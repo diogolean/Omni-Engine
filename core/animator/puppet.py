@@ -333,6 +333,17 @@ class PuppetSkin:
 
     def ensure_assets(self) -> None:
         """Procedurally generate any PNG layer that is not already on disk."""
+        # View-authored gold masters keep their art under views/. Root layer
+        # names are not their sprites, so a missing root PNG must not be
+        # filled with a procedural stand-in inside that folder.
+        manifest_path = self.root / "puppet.json"
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                manifest = {}
+            if manifest.get("views") and not manifest.get("layers"):
+                return
         missing = self.missing_layers()
         if not missing:
             return

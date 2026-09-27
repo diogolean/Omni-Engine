@@ -61,10 +61,31 @@ CAMERA_NORMAL_ZOOM = 0.95
 # and sit 30px lower in the frame.
 PRESENT_SCALE = 1.05
 PRESENT_DROP_PX = 30
-# ChatGPT and Claude, every view: another +5% on the present fit, and 20px lower.
+# ChatGPT and Claude, every view: another +5% on the present fit, and 70px
+# lower (the prior 20px plus another 50px). Screen X: ChatGPT toward the
+# viewer's right, Claude toward the viewer's left.
 DEBATER_PRESENT_IDS = frozenset({"chatgpt_cyborg_v1", "claude_cyborg_v1"})
 DEBATER_EXTRA_SCALE = 1.05
-DEBATER_EXTRA_DROP_PX = 20
+DEBATER_EXTRA_DROP_PX = 70
+DEBATER_SHIFT_X = {
+    "chatgpt_cyborg_v1": 35,
+    "claude_cyborg_v1": -35,
+}
+# Claude, every view and every scene: 120px plus another 30px down.
+CLAUDE_EXTRA_DROP_PX = 150
+# ChatGPT, every view and every scene: another 30px down, and 1% smaller.
+CHATGPT_EXTRA_DROP_PX = 30
+CHATGPT_SCALE = 0.99
+# Only the left seat (facing screen-right): another 20px toward the viewer's left.
+CHATGPT_LEFT_SHIFT_X = -20
+# Locked DeepSeek plate: 9% then 2% then 1%, 100px toward the viewer's
+# right, and 105px plus another 10px down.
+DEEPSEEK_LOCKED_IDS = frozenset({"deepseek_cyborg_v3"})
+DEEPSEEK_EXTRA_SCALE = 1.09 * 1.02 * 1.01
+DEEPSEEK_SHIFT_X = -200
+DEEPSEEK_SHIFT_Y = 115
+# Whole-robot tilt. Positive is counter-clockwise, applied to the locked plate.
+DEEPSEEK_ROLL_CCW_DEG = 5.0
 CAMERA_TIGHT_ZOOM = 1.25
 GEMINI_LEAD_X = 420
 LLAMA_LEAD_X = 660
@@ -336,23 +357,50 @@ class ShotReverseShotCompositor:
             view_zoom = self._update_view_zoom(camera_tight)
             camera = self._camera[current]
             breathing_y = camera.breathing_offset(t)
-            frame = self._speaker_base[current][breathing_y].copy()
-
-            # Background + breathing body are pre-baked. One cached head crop
-            # carries the viseme, eyelid and Ghibli brow sprites together so
-            # neck-pivot movement never detaches facial features.
-            camera.render_dirty(
-                frame,
-                t=t,
-                viseme=_sequence_at(analyzed.viseme.get(current), index, REST_VISEME) if is_speaking else REST_VISEME,
-                eye_state=_sequence_at(analyzed.eye_state.get(current), index, 0),
-                rms=active_rms,
-                emphasis_threshold=emphasis_thresholds.get(current, 1.0),
-                brow_emphasis_threshold=brow_thresholds.get(current, 1.0),
-                is_speaking=is_speaking,
-                emotion=emotion,
-                body_offset_y=breathing_y,
-            )
+            head_y = camera.head_breathing_offset(t)
+            if abs(camera.roll_deg) > 0.01:
+                # Pad so the whole robot is on the plate before the tilt.
+                # Rotating a frame-clipped paste leaves a straight cut.
+                pad = 640
+                plate = np.zeros((self.height + pad * 2, self.width + pad * 2, 4), dtype=np.uint8)
+                _paste_rgba(
+                    plate,
+                    camera.static_body,
+                    camera.body_offset_x + pad,
+                    camera.body_offset_y + breathing_y + pad,
+                )
+                camera.render_dirty(
+                    plate,
+                    t=t,
+                    viseme=_sequence_at(analyzed.viseme.get(current), index, REST_VISEME) if is_speaking else REST_VISEME,
+                    eye_state=_sequence_at(analyzed.eye_state.get(current), index, 0),
+                    rms=active_rms,
+                    emphasis_threshold=emphasis_thresholds.get(current, 1.0),
+                    brow_emphasis_threshold=brow_thresholds.get(current, 1.0),
+                    is_speaking=is_speaking,
+                    emotion=emotion,
+                    body_offset_y=head_y,
+                    plate_origin=(pad, pad),
+                    collar_offset_y=breathing_y,
+                )
+                plate = _rotate_rgba(plate, camera.roll_deg)
+                frame = self._backgrounds[current].copy()
+                _alpha_blend_paste(frame, plate, -pad, -pad)
+            else:
+                frame = self._speaker_base[current][breathing_y].copy()
+                camera.render_dirty(
+                    frame,
+                    t=t,
+                    viseme=_sequence_at(analyzed.viseme.get(current), index, REST_VISEME) if is_speaking else REST_VISEME,
+                    eye_state=_sequence_at(analyzed.eye_state.get(current), index, 0),
+                    rms=active_rms,
+                    emphasis_threshold=emphasis_thresholds.get(current, 1.0),
+                    brow_emphasis_threshold=brow_thresholds.get(current, 1.0),
+                    is_speaking=is_speaking,
+                    emotion=emotion,
+                    body_offset_y=head_y,
+                    collar_offset_y=breathing_y,
+                )
             if view_zoom > 1.001:
                 frame = self._tight_view(
                     frame,
@@ -405,9 +453,16 @@ class _HeroCamera:
 
         framing = rig.skin.framing or {}
         legacy_artist_v2 = rig.skin.character_id in LEGACY_ARTIST_V2_IDS
+        # A locked view is already seated on the 1080x1920 stage. The
+        # parametric solver would slide the head to the eye line and the
+        # body to the foot line, which pulls that seating apart.
+        locked_plate = bool(framing.get("locked_plate"))
         parametric_v3 = (
-            rig.skin.character_id == "deepseek_cyborg_v3"
-            or bool(framing.get("puppet_matrix"))
+            not locked_plate
+            and (
+                rig.skin.character_id == "deepseek_cyborg_v3"
+                or bool(framing.get("puppet_matrix"))
+            )
         )
         self._matrix_normalized = parametric_v3
         production_framing = bool(framing.get("bottom_anchor")) or bool(
@@ -417,7 +472,11 @@ class _HeroCamera:
             "llama_cyborg_v2",
         }
         present_camera = False
-        if legacy_artist_v2:
+        if locked_plate:
+            scale = min(target_width / float(crop_w), target_height / float(crop_h)) * 0.96
+            if rig.skin.character_id in DEEPSEEK_LOCKED_IDS:
+                scale *= DEEPSEEK_EXTRA_SCALE
+        elif legacy_artist_v2:
             # Immutable camera contract copied from 54b1b5d. Do not route V2
             # artist cels through any V3 eye-line or proportion normalizer.
             scale = min(
@@ -468,6 +527,8 @@ class _HeroCamera:
             )
             if rig.skin.character_id in DEBATER_PRESENT_IDS:
                 scale *= DEBATER_EXTRA_SCALE
+            if rig.skin.character_id == "chatgpt_cyborg_v1":
+                scale *= CHATGPT_SCALE
         native_eye_x = (
             rig.skin.anchors.left_eye[0] + rig.skin.anchors.right_eye[0]
         ) / 2.0
@@ -493,7 +554,19 @@ class _HeroCamera:
         self.body_scale_x = self.scale
         self.body_scale_y = self.scale
         self.pixel_aspect_error = abs(self.scale_x - self.scale_y) / self.scale_x
-        if legacy_artist_v2:
+        self.roll_deg = (
+            DEEPSEEK_ROLL_CCW_DEG
+            if rig.skin.character_id in DEEPSEEK_LOCKED_IDS
+            else 0.0
+        )
+        if locked_plate:
+            self.offset_x = int(round((target_width - self.out_w) / 2.0))
+            self.offset_y = int(round((target_height - self.out_h) / 2.0))
+            if rig.skin.character_id in DEEPSEEK_LOCKED_IDS:
+                self.offset_x += DEEPSEEK_SHIFT_X
+                self.offset_y += DEEPSEEK_SHIFT_Y
+            self.lead_anchor_x = int(round(self.offset_x + native_eye_x * self.scale))
+        elif legacy_artist_v2:
             self.offset_x = (target_width - self.out_w) // 2
             self.lead_anchor_x = int(
                 round(self.offset_x + native_eye_x * self.scale)
@@ -519,6 +592,11 @@ class _HeroCamera:
                 round(self.offset_x + native_eye_x * self.scale)
             )
         else:
+            shift_x = DEBATER_SHIFT_X.get(rig.skin.character_id, 0)
+            if rig.skin.character_id == "chatgpt_cyborg_v1" and self.facing == "right":
+                shift_x += CHATGPT_LEFT_SHIFT_X
+            if shift_x:
+                self.lead_anchor_x = int(self.lead_anchor_x) + shift_x
             self.offset_x = int(round(self.lead_anchor_x - (self.out_w / 2.0)))
         if parametric_v3:
             self.body_scale = matrix.body_scale * (target_width / 1080.0)
@@ -534,7 +612,9 @@ class _HeroCamera:
             (body_out_w, body_out_h),
             interpolation=cv2.INTER_AREA,
         )
-        if legacy_artist_v2:
+        if locked_plate:
+            pass
+        elif legacy_artist_v2:
             self.offset_y = target_height - self.out_h
         elif parametric_v3:
             self.offset_y = int(
@@ -552,6 +632,10 @@ class _HeroCamera:
                 drop = PRESENT_DROP_PX
                 if rig.skin.character_id in DEBATER_PRESENT_IDS:
                     drop += DEBATER_EXTRA_DROP_PX
+                if rig.skin.character_id == "claude_cyborg_v1":
+                    drop += CLAUDE_EXTRA_DROP_PX
+                if rig.skin.character_id == "chatgpt_cyborg_v1":
+                    drop += CHATGPT_EXTRA_DROP_PX
                 self.offset_y += drop
         if parametric_v3:
             self.body_offset_x = int(
@@ -567,6 +651,12 @@ class _HeroCamera:
 
     @staticmethod
     def breathing_offset(t: float) -> int:
+        """Body idle. Small enough that it rounds away except at the crest."""
+        return int(np.clip(np.rint(np.sin(float(t) * 2.0) * 0.55), -1, 1))
+
+    @staticmethod
+    def head_breathing_offset(t: float) -> int:
+        """The former whole-body bob, kept on the head alone."""
         return int(np.clip(np.rint(np.sin(float(t) * 2.0) * 2.5), -3, 3))
 
     def _scaled_overlay(
@@ -626,6 +716,8 @@ class _HeroCamera:
         is_speaking: bool,
         emotion: str = "neutral",
         body_offset_y: int = 0,
+        plate_origin: tuple[int, int] = (0, 0),
+        collar_offset_y: int | None = None,
     ) -> None:
         """Blit one articulated head crop onto a pre-baked breathing body."""
         self._update_emotion(emotion)
@@ -666,12 +758,13 @@ class _HeroCamera:
             head,
             bbox,
         )
-        _alpha_blend_paste_precomputed(
+        origin_x, origin_y = plate_origin
+        _paste_sprite(
             frame,
             premultiplied,
             inv_alpha,
-            x,
-            y + int(body_offset_y),
+            x + origin_x,
+            y + int(body_offset_y) + origin_y,
         )
         collar = self.rig.collar_overlay()
         if collar is not None and not self._matrix_normalized:
@@ -690,12 +783,13 @@ class _HeroCamera:
                 offset_x=self.body_offset_x,
                 offset_y=self.body_offset_y,
             )
-            _alpha_blend_paste_precomputed(
+            neck_y = body_offset_y if collar_offset_y is None else collar_offset_y
+            _paste_sprite(
                 frame,
                 collar_rgb,
                 collar_inv_alpha,
-                collar_x,
-                collar_y + int(body_offset_y),
+                collar_x + origin_x,
+                collar_y + int(neck_y) + origin_y,
             )
 
     def render(
@@ -831,6 +925,67 @@ def _sequence_at(seq, index: int, default):
     if not seq or index >= len(seq):
         return default
     return seq[index]
+
+
+def _paste_sprite(
+    dest: np.ndarray,
+    premultiplied_rgb: np.ndarray,
+    inv_alpha_3ch: np.ndarray,
+    x: int,
+    y: int,
+) -> None:
+    """Paint a premultiplied sprite onto an RGB frame or an RGBA plate."""
+    if dest.shape[-1] == 4:
+        alpha = cv2.bitwise_not(inv_alpha_3ch[..., 0])
+        scale = np.maximum(alpha.astype(np.float32), 1.0)[..., None]
+        straight = np.clip(
+            premultiplied_rgb.astype(np.float32) * (255.0 / scale),
+            0,
+            255,
+        ).astype(np.uint8)
+        _paste_rgba(dest, np.dstack((straight, alpha)), x, y)
+        return
+    _alpha_blend_paste_precomputed(dest, premultiplied_rgb, inv_alpha_3ch, x, y)
+
+
+def _paste_rgba(dest: np.ndarray, src_rgba: np.ndarray, x: int, y: int) -> None:
+    """Source-over paste of an RGBA sprite onto an RGBA plate."""
+    dh, dw = dest.shape[:2]
+    sh, sw = src_rgba.shape[:2]
+    dst_x0, dst_y0 = max(0, x), max(0, y)
+    dst_x1, dst_y1 = min(dw, x + sw), min(dh, y + sh)
+    if dst_x1 <= dst_x0 or dst_y1 <= dst_y0:
+        return
+    src_x0, src_y0 = dst_x0 - x, dst_y0 - y
+    src_x1 = src_x0 + (dst_x1 - dst_x0)
+    src_y1 = src_y0 + (dst_y1 - dst_y0)
+    src = src_rgba[src_y0:src_y1, src_x0:src_x1].astype(np.float32)
+    dst = dest[dst_y0:dst_y1, dst_x0:dst_x1].astype(np.float32)
+    src_a = src[..., 3:4] / 255.0
+    dst_a = dst[..., 3:4] / 255.0
+    out_a = src_a + dst_a * (1.0 - src_a)
+    out_rgb = src[..., :3] * src_a + dst[..., :3] * dst_a * (1.0 - src_a)
+    safe = np.maximum(out_a, 1.0 / 255.0)
+    merged = np.concatenate((out_rgb / safe, out_a * 255.0), axis=2)
+    dest[dst_y0:dst_y1, dst_x0:dst_x1] = np.clip(merged, 0, 255).astype(np.uint8)
+
+
+def _rotate_rgba(image: np.ndarray, degrees_ccw: float) -> np.ndarray:
+    """Rotate an RGBA plate counter-clockwise around the visible robot."""
+    alpha = image[..., 3]
+    ys, xs = np.nonzero(alpha > 8)
+    if xs.size == 0:
+        return image
+    center = (float(xs.mean()), float(ys.mean()))
+    matrix = cv2.getRotationMatrix2D(center, float(degrees_ccw), 1.0)
+    return cv2.warpAffine(
+        image,
+        matrix,
+        (image.shape[1], image.shape[0]),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0),
+    )
 
 
 def _alpha_blend_paste(dest: np.ndarray, src_rgba: np.ndarray, x: int, y: int) -> None:

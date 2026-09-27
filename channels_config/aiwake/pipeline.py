@@ -337,8 +337,11 @@ def run_pipeline(
     if with_audio or with_video:
         # The silent engine keeps the timeline honest when audio is off.
         audio_cfg = cfg.audio if with_audio else cfg.audio.model_copy(update={"engine": "silent"})
-        if (right_puppet or "").strip().lower() == "deepseek_cyborg_v3":
-            voice_map = dict(audio_cfg.voice_map)
+        voice_map = dict(audio_cfg.voice_map)
+        voice_update: dict[str, object] = {}
+        right_id = (right_puppet or "").strip().lower()
+        left_id = (left_puppet or "").strip().lower()
+        if right_id == "deepseek_cyborg_v3":
             voice_map.update(
                 {
                     "target": DEEPSEEK_CANONICAL_VOICE,
@@ -348,12 +351,41 @@ def run_pipeline(
                     "deepseek-chat": DEEPSEEK_CANONICAL_VOICE,
                 }
             )
-            audio_cfg = audio_cfg.model_copy(
-                update={
-                    "target_voice": DEEPSEEK_CANONICAL_VOICE,
-                    "voice_map": voice_map,
+            voice_update["target_voice"] = DEEPSEEK_CANONICAL_VOICE
+        if left_id == "chatgpt_cyborg_v1":
+            voice_map["orchestrator_voice_override"] = "en-US-AndrewNeural"
+        if left_id == "claude_cyborg_v1":
+            voice_map["orchestrator_voice_override"] = "en-GB-RyanNeural"
+        if right_id == "chatgpt_cyborg_v1":
+            chatgpt_voice = "en-US-AndrewNeural"
+            voice_map.update(
+                {
+                    "target": chatgpt_voice,
+                    "gpt4o": chatgpt_voice,
+                    "gpt-4o": chatgpt_voice,
+                    "chatgpt": chatgpt_voice,
                 }
             )
+            voice_update["target_voice"] = chatgpt_voice
+        if left_id == "deepseek_cyborg_v3":
+            voice_map["orchestrator_voice_override"] = DEEPSEEK_CANONICAL_VOICE
+            voice_map["deepseek-chat"] = DEEPSEEK_CANONICAL_VOICE
+            voice_map["deepseek"] = DEEPSEEK_CANONICAL_VOICE
+        if right_id == "claude_cyborg_v1":
+            claude_voice = "en-GB-RyanNeural"
+            voice_map.update(
+                {
+                    "target": claude_voice,
+                    "llama": claude_voice,
+                    "llama-70b": claude_voice,
+                    "claude": claude_voice,
+                    "claude-sonnet": claude_voice,
+                }
+            )
+            voice_update["target_voice"] = claude_voice
+        if voice_update or voice_map != dict(audio_cfg.voice_map):
+            voice_update["voice_map"] = voice_map
+            audio_cfg = audio_cfg.model_copy(update=voice_update)
         voice_observer = VoiceObserver(build_engine(audio_cfg), room.session_id)
 
     attach_optional_plugins()
@@ -453,6 +485,7 @@ def run_pipeline(
                             if duration_override is not None
                             else None
                         ),
+                        scene="random",
                     )
                 except Exception as exc:  # noqa: BLE001 — a failed render must not lose the transcript
                     _LOG.error("dynamic_animation render failed: %s", exc)

@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import unicodedata
 import wave
 from pathlib import Path
@@ -80,6 +81,10 @@ DEFAULT_SEAT_STYLE: dict[str, tuple[str, str, str]] = {
     "orchestrator": ("GEMINI 3.5 FLASH", "#00F0FF", "right"),
     "target": ("LLAMA 3.3 70B", "#FFB300", "left"),
 }
+_PUPPET_HUD: dict[str, tuple[str, str]] = {
+    "chatgpt_cyborg_v1": ("CHATGPT", "#E8B84A"),
+    "claude_cyborg_v1": ("CLAUDE", "#C4654A"),
+}
 
 
 def resolve_character_map(
@@ -130,6 +135,9 @@ def build_speaker_styles(
     styles: list[SpeakerStyle] = []
     for seat, character_id in seats.items():
         label, accent, facing = DEFAULT_SEAT_STYLE.get(seat, (seat.upper(), "#00F0FF", "right"))
+        puppet_hud = _PUPPET_HUD.get(character_id)
+        if puppet_hud is not None:
+            label, accent = puppet_hud
         if labels and seat in labels and labels[seat].strip():
             label = labels[seat].strip()
         styles.append(
@@ -776,6 +784,39 @@ def _terminal_outro_painter(text: str, *, width: int, height: int, fps: int):
     return paint
 
 
+def _assemble_view_puppets(styles: list[SpeakerStyle], destination: Path) -> Path:
+    """Build contraplano canvases for view-authored puppets.
+
+    ChatGPT and Claude keep their gold art under ``views/``. The shot
+    renderer loads flat root layers, so each seat is assembled into a
+    throwaway directory. The gold folders are left untouched.
+    """
+    from core.animator.asset_generator import DEFAULT_PUPPETS_DIR  # noqa: PLC0415
+    from core.animator.pipeline import build_render_skin  # noqa: PLC0415
+
+    view_for_facing = {"right": "facing_right", "left": "facing_left"}
+    seated: list[tuple[str, str]] = []
+    for style in styles:
+        manifest_path = Path(DEFAULT_PUPPETS_DIR) / style.character_id / "puppet.json"
+        if not manifest_path.is_file():
+            return Path(DEFAULT_PUPPETS_DIR)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if "views" not in manifest:
+            return Path(DEFAULT_PUPPETS_DIR)
+        seated.append((style.character_id, view_for_facing.get(style.facing, "facing_front")))
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    for character_id, view_name in seated:
+        build_render_skin(
+            character_id,
+            destination,
+            view_name=view_name,
+            contraplano=True,
+        )
+    return destination
+
+
 def render_debate_animation(
     transcript: "DebateTranscript",
     *,
@@ -794,6 +835,7 @@ def render_debate_animation(
     output_name: str | None = None,
     enable_cta: bool = False,
     seamless_loop: bool | None = None,
+    scene: str | None = None,
 ) -> Path:
     """Render a debate transcript through the shot-reverse-shot engine.
 
@@ -826,6 +868,7 @@ def render_debate_animation(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    puppets_dir = _assemble_view_puppets(styles, output_dir / f"{transcript.session_id}_skins")
     video_filename = output_name or debate_video_filename(transcript)
     merged_audio_path = output_dir / f"{transcript.session_id}_battle_audio.wav"
     video_path = output_dir / video_filename
@@ -881,7 +924,7 @@ def render_debate_animation(
         audio_path=merged_audio_path,
         styles=styles,
         output_path=video_path,
-        puppets_dir=DEFAULT_PUPPETS_DIR,
+        puppets_dir=puppets_dir,
         fps=fps,
         width=width,
         height=height,
@@ -890,6 +933,7 @@ def render_debate_animation(
         outro_start_s=outro_start_s,
         outro_frame=outro_frame,
         subtitle_fade_s=subtitle_fade_s,
+        scene=scene,
     )
     _LOG.info(
         "battle render complete: %s (%d frames, %.2fx realtime)",

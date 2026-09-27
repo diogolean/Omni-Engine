@@ -170,6 +170,11 @@ def resolve_voice(
     """
     mapping = {**SEAT_VOICES, **dict(config.voice_map)}
     if role is SpeakerRole.ORCHESTRATOR:
+        # Seat pin stays Brian unless a caller explicitly overrides it for a
+        # non-Gemini provocateur puppet (ChatGPT's tested Andrew voice).
+        override = str(mapping.get("orchestrator_voice_override") or "").strip()
+        if override:
+            return override
         return GEMINI_CANONICAL_VOICE
 
     needle = (model_slug or "").strip().lower()

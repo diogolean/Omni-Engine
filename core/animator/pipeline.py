@@ -97,8 +97,19 @@ def _opaque_width(image: Image.Image) -> int:
 
 
 def _paste_layer(canvas_size: tuple[int, int], image: Image.Image, origin: tuple[int, int]) -> Image.Image:
+    """Paste ``image`` at ``origin``, clipping anything that falls outside the stage."""
     layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    layer.alpha_composite(image, origin)
+    x, y = origin
+    src_x = max(0, -x)
+    src_y = max(0, -y)
+    dest_x = max(0, x)
+    dest_y = max(0, y)
+    width = min(image.width - src_x, canvas_size[0] - dest_x)
+    height = min(image.height - src_y, canvas_size[1] - dest_y)
+    if width <= 0 or height <= 0:
+        return layer
+    cropped = image.crop((src_x, src_y, src_x + width, src_y + height))
+    layer.alpha_composite(cropped, (dest_x, dest_y))
     return layer
 
 
@@ -190,6 +201,9 @@ def build_render_skin(
     body = Image.open(root / view["body"]).convert("RGBA")
     head_xy = (int(view["head_xy"][0]), int(view["head_xy"][1]))
     body_xy = (int(view["body_xy"][0]), int(view["body_xy"][1]))
+    # Locked views keep the approved head/body gap. The plate is the
+    # union of those coordinates, and the camera fits that one piece.
+    locked_plate = str(view.get("status") or "") == "locked_approved"
     min_x = min(0, head_xy[0], body_xy[0])
     min_y = min(0, head_xy[1], body_xy[1])
     head_xy = (head_xy[0] - min_x, head_xy[1] - min_y)
@@ -344,7 +358,11 @@ def build_render_skin(
             layout.nameplate_bottom,
             int(round(max(optic.radius for optic in (layout.left, layout.right)) * 2.3)),
         ),
-        "framing": {} if contraplano else {"bottom_anchor": True},
+        "framing": (
+            {"locked_plate": True}
+            if locked_plate
+            else ({} if contraplano else {"bottom_anchor": True})
+        ),
         "calibration": {
             "eye_bboxes": eye_boxes,
             "lens_circles": [[center_x, center_y, radius] for center_x, center_y, radius in optics],
