@@ -10,11 +10,13 @@ import argparse
 import asyncio
 import json
 import logging
+import random
+import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from utils.pipeline_paths import assets_root, outputs_root
 
@@ -28,6 +30,7 @@ from .render.visemes import (
     LLAMA_CHIN_WIDTH,
     LLAMA_WIDE_MOUTH,
     PALETTES,
+    MechaPalette,
     draw_mouths,
     generate_viseme_set,
     metal_stroke,
@@ -212,7 +215,10 @@ def build_render_skin(
         mouth_anchor = _shift(local_mouth, head_xy)
         mouth_rot = 0.0
         mouth_mul = 1.0
-    palette = PALETTES[character_id]
+    palette = PALETTES.get(
+        character_id,
+        MechaPalette(character_id, (196, 154, 78, 255)),
+    )
     stroke = metal_stroke(palette.bezel)
     native_dir = (
         root / rig_mouth["asset_dir"]
@@ -527,6 +533,7 @@ def render_test_dialogue(
     output_path: Path,
     *,
     contraplano: bool = False,
+    scene: str = "random",
 ) -> Path:
     """Render a few seconds of ChatGPT answering Claude through the standard engine."""
     from . import render_dynamic_animation
@@ -576,6 +583,7 @@ def render_test_dialogue(
         height=1920,
         burn_subtitles=True,
         use_rhubarb=True,
+        scene=scene,
     )
     print(output_path)
     return output_path
@@ -603,15 +611,20 @@ def _write_pose_stills(skin_root: Path, destination: Path, character_ids: list[s
     print(destination)
 
 
-def build_solo_audio(workdir: Path, line: dict) -> tuple[Path, dict]:
-    """One utterance padded so the pilot lands on about four seconds."""
+def build_solo_audio(
+    workdir: Path,
+    line: dict,
+    *,
+    target_s: float = 4.0,
+) -> tuple[Path, dict]:
+    """One utterance padded to the target. Speech is never trimmed."""
     workdir.mkdir(parents=True, exist_ok=True)
     lead = 0.15
     utterance = workdir / "line_0.mp3"
     _synthesize_line(line["text"], line["voice"], utterance)
     spoken = _probe_duration(utterance)
-    tail = max(0.15, 4.0 - lead - spoken)
-    if lead + spoken + tail > 4.6:
+    tail = max(0.15, target_s - lead - spoken)
+    if lead + spoken + tail > target_s + 0.6:
         tail = 0.15
     listing = workdir / "concat.txt"
     pieces = []
@@ -643,7 +656,62 @@ def build_solo_audio(workdir: Path, line: dict) -> tuple[Path, dict]:
     return mixed, timed
 
 
-def render_pilot_acting(character_id: str, output_path: Path) -> Path:
+def render_deepseek_debut(output_path: Path, scene: str = "random") -> Path:
+    """Five-second solo: Rhubarb visemes, blinks, and a deboche blade."""
+    from . import render_dynamic_animation
+    from .types import DialogueTurn, SpeakerStyle
+
+    character_id = "deepseek_cyborg_v3"
+    line = {
+        "character_id": character_id,
+        "label": "DEEPSEEK",
+        "accent": "#C49A4E",
+        "facing": "right",
+        "voice": "en-US-ChristopherNeural",
+        "text": "The clean path is the one that still holds.",
+        "view": "facing_front",
+    }
+    workdir = output_path.parent / "deepseek_debut_build"
+    skin_root = workdir / "puppets"
+    build_render_skin(character_id, skin_root, view_name=line["view"], contraplano=False)
+    mixed, timed = build_solo_audio(workdir / "audio", line, target_s=5.0)
+    turns = [
+        DialogueTurn(
+            speaker=character_id,
+            start_time=timed["start"],
+            end_time=timed["end"],
+            text=timed["text"],
+            audio_path=str(timed["audio"]),
+            emotion="deboche",
+        )
+    ]
+    styles = [
+        SpeakerStyle(
+            character_id=character_id,
+            label=line["label"],
+            accent_hex=line["accent"],
+            facing=line["facing"],
+        )
+    ]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    render_dynamic_animation(
+        turns=turns,
+        audio_path=mixed,
+        styles=styles,
+        output_path=output_path,
+        puppets_dir=skin_root,
+        fps=30,
+        width=1080,
+        height=1920,
+        burn_subtitles=True,
+        use_rhubarb=True,
+        scene=scene,
+    )
+    print(output_path)
+    return output_path
+
+
+def render_pilot_acting(character_id: str, output_path: Path, scene: str = "random") -> Path:
     """Four-second solo: reserved male voice, visemes, a cocked brow, and a blink."""
     from . import render_dynamic_animation
     from .types import DialogueTurn, SpeakerStyle
@@ -693,12 +761,13 @@ def render_pilot_acting(character_id: str, output_path: Path) -> Path:
         height=1920,
         burn_subtitles=True,
         use_rhubarb=True,
+        scene=scene,
     )
     print(output_path)
     return output_path
 
 
-def render_v6_contraplano(output_path: Path) -> Path:
+def render_v6_contraplano(output_path: Path, scene: str = "random") -> Path:
     """Six-second shot-reverse-shot using the approved V6 mouths, lids, and deboche."""
     from . import render_dynamic_animation
     from .types import DialogueTurn, SpeakerStyle
@@ -771,6 +840,7 @@ def render_v6_contraplano(output_path: Path) -> Path:
         height=1920,
         burn_subtitles=True,
         use_rhubarb=True,
+        scene=scene,
     )
     print(output_path)
     return output_path
@@ -816,11 +886,563 @@ def render_v14_contraplano(output_path: Path) -> Path:
     return render_v6_contraplano(output_path)
 
 
+SCENE_02_NAME = "scene_02_steampunk_observatory.png"
+SCENE_PREVIEW = (
+    outputs_root()
+    / "aiwake"
+    / "_test_harness"
+    / "scene_test"
+    / "chatgpt_claude_new_scene_preview.png"
+)
+_SCENE_STAGE_HEIGHT = 0.68
+_SCENE_GROUND_MARGIN = 36
+
+
+def _scene_dir() -> Path:
+    return assets_root() / "backgrounds"
+
+
+def _scene_02_path() -> Path:
+    return _scene_dir() / SCENE_02_NAME
+
+
+def _write_scene_registry(scene_path: Path) -> Path:
+    """Register the observatory beside the locked library panorama."""
+    library = (
+        assets_root()
+        / "puppets"
+        / "shared_backgrounds"
+        / "aiwake_arena_panorama_v2.png"
+    )
+    registry = {
+        "scenes": [
+            {
+                "id": "scene_01_library_cathedral",
+                "file": library.relative_to(assets_root()).as_posix(),
+                "locked": True,
+            },
+            {
+                "id": "scene_02_steampunk_observatory",
+                "file": scene_path.relative_to(assets_root()).as_posix(),
+                "size": [1080, 1920],
+                "locked": True,
+            },
+        ]
+    }
+    destination = _scene_dir() / "registry.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    return destination
+
+
+def _observatory_source() -> Path | None:
+    candidates = (
+        Path.home()
+        / ".cursor"
+        / "projects"
+        / "c-dev-omni-engine"
+        / "assets"
+        / SCENE_02_NAME,
+        Path(__file__).resolve().parents[2] / "assets" / SCENE_02_NAME,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def generate_steampunk_observatory() -> Path:
+    """Retired. Shared scenes live only in puppets/shared_backgrounds."""
+    raise RuntimeError(
+        "assets/backgrounds is retired; write shared scenes under puppets/shared_backgrounds"
+    )
+
+
+def _ground_character(
+    plate: Image.Image,
+    sprite: Image.Image,
+    center_x: int,
+) -> None:
+    """Fit one figure into its half of the stage, then apply the +5% scale."""
+    alpha = np.asarray(sprite)[..., 3]
+    ys, xs = np.nonzero(alpha > 16)
+    if xs.size == 0:
+        return
+    crop = sprite.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+    slot_w = int(round(plate.width * 0.48))
+    slot_h = int(round(plate.height * _SCENE_STAGE_HEIGHT))
+    scale = min(slot_w / crop.width, slot_h / crop.height) * 1.05
+    fitted = crop.resize(
+        (
+            max(1, int(round(crop.width * scale))),
+            max(1, int(round(crop.height * scale))),
+        ),
+        Image.Resampling.LANCZOS,
+    )
+    left = int(round(center_x - fitted.width / 2))
+    left = max(8, min(left, plate.width - fitted.width - 8))
+    top = plate.height - _SCENE_GROUND_MARGIN - fitted.height
+    plate.alpha_composite(fitted, (left, max(0, top)))
+
+
+def preview_scene_composite(
+    scene_path: Path,
+    destination: Path,
+    *,
+    speaker_left: str,
+    speaker_right: str,
+) -> Path:
+    """One still: ChatGPT on the left looking right, Claude on the right looking left."""
+    from .puppet import PuppetRig, PuppetSkin
+
+    workdir = destination.parent / "build" / "puppets"
+    build_render_skin(speaker_left, workdir, view_name="facing_right", contraplano=True)
+    build_render_skin(speaker_right, workdir, view_name="facing_left", contraplano=True)
+    with Image.open(scene_path) as opened:
+        plate = opened.convert("RGBA")
+    if plate.size != (1080, 1920):
+        plate = ImageOps.fit(plate, (1080, 1920), method=Image.Resampling.LANCZOS)
+    for character_id, center_x in ((speaker_left, 270), (speaker_right, 810)):
+        rig = PuppetRig(PuppetSkin.load(workdir / character_id))
+        frame = rig.compose(viseme="X", emotion="neutral")
+        rgb = np.clip(frame[..., :3], 0, 255).astype(np.uint8)
+        alpha = np.clip(frame[..., 3], 0, 255).astype(np.uint8)
+        sprite = Image.fromarray(np.dstack((rgb, alpha)))
+        _ground_character(plate, sprite, center_x)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    plate.convert("RGB").save(destination, format="PNG", compress_level=1)
+    print(destination)
+    return destination
+
+
+def _shared_backgrounds() -> Path:
+    return assets_root() / "puppets" / "shared_backgrounds"
+
+
+APPROVED_ARENA_NAMES: tuple[str, ...] = (
+    "aiwake_arena_panorama_v2.png",
+    "aiwake_arena_panorama_v3.png",
+    "arena_04_clockwork_foundry.png",
+    "arena_05_botanical_conservatory.png",
+    "arena_06_royal_circular_vault.png",
+    "arena_07_council_chamber.png",
+    "arena_08_subterranean_relay.png",
+    "arena_09_sky_armory_hangar.png",
+    "arena_10_celestial_cartography.png",
+    "arena_11_alchemical_apothecary.png",
+    "arena_12_clock_tower_interior.png",
+    "arena_13_grand_greenhouse_atrium.png",
+    "arena_14_telegraphic_exchange.png",
+    "arena_15_chamber_of_reason.png",
+)
+
+
+def approved_arenas_pool() -> list[Path]:
+    """Official graded panoramas. Raw ``*_source.png`` plates are excluded."""
+    root = _shared_backgrounds()
+    pool = [root / name for name in APPROVED_ARENA_NAMES]
+    missing = [path.name for path in pool if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"approved arenas missing: {', '.join(missing)}")
+    return pool
+
+
+def get_scene_by_name(scene_arg: str) -> Path:
+    token = scene_arg.strip()
+    if token.lower().endswith(".png"):
+        token = token[:-4]
+    pool = approved_arenas_pool()
+    for path in pool:
+        if path.stem == token or path.name == scene_arg.strip():
+            return path
+    raise FileNotFoundError(f"arena {scene_arg} is not in the approved pool")
+
+
+def resolve_scene_panorama(scene_arg: str = "random") -> Path:
+    """Pick one official arena. ``random`` is the default when no scene is named."""
+    if scene_arg == "random" or not scene_arg:
+        chosen_scene = random.choice(approved_arenas_pool())
+        logging.getLogger("animator.pipeline").info(
+            "[ARENA SELECTOR] Sorteando arena automática: %s",
+            chosen_scene.name,
+        )
+        return chosen_scene
+    return get_scene_by_name(scene_arg)
+
+
+def verify_arena_camera_crops() -> None:
+    """Each official plate must crop to the two 1080x1920 reverse angles."""
+    from .compositor import ShotReverseShotCompositor
+    from .types import SpeakerStyle
+
+    director = ShotReverseShotCompositor.__new__(ShotReverseShotCompositor)
+    director.width = 1080
+    director.height = 1920
+    for path in approved_arenas_pool():
+        with Image.open(path) as opened:
+            panorama = opened.convert("RGB")
+        if panorama.size != (2160, 1920):
+            raise RuntimeError(f"{path.name} is {panorama.size}, expected 2160x1920")
+        for facing in ("right", "left"):
+            background = director._prepare_camera_background(
+                None,
+                SpeakerStyle(character_id="arena", label="ARENA", facing=facing),
+                panorama,
+            )
+            if background.shape != (1920, 1080, 3):
+                raise RuntimeError(
+                    f"{path.name} facing={facing} crop is {background.shape}"
+                )
+    print(f"camera crops ok: {len(APPROVED_ARENA_NAMES)} arenas")
+
+
+def _panorama_v2() -> Path:
+    return _shared_backgrounds() / "aiwake_arena_panorama_v2.png"
+
+
+def _panorama_v3() -> Path:
+    return _shared_backgrounds() / "aiwake_arena_panorama_v3.png"
+
+
+def clean_rogue_backgrounds() -> None:
+    """Delete the duplicate assets/backgrounds tree. Shared scenes stay."""
+    rogue = assets_root() / "backgrounds"
+    shared = _shared_backgrounds()
+    if rogue.resolve() == shared.resolve():
+        raise RuntimeError("refusing to delete the canonical shared_backgrounds directory")
+    if rogue.is_dir():
+        shutil.rmtree(rogue)
+        print(f"removed rogue backgrounds: {rogue}")
+    else:
+        print(f"rogue backgrounds already absent: {rogue}")
+
+
+_PANORAMA_V3_PROMPT = (
+    "1990s Studio Ghibli painted background art, Hayao Miyazaki Laputa aesthetic. "
+    "Rich hand-painted gouache, warm golden-hour lighting, dark anime ink linework. "
+    "A grand panoramic observation bridge and clockwork library inside a Victorian "
+    "steampunk sky cruiser, one continuous shared hall. "
+    "Left section: mahogany celestial navigation tables, antique star charts, "
+    "brass astrolabes, and green banker lamps. "
+    "Center vista: grand arched bay windows filled with Art Nouveau Gothic stained glass "
+    "in warm gold, amber, and olive, filtering stationary sunset light across "
+    "the polished wooden floor. "
+    "Right section: steampunk pressure consoles, glowing brass gauges, copper tubes, "
+    "and warm amber vacuum tubes. "
+    "Completely clean empty arena. No human figures. No robot figures."
+)
+
+
+def audit_bg_generator() -> dict:
+    """Report the live environment generator and the locked v2 plate size."""
+    from .factory.create_environment import PANORAMA_SIZE, generation_aspect_for_size
+
+    with Image.open(_panorama_v2()) as opened:
+        locked = opened.size
+    report = {
+        "module": "core.animator.factory.create_environment",
+        "function": "create_environment",
+        "backend": "core.animator.factory.create_puppet.generate_character_image",
+        "model": "models/gemini-2.5-flash-image",
+        "formatter": "apply_reverse_angle_ambience",
+        "fit": "ImageOps.fit uniform cover-crop, shared scale on both axes",
+        "default_panorama_size": list(PANORAMA_SIZE),
+        "canonical_v2_size": [locked[0], locked[1]],
+        "locked_output_size": [locked[0], locked[1]],
+        "generation_aspect_ratio": generation_aspect_for_size(locked),
+        "destination": str(_panorama_v3()),
+    }
+    print(json.dumps(report, indent=2))
+    return report
+
+
+def generate_panorama_v3() -> Path:
+    """Run create_environment and lock the plate to the v2 pixel size."""
+    from dotenv import load_dotenv
+
+    from .factory.create_environment import create_environment
+
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+    canonical = _panorama_v2()
+    before = canonical.read_bytes()
+    with Image.open(canonical) as opened:
+        locked = opened.size
+    result = create_environment(
+        theme_id="aiwake_arena_panorama_v3",
+        prompt=_PANORAMA_V3_PROMPT,
+        output_size=locked,
+    )
+    destination = Path(result["path"])
+    if destination.resolve() != _panorama_v3().resolve():
+        raise RuntimeError(f"generator wrote {destination}, expected {_panorama_v3()}")
+    if tuple(result["size"]) != locked:
+        raise RuntimeError(f"panorama v3 is {result['size']}, expected {list(locked)}")
+    if canonical.read_bytes() != before:
+        raise RuntimeError(f"refusing to alter the canonical panorama: {canonical}")
+    print(f"{destination} {locked[0]}x{locked[1]} aspect={result['aspect_ratio']}")
+    return destination
+
+
+_GHIBLI_STYLE = (
+    "1990s Studio Ghibli painted background art, Hayao Miyazaki Laputa aesthetic. "
+    "Rich hand-painted gouache and watercolor, warm golden-hour lighting, dark anime ink linework. "
+    "Completely empty arena. No human figures. No robot figures. No letters."
+)
+_SCENE_CATALOG: tuple[dict[str, str], ...] = (
+    {
+        "theme_id": "aiwake_arena_panorama_v3",
+        "title": "03  Royal Airship Observatory",
+        "reference": "window",
+        "prompt": (
+            f"{_GHIBLI_STYLE} "
+            "Revise the reference image. Keep the magnificent interior: mahogany celestial "
+            "navigation tables, antique star charts, brass astrolabes, and green banker lamps "
+            "on the left; steampunk pressure consoles, glowing brass gauges, copper tubes, and "
+            "warm amber vacuum tubes on the right; polished herringbone wood floor; vaulted "
+            "wooden ceiling; book-lined walls. "
+            "REPLACE ONLY the central bay window. Remove every fluffy cloud and every sea of clouds. "
+            "Fill those arched windows with grand Art Nouveau Gothic stained glass vitrais: "
+            "multi-pane ornamental leaded glass in warm golden, amber, and olive patterns that "
+            "filter stationary sunset light onto the floor. The glass is solid, still, and architectural."
+        ),
+    },
+    {
+        "theme_id": "scene_04_clockwork_foundry",
+        "title": "04  A Oficina Real de Autômatos",
+        "reference": "",
+        "prompt": (
+            f"{_GHIBLI_STYLE} "
+            "A Oficina Real de Autômatos. Vaulted stone and exposed iron arches. "
+            "Center: a giant brass pendulum frozen at rest and a hanging astronomical orrery, both still. "
+            "Left: drafting tables, parchment blueprints, brass calipers. "
+            "Right: testing benches, glowing nixie tube arrays, copper steam pistons at rest. "
+            "No steam plumes. Enclosed foundry interior with a clear standing floor."
+        ),
+    },
+    {
+        "theme_id": "scene_05_botanical_conservatory",
+        "title": "05  O Jardim de Inverno Mecânico",
+        "reference": "",
+        "prompt": (
+            f"{_GHIBLI_STYLE} "
+            "O Jardim de Inverno Mecânico. Ornate Victorian wrought-iron and glass dome. "
+            "Large arched windows look onto stationary stone statues, stone balustrades, and a "
+            "distant silent mountain ridge under a smooth twilight gradient sky with no cloud forms. "
+            "Terrariums, brass watering apparatus, antique reading nooks. "
+            "No spraying water, no wind-blown leaves. Open floor between the planters."
+        ),
+    },
+    {
+        "theme_id": "scene_06_grand_circular_vault",
+        "title": "06  O Grande Arquivo Circular",
+        "reference": "",
+        "prompt": (
+            f"{_GHIBLI_STYLE} "
+            "O Grande Arquivo Circular. A completely enclosed interior rotunda. "
+            "Solid wood and plaster dome ceiling with painted coffers. "
+            "Absolutely no windows, no glass panes, no stained glass, no sky, no clouds, "
+            "and no exterior view of any kind. "
+            "Multi-tier curved mahogany balconies, wrought-iron spiral staircases, a central "
+            "illuminated celestial brass globe glowing softly, and warm desk lamps. "
+            "The only light comes from interior lamps. Polished wood floor, still air."
+        ),
+    },
+    {
+        "theme_id": "scene_07_council_chamber",
+        "title": "07  O Salão de Honra dos Filósofos",
+        "reference": "",
+        "prompt": (
+            f"{_GHIBLI_STYLE} "
+            "O Salão de Honra dos Filósofos. Renaissance wood-paneled walls, rich crimson drapery, "
+            "and heraldic brass crests. A central stained-glass rose window filters deep amber and "
+            "emerald light across a herringbone parquet floor. No open sky. Empty ceremonial hall."
+        ),
+    },
+    {
+        "theme_id": "scene_08_subterranean_relay",
+        "title": "08  A Estação de Relés e Válvulas",
+        "reference": "",
+        "prompt": (
+            f"{_GHIBLI_STYLE} "
+            "A Estação de Relés e Válvulas. Subterranean warm industrial Ghibli archive. "
+            "Granite flagstone floor, massive glowing vacuum-tube mainframe banks with warm orange "
+            "filaments, copper conduit pipes, and antique teletype stations. "
+            "Enclosed underground hall. No smoke, no steam, no water."
+        ),
+    },
+)
+
+
+def _locked_panorama_size() -> tuple[int, int]:
+    with Image.open(_panorama_v2()) as opened:
+        return opened.size
+
+
+def _catalog_font(size: int) -> ImageFont.ImageFont:
+    for candidate in (
+        Path(r"C:\Windows\Fonts\segoeui.ttf"),
+        Path(r"C:\Windows\Fonts\arial.ttf"),
+    ):
+        if candidate.is_file():
+            return ImageFont.truetype(str(candidate), size)
+    return ImageFont.load_default()
+
+
+def generate_scene_catalog() -> list[Path]:
+    """Revise scene 03 and write scenes 04–08 at the canonical v2 plate size."""
+    from dotenv import load_dotenv
+
+    from .factory.create_environment import (
+        STATIC_SCENE_RULES,
+        create_environment,
+        environment_prompt,
+    )
+
+    if STATIC_SCENE_RULES not in environment_prompt("catalog"):
+        raise RuntimeError("STATIC_SCENE_RULES is missing from the environment prompt")
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+    canonical = _panorama_v2()
+    before = canonical.read_bytes()
+    locked = _locked_panorama_size()
+    snapshot_dir = (
+        outputs_root() / "aiwake" / "_test_harness" / "scene_test" / "build"
+    )
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for scene in _SCENE_CATALOG:
+        reference: Path | None = None
+        if scene["reference"] == "window":
+            current = _shared_backgrounds() / f"{scene['theme_id']}.png"
+            if not current.is_file():
+                raise FileNotFoundError(current)
+            reference = snapshot_dir / f"{scene['theme_id']}_window_reference.png"
+            reference.write_bytes(current.read_bytes())
+        result = create_environment(
+            theme_id=scene["theme_id"],
+            prompt=scene["prompt"],
+            output_size=locked,
+            reference_path=reference,
+        )
+        destination = Path(result["path"])
+        if tuple(result["size"]) != locked:
+            raise RuntimeError(
+                f"{destination.name} is {result['size']}, expected {list(locked)}"
+            )
+        if canonical.read_bytes() != before:
+            raise RuntimeError(f"refusing to alter the canonical panorama: {canonical}")
+        print(f"{destination} {locked[0]}x{locked[1]} aspect={result['aspect_ratio']}")
+        written.append(destination)
+    return written
+
+
+def inspect_scene_catalog(destination: Path | None = None) -> Path:
+    """Stack the six catalog plates with a title on each cell."""
+    locked = _locked_panorama_size()
+    destination = destination or (
+        outputs_root()
+        / "aiwake"
+        / "_test_harness"
+        / "scene_test"
+        / "scene_catalog_preview_sheet.png"
+    )
+    columns = 2
+    thumb_w = 960
+    thumb_h = int(round(locked[1] * (thumb_w / locked[0])))
+    label_h = 64
+    pad = 18
+    rows = (len(_SCENE_CATALOG) + columns - 1) // columns
+    sheet = Image.new(
+        "RGB",
+        (
+            columns * thumb_w + (columns + 1) * pad,
+            rows * (thumb_h + label_h) + (rows + 1) * pad,
+        ),
+        (28, 22, 16),
+    )
+    draw = ImageDraw.Draw(sheet)
+    font = _catalog_font(32)
+    for index, scene in enumerate(_SCENE_CATALOG):
+        path = _shared_backgrounds() / f"{scene['theme_id']}.png"
+        with Image.open(path) as opened:
+            if opened.size != locked:
+                raise RuntimeError(f"{path.name} is {opened.size}, expected {locked}")
+            thumb = opened.convert("RGB").resize(
+                (thumb_w, thumb_h),
+                Image.Resampling.LANCZOS,
+            )
+        column = index % columns
+        row = index // columns
+        x = pad + column * (thumb_w + pad)
+        y = pad + row * (thumb_h + label_h + pad)
+        draw.rectangle((x, y, x + thumb_w, y + label_h), fill=(72, 48, 28))
+        draw.text((x + 18, y + 14), scene["title"], fill=(245, 228, 196), font=font)
+        sheet.paste(thumb, (x, y + label_h))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(destination, format="PNG", compress_level=1)
+    print(f"{destination} {sheet.size[0]}x{sheet.size[1]}")
+    return destination
+
+
+def preview_contraplano_crops(
+    panorama_path: Path,
+    destination: Path,
+    *,
+    speaker_left: str,
+    speaker_right: str,
+) -> Path:
+    """Left camera on the panorama's left half, reverse camera on the right half."""
+    from .compositor import ShotReverseShotCompositor
+    from .puppet import PuppetRig, PuppetSkin
+    from .types import SpeakerStyle
+
+    workdir = destination.parent / "build" / "puppets"
+    build_render_skin(speaker_left, workdir, view_name="facing_right", contraplano=True)
+    build_render_skin(speaker_right, workdir, view_name="facing_left", contraplano=True)
+    with Image.open(panorama_path) as opened:
+        panorama = opened.convert("RGB")
+    director = ShotReverseShotCompositor.__new__(ShotReverseShotCompositor)
+    director.width = panorama.width // 2
+    director.height = panorama.height
+    shots = (
+        (
+            speaker_left,
+            SpeakerStyle(character_id=speaker_left, label="CHATGPT", facing="right"),
+            director.width // 2,
+        ),
+        (
+            speaker_right,
+            SpeakerStyle(character_id=speaker_right, label="CLAUDE", facing="left"),
+            director.width // 2,
+        ),
+    )
+    panels: list[Image.Image] = []
+    for character_id, style, center_x in shots:
+        rig = PuppetRig(PuppetSkin.load(workdir / character_id))
+        background = director._prepare_camera_background(rig, style, panorama)
+        plate = Image.fromarray(background).convert("RGBA")
+        frame = rig.compose(viseme="X", emotion="neutral")
+        rgb = np.clip(frame[..., :3], 0, 255).astype(np.uint8)
+        alpha = np.clip(frame[..., 3], 0, 255).astype(np.uint8)
+        sprite = Image.fromarray(np.dstack((rgb, alpha)))
+        _ground_character(plate, sprite, center_x)
+        panels.append(plate.convert("RGB"))
+    preview = Image.new("RGB", (sum(panel.width for panel in panels), panels[0].height))
+    cursor = 0
+    for panel in panels:
+        preview.paste(panel, (cursor, 0))
+        cursor += panel.width
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    preview.save(destination, format="PNG", compress_level=1)
+    print(f"{destination} {preview.size[0]}x{preview.size[1]}")
+    return destination
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render a ChatGPT vs Claude debate test.")
     parser.add_argument("--clone-from", default="llama")
     parser.add_argument("--puppets", default="", help="Comma-separated puppet ids.")
     parser.add_argument("--contraplano", action="store_true")
+    parser.add_argument("--scene", default="random")
     parser.add_argument("--speaker-left", default="chatgpt_cyborg_v1")
     parser.add_argument("--speaker-right", default="claude_cyborg_v1")
     parser.add_argument("--voice-left", default="male_confident")
@@ -830,9 +1452,77 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--draw-mouths", action="store_true")
     parser.add_argument("--inspect-sheet", action="store_true")
     parser.add_argument("--render-pilot-acting", action="store_true")
+    parser.add_argument("--freeze-deepseek", action="store_true")
+    parser.add_argument("--generate-new-scene", action="store_true")
+    parser.add_argument("--preview-scene-composite", action="store_true")
+    parser.add_argument("--clean-rogue-bg", action="store_true")
+    parser.add_argument("--audit-bg-generator", action="store_true")
+    parser.add_argument("--generate-panorama-v3", action="store_true")
+    parser.add_argument("--preview-contraplano-crops", action="store_true")
+    parser.add_argument("--generate-scene-catalog", action="store_true")
+    parser.add_argument("--apply-static-rules", action="store_true")
+    parser.add_argument("--inspect-catalog", action="store_true")
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if args.generate_scene_catalog or args.apply_static_rules or args.inspect_catalog:
+        if args.generate_scene_catalog and not args.apply_static_rules:
+            parser.error("--generate-scene-catalog requires --apply-static-rules")
+        if args.apply_static_rules:
+            from .factory.create_environment import STATIC_SCENE_RULES, environment_prompt
+
+            if STATIC_SCENE_RULES not in environment_prompt("static-rules"):
+                raise RuntimeError("STATIC_SCENE_RULES is missing from the environment prompt")
+            print("STATIC_SCENE_RULES armed")
+        if args.generate_scene_catalog:
+            generate_scene_catalog()
+        if args.inspect_catalog:
+            inspect_scene_catalog(args.output)
+        return 0
+    if (
+        args.audit_bg_generator
+        or args.clean_rogue_bg
+        or args.generate_panorama_v3
+        or args.preview_contraplano_crops
+    ):
+        if args.audit_bg_generator:
+            audit_bg_generator()
+        if args.clean_rogue_bg:
+            clean_rogue_backgrounds()
+        panorama = _panorama_v3()
+        if args.generate_panorama_v3 or (
+            args.preview_contraplano_crops and not panorama.is_file()
+        ):
+            panorama = generate_panorama_v3()
+        if args.preview_contraplano_crops:
+            preview_contraplano_crops(
+                panorama,
+                outputs_root()
+                / "aiwake"
+                / "_test_harness"
+                / "scene_test"
+                / "panorama_v3_preview.png",
+                speaker_left=args.speaker_left,
+                speaker_right=args.speaker_right,
+            )
+        return 0
+    if args.freeze_deepseek or args.generate_new_scene or args.preview_scene_composite:
+        scene_path = _scene_02_path()
+        if args.freeze_deepseek:
+            from .vision.head_analyzer import freeze_gold_master
+
+            freeze_gold_master("deepseek_cyborg_v3")
+        if args.generate_new_scene or args.preview_scene_composite:
+            if args.generate_new_scene or not scene_path.is_file():
+                scene_path = generate_steampunk_observatory()
+        if args.preview_scene_composite:
+            preview_scene_composite(
+                scene_path,
+                args.output or SCENE_PREVIEW,
+                speaker_left=args.speaker_left,
+                speaker_right=args.speaker_right,
+            )
+        return 0
     if args.pilot:
         if args.draw_mouths:
             draw_mouths(args.pilot, {"style": "cybernetic_capsule"})
@@ -841,7 +1531,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.inspect_sheet:
             export_pilot_facial_sheet(args.pilot, _PILOT_SHEET)
         if args.render_pilot_acting:
-            render_pilot_acting(args.pilot, args.output or _PILOT_VIDEO)
+            render_pilot_acting(args.pilot, args.output or _PILOT_VIDEO, scene=args.scene)
         if not (args.draw_mouths or args.inspect_sheet or args.render_pilot_acting):
             parser.error("--pilot needs --draw-mouths, --inspect-sheet, or --render-pilot-acting")
         return 0
@@ -858,7 +1548,12 @@ def main(argv: list[str] | None = None) -> int:
                 voice_right=args.voice_right,
                 contraplano=True,
             )
-            render_test_dialogue(lines, args.output or _CONTRAPLANO_OUTPUT, contraplano=True)
+            render_test_dialogue(
+                lines,
+                args.output or _CONTRAPLANO_OUTPUT,
+                contraplano=True,
+                scene=args.scene,
+            )
         return 0
     if not args.puppets:
         parser.error("pass --puppets or --contraplano")
@@ -871,7 +1566,12 @@ def main(argv: list[str] | None = None) -> int:
             voice_left="male_confident",
             contraplano=False,
         )
-        render_test_dialogue(lines, args.output or _TEST_OUTPUT, contraplano=False)
+        render_test_dialogue(
+            lines,
+            args.output or _TEST_OUTPUT,
+            contraplano=False,
+            scene=args.scene,
+        )
     return 0
 
 

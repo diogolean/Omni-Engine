@@ -655,7 +655,12 @@ def _straight_blade_brow(width: int, *, stroke_scale: float = 1.0) -> Image.Imag
     return canvas.resize((width, height + 10), Image.Resampling.LANCZOS)
 
 
-def _tapered_arch_brow(width: int, *, bow: float = 0.34) -> Image.Image:
+def _tapered_arch_brow(
+    width: int,
+    *,
+    bow: float = 0.34,
+    stroke_scale: float = 1.0,
+) -> Image.Image:
     """Slight anime arch. Outer tip tapers; stroke is 25% under the bevel bar."""
     height = max(20, int(round(width * 0.22)))
     scale = 4
@@ -665,7 +670,7 @@ def _tapered_arch_brow(width: int, *, bow: float = 0.34) -> Image.Image:
         (0, 0, 0, 0),
     )
     draw = ImageDraw.Draw(canvas, "RGBA")
-    base = max(4.0, width * 0.075 * 0.75) * scale
+    base = max(4.0, width * 0.075 * 0.75) * scale * stroke_scale
     samples = 32
     centerline: list[tuple[float, float]] = []
     for index in range(samples + 1):
@@ -775,20 +780,30 @@ def stamp_scene_brows(
             int(round(target * scale_x * width_scale + width_delta)),
         )
         pose = float(angle)
-        if expression == "smug" and node.get("smug_tilt") is not None:
+        angle_locked = False
+        if expression == "neutral" and node.get("neutral_tilt") is not None:
+            pose = float(node["neutral_tilt"])
+            angle_locked = True
+        elif expression == "shock" and node.get("shock_tilt") is not None:
+            pose = float(node["shock_tilt"])
+            angle_locked = True
+        elif expression == "smug" and node.get("smug_tilt") is not None:
             pose = float(node["smug_tilt"])
         elif expression == "angry" and node.get("angry_tilt") is not None:
             pose = float(node["angry_tilt"])
         elif expression == "sad" and node.get("sad_tilt") is not None:
             pose = float(node["sad_tilt"])
+        if angle_locked:
+            horizon = 0.0
+        stroke = float(node.get("stroke_scale") or 1.0)
         if expression in {"smug", "angry"}:
             fitted = _straight_blade_brow(
                 placed_w,
-                stroke_scale=float(node.get("blade_stroke_scale") or 1.0),
+                stroke_scale=float(node.get("blade_stroke_scale") or 1.0) * stroke,
             )
         elif node.get("shape") == "taper":
             bow = 0.62 if expression == "shock" else 0.34
-            fitted = _tapered_arch_brow(placed_w, bow=bow)
+            fitted = _tapered_arch_brow(placed_w, bow=bow, stroke_scale=stroke)
         elif node.get("shape") == "bevel":
             fitted = _bevel_brow(placed_w)
         elif expression == "smug" and node.get("smug_contour") == "villain":

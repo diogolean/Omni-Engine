@@ -22,10 +22,14 @@ from utils.pipeline_paths import assets_root, outputs_root
 
 from ..render.facial_rig import (
     SCENE_GRAPH_BROW_ANGLES,
+    _straight_blade_brow,
+    _tapered_arch_brow,
     compose_scene_graph_head,
 )
 from ..render.skia_mouths import (
     ARCHETYPES,
+    DEEPSEEK_CAVITY,
+    DEEPSEEK_LIP,
     VIEW_FOLDERS,
     archetype_for,
     generate_mouth_suite,
@@ -159,6 +163,22 @@ V14_MASTER_SHEET = (
     / "master_head_rig_inspection_v14.png"
 )
 V14_VIDEO = V14_MASTER_SHEET.parent / "chatgpt_vs_claude_v14_master.mp4"
+DEEPSEEK_SHEET = (
+    outputs_root()
+    / "aiwake"
+    / "_test_harness"
+    / "deepseek_validation"
+    / "deepseek_master_rig_preview.png"
+)
+DEEPSEEK_APPROVED = DEEPSEEK_SHEET.with_name("deepseek_master_rig_approved.png")
+DEEPSEEK_DEBUT = DEEPSEEK_SHEET.with_name("deepseek_debut_test.mp4")
+DEEPSEEK_DEBUT_MASTER = DEEPSEEK_SHEET.with_name("deepseek_debut_master.mp4")
+FROZEN_GOLD_MASTERS = frozenset({
+    "chatgpt_cyborg_v1",
+    "claude_cyborg_v1",
+    "deepseek_cyborg_v3",
+})
+AVATAR_ALIASES = {"deepseek_cyborg_v1": "deepseek_cyborg_v3"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1750,6 +1770,702 @@ def _archive_v10_sprites(puppet_id: str, root: Path, manifest_path: Path) -> Non
     shutil.copy2(manifest_path, manifest_dest / f"{puppet_id}.json")
 
 
+def _assert_mutable(puppet_id: str) -> None:
+    """Gold-master puppets stay canonical. Auto-rig must not rewrite them."""
+    if puppet_id in FROZEN_GOLD_MASTERS:
+        raise RuntimeError(
+            f"{puppet_id} is a frozen gold master. "
+            "Its manifest and sprites stay canonical."
+        )
+
+
+def freeze_gold_master(puppet_id: str) -> Path:
+    """Stamp one manifest as a frozen gold master. Sprites stay untouched."""
+    if puppet_id not in FROZEN_GOLD_MASTERS:
+        raise RuntimeError(f"{puppet_id} is not in the frozen gold-master set")
+    manifest_path = assets_root() / "puppets" / puppet_id / "puppet.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if data.get("gold_master") == "frozen":
+        print(f"frozen gold master: {manifest_path}")
+        return manifest_path
+    data["gold_master"] = "frozen"
+    graph = data.setdefault("facial_scene_graph", {})
+    masters = set(graph.get("frozen_gold_masters") or [])
+    masters.update(FROZEN_GOLD_MASTERS)
+    graph["frozen_gold_masters"] = sorted(masters)
+    manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"frozen gold master: {manifest_path}")
+    return manifest_path
+
+
+def _resolve_avatar(puppet_id: str) -> str:
+    """Bind a requested avatar id to the on-disk puppet that owns the heads."""
+    root = assets_root() / "puppets" / puppet_id
+    if (root / "puppet.json").is_file():
+        return puppet_id
+    alias = AVATAR_ALIASES.get(puppet_id)
+    if alias and (assets_root() / "puppets" / alias / "puppet.json").is_file():
+        print(f"avatar {puppet_id} -> {alias}")
+        return alias
+    raise FileNotFoundError(f"no puppet manifest for {puppet_id}")
+
+
+def _eye_line_theta(left: EyeLandmark, right: EyeLandmark) -> float:
+    """Eye-line angle in radians. Positive is clockwise in screen space."""
+    return math.atan2(
+        right.center[1] - left.center[1],
+        right.center[0] - left.center[0],
+    )
+
+
+def _warp_head_roll(head: Image.Image, degrees_ccw: float) -> Image.Image:
+    """Rotate a head about its center. The source file is left untouched."""
+    if abs(degrees_ccw) < 1e-3:
+        return head
+    rgba = np.asarray(head.convert("RGBA"))
+    height, width = rgba.shape[:2]
+    matrix = cv2.getRotationMatrix2D(
+        (width / 2.0, height / 2.0),
+        degrees_ccw,
+        1.0,
+    )
+    warped = cv2.warpAffine(
+        rgba,
+        matrix,
+        (width, height),
+        flags=cv2.INTER_LANCZOS4,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0),
+    )
+    return Image.fromarray(warped)
+
+
+def _roll_correction_degrees(
+    facing_left: tuple[EyeLandmark, EyeLandmark],
+    facing_right: tuple[EyeLandmark, EyeLandmark],
+) -> float:
+    """CCW degrees that mirror facing_right's roll onto facing_left.
+
+    Only a clockwise surplus is removed. The mirror of the left profile is
+    the negation of its eye-line angle.
+    """
+    theta_left = math.degrees(_eye_line_theta(*facing_left))
+    theta_right = math.degrees(_eye_line_theta(*facing_right))
+    excess_clockwise = theta_right - (-theta_left)
+    if excess_clockwise <= 0.5:
+        return 0.0
+    return excess_clockwise
+
+
+def _chin_basin_centroid(rgba: np.ndarray) -> tuple[float, float, tuple[int, int, int, int]]:
+    """Center of mass of the chassis plate in the lower 35% of the head."""
+    height, width = rgba.shape[:2]
+    y_cut = int(round(height * 0.65))
+    rgb = rgba[..., :3]
+    luma = rgb.astype(np.float32).mean(axis=2)
+    plate = (
+        (rgba[..., 3] > 16)
+        & (luma > 35.0)
+        & (luma < 210.0)
+    )
+    plate[:y_cut, :] = False
+    mask = plate.astype(np.uint8) * 255
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        raise RuntimeError("chin basin contour was not found in the lower 35%")
+    contour = max(contours, key=cv2.contourArea)
+    if cv2.contourArea(contour) < 400:
+        raise RuntimeError("chin basin contour is too small to place a mouth")
+    moments = cv2.moments(contour)
+    if moments["m00"] == 0:
+        raise RuntimeError("chin basin contour has no area")
+    centroid_x = moments["m10"] / moments["m00"]
+    centroid_y = moments["m01"] / moments["m00"]
+    x_pos, y_pos, box_w, box_h = cv2.boundingRect(contour)
+    return (
+        float(centroid_x),
+        float(centroid_y),
+        (int(x_pos), int(y_pos), int(x_pos + box_w), int(y_pos + box_h)),
+    )
+
+
+def _ocular_bezel(rgba: np.ndarray, eye: EyeLandmark) -> tuple[int, float]:
+    """Upper bezel rim and the horizontal radius of that same contour."""
+    height, width = rgba.shape[:2]
+    cx, cy = eye.center
+    radius = max(8, eye.radius)
+    x0 = max(0, cx - int(round(radius * 2.4)))
+    x1 = min(width, cx + int(round(radius * 2.4)) + 1)
+    y0 = max(0, cy - int(round(radius * 2.6)))
+    y1 = min(height, cy + int(round(radius * 1.4)) + 1)
+    crop = rgba[y0:y1, x0:x1]
+    gray = cv2.cvtColor(crop[..., :3], cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 40, 120)
+    edges[crop[..., 3] < 16] = 0
+    ys, xs = np.nonzero(edges)
+    local_cx = cx - x0
+    local_cy = cy - y0
+    if ys.size:
+        dist = np.hypot(xs - local_cx, ys - local_cy)
+        ring = (dist >= radius * 0.55) & (dist <= radius * 1.90)
+        if int(ring.sum()) >= 12:
+            ring_y = ys[ring]
+            ring_x = xs[ring]
+            upper = ring_y <= local_cy
+            chosen_y = ring_y[upper] if int(upper.sum()) >= 6 else ring_y
+            chosen_x = ring_x[upper] if int(upper.sum()) >= 6 else ring_x
+            y_top = y0 + int(chosen_y.min())
+            horizontal = float(chosen_x.max() - chosen_x.min()) / 2.0
+            return y_top, max(8.0, horizontal)
+    return int(cy - radius), float(radius)
+
+
+def _ink_base_below_center(sprite: Image.Image) -> float:
+    """Distance from the ink bbox center down to the ink base."""
+    alpha = np.asarray(sprite)[..., 3]
+    ys = np.nonzero(alpha > 16)[0]
+    if ys.size == 0:
+        return sprite.height / 2.0
+    return float(ys.max() - (ys.min() + ys.max()) / 2.0)
+
+
+def _dock_brows_to_rims(
+    brows: dict,
+    rgba: np.ndarray,
+    left: EyeLandmark,
+    right: EyeLandmark,
+) -> None:
+    """Seat each brow on its own ocular rim. Width follows that eye's radius."""
+    brows["style"] = "ink"
+    for side, eye in (("left", left), ("right", right)):
+        rim_y, horizontal = _ocular_bezel(rgba, eye)
+        width = max(8, int(round(horizontal * 1.8)))
+        neutral_base = rim_y - 4
+        menace_base = rim_y - 1
+        arch_drop = _ink_base_below_center(_tapered_arch_brow(width))
+        blade_drop = _ink_base_below_center(_straight_blade_brow(width))
+        shock_drop = _ink_base_below_center(_tapered_arch_brow(width, bow=0.62))
+        neutral_anchor = neutral_base - arch_drop
+        node = brows[side]
+        node["shape"] = "taper"
+        node["scale_x"] = 1.0
+        node["horizon_tilt"] = 0.0
+        node["width"] = width
+        node["center"] = [eye.center[0], int(round(neutral_anchor))]
+        node["offset_x"] = 0
+        node["offset_y"] = 0
+        node["sad_tilt"] = 14 if side == "left" else -14
+        node["smug_tilt"] = -14 if side == "left" else 14
+        node["angry_tilt"] = -12 if side == "left" else 12
+        node["shock_offset_y"] = (neutral_base - shock_drop) - neutral_anchor
+        node["menace_drop_y"] = (menace_base - blade_drop) - neutral_anchor
+        node["rim_y"] = rim_y
+
+
+def _deterministic_analysis(
+    head: Image.Image,
+    view_name: str,
+    *,
+    mouth_scale: float = 0.75,
+) -> HeadAnalysis:
+    """Landmarks from the eye line, the chin centroid, and each ocular rim."""
+    rgba = np.asarray(head.convert("RGBA"))
+    left, right = _pair_eyes(rgba, view_name)
+    centroid_x, centroid_y, chin = _chin_basin_centroid(rgba)
+    mouth_x = int(round(centroid_x))
+    mouth_y = int(round(centroid_y + 4.0))
+    chin_left, chin_top, chin_right, chin_bottom = chin
+    mouth_x = int(np.clip(mouth_x, chin_left + 8, chin_right - 8))
+    mouth_y = int(np.clip(mouth_y, chin_top, chin_bottom))
+    tilt = float(np.clip(math.degrees(_eye_line_theta(left, right)), -8.0, 8.0))
+    perspective = min(left.radius, right.radius) / max(left.radius, right.radius, 1)
+    chin_width = chin_right - chin_left
+    plate_bottom = _nameplate_bottom(rgba, left, right)
+    return HeadAnalysis(
+        eye_left=left,
+        eye_right=right,
+        eye_radius=int(round((left.radius + right.radius) / 2.0)),
+        nameplate_bottom=plate_bottom,
+        mouth_center=(mouth_x, mouth_y),
+        mouth_rotation_deg=tilt,
+        mouth_target_width=max(44, int(round(chin_width * mouth_scale))),
+        perspective_scale=float(perspective),
+        chin_bbox=chin,
+        eyebrow_y=int(round((left.top + right.top) / 2.0)),
+    )
+
+
+def _apply_production_brows(
+    brows: dict,
+    view_name: str,
+    analysis: HeadAnalysis,
+) -> None:
+    """Universal production brows: arch at rest, blade on smug and angry."""
+    far = _far_side(analysis, view_name)
+    brows["style"] = "ink"
+    for side in ("left", "right"):
+        node = brows[side]
+        node["shape"] = "taper"
+        node["scale_x"] = 1.0
+        node["horizon_tilt"] = _horizon_tilt(view_name, side, far)
+        node["sad_tilt"] = 14 if side == "left" else -14
+        node["shock_offset_y"] = -12
+        node["smug_tilt"] = -14 if side == "left" else 14
+        node["angry_tilt"] = -12 if side == "left" else 12
+        node["menace_drop_y"] = 4
+
+
+CANONICAL_BROW_WIDTH = 85
+EYE_BROW_CLEARANCE_PX = 28
+# Relative brow-creation rule. Each brow is parented to its own eye center.
+# Screen Y grows downward, so a larger clearance sits higher on the forehead.
+# Neutral, sad, and shock share the rest seat. Angry and smug use the
+# menace seat. Stroke and width are part of the same rule.
+BROW_CREATION_RULE = {
+    "anchor": "own_eye_center",
+    "neutral_sad_shock_clearance_px": 66,
+    "angry_smug_clearance_px": 59,
+    "stroke_scale": 1.80,
+    "blade_stroke_scale": 1.10,
+    "width_px": CANONICAL_BROW_WIDTH,
+    "neutral_relax_deg": 5,
+    "facing_left": {
+        "left": {"width_scale": 1.05, "offset_x": -6, "neutral_tilt": 4.0},
+        "right": {"width_scale": 1.05, "offset_x": -5, "offset_y": -2},
+    },
+    "facing_right": {
+        "left": {"offset_x": 5, "offset_y": -2},
+        "right": {"offset_x": 6, "neutral_tilt": -4.0, "shock_tilt": -6.0},
+    },
+}
+FULL_BLINK_FIT = {
+    "facing_left": {"side": "left", "scale": 1.02, "offset_y": 1},
+    "facing_right": {"side": "right", "scale": 1.02, "offset_y": 1},
+}
+FINAL_BROW_CLEARANCE_PX = int(BROW_CREATION_RULE["neutral_sad_shock_clearance_px"])
+FINAL_MENACE_DROP_Y = FINAL_BROW_CLEARANCE_PX - int(
+    BROW_CREATION_RULE["angry_smug_clearance_px"]
+)
+MVP_STROKE_SCALE = 1.15
+FINAL_STROKE_SCALE = float(BROW_CREATION_RULE["stroke_scale"])
+V14_MOUTH_DROP_Y = 7
+MVP_MOUTH_NUDGE_Y = 5
+FINAL_MOUTH_DROP_Y = 7
+
+
+def _ink_top_above_center(sprite: Image.Image) -> float:
+    """Distance from the ink bbox center up to the ink top."""
+    alpha = np.asarray(sprite)[..., 3]
+    ys = np.nonzero(alpha > 16)[0]
+    if ys.size == 0:
+        return sprite.height / 2.0
+    return float((ys.min() + ys.max()) / 2.0 - ys.min())
+
+
+def _restore_v14_brow_seat(
+    brows: dict,
+    view_name: str,
+    plate_bottom: int,
+) -> None:
+    """Canonical 85px brows, eye-height tracking, and a hard plate ceiling."""
+    for side in ("left", "right"):
+        node = brows[side]
+        node["width"] = CANONICAL_BROW_WIDTH
+        node["width_scale"] = 1.0
+        node["width_delta"] = 0
+        node["scale_x"] = 1.0
+        node["offset_x"] = 0
+        node["offset_y"] = 0
+    if view_name == "facing_left":
+        brows["left"]["offset_x"] = -4
+        brows["left"]["offset_y"] = 8
+        brows["right"]["offset_y"] = -4
+    elif view_name == "facing_right":
+        brows["right"]["offset_x"] = 4
+        brows["right"]["offset_y"] = 8
+        brows["left"]["offset_y"] = -4
+    tall = _tapered_arch_brow(CANONICAL_BROW_WIDTH, bow=0.62)
+    top_above = _ink_top_above_center(tall)
+    ceiling = plate_bottom + 2
+    for side in ("left", "right"):
+        node = brows[side]
+        anchor = float(node["center"][1]) + float(node.get("offset_y") or 0)
+        shock = min(0.0, float(node.get("shock_offset_y") or 0.0))
+        highest_top = anchor + shock - top_above
+        if highest_top < ceiling:
+            node["offset_y"] = int(node.get("offset_y") or 0) + int(
+                math.ceil(ceiling - highest_top)
+            )
+
+
+def _bind_brows_to_eye_centers(
+    brows: dict,
+    analysis: HeadAnalysis,
+    *,
+    clearance_px: int = EYE_BROW_CLEARANCE_PX,
+    stroke_scale: float = MVP_STROKE_SCALE,
+    menace_drop_y: int | None = None,
+    shock_offset_y: int | None = None,
+) -> None:
+    """Seat each brow on its own eye center. Perspective comes from the eyes."""
+    eyes = {"left": analysis.eye_left, "right": analysis.eye_right}
+    tall = _tapered_arch_brow(
+        CANONICAL_BROW_WIDTH,
+        bow=0.62,
+        stroke_scale=stroke_scale,
+    )
+    top_above = _ink_top_above_center(tall)
+    ceiling = analysis.nameplate_bottom + 2
+    for side, eye in eyes.items():
+        node = brows[side]
+        node["width"] = CANONICAL_BROW_WIDTH
+        node["width_scale"] = 1.0
+        node["width_delta"] = 0
+        node["scale_x"] = 1.0
+        node["offset_x"] = 0
+        node["offset_y"] = 0
+        node["stroke_scale"] = stroke_scale
+        if menace_drop_y is not None:
+            node["menace_drop_y"] = menace_drop_y
+        if shock_offset_y is not None:
+            node["shock_offset_y"] = shock_offset_y
+        anchor_y = int(eye.center[1]) - clearance_px
+        shock = min(0.0, float(node.get("shock_offset_y") or 0.0))
+        highest_top = anchor_y + shock - top_above
+        if highest_top < ceiling:
+            anchor_y += int(math.ceil(ceiling - highest_top))
+        node["center"] = [int(eye.center[0]), anchor_y]
+
+
+def _neutral_tilt_deg(view_name: str, side: str, eyes: dict) -> float:
+    """Calm rest angle. Named snaps in the creation rule override this."""
+    relax = float(BROW_CREATION_RULE["neutral_relax_deg"])
+    if view_name == "facing_right" and side == "left":
+        left = eyes["left"]["center"]
+        right = eyes["right"]["center"]
+        roll = math.degrees(
+            math.atan2(float(right[1]) - float(left[1]), float(right[0]) - float(left[0]))
+        )
+        return -abs(roll)
+    if side == "left":
+        base = -7.0 if view_name == "facing_left" else 0.0
+        return base + relax
+    return -relax
+
+
+def _elevate_sealed_brows(data: dict) -> None:
+    """Apply the brow-creation rule. Mouth centers stay untouched."""
+    blade = float(BROW_CREATION_RULE["blade_stroke_scale"])
+    for view_name in VIEW_ORDER:
+        rig = data["views"][view_name]["facial_rig"]
+        eyes = rig["eyes_lids"]
+        brows = rig["eyebrows"]
+        snaps = BROW_CREATION_RULE.get(view_name) or {}
+        for side in ("left", "right"):
+            eye = eyes[side]["center"]
+            node = brows[side]
+            snap = snaps.get(side) or {}
+            node["center"] = [
+                int(eye[0]),
+                int(eye[1]) - FINAL_BROW_CLEARANCE_PX,
+            ]
+            node["width"] = int(BROW_CREATION_RULE["width_px"])
+            node["width_scale"] = float(snap.get("width_scale") or 1.0)
+            node["offset_x"] = int(snap.get("offset_x") or 0)
+            node["offset_y"] = int(snap.get("offset_y") or 0)
+            node["stroke_scale"] = FINAL_STROKE_SCALE
+            node["blade_stroke_scale"] = blade
+            node["menace_drop_y"] = FINAL_MENACE_DROP_Y
+            node["shock_offset_y"] = 0
+            node["neutral_tilt"] = round(
+                float(snap["neutral_tilt"])
+                if "neutral_tilt" in snap
+                else _neutral_tilt_deg(view_name, side, eyes),
+                3,
+            )
+            if "shock_tilt" in snap:
+                node["shock_tilt"] = float(snap["shock_tilt"])
+            else:
+                node.pop("shock_tilt", None)
+
+
+def _microfit_closed_lid(
+    path: Path,
+    center: tuple[int, int],
+    radius: int,
+    *,
+    scale: float,
+    offset_y: int,
+) -> None:
+    """Scale and drop one closed lid. The other eye on the plate stays put."""
+    image = Image.open(path).convert("RGBA")
+    arr = np.array(image)
+    height, width = arr.shape[:2]
+    yy, xx = np.ogrid[:height, :width]
+    cx, cy = center
+    reach = max(8, int(round(radius * 1.45)))
+    mask = ((xx - cx) ** 2 + (yy - cy) ** 2 <= reach ** 2) & (arr[..., 3] > 16)
+    ys, xs = np.nonzero(mask)
+    if xs.size == 0:
+        return
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    patch = image.crop((x0, y0, x1, y1))
+    arr[y0:y1, x0:x1] = 0
+    image = Image.fromarray(arr)
+    fitted = patch.resize(
+        (
+            max(1, int(round(patch.width * scale))),
+            max(1, int(round(patch.height * scale))),
+        ),
+        Image.Resampling.LANCZOS,
+    )
+    origin_x = int(round((x0 + x1) / 2.0 - fitted.width / 2.0))
+    origin_y = int(round((y0 + y1) / 2.0 - fitted.height / 2.0)) + int(offset_y)
+    layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    layer.paste(fitted, (origin_x, origin_y))
+    image.alpha_composite(layer)
+    image.save(path, format="PNG", compress_level=1)
+
+
+def _fit_sealed_blinks(root: Path, data: dict) -> None:
+    """Full-blink micro-fit. Half-open lids are left byte-for-byte."""
+    stored = (data.get("facial_scene_graph") or {}).get("full_blink_fit")
+    if stored == FULL_BLINK_FIT:
+        return
+    for view_name, spec in FULL_BLINK_FIT.items():
+        rig = data["views"][view_name]["facial_rig"]
+        side = spec["side"]
+        eye = rig["eyes_lids"][side]
+        blink = root / data["views"][view_name]["head"]
+        blink = blink.parent / "eyelid_blink.png"
+        _microfit_closed_lid(
+            blink,
+            (int(eye["center"][0]), int(eye["center"][1])),
+            int(eye["radius"]),
+            scale=float(spec["scale"]),
+            offset_y=int(spec["offset_y"]),
+        )
+
+
+def production_rig_avatar(
+    puppet_id: str,
+    *,
+    vision_deterministic: bool = False,
+    restore_v14_dna: bool = False,
+    mvp_final_seal: bool = False,
+    seal_final_rig: bool = False,
+) -> Path:
+    """One-click vision rig. Frozen gold masters are refused."""
+    _assert_mutable(puppet_id)
+    root = assets_root() / "puppets" / puppet_id
+    manifest_path = root / "puppet.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    archetype = archetype_for(puppet_id)
+    if seal_final_rig:
+        _elevate_sealed_brows(data)
+        _fit_sealed_blinks(root, data)
+        data["facial_scene_graph"] = {
+            "coordinate_space": "head_local",
+            "root": "head",
+            "version": "final_rig_seal",
+            "brow_creation_rule": BROW_CREATION_RULE,
+            "full_blink_fit": FULL_BLINK_FIT,
+            "frozen_gold_masters": sorted(FROZEN_GOLD_MASTERS),
+            "mouth_archetype": archetype,
+        }
+        manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        DEEPSEEK_SHEET.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, DEEPSEEK_SHEET.parent / f"{puppet_id}.json")
+        print(f"production-rigged: {manifest_path}")
+        return manifest_path
+    suite_dir = root / "mouths" / "deepseek_production"
+    generate_view_mouth_suites(
+        puppet_id,
+        archetype=archetype,
+        puppet_root=root,
+        suite_dir=suite_dir,
+        lip=DEEPSEEK_LIP if "deepseek" in puppet_id.lower() else None,
+        cavity=DEEPSEEK_CAVITY if "deepseek" in puppet_id.lower() else None,
+    )
+    art_before = {
+        name: (
+            view.get("head"),
+            view.get("body"),
+            view.get("head_xy"),
+            view.get("body_xy"),
+        )
+        for name, view in data["views"].items()
+    }
+    if restore_v14_dna or mvp_final_seal or seal_final_rig:
+        vision_deterministic = False
+    roll_correction = 0.0
+    if vision_deterministic:
+        measured: dict[str, tuple[EyeLandmark, EyeLandmark]] = {}
+        for view_name in ("facing_left", "facing_right"):
+            head_path = root / data["views"][view_name]["head"]
+            with Image.open(head_path) as opened:
+                probe = np.asarray(opened.convert("RGBA"))
+            measured[view_name] = _pair_eyes(probe, view_name)
+        roll_correction = _roll_correction_degrees(
+            measured["facing_left"],
+            measured["facing_right"],
+        )
+        theta_left = math.degrees(_eye_line_theta(*measured["facing_left"]))
+        theta_right = math.degrees(_eye_line_theta(*measured["facing_right"]))
+        print(
+            f"eye-line facing_left={theta_left:.3f} deg "
+            f"facing_right={theta_right:.3f} deg "
+            f"ccw_correction={roll_correction:.3f} deg"
+        )
+    for view_name in VIEW_ORDER:
+        view = data["views"][view_name]
+        head_path = root / view["head"]
+        with Image.open(head_path) as opened:
+            head = opened.convert("RGBA")
+        correction = roll_correction if view_name == "facing_right" else 0.0
+        if vision_deterministic and correction:
+            head = _warp_head_roll(head, correction)
+        if vision_deterministic:
+            analysis = _deterministic_analysis(head, view_name, mouth_scale=0.75)
+        else:
+            analysis = analyze_head(
+                head,
+                view_name=view_name,
+                mouth_scale=0.75,
+                reanchor_chin=True,
+                v4_universal_rig=True,
+                v6_master_approved=True,
+            )
+        blink_path = head_path.parent / "eyelid_blink.png"
+        half_blink_path = head_path.parent / "eyelid_half.png"
+        generate_blink_overlays(
+            head,
+            analysis,
+            puppet_id,
+            blink_path,
+            half_blink_path,
+            view_name=view_name,
+            far_ratio=FAR_EYE_FORESHORTEN_RATIO,
+            half_profile=None,
+        )
+        view["facial_rig"] = analysis.scene_graph(
+            blink_path.relative_to(root).as_posix(),
+            half_blink_path.relative_to(root).as_posix(),
+        )
+        folder = VIEW_FOLDERS[view_name]
+        view["facial_rig"]["roll_correction_deg"] = (
+            correction if vision_deterministic else 0.0
+        )
+        if not vision_deterministic:
+            mouth_x, mouth_y = view["facial_rig"]["mouth"]["center"]
+            jaw = CHASSIS_JAW_PROTRUSION_PX.get(
+                archetype,
+                CHASSIS_JAW_PROTRUSION_PX["cyber_capsule"],
+            )
+            dx, dy = jaw.get(view_name, (0, 0))
+            view["facial_rig"]["mouth"]["center"] = [int(mouth_x) + dx, int(mouth_y) + dy]
+            _apply_production_brows(
+                view["facial_rig"]["eyebrows"],
+                view_name,
+                analysis,
+            )
+            if seal_final_rig or mvp_final_seal:
+                _bind_brows_to_eye_centers(
+                    view["facial_rig"]["eyebrows"],
+                    analysis,
+                    clearance_px=(
+                        FINAL_BROW_CLEARANCE_PX
+                        if seal_final_rig
+                        else EYE_BROW_CLEARANCE_PX
+                    ),
+                    stroke_scale=(
+                        FINAL_STROKE_SCALE if seal_final_rig else MVP_STROKE_SCALE
+                    ),
+                    menace_drop_y=FINAL_MENACE_DROP_Y if seal_final_rig else None,
+                    shock_offset_y=0 if seal_final_rig else None,
+                )
+                mouth_drop = V14_MOUTH_DROP_Y + MVP_MOUTH_NUDGE_Y
+                if seal_final_rig:
+                    mouth_drop += FINAL_MOUTH_DROP_Y
+                mouth_center = view["facial_rig"]["mouth"]["center"]
+                view["facial_rig"]["mouth"]["center"] = [
+                    int(mouth_center[0]),
+                    int(mouth_center[1]) + mouth_drop,
+                ]
+            elif restore_v14_dna:
+                _restore_v14_brow_seat(
+                    view["facial_rig"]["eyebrows"],
+                    view_name,
+                    analysis.nameplate_bottom,
+                )
+                mouth_center = view["facial_rig"]["mouth"]["center"]
+                view["facial_rig"]["mouth"]["center"] = [
+                    int(mouth_center[0]),
+                    int(mouth_center[1]) + V14_MOUTH_DROP_Y,
+                ]
+        else:
+            _dock_brows_to_rims(
+                view["facial_rig"]["eyebrows"],
+                np.asarray(head.convert("RGBA")),
+                analysis.eye_left,
+                analysis.eye_right,
+            )
+        view["facial_rig"]["mouth"]["asset_dir"] = f"mouths/deepseek_production/{folder}"
+        view["facial_rig"]["mouth"]["native_view"] = folder
+        view["facial_rig"]["expressions"] = {
+            "sad_pout": {"mouth": "mouth_sad.png", "brows": "sad"},
+            "shock_surprise": {
+                "mouth": "mouth_shock.png",
+                "brows": "shock",
+                "brow_offset_y": -12,
+            },
+            "angry_rebuttal": {"mouth": "mouth_angry.png", "brows": "angry"},
+            "smug_deboche": {"mouth": "mouth_smug.png", "brows": "smug"},
+        }
+        view["mouth_archetype"] = archetype
+        mouth_center = view["facial_rig"]["mouth"]["center"]
+        view["mouth"] = {
+            "x": int(mouth_center[0]),
+            "y": int(mouth_center[1]),
+            "rot_deg": round(analysis.mouth_rotation_deg, 3),
+            "scale": round(analysis.perspective_scale, 4),
+        }
+    art_after = {
+        name: (
+            view.get("head"),
+            view.get("body"),
+            view.get("head_xy"),
+            view.get("body_xy"),
+        )
+        for name, view in data["views"].items()
+    }
+    if art_after != art_before:
+        raise RuntimeError(f"refusing to rewrite approved view art in {manifest_path}")
+    data["facial_scene_graph"] = {
+        "coordinate_space": "head_local",
+        "root": "head",
+        "version": (
+            "final_rig_seal"
+            if seal_final_rig
+            else "mvp_final_seal"
+            if mvp_final_seal
+            else "v14_dna_restore"
+            if restore_v14_dna
+            else "vision_deterministic"
+            if vision_deterministic
+            else "production_one_click"
+        ),
+        "frozen_gold_masters": sorted(FROZEN_GOLD_MASTERS),
+        "mouth_archetype": archetype,
+    }
+    manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    DEEPSEEK_SHEET.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(manifest_path, DEEPSEEK_SHEET.parent / f"{puppet_id}.json")
+    print(f"production-rigged: {manifest_path}")
+    return manifest_path
+
+
 def auto_rig_puppet(
     puppet_id: str,
     *,
@@ -1769,6 +2485,7 @@ def auto_rig_puppet(
     v14_master_signoff: bool = False,
 ) -> Path:
     """Analyze all existing head views and update only facial rig metadata."""
+    _assert_mutable(puppet_id)
     root = assets_root() / "puppets" / puppet_id
     manifest_path = root / "puppet.json"
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -2303,6 +3020,7 @@ def _inspection_portrait(
     v12_definitive_release: bool = False,
     v13_golden_seal: bool = False,
     v14_master_signoff: bool = False,
+    production_avatar: bool = False,
 ) -> Image.Image:
     root = assets_root() / "puppets" / puppet_id
     manifest = json.loads((root / "puppet.json").read_text(encoding="utf-8"))
@@ -2310,6 +3028,9 @@ def _inspection_portrait(
     with Image.open(root / view["head"]) as opened:
         head = opened.convert("RGBA")
     rig = view["facial_rig"]
+    correction = float(rig.get("roll_correction_deg") or 0.0)
+    if abs(correction) > 1e-3:
+        head = _warp_head_roll(head, correction)
     native = (
         v3_southpark_hybrid
         or v4_universal_rig
@@ -2323,6 +3044,7 @@ def _inspection_portrait(
         or v12_definitive_release
         or v13_golden_seal
         or v14_master_signoff
+        or production_avatar
     )
     native_dir = root / rig["mouth"]["asset_dir"] if native else None
     if state.startswith("viseme_"):
@@ -2689,12 +3411,94 @@ def export_master_sheet(
     return destination
 
 
+def export_production_sheet(
+    puppet_id: str,
+    destination: Path = DEEPSEEK_SHEET,
+) -> Path:
+    """One-character acting matrix for a freshly production-rigged avatar."""
+    states = (
+        ("neutral", "NEUTRAL REST + LEVELED BROWS"),
+        ("speech", "OPEN SPEECH · VISEME D"),
+        ("smug", "SMUG DEBOCHE · STRAIGHT-BLADE V"),
+        ("angry", "ANGRY REBUTTAL · BLADE COMPRESSION"),
+        ("sad", "SAD MELANCHOLY · ARCHED INVERTED V"),
+        ("shock", "SHOCK PERPLEXED · HIGH ARCHED BROWS"),
+        ("half_blink", "HALF-BLINK · SOCKET-LOCKED LIDS"),
+        ("blink", "FULL BLINK · MECHANICAL SHUTTERS"),
+    )
+    cell_w = 540
+    cell_h = 640
+    section_header = 74
+    view_header = 52
+    sheet = Image.new(
+        "RGB",
+        (cell_w * len(VIEW_ORDER), section_header + view_header + cell_h * len(states)),
+        (10, 11, 14),
+    )
+    title_font = _load_font(32, bold=True)
+    header_font = _load_font(24, bold=True)
+    label_font = _load_font(20, bold=True)
+    pen = ImageDraw.Draw(sheet)
+    pen.rectangle((0, 0, sheet.width, section_header), fill=(24, 19, 16))
+    pen.text(
+        (24, 18),
+        f"{puppet_id.upper()}  ·  CYBER CAPSULE  ·  PRODUCTION",
+        fill=(244, 214, 150),
+        font=title_font,
+    )
+    for column, view_name in enumerate(VIEW_ORDER):
+        x0 = column * cell_w
+        pen.rectangle(
+            (x0, section_header, x0 + cell_w, section_header + view_header),
+            fill=(31, 27, 23),
+        )
+        pen.text(
+            (x0 + 16, section_header + 12),
+            VIEW_LABELS[view_name],
+            fill=(230, 202, 151),
+            font=header_font,
+        )
+        for row, (state, label) in enumerate(states):
+            y0 = section_header + view_header + row * cell_h
+            cell = Image.new("RGB", (cell_w, cell_h), (16, 17, 20))
+            cell_pen = ImageDraw.Draw(cell)
+            cell_pen.text((14, 12), f"{row + 1}. {label}", fill=(231, 223, 205), font=label_font)
+            portrait = _inspection_portrait(
+                puppet_id,
+                view_name,
+                state,
+                production_avatar=True,
+            )
+            fitted = _fit_portrait(portrait, cell_w - 30, cell_h - 54)
+            cell.paste(
+                fitted.convert("RGB"),
+                (
+                    (cell_w - fitted.width) // 2,
+                    48 + (cell_h - 48 - fitted.height) // 2,
+                ),
+                fitted.split()[-1],
+            )
+            sheet.paste(cell, (x0, y0))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(destination, format="PNG", compress_level=1)
+    print(destination)
+    return destination
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Auto-rig isolated puppet heads and export a master sheet."
     )
     parser.add_argument("--auto-rig", action="store_true")
-    parser.add_argument("--puppets", required=True)
+    parser.add_argument("--puppets", default="")
+    parser.add_argument("--auto-rig-avatar", default="")
+    parser.add_argument("--one-click-production", action="store_true")
+    parser.add_argument("--vision-deterministic", action="store_true")
+    parser.add_argument("--restore-v14-dna", action="store_true")
+    parser.add_argument("--mvp-final-seal", action="store_true")
+    parser.add_argument("--seal-final-rig", action="store_true")
+    parser.add_argument("--inspect-deepseek", action="store_true")
+    parser.add_argument("--render-deepseek-debut", action="store_true")
     parser.add_argument("--inspect-master-sheet", action="store_true")
     parser.add_argument("--v3-southpark-hybrid", action="store_true")
     parser.add_argument("--inspect-sheet-v3", action="store_true")
@@ -2770,6 +3574,13 @@ def main(argv: list[str] | None = None) -> int:
         or args.render_contraplano_v13
         or args.inspect_sheet_v14
         or args.render_contraplano_v14
+        or args.one_click_production
+        or args.vision_deterministic
+        or args.restore_v14_dna
+        or args.mvp_final_seal
+        or args.seal_final_rig
+        or args.inspect_deepseek
+        or args.render_deepseek_debut
     ):
         parser.error(
             "pass --auto-rig, --inspect-master-sheet, "
@@ -2802,6 +3613,54 @@ def main(argv: list[str] | None = None) -> int:
         if calibrated and args.scale_mouths == 1.0
         else args.scale_mouths
     )
+    if (
+        args.one_click_production
+        or args.vision_deterministic
+        or args.restore_v14_dna
+        or args.mvp_final_seal
+        or args.seal_final_rig
+        or args.inspect_deepseek
+        or args.render_deepseek_debut
+    ):
+        if not args.auto_rig_avatar:
+            parser.error("pass --auto-rig-avatar with the production flags")
+        avatar_id = _resolve_avatar(args.auto_rig_avatar)
+        if (
+            args.one_click_production
+            or args.vision_deterministic
+            or args.restore_v14_dna
+            or args.mvp_final_seal
+            or args.seal_final_rig
+        ):
+            production_rig_avatar(
+                avatar_id,
+                vision_deterministic=(
+                    args.vision_deterministic
+                    and not args.restore_v14_dna
+                    and not args.mvp_final_seal
+                    and not args.seal_final_rig
+                ),
+                restore_v14_dna=(
+                    args.restore_v14_dna
+                    and not args.mvp_final_seal
+                    and not args.seal_final_rig
+                ),
+                mvp_final_seal=args.mvp_final_seal and not args.seal_final_rig,
+                seal_final_rig=args.seal_final_rig,
+            )
+        if args.inspect_deepseek:
+            export_production_sheet(
+                avatar_id,
+                DEEPSEEK_APPROVED
+                if args.mvp_final_seal or args.seal_final_rig
+                else DEEPSEEK_SHEET,
+            )
+        if args.render_deepseek_debut:
+            from core.animator.pipeline import render_deepseek_debut
+
+            render_deepseek_debut(
+                DEEPSEEK_DEBUT_MASTER if args.seal_final_rig else DEEPSEEK_DEBUT
+            )
     if args.auto_rig:
         for puppet_id in puppet_ids:
             auto_rig_puppet(

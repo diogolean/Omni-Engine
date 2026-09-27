@@ -70,6 +70,7 @@ def render_dynamic_animation(
     outro_start_s: float | None = None,
     outro_frame=None,
     subtitle_fade_s: float = 0.0,
+    scene: str | None = None,
 ) -> RenderStats:
     """Analyze audio, direct the shot-reverse-shot, render to mp4.
 
@@ -95,6 +96,11 @@ def render_dynamic_animation(
         audio_path, list(turns), duration_override=duration_override, use_rhubarb=use_rhubarb
     )
 
+    panorama_path = None
+    if scene:
+        from .pipeline import resolve_scene_panorama
+
+        panorama_path = resolve_scene_panorama(scene)
     compositor = ShotReverseShotCompositor(
         rigs=rigs,
         styles=style_map,
@@ -103,6 +109,7 @@ def render_dynamic_animation(
         enable_cta=enable_cta,
         outro_start_s=outro_start_s,
         outro_frame=outro_frame,
+        panorama_path=panorama_path,
     )
 
     output_path = Path(output_path)

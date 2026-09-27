@@ -27,6 +27,8 @@ CAVITY = (14, 16, 20, 255)        # #0e1014
 IVORY = (244, 238, 218, 255)
 CARAMEL = (205, 151, 88, 255)
 CYBER_LIP = (30, 22, 18, 255)      # espresso #1e1612
+DEEPSEEK_LIP = (15, 23, 42, 255)   # cyber-navy #0F172A
+DEEPSEEK_CAVITY = (12, 14, 18, 255)  # #0c0e12
 ANTIQUE_BRASS = (200, 147, 62, 255)  # #c8933e
 GOLD_HIGHLIGHT = (212, 160, 84, 255)  # #d4a054
 CLAUDE_LIP = (74, 50, 30, 255)     # oil-rubbed bronze #4a321e
@@ -59,6 +61,8 @@ ARCHETYPES: dict[str, MouthArchetype] = {
 PUPPET_ARCHETYPE = {
     "chatgpt_cyborg_v1": "cyber_capsule",
     "gemini_cyborg_v2": "cyber_capsule",
+    "deepseek_cyborg_v1": "cyber_capsule",
+    "deepseek_cyborg_v3": "cyber_capsule",
     "claude_cyborg_v1": "organic_brass_cutout",
     "llama_cyborg_v2": "organic_brass_cutout",
 }
@@ -69,7 +73,7 @@ def archetype_for(puppet_id: str) -> str:
     if puppet_id in PUPPET_ARCHETYPE:
         return PUPPET_ARCHETYPE[puppet_id]
     lowered = puppet_id.lower()
-    if "chatgpt" in lowered or "gemini" in lowered:
+    if "chatgpt" in lowered or "gemini" in lowered or "deepseek" in lowered:
         return "cyber_capsule"
     if "claude" in lowered or "llama" in lowered:
         return "organic_brass_cutout"
@@ -245,6 +249,7 @@ def _organic_cutout(
     teeth: bool,
     tongue: bool = False,
     teeth_on_lower: bool = False,
+    cavity: tuple[int, int, int, int] = CAVITY,
 ) -> None:
     """Imperfect cut-out aperture; deliberately not a CAD stadium."""
     left, top, right, bottom = box
@@ -268,7 +273,7 @@ def _organic_cutout(
         (mid + 2) * DRAW_SCALE,
     )
     path.close()
-    canvas.drawPath(path, _paint(CAVITY))
+    canvas.drawPath(path, _paint(cavity))
     canvas.drawPath(path, _paint(INK, stroke=True, width=12.0))
     canvas.drawPath(path, _paint(lip, stroke=True, width=7.0))
     if teeth:
@@ -320,14 +325,17 @@ def _cyber_capsule(
     teeth: bool,
     tongue: bool = False,
     teeth_on_lower: bool = False,
+    lip: tuple[int, int, int, int] = CYBER_LIP,
+    cavity: tuple[int, int, int, int] = CAVITY,
 ) -> None:
     _organic_cutout(
         canvas,
         box,
-        lip=CYBER_LIP,
+        lip=lip,
         teeth=teeth,
         tongue=tongue,
         teeth_on_lower=teeth_on_lower,
+        cavity=cavity,
     )
 
 
@@ -343,14 +351,19 @@ _CYBER_BOXES = {
 }
 
 
-def _draw_cyber_viseme(code: str) -> Image.Image:
+def _draw_cyber_viseme(
+    code: str,
+    *,
+    lip: tuple[int, int, int, int] = CYBER_LIP,
+    cavity: tuple[int, int, int, int] = CAVITY,
+) -> Image.Image:
     surface, canvas = _surface()
     if code == "X":
-        _closed_slit(canvas, CYBER_LIP, tight=False)
+        _closed_slit(canvas, lip, tight=False)
     elif code == "A":
-        _closed_slit(canvas, CYBER_LIP, tight=True)
+        _closed_slit(canvas, lip, tight=True)
     elif code == "D":
-        _joy_smile(canvas, bezel=CYBER_LIP, box=_CYBER_BOXES["D"])
+        _joy_smile(canvas, bezel=lip, box=_CYBER_BOXES["D"], cavity=cavity)
     else:
         _cyber_capsule(
             canvas,
@@ -358,6 +371,8 @@ def _draw_cyber_viseme(code: str) -> Image.Image:
             teeth=code in {"B", "C", "G", "H"},
             tongue=code == "H",
             teeth_on_lower=code == "G",
+            lip=lip,
+            cavity=cavity,
         )
     return _finish(surface)
 
@@ -429,6 +444,7 @@ def _joy_smile(
     smirk_px: float = 0.0,
     teeth_drop: float = 0.0,
     sharp_apex: bool = False,
+    cavity: tuple[int, int, int, int] = CAVITY,
 ) -> None:
     """Signature arched smile with an inverted rounded-triangle cavity."""
     left, top, right, bottom = box
@@ -463,7 +479,7 @@ def _joy_smile(
             (top + smirk_px) * DRAW_SCALE,
         )
     path.close()
-    canvas.drawPath(path, _paint(CAVITY))
+    canvas.drawPath(path, _paint(cavity))
     canvas.drawPath(path, _paint(INK, stroke=True, width=12.0))
     canvas.drawPath(path, _paint(bezel, stroke=True, width=7.0))
     inset = (right - left) * 0.10
@@ -482,32 +498,39 @@ def _joy_smile(
     canvas.restore()
 
 
-def _draw_cyber_emotion(name: str) -> Image.Image:
+def _draw_cyber_emotion(
+    name: str,
+    *,
+    lip: tuple[int, int, int, int] = CYBER_LIP,
+    cavity: tuple[int, int, int, int] = CAVITY,
+) -> Image.Image:
     surface, canvas = _surface()
     if name == "smug":
         _joy_smile(
             canvas,
-            bezel=CYBER_LIP,
+            bezel=lip,
             box=(108, 230, 404, 310),
             smirk_px=12,
             sharp_apex=True,
+            cavity=cavity,
         )
     elif name == "angry":
-        _cyber_capsule(canvas, (100, 224, 412, 290), teeth=True)
+        _cyber_capsule(canvas, (100, 224, 412, 290), teeth=True, lip=lip, cavity=cavity)
         for x_pos in (180, 256, 332):
-            _round_rect(canvas, (x_pos - 4, 240, x_pos + 4, 276), 2, CAVITY)
+            _round_rect(canvas, (x_pos - 4, 240, x_pos + 4, 276), 2, cavity)
     elif name == "shock":
-        _oval(canvas, (194, 144, 318, 370), CAVITY, stroke=INK, stroke_width=12)
-        _oval(canvas, (194, 144, 318, 370), None, stroke=CYBER_LIP, stroke_width=7)
+        _oval(canvas, (194, 144, 318, 370), cavity, stroke=INK, stroke_width=12)
+        _oval(canvas, (194, 144, 318, 370), None, stroke=lip, stroke_width=7)
     elif name == "sad":
         points = ((108, 246), (256, 296), (404, 246))
         _curve(canvas, points, INK, 11)
-        _curve(canvas, points, CYBER_LIP, 6.5)
+        _curve(canvas, points, lip, 6.5)
     elif name == "triumph":
         _joy_smile(
             canvas,
-            bezel=CYBER_LIP,
+            bezel=lip,
             box=(48, 208, 464, 322),
+            cavity=cavity,
         )
     else:
         raise ValueError(name)
@@ -585,12 +608,18 @@ def draw_viseme(
     code: str,
     *,
     view_name: str = "front",
+    lip: tuple[int, int, int, int] | None = None,
+    cavity: tuple[int, int, int, int] | None = None,
 ) -> Image.Image:
     code = code.upper()[:1]
     if code not in VISEMES:
         raise ValueError(f"unknown Rhubarb viseme {code}")
     if archetype == "cyber_capsule":
-        image = _draw_cyber_viseme(code)
+        image = _draw_cyber_viseme(
+            code,
+            lip=lip or CYBER_LIP,
+            cavity=cavity or CAVITY,
+        )
     elif archetype in {"industrial_louver", "organic_brass_cutout"}:
         image = _draw_louver_viseme(code)
     else:
@@ -603,11 +632,17 @@ def draw_emotion(
     name: str,
     *,
     view_name: str = "front",
+    lip: tuple[int, int, int, int] | None = None,
+    cavity: tuple[int, int, int, int] | None = None,
 ) -> Image.Image:
     if name not in EMOTIONS:
         raise ValueError(name)
     if archetype == "cyber_capsule":
-        image = _draw_cyber_emotion(name)
+        image = _draw_cyber_emotion(
+            name,
+            lip=lip or CYBER_LIP,
+            cavity=cavity or CAVITY,
+        )
     elif archetype in {"industrial_louver", "organic_brass_cutout"}:
         image = _draw_louver_emotion(name)
     else:
@@ -652,6 +687,8 @@ def generate_view_mouth_suites(
     archetype: str | None = None,
     puppet_root: Path | None = None,
     suite_dir: Path | None = None,
+    lip: tuple[int, int, int, int] | None = None,
+    cavity: tuple[int, int, int, int] | None = None,
 ) -> dict[str, Path]:
     """Write independent front/left/right suites without touching legacy sets."""
     resolved = archetype or archetype_for(puppet_id)
@@ -664,16 +701,28 @@ def generate_view_mouth_suites(
         destination = base / view_name
         for code in VISEMES:
             _save(
-                draw_viseme(resolved, code, view_name=view_name),
+                draw_viseme(
+                    resolved,
+                    code,
+                    view_name=view_name,
+                    lip=lip,
+                    cavity=cavity,
+                ),
                 destination / f"mouth_{code}.png",
             )
         for name in EMOTIONS:
             _save(
-                draw_emotion(resolved, name, view_name=view_name),
+                draw_emotion(
+                    resolved,
+                    name,
+                    view_name=view_name,
+                    lip=lip,
+                    cavity=cavity,
+                ),
                 destination / f"mouth_{name}.png",
             )
         _save(
-            draw_viseme(resolved, "X", view_name=view_name),
+            draw_viseme(resolved, "X", view_name=view_name, lip=lip, cavity=cavity),
             destination / "mouth_neutral.png",
         )
         written[view_name] = destination
@@ -682,6 +731,8 @@ def generate_view_mouth_suites(
 
 __all__ = [
     "ARCHETYPES",
+    "DEEPSEEK_CAVITY",
+    "DEEPSEEK_LIP",
     "EMOTIONS",
     "SPRITE_SIZE",
     "archetype_for",

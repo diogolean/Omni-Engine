@@ -24,6 +24,7 @@ or independent-axis stretch is applied.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Iterator, Sequence
 
 import cv2
@@ -60,6 +61,10 @@ CAMERA_NORMAL_ZOOM = 0.95
 # and sit 30px lower in the frame.
 PRESENT_SCALE = 1.05
 PRESENT_DROP_PX = 30
+# ChatGPT and Claude, every view: another +5% on the present fit, and 20px lower.
+DEBATER_PRESENT_IDS = frozenset({"chatgpt_cyborg_v1", "claude_cyborg_v1"})
+DEBATER_EXTRA_SCALE = 1.05
+DEBATER_EXTRA_DROP_PX = 20
 CAMERA_TIGHT_ZOOM = 1.25
 GEMINI_LEAD_X = 420
 LLAMA_LEAD_X = 660
@@ -91,6 +96,7 @@ class ShotReverseShotCompositor:
         enable_cta: bool = False,
         outro_start_s: float | None = None,
         outro_frame=None,
+        panorama_path: Path | None = None,
     ) -> None:
         if not rigs:
             raise ValueError("shot-reverse-shot needs at least one character rig")
@@ -104,6 +110,7 @@ class ShotReverseShotCompositor:
         self.subtitle_band = (self.hero_band[1], height)
         self._outro_start_s = outro_start_s if enable_cta else None
         self._outro_frame = outro_frame if enable_cta else None
+        self._panorama_path = panorama_path
 
         # Built once as PIL images (gradients, text, glows are expensive but
         # static) then frozen into numpy — the per-frame loop is pure
@@ -151,7 +158,10 @@ class ShotReverseShotCompositor:
 
     # -- Static layers --------------------------------------------------- #
     def _load_shared_panorama(self) -> Image.Image | None:
-        """Load/generate one V2 arena shared by both reverse-angle cameras."""
+        """Load one arena shared by both reverse-angle cameras."""
+        if self._panorama_path is not None:
+            with Image.open(self._panorama_path) as panorama:
+                return panorama.convert("RGB")
         if not any(character_id.endswith("_v2") for character_id in self.rigs):
             return None
         try:
@@ -456,6 +466,8 @@ class _HeroCamera:
                 min(target_width / float(crop_w), target_height / float(crop_h))
                 * PRESENT_SCALE
             )
+            if rig.skin.character_id in DEBATER_PRESENT_IDS:
+                scale *= DEBATER_EXTRA_SCALE
         native_eye_x = (
             rig.skin.anchors.left_eye[0] + rig.skin.anchors.right_eye[0]
         ) / 2.0
@@ -537,7 +549,10 @@ class _HeroCamera:
             )
             self.offset_y = int(round(target_height - opaque_bottom * self.scale))
             if present_camera:
-                self.offset_y += PRESENT_DROP_PX
+                drop = PRESENT_DROP_PX
+                if rig.skin.character_id in DEBATER_PRESENT_IDS:
+                    drop += DEBATER_EXTRA_DROP_PX
+                self.offset_y += drop
         if parametric_v3:
             self.body_offset_x = int(
                 round(matrix.body_offset_x * (target_width / 1080.0))
