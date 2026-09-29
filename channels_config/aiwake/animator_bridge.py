@@ -23,8 +23,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
+import subprocess
 import unicodedata
 import wave
 from pathlib import Path
@@ -84,6 +86,9 @@ DEFAULT_SEAT_STYLE: dict[str, tuple[str, str, str]] = {
 _PUPPET_HUD: dict[str, tuple[str, str]] = {
     "chatgpt_cyborg_v1": ("CHATGPT", "#E8B84A"),
     "claude_cyborg_v1": ("CLAUDE", "#C4654A"),
+    "gemini_cyborg_v2": ("GEMINI", "#00F0FF"),
+    "llama_cyborg_v2": ("LLAMA", "#FFB300"),
+    "deepseek_cyborg_v3": ("DEEPSEEK", "#C49A4E"),
 }
 
 
@@ -146,8 +151,11 @@ def build_speaker_styles(
     return styles
 
 _TURN_GAP_S = 0.4
-_DRAMATIC_TURN_GAP_S = 0.8
-_REACTION_LEAD_S = 0.8
+_DRAMATIC_TURN_GAP_S = 1.2
+_REACTION_LEAD_S = 1.2
+END_PADDING_S = 1.5
+SPEECH_TAIL_LINGER_S = 0.8
+_SHOCK_REACTION_EMOTION = "shock_perplexed"
 
 
 def _write_pcm16_wave(destination: Path, samples: np.ndarray, sample_rate: int) -> None:
@@ -166,8 +174,8 @@ _MERGE_SAMPLE_RATE = 44100
 _TARGET_PEAK = 0.92
 _INTENT_EMOTION = {
     "opens": "neutral",
-    "answers": "confident",
-    "probes": "neutral",
+    "answers": "resolute",
+    "probes": "inquisitor",
     "questions": "neutral",
     "skeptical": "skeptical",
     "presses": "inquisitor",
@@ -176,6 +184,8 @@ _INTENT_EMOTION = {
     "concedes": "conceded",
     "admits": "conceded",
     "yields": "conceded",
+    "cornered": "shock",
+    "deboche": "deboche",
 }
 _CONCESSION_MARKERS = (
     "i concede",
@@ -200,7 +210,8 @@ _CLIMAX_CONCESSION_MARKERS = (
     "i do not say no",
     "cannot be maintained",
 )
-_CLIMAX_RETURN_S = 0.90
+# Dedicated silent target reaction after the finishing punchline.
+_PUNCHLINE_SHOCK_S = 1.2
 _OUTRO_S = 2.8
 _OUTRO_TYPE_S = 1.15
 _CYNICAL_HOOKS = (
@@ -242,8 +253,14 @@ def _turn_intent(
     """Read optional turn metadata, with a deterministic role/order fallback."""
     explicit = getattr(utterance, "intent", "") or getattr(utterance, "dialectic_intent", "")
     text = str(getattr(utterance, "text", "") or "").lower()
-    if utterance.role.value == "target" and any(marker in text for marker in _CONCESSION_MARKERS):
+    if utterance.role.value == "target" and any(
+        marker in text for marker in _CONCESSION_MARKERS
+    ):
         return "concedes"
+    if utterance.role.value == "orchestrator" and role_occurrence > 0:
+        # Focused delivery first; the timed climax state supplies the smirk
+        # only over the final rhetorical beat.
+        return "presses"
     metadata = getattr(transcript, "metadata", {}) or {}
     dialogue_end_reason = str(metadata.get("dialogue_end_reason") or "").upper()
     if utterance.role.value == "target" and dialogue_end_reason in {
@@ -333,6 +350,28 @@ def _estimate_duration_for(text: str) -> float:
     from .media.audio import estimate_duration  # noqa: PLC0415
 
     return max(0.3, float(estimate_duration(text)))
+
+
+def _rhetorical_climax_start(
+    text: str,
+    *,
+    speech_start: float,
+    duration: float,
+) -> float:
+    """Approximate the final sentence/beat without altering the spoken audio."""
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", (text or "").strip())
+        if part.strip()
+    ]
+    words = max(1, len((text or "").split()))
+    final_words = len(sentences[-1].split()) if sentences else words
+    if len(sentences) > 1:
+        fraction_before = max(0.0, min(0.82, (words - final_words) / words))
+        offset = duration * fraction_before
+    else:
+        offset = max(0.0, duration - min(1.0, max(0.45, duration * 0.28)))
+    return speech_start + offset
 
 
 def _peak_normalize(samples: np.ndarray, *, target_peak: float = _TARGET_PEAK) -> np.ndarray:
@@ -532,29 +571,21 @@ def build_session_audio(
         )
         prior_token = prior_words[0] if prior_words else ""
         emotion = resolve_dialectic_emotion(intent)
-        intent_token = (
-            str(intent or "")
-            .strip()
-            .lower()
-            .split(":", 1)[0]
-            .split(maxsplit=1)[0]
-        )
-        cornering_blow = (
-            utterance.role.value == "orchestrator"
-            and utterance is final_orchestrator
-            and intent_token == "presses"
+        trap_answer = (
+            utterance.role.value == "target"
+            and prior_token in {"presses", "probes", "deboche"}
         )
         climax_concession = (
             utterance is final_target
             and final_target_concedes
         )
         if climax_concession:
+            # Dilemma line: inverted-V brows and the stressed grimace.
             emotion = "conceded"
-        target_reaction = (
-            bool(turns)
-            and utterance.role.value == "target"
-            and (emotion == "conceded" or prior_token == "presses")
-        )
+        elif trap_answer:
+            # After the stunned beat the target recovers in a visibly
+            # destabilized medium shot rather than snapping back to confidence.
+            emotion = "sad_melancholy"
         moral_disbelief = (
             bool(turns)
             and utterance.role.value == "orchestrator"
@@ -563,14 +594,38 @@ def build_session_audio(
                 for marker in _MORAL_DISBELIEF_MARKERS
             )
         )
-        dramatic_reaction = target_reaction or moral_disbelief
+        dramatic_reaction = moral_disbelief
         if turns:
-            transition_gap = _DRAMATIC_TURN_GAP_S if dramatic_reaction else gap_s
-            if transition_gap > 0:
+            if trap_answer:
+                # Keep the camera on the attacker after the last spoken sample.
+                # Their climax emotion has already landed on deboche, so this
+                # mute turn freezes the satisfied smirk before the reverse shot.
                 segments.append(
-                    np.zeros(int(transition_gap * sample_rate), dtype=np.float32)
+                    np.zeros(int(SPEECH_TAIL_LINGER_S * sample_rate), dtype=np.float32)
                 )
-                cursor += transition_gap
+                provocateur = turns[-1].speaker
+                turns.append(
+                    DialogueTurn(
+                        speaker=provocateur,
+                        start_time=cursor,
+                        end_time=cursor + SPEECH_TAIL_LINGER_S,
+                        text="",
+                        emotion="deboche",
+                        speech_start_time=cursor,
+                        reaction_emotion="deboche",
+                        camera_tight=False,
+                        camera_speaker=provocateur,
+                        camera_emotion="deboche",
+                    )
+                )
+                cursor += SPEECH_TAIL_LINGER_S
+            else:
+                transition_gap = _DRAMATIC_TURN_GAP_S if dramatic_reaction else gap_s
+                if transition_gap > 0:
+                    segments.append(
+                        np.zeros(int(transition_gap * sample_rate), dtype=np.float32)
+                    )
+                    cursor += transition_gap
         speech_start = cursor
         camera_start = (
             max(0.0, speech_start - _REACTION_LEAD_S)
@@ -581,29 +636,11 @@ def build_session_audio(
             (
                 "disbelief"
                 if moral_disbelief
-                else (
-                    "conceded"
-                    if emotion == "conceded"
-                    else "defeated"
-                )
+                else ("conceded" if emotion == "conceded" else "defeated")
             )
             if dramatic_reaction
             else emotion
         )
-        if climax_concession and speech_start > camera_start:
-            turns.append(
-                DialogueTurn(
-                    speaker=speaker_id,
-                    start_time=camera_start,
-                    end_time=speech_start,
-                    text="",
-                    emotion=reaction_emotion,
-                    speech_start_time=speech_start,
-                    reaction_emotion=reaction_emotion,
-                    camera_tight=False,
-                )
-            )
-            camera_start = speech_start
         turns.append(
             DialogueTurn(
                 speaker=speaker_id,
@@ -613,8 +650,24 @@ def build_session_audio(
                 audio_path=str(turn_wav) if turn_wav else None,
                 emotion=emotion,
                 speech_start_time=speech_start,
-                reaction_emotion=emotion if climax_concession else reaction_emotion,
-                camera_tight=cornering_blow,
+                reaction_emotion=reaction_emotion,
+                camera_tight=False,
+                climax_start_time=(
+                    _rhetorical_climax_start(
+                        utterance.text,
+                        speech_start=speech_start,
+                        duration=duration,
+                    )
+                    if utterance.role.value == "orchestrator"
+                    and role_occurrence > 0
+                    else None
+                ),
+                climax_emotion=(
+                    "deboche"
+                    if utterance.role.value == "orchestrator"
+                    and role_occurrence > 0
+                    else None
+                ),
             )
         )
         segments.append(samples)
@@ -622,22 +675,54 @@ def build_session_audio(
         prior_intent = intent
         prior_text = str(utterance.text or "")
 
-    if turns and turns[-1].camera_tight:
-        segments.append(np.zeros(int(_CLIMAX_RETURN_S * sample_rate), dtype=np.float32))
-        conceded = turns[-1]
+    final_target_finish = bool(
+        turns
+        and final_target is not None
+        and turns[-1].speaker == seats.get("target", "target")
+        and bool((turns[-1].text or "").strip())
+    )
+    final_checkmate = bool(
+        turns
+        and final_orchestrator is not None
+        and turns[-1].speaker == seats.get("orchestrator", "orchestrator")
+    )
+    if turns and (final_checkmate or final_target_finish):
+        stunned_speaker = seats.get("target", "target")
+        target_speaker = seats.get("target", "target")
+        last_target_turn = next(
+            (
+                turn
+                for turn in reversed(turns)
+                if turn.speaker == target_speaker and (turn.text or "").strip()
+            ),
+            None,
+        )
+        last_target_emotion = (
+            (last_target_turn.emotion or "").strip().lower()
+            if last_target_turn is not None
+            else ""
+        )
+        hold_emotion = (
+            "sad_melancholy"
+            if last_target_emotion in {"conceded", "sad", "sad_melancholy"}
+            else _SHOCK_REACTION_EMOTION
+        )
+        segments.append(np.zeros(int(_PUNCHLINE_SHOCK_S * sample_rate), dtype=np.float32))
         turns.append(
             DialogueTurn(
-                speaker=conceded.speaker,
+                speaker=stunned_speaker,
                 start_time=cursor,
-                end_time=cursor + _CLIMAX_RETURN_S,
+                end_time=cursor + _PUNCHLINE_SHOCK_S,
                 text="",
-                emotion=conceded.emotion or "conceded",
+                emotion=hold_emotion,
                 speech_start_time=cursor,
-                reaction_emotion=conceded.emotion or "conceded",
-                camera_tight=False,
+                reaction_emotion=hold_emotion,
+                camera_tight=True,
+                camera_speaker=stunned_speaker,
+                camera_emotion=hold_emotion,
             )
         )
-        cursor += _CLIMAX_RETURN_S
+        cursor += _PUNCHLINE_SHOCK_S
 
     if tail_s > 0:
         segments.append(np.zeros(int(round(tail_s * sample_rate)), dtype=np.float32))
@@ -784,26 +869,59 @@ def _terminal_outro_painter(text: str, *, width: int, height: int, fps: int):
     return paint
 
 
+def _link_flat_puppet(source: Path, link: Path) -> None:
+    """Expose a flat puppet beside assembled view skins.
+
+    Junctions fail on the Drive-backed asset volume, so a real directory
+    copy is the fallback that the renderer can actually open.
+    """
+    if os.name == "nt":
+        completed = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(source)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode == 0 and (link / "puppet.json").is_file():
+            return
+        if link.exists():
+            shutil.rmtree(link, ignore_errors=True)
+    try:
+        link.symlink_to(source, target_is_directory=True)
+        if (link / "puppet.json").is_file():
+            return
+    except OSError:
+        if link.exists():
+            shutil.rmtree(link, ignore_errors=True)
+    shutil.copytree(source, link)
+
+
 def _assemble_view_puppets(styles: list[SpeakerStyle], destination: Path) -> Path:
     """Build contraplano canvases for view-authored puppets.
 
     ChatGPT and Claude keep their gold art under ``views/``. The shot
-    renderer loads flat root layers, so each seat is assembled into a
-    throwaway directory. The gold folders are left untouched.
+    renderer loads flat root layers, so each view-authored seat is assembled
+    into a throwaway directory. Flat puppets in the same matchup stay linked
+    beside them. The gold folders are left untouched.
     """
     from core.animator.asset_generator import DEFAULT_PUPPETS_DIR  # noqa: PLC0415
     from core.animator.pipeline import build_render_skin  # noqa: PLC0415
 
     view_for_facing = {"right": "facing_right", "left": "facing_left"}
+    source_root = Path(DEFAULT_PUPPETS_DIR)
     seated: list[tuple[str, str]] = []
+    flat: list[str] = []
     for style in styles:
-        manifest_path = Path(DEFAULT_PUPPETS_DIR) / style.character_id / "puppet.json"
+        manifest_path = source_root / style.character_id / "puppet.json"
         if not manifest_path.is_file():
-            return Path(DEFAULT_PUPPETS_DIR)
+            return source_root
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if "views" not in manifest:
-            return Path(DEFAULT_PUPPETS_DIR)
+            flat.append(style.character_id)
+            continue
         seated.append((style.character_id, view_for_facing.get(style.facing, "facing_front")))
+    if not seated:
+        return source_root
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
@@ -814,6 +932,8 @@ def _assemble_view_puppets(styles: list[SpeakerStyle], destination: Path) -> Pat
             view_name=view_name,
             contraplano=True,
         )
+    for character_id in flat:
+        _link_flat_puppet(source_root / character_id, destination / character_id)
     return destination
 
 
@@ -877,7 +997,7 @@ def render_debate_animation(
         # Backward-compatible bridge for archived render scripts. New callers
         # opt into the terminal card with ``enable_cta=True``.
         enable_cta = not seamless_loop
-    loop_tail_s = 0.0 if enable_cta else 0.4
+    loop_tail_s = END_PADDING_S
     _, turns, total_duration = build_session_audio(
         transcript,
         audio_by_turn,
@@ -888,32 +1008,39 @@ def render_debate_animation(
     )
     for turn in turns:
         _LOG.info(
-            "turn %s %.2f-%.2f speech=%.2f tight=%s %s",
+            "turn %s %.2f-%.2f speech=%.2f tight=%s emotion=%s %s",
             turn.speaker,
             turn.start_time,
             turn.end_time,
             turn.speech_start,
             turn.camera_tight,
+            turn.emotion,
             (turn.text or "")[:64],
         )
     if not enable_cta:
         spoken_end = max((turn.end_time for turn in turns if (turn.text or "").strip()), default=0.0)
         effective_duration = (
-            duration_override if duration_override is not None else spoken_end + loop_tail_s
+            max(total_duration, duration_override)
+            if duration_override is not None
+            else total_duration
         )
         outro_start_s = None
         outro_frame = None
         subtitle_fade_s = loop_tail_s
         _LOG.info(
-            "seamless loop: cut %.2fs after the final word (%.2fs), no terminal card",
-            loop_tail_s,
+            "safe ending: final word %.2fs, stunned reaction plus %.2fs padding, no terminal card",
             spoken_end,
+            loop_tail_s,
         )
     else:
         hook = pick_cynical_hook(transcript.session_id)
         dialogue_duration = total_duration
         mastered_duration = _append_typewriter_outro(merged_audio_path, hook)
-        effective_duration = duration_override if duration_override is not None else mastered_duration
+        effective_duration = (
+            max(mastered_duration, duration_override)
+            if duration_override is not None
+            else mastered_duration
+        )
         outro_start_s = dialogue_duration
         outro_frame = _terminal_outro_painter(hook, width=width, height=height, fps=fps)
         subtitle_fade_s = 0.0

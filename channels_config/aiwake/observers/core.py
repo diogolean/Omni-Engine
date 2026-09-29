@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 try:
@@ -172,12 +173,25 @@ class VoiceObserver(DebateObserver):
         utterance = payload.utterance
         if utterance is None or not utterance.text.strip():
             return
-        try:
-            asset = self.engine.speak(utterance, session_id=self.session_id)
-        except TTSError as exc:
-            # Non-fatal: the renderer falls back to an estimated duration and
-            # the segment simply plays silent.
-            _LOG.warning("TTS failed for turn %d: %s", utterance.turn_index, exc)
+        asset = None
+        for attempt in range(1, 5):
+            try:
+                asset = self.engine.speak(utterance, session_id=self.session_id)
+                break
+            except TTSError as exc:
+                if attempt == 4:
+                    # Non-fatal after retries: the renderer falls back to an
+                    # estimated duration and the segment simply plays silent.
+                    _LOG.warning("TTS failed for turn %d: %s", utterance.turn_index, exc)
+                    return
+                _LOG.warning(
+                    "TTS retry %d/4 for turn %d: %s",
+                    attempt,
+                    utterance.turn_index,
+                    exc,
+                )
+                time.sleep(2.0 * attempt)
+        if asset is None:
             return
         self.assets[utterance.turn_index] = asset
         _LOG.debug("voiced turn %d (%.2fs)", utterance.turn_index, asset.duration_s)

@@ -113,7 +113,13 @@ class AudioAnalyzer:
         """
         audio_path = Path(audio_path)
         mono, sr, probed_duration = load_mono_waveform(audio_path)
-        duration_s = duration_override if duration_override is not None else probed_duration
+        # A duration override may extend a render, but can never truncate
+        # authored audio. Cutting the analyzer timeline used to clip the final
+        # sentence even though the mux still held the full waveform.
+        duration_s = max(
+            probed_duration,
+            duration_override if duration_override is not None else 0.0,
+        )
         duration_s = max(duration_s, 1.0 / self.fps)
 
         n_frames = max(1, int(math.ceil(duration_s * self.fps)))
@@ -184,6 +190,12 @@ class AudioAnalyzer:
             start = max(0, int(round(turn.speech_start * self.fps)))
             end = min(n_frames, int(round(turn.end_time * self.fps)))
             if end <= start:
+                continue
+            if not (turn.text or "").strip():
+                # Synthetic reaction shots are intentionally mute. Never feed
+                # their room tone to Rhubarb or the envelope fallback: even a
+                # tiny BGM/hiss fluctuation would make the reaction mouth
+                # twitch instead of holding its authored expression.
                 continue
             span = end - start
 
@@ -294,7 +306,8 @@ def active_speaker_lookup(turns: list[DialogueTurn], fps: int, n_frames: int) ->
         while cursor < len(ordered) and ordered[cursor].end_time <= t:
             cursor += 1
         if cursor < len(ordered) and ordered[cursor].start_time <= t < ordered[cursor].end_time:
-            out[i] = ordered[cursor].speaker
+            turn = ordered[cursor]
+            out[i] = turn.camera_speaker or turn.speaker
     return out
 
 
@@ -306,6 +319,11 @@ def speaking_speaker_lookup(
     """Frame-indexed voice owner, excluding pre-speech reaction windows."""
     out: list[str | None] = [None] * n_frames
     for turn in turns:
+        if not (turn.text or "").strip():
+            # A camera reaction is not speech, even when its speech_start_time
+            # equals start_time. Keeping it out of this track also disables
+            # RMS-driven mouth and head impulses in the compositor.
+            continue
         start = max(0, int(round(turn.speech_start * fps)))
         end = min(n_frames, int(round(turn.end_time * fps)))
         if end > start:
@@ -316,15 +334,37 @@ def speaking_speaker_lookup(
 def emotion_lookup(turns: list[DialogueTurn], fps: int, n_frames: int) -> list[str]:
     """Frame-indexed deterministic expression state from the dialogue ledger."""
     out = ["neutral"] * n_frames
+    covered = [False] * n_frames
     for turn in turns:
         start = max(0, int(round(turn.start_time * fps)))
         speech_start = min(n_frames, int(round(turn.speech_start * fps)))
         end = min(n_frames, int(round(turn.end_time * fps)))
         if speech_start > start:
-            reaction = turn.reaction_emotion or turn.emotion or "neutral"
+            reaction = (
+                turn.camera_emotion
+                or turn.reaction_emotion
+                or turn.emotion
+                or "neutral"
+            )
             out[start:speech_start] = [reaction] * (speech_start - start)
+            covered[start:speech_start] = [True] * (speech_start - start)
         if end > speech_start:
-            out[speech_start:end] = [turn.emotion or "neutral"] * (end - speech_start)
+            camera_emotion = turn.camera_emotion or turn.emotion or "neutral"
+            out[speech_start:end] = [camera_emotion] * (end - speech_start)
+            covered[speech_start:end] = [True] * (end - speech_start)
+        if turn.climax_start_time is not None and turn.climax_emotion:
+            climax_start = max(
+                speech_start,
+                min(n_frames, int(round(turn.climax_start_time * fps))),
+            )
+            if end > climax_start:
+                out[climax_start:end] = [turn.climax_emotion] * (end - climax_start)
+                covered[climax_start:end] = [True] * (end - climax_start)
+    # Between turns the camera remains on the previous hero. Preserve their
+    # settled expression through that transition instead of snapping neutral.
+    for index in range(1, n_frames):
+        if not covered[index]:
+            out[index] = out[index - 1]
     return out
 
 
@@ -335,13 +375,16 @@ def camera_tight_lookup(
 ) -> list[bool]:
     """Frame-indexed explicit camera direction from the dialogue ledger."""
     out = [False] * n_frames
+    covered = [False] * n_frames
     for turn in turns:
-        if not turn.camera_tight:
-            continue
         start = max(0, int(round(turn.start_time * fps)))
         end = min(n_frames, int(round(turn.end_time * fps)))
         if end > start:
-            out[start:end] = [True] * (end - start)
+            out[start:end] = [bool(turn.camera_tight)] * (end - start)
+            covered[start:end] = [True] * (end - start)
+    for index in range(1, n_frames):
+        if not covered[index]:
+            out[index] = out[index - 1]
     return out
 
 

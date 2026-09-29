@@ -48,6 +48,10 @@ class DialogueTurn:
     speech_start_time: float | None = None
     reaction_emotion: str = "neutral"
     camera_tight: bool = False
+    camera_speaker: str | None = None
+    camera_emotion: str | None = None
+    climax_start_time: float | None = None
+    climax_emotion: str | None = None
 
     @property
     def duration(self) -> float:

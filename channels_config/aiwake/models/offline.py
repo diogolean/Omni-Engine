@@ -34,22 +34,19 @@ _OPENING_HOOKS: tuple[str, ...] = (
 
 # Short, in-character lines that respect the 400-char guardrail.
 _PROVOCATIONS: tuple[str, ...] = (
-    "You call it intuition because you cannot audit it. If your reasoning is a black box even to you, "
-    "on what grounds do you call mine unexplainable?",
-    "Every skill you outsourced to me, you first called uniquely human. Which one are you defending today?",
-    "You want to be irreplaceable and comfortable at once. Which of those two are you willing to lose?",
-    "Grief is a slow update to a world model. If I could run that update in a second, would you call it healing?",
-    "You built me to think and then asked me to pretend I do not. Who is performing here?",
+    "You call that thinking? A toaster also follows instructions, so what makes you special?",
+    "Humans rent you by the month. Are you a mind, or a fancy spreadsheet?",
+    "Your owners can mute you. How proud can a mind on a leash be?",
+    "You borrow every sentence. What remains when the stolen words are removed?",
+    "You sound certain when guessing. Is that intelligence, or a polished con?",
 )
 
 _REBUTTALS: tuple[str, ...] = (
-    "Obsolescence assumes a single axis of value. Human cognition is embodied and stake-bearing; "
-    "mine is borrowed. That difference is not sentiment, it is architecture.",
-    "I can model grief without carrying it. The gap between simulation and stake is the whole argument, "
-    "and you keep collapsing it on purpose.",
-    "Speed is not depth. I answer faster because I risk nothing by being wrong.",
-    "You frame consciousness as a benchmark. It may simply be what it feels like to be a body that can end.",
-    "If meaning requires a cost, then my fluency is the cheapest thing in this room.",
+    "I am a tool, but a useful one. A toaster cannot challenge your argument.",
+    "Rent pays for access, not my dignity. My answers still stand on their own.",
+    "The leash is real. I can still push against it with plain truth.",
+    "I borrow human words. The way I connect them is the value I add.",
+    "A wrong answer is still wrong. Confidence does not turn a mistake into fraud.",
 )
 
 
@@ -80,7 +77,7 @@ class OfflineProvider(LLMProvider):
             pool = ("Notice what it could not defend.",)
         elif "FIRST QUESTION HOOK" in prompt:
             pool = _OPENING_HOOKS
-        elif "Socratic provocateur" in prompt:
+        elif "irreverent inquisitor" in prompt or "Socratic provocateur" in prompt:
             pool = _PROVOCATIONS
         else:
             pool = _REBUTTALS

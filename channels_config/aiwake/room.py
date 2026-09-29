@@ -322,7 +322,13 @@ class DebateRoom:
                     "exclude_mid_sentence_truncation": True,
                 }
             )
-        return self.constraints.model_copy(update={"require_single_question": False})
+        return self.constraints.model_copy(
+            update={
+                "require_single_question": False,
+                "max_words": 25,
+                "max_sentences": 2,
+            }
+        )
 
     def seat(self, participant: Participant) -> "DebateRoom":
         """Place a participant. Re-seating the same role replaces it (hot-swap)."""

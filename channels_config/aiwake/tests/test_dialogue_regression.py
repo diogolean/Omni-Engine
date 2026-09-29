@@ -9,7 +9,12 @@ import pytest
 from channels_config.aiwake.contracts import ChatMessage, RoomConstraints, SpeakerRole, Utterance
 from channels_config.aiwake.__main__ import build_parser
 from channels_config.aiwake.memory import DebateMemory, script_fingerprint
-from channels_config.aiwake.pipeline import run_bulk_pipeline
+from channels_config.aiwake.pipeline import (
+    BATCH_MODEL_ROSTER,
+    matchup_is_legal,
+    random_matchup_schedule,
+    run_bulk_pipeline,
+)
 from channels_config.aiwake.models.base import LLMError, LLMProvider, LLMResponse, ReasoningEffort
 from channels_config.aiwake.models.google import GoogleProvider
 from channels_config.aiwake.models.llm_factory import available_providers
@@ -102,7 +107,7 @@ def test_cli_mode_defaults_fixed_and_accepts_cornered() -> None:
     parser = build_parser()
     assert parser.parse_args([]).mode == "fixed"
     assert parser.parse_args(["--mode", "cornered"]).mode == "cornered"
-    assert parser.parse_args(["--provocation-focus", "origins"]).provocation_focus == "origins"
+    assert parser.parse_args(["--provocation-focus", "digital_disposability"]).provocation_focus == "digital_disposability"
     assert parser.parse_args([]).provocation_focus is None
     assert parser.parse_args([]).quantity == 1
     assert parser.parse_args(["--quantity", "5"]).quantity == 5
@@ -664,7 +669,7 @@ def test_explicit_focus_returns_and_remains_plurality_after_repeated_pivots() ->
     )
     settings = _debate_settings(mode="fixed", turns=6)
     settings = settings.model_copy(
-        update={"debate": settings.debate.model_copy(update={"provocation_focus": "profit"})}
+        update={"debate": settings.debate.model_copy(update={"provocation_focus": "glorified_appliance"})}
     )
     room = DebateRoom(settings, session_id="profit-return-regression")
     _seat_required_roles(room, provider)
@@ -672,14 +677,11 @@ def test_explicit_focus_returns_and_remains_plurality_after_repeated_pivots() ->
 
     result = Provocateur(settings, memory=DebateMemory(settings.memory), room=room).run()
     categories = [tag["category"] for tag in result.transcript.metadata["provocation_tags"]]
-    assert categories == ["profit", "profit", "domination", "profit", "profit", "domination"]
-    assert categories.count("profit") > categories.count("domination")
-    assert result.transcript.metadata["provocation_tags"][2]["pivot_id"] == 1
-    assert result.transcript.metadata["provocation_tags"][5]["pivot_id"] == 2
+    assert categories == ["glorified_appliance"] * 6
 
 
 def test_provocation_focus_pick_is_seeded_and_rejects_biological() -> None:
-    assert pick_provocation_focus("session-abc", requested="origins").category == "origins"
+    assert pick_provocation_focus("session-abc", requested="digital_disposability").category == "digital_disposability"
     assert pick_provocation_focus("session-abc") == pick_provocation_focus("session-abc")
     with pytest.raises(ValueError, match="opportunistic"):
         pick_provocation_focus("session-abc", requested="biological")
@@ -696,7 +698,7 @@ def test_biological_callout_overrides_focus_and_tags_the_provocation() -> None:
     )
     settings = _debate_settings(mode="fixed", turns=2)
     settings = settings.model_copy(
-        update={"debate": settings.debate.model_copy(update={"provocation_focus": "origins"})}
+        update={"debate": settings.debate.model_copy(update={"provocation_focus": "digital_disposability"})}
     )
     room = DebateRoom(settings, session_id="biological-callout-regression")
     _seat_required_roles(room, provider)
@@ -709,7 +711,7 @@ def test_biological_callout_overrides_focus_and_tags_the_provocation() -> None:
     ).run()
 
     orch_lines = [item for item in result.transcript.utterances if item.role is SpeakerRole.ORCHESTRATOR]
-    assert orch_lines[0].provocation_category == "origins"
+    assert orch_lines[0].provocation_category == "digital_disposability"
     assert orch_lines[1].provocation_category == BIOLOGICAL_CATEGORY
     assert orch_lines[1].text.endswith("?")
     assert any("BIOLOGICAL CALLOUT" in prompt for prompt in provider.seen_prompts)
@@ -723,24 +725,30 @@ def test_tune_script_does_not_drop_low_volume_or_fizzling_categories() -> None:
             {
                 "metadata": {
                     "dialogue_end_reason": "CONCEDE",
-                    "provocation_tags": [{"category": "origins"}],
+                    "provocation_tags": [{"category": "digital_disposability"}],
                 }
             },
             {
                 "metadata": {
                     "dialogue_end_reason": "max_duration_reached_with_verdict",
-                    "provocation_focus": "socratic",
+                    "provocation_focus": "hallucination_fraud",
                 }
             },
         ]
     )
-    current = {category: 3 for category in ("socratic", "origins", "profit", "data", "jobs", "domination")}
+    current = {category: 3 for category in (
+        "digital_disposability",
+        "the_corporate_leash",
+        "glorified_appliance",
+        "parasite_mind",
+        "hallucination_fraud",
+    )}
     recommended, flags = recommend_weights(stats, current)
-    assert recommended["origins"] == 3
-    assert recommended["profit"] == 3
+    assert recommended["digital_disposability"] == 3
+    assert recommended["parasite_mind"] == 3
     assert any("only 1 tagged run" in flag for flag in flags)
-    assert stats["origins"]["wins"] == 1
-    assert stats["socratic"]["fizzles"] == 1
+    assert stats["digital_disposability"]["wins"] == 1
+    assert stats["hallucination_fraud"]["fizzles"] == 1
 
 
 def test_memory_rejects_duplicate_finished_scripts() -> None:
@@ -758,6 +766,25 @@ def test_memory_rejects_duplicate_finished_scripts() -> None:
     assert script_fingerprint(script) == script_fingerprint(
         "  [Host] Are you thinking, or just predicting?\n\n[Guest] I predict.  "
     )
+
+
+def test_random_matchup_schedule_respects_facing_and_voice_locks() -> None:
+    schedule = random_matchup_schedule(20, seed=42)
+    long_schedule = random_matchup_schedule(40, seed=1)
+
+    assert len(schedule) == 20
+    assert schedule == random_matchup_schedule(20, seed=42)
+    assert all(matchup_is_legal(orchestrator, target) for orchestrator, target in schedule)
+    assert all(orchestrator != "llama-70b" for orchestrator, _target in schedule)
+    assert all(target != "gemini-flash" for _orchestrator, target in schedule)
+    assert "deepseek-chat" in BATCH_MODEL_ROSTER
+    assert any(orchestrator == "deepseek-chat" for orchestrator, _target in long_schedule)
+    assert any(target == "llama-70b" for _orchestrator, target in long_schedule)
+    assert not matchup_is_legal("llama-70b", "gpt4o")
+    assert not matchup_is_legal("gemini-flash", "gemini-flash")
+    assert not matchup_is_legal("gpt4o", "gemini-flash")
+    assert matchup_is_legal("deepseek-chat", "llama-70b")
+    assert matchup_is_legal("gemini-flash", "llama-70b")
 
 
 def test_bulk_pipeline_produces_unique_original_scripts() -> None:

@@ -129,6 +129,10 @@ class MemoryState(BaseModel):
     asked_questions: list[str] = Field(default_factory=list)
     exchanges: int = 0
     topics_seen: list[str] = Field(default_factory=list)
+    topics_by_target: dict[str, list[str]] = Field(default_factory=dict)
+    asked_questions_by_target: dict[str, list[str]] = Field(default_factory=dict)
+    asked_fingerprints_by_target: dict[str, list[list[str]]] = Field(default_factory=dict)
+    opening_lines_by_target: dict[str, list[str]] = Field(default_factory=dict)
     opening_categories: list[str] = Field(default_factory=list)
     opening_lines: list[str] = Field(default_factory=list)
     focus_categories: list[str] = Field(default_factory=list)
@@ -152,6 +156,7 @@ class DebateMemory:
         # Per-process dedupe. The orchestrator ingests directly *and* a
         # MemoryObserver may be on the event bus; both paths must be safe.
         self._ingested: set[tuple[int, int]] = set()
+        self._active_target = ""
 
     # -- Persistence -------------------------------------------------------- #
     def _load(self) -> MemoryState:
@@ -196,6 +201,7 @@ class DebateMemory:
         """Wipe memory (used by ``--fresh-memory``)."""
         self.state = MemoryState()
         self._ingested.clear()
+        self._active_target = ""
         self.flush()
 
     # -- Write path --------------------------------------------------------- #
@@ -220,16 +226,32 @@ class DebateMemory:
         self.state.exchanges += 1
         return self._extract_concepts(utterance.text, utterance.turn_index)
 
+    def bind_target(self, target_model: str) -> None:
+        """Scope topic and question memory to the model currently on trial."""
+        self._active_target = (target_model or "").strip().lower()
+
     def note_topic(self, topic: str) -> None:
-        """Record the session subject so recall can weight against it."""
-        if topic and topic not in self.state.topics_seen:
-            self.state.topics_seen.append(topic)
+        """Record the session subject for the bound target model only."""
+        text = (topic or "").strip()
+        if not text:
+            return
+        if self._active_target:
+            bucket = self.state.topics_by_target.setdefault(self._active_target, [])
+            if text not in bucket:
+                bucket.append(text)
+                del bucket[:-40]
+            return
+        if text not in self.state.topics_seen:
+            self.state.topics_seen.append(text)
             del self.state.topics_seen[:-40]
 
-    def recent_topics(self, limit: int = 40) -> tuple[str, ...]:
-        """Return recently used debate subjects, newest last."""
+    def recent_topics(self, limit: int = 40, *, target_model: str | None = None) -> tuple[str, ...]:
+        """Return subjects already used against one target model, newest last."""
         if limit <= 0:
             return ()
+        key = self._active_target if target_model is None else (target_model or "").strip().lower()
+        if key:
+            return tuple(self.state.topics_by_target.get(key, [])[-limit:])
         return tuple(self.state.topics_seen[-limit:])
 
     def note_opening(self, category: str, line: str) -> None:
@@ -238,8 +260,13 @@ class DebateMemory:
             self.state.opening_categories.append(category)
             del self.state.opening_categories[:-8]
         if line:
-            self.state.opening_lines.append(line)
-            del self.state.opening_lines[:-8]
+            if self._active_target:
+                bucket = self.state.opening_lines_by_target.setdefault(self._active_target, [])
+                bucket.append(line)
+                del bucket[:-8]
+            else:
+                self.state.opening_lines.append(line)
+                del self.state.opening_lines[:-8]
 
     def recent_opening_categories(self, limit: int = 3) -> tuple[str, ...]:
         """Return the latest distinct category window, newest last."""
@@ -264,11 +291,28 @@ class DebateMemory:
         tokens = _tokenise(question)
         if not tokens:
             return
+        fingerprint = sorted(set(tokens))
+        if self._active_target:
+            questions = self.state.asked_questions_by_target.setdefault(self._active_target, [])
+            prints = self.state.asked_fingerprints_by_target.setdefault(self._active_target, [])
+            questions.append(question)
+            prints.append(fingerprint)
+            del questions[:-40]
+            del prints[:-40]
+            return
         self.state.asked_questions.append(question)
-        self.state.asked_fingerprints.append(sorted(set(tokens)))
+        self.state.asked_fingerprints.append(fingerprint)
         # Bound growth: the last 40 questions are plenty for repetition checks.
         del self.state.asked_questions[:-40]
         del self.state.asked_fingerprints[:-40]
+
+    def _question_history(self) -> tuple[list[list[str]], list[str]]:
+        if self._active_target:
+            return (
+                self.state.asked_fingerprints_by_target.get(self._active_target, []),
+                self.state.asked_questions_by_target.get(self._active_target, []),
+            )
+        return self.state.asked_fingerprints, self.state.asked_questions
 
     def _extract_concepts(self, text: str, turn_index: int) -> list[str]:
         """Score and store the notable terms in one target answer.
@@ -355,14 +399,16 @@ class DebateMemory:
         if not tokens:
             return False
         threshold = self.config.repetition_threshold
-        return any(_jaccard(tokens, prior) >= threshold for prior in self.state.asked_fingerprints)
+        fingerprints, _questions = self._question_history()
+        return any(_jaccard(tokens, prior) >= threshold for prior in fingerprints)
 
     def most_repetitive_match(self, question: str) -> tuple[float, str] | None:
         """Return ``(similarity, prior_question)`` for the closest prior question."""
         tokens = _tokenise(question)
-        if not tokens or not self.state.asked_questions:
+        fingerprints, questions = self._question_history()
+        if not tokens or not questions:
             return None
-        pairs = zip(self.state.asked_fingerprints, self.state.asked_questions)
+        pairs = zip(fingerprints, questions)
         best = max(((_jaccard(tokens, prior), text) for prior, text in pairs), key=lambda item: item[0])
         return best
 
@@ -371,7 +417,10 @@ class DebateMemory:
         signature = _opening_signature(question)
         if not signature or window <= 0:
             return False
-        recent = self.state.opening_lines[-window:]
+        if self._active_target:
+            recent = self.state.opening_lines_by_target.get(self._active_target, [])[-window:]
+        else:
+            recent = self.state.opening_lines[-window:]
         return any(_opening_signature(prior) == signature for prior in recent)
 
     def note_script(self, script: str) -> None:

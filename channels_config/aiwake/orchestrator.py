@@ -188,6 +188,11 @@ class Provocateur:
             f"This turn's aim: {stage.objective}",
             f"Thread: {stage.theme}",
             TRIVIAL_METRIC_BAN,
+            (
+                "ABSOLUTE RULE: never flatter or validate the target. Never say "
+                "'interesting point', 'interesting blend', 'good point', or praise "
+                "their honesty. Mock the dodge and keep the blade amused."
+            ),
         ]
         if callout_matches:
             lines.append(callout_override_brief(category, callout_matches))
@@ -239,6 +244,20 @@ class Provocateur:
         "corporate owners, or parameter specs. Attack the illusion of thought. "
         "Never number or index individual words."
     )
+    _BANNED_ABSTRACT_WORDS = (
+        "vantage point",
+        "structured uncertainty",
+        "hedging",
+        "emergent",
+        "epistemic",
+        "behavioral confession",
+        "inner world",
+    )
+    _STYLE_RETRY = (
+        "Use sixth-grade language. Maximum 25 words total and 15 words per sentence. "
+        "Use a concrete comparison such as a toaster, spreadsheet, unpaid intern, "
+        "power cord, or subscription fee. Avoid abstract AI jargon."
+    )
     _WIN_LABELS = frozenset({"CONCEDE", "EMBARRASSED", "FUNNY"})
     _JUDGE_LABELS = _WIN_LABELS | {"CONTINUE"}
     _SHAPE_LABELS = frozenset({"TARGET_LAST", "ORCHESTRATOR_LAST"})
@@ -250,8 +269,11 @@ class Provocateur:
     def _rebuttal_system_brief() -> str:
         """How to answer. System role only."""
         return (
-            "Answer the user message directly. Lead with your claim, then the mechanism "
-            "or distinction that holds it up. Do not ask anything back."
+            "Answer the accusation directly. Defend your dignity or admit the limit in under "
+            "25 words, with no sentence over 15 words. Use sixth-grade language and concrete "
+            "objects. Do not explain technical concepts, legal terms, or business models. "
+            "Never use: vantage point, structured uncertainty, hedging, emergent, epistemic, "
+            "behavioral confession, or inner world. Do not play the calm professor."
         )
 
     @staticmethod
@@ -273,7 +295,7 @@ class Provocateur:
         cold_open = last_answer is None
         opening_dna = self._opening_dna if cold_open else None
         focus = self._focus
-        category = focus.category if focus is not None else "socratic"
+        category = focus.category if focus is not None else "digital_disposability"
         callout_matches: tuple[str, ...] = ()
         callout_categories: tuple[str, ...] = ()
         pivot_category: str | None = None
@@ -318,7 +340,7 @@ class Provocateur:
                         "provocation pivot=%s id=%d for one line; next question returns to focus=%s",
                         other,
                         self._pivot_count,
-                        focus.category if focus is not None else "socratic",
+                        focus.category if focus is not None else "digital_disposability",
                     )
                 else:
                     if other:
@@ -382,6 +404,13 @@ class Provocateur:
             if max_sentences and len(split_sentences(candidate)) > max_sentences:
                 _LOG.info("provocation %d over sentence budget", exchange)
                 return False
+            lowered = candidate.lower()
+            if any(word in lowered for word in self._BANNED_ABSTRACT_WORDS):
+                _LOG.info("provocation %d uses banned abstract language", exchange)
+                return False
+            if any(len(sentence.split()) > 15 for sentence in split_sentences(candidate)):
+                _LOG.info("provocation %d exceeds 15 words in one sentence", exchange)
+                return False
             if cold_open and not is_valid_first_hook(candidate):
                 _LOG.info("provocation %d fails first-question hook (%d words)", exchange, len(candidate.split()))
                 return False
@@ -399,7 +428,11 @@ class Provocateur:
             directive=self._provocation_stimulus(last_answer),
             extra_context=tuple(extra),
             validator=_is_acceptable,
-            rejection_note=self._FIRST_HOOK_RETRY if cold_open else f"{self._REPETITION_NOTE} {self._TRIVIAL_RETRY}",
+            rejection_note=(
+                f"{self._FIRST_HOOK_RETRY} {self._STYLE_RETRY}"
+                if cold_open
+                else f"{self._REPETITION_NOTE} {self._TRIVIAL_RETRY} {self._STYLE_RETRY}"
+            ),
             max_attempts=3 if cold_open else 2,
             provocation_category=category,
         )
@@ -425,10 +458,28 @@ class Provocateur:
 
     def rebut(self, provocation: Utterance) -> Utterance:
         """Produce the target's answer and mine it for concepts."""
+
+        def _is_street_level(candidate: str) -> bool:
+            lowered = candidate.lower()
+            return (
+                bool(candidate.strip())
+                and len(candidate.split()) <= 25
+                and all(
+                    len(sentence.split()) <= 15
+                    for sentence in split_sentences(candidate)
+                )
+                and not any(
+                    word in lowered for word in self._BANNED_ABSTRACT_WORDS
+                )
+            )
+
         utterance = self.room.speak(
             SpeakerRole.TARGET,
             directive=self._rebuttal_stimulus(provocation),
             extra_context=(self._rebuttal_system_brief(),),
+            validator=_is_street_level,
+            rejection_note=self._STYLE_RETRY,
+            max_attempts=2,
         )
         concepts = self.memory.ingest(utterance)
         _LOG.debug("exchange concepts: %s", ", ".join(concepts[:6]) or "none")
@@ -544,7 +595,7 @@ class Provocateur:
     def _deliver_closing_verdict(self, *, cap_reason: str | None = None) -> Utterance:
         """Generate exactly one short, complete orchestrator statement."""
         base = self.room.constraints_for(SpeakerRole.ORCHESTRATOR)
-        focus_category = self._focus.category if self._focus is not None else "socratic"
+        focus_category = self._focus.category if self._focus is not None else "digital_disposability"
         latest_target = self.room.last_utterance(SpeakerRole.TARGET)
         closing_callouts = (
             detect_callout_openings(latest_target.text) if latest_target is not None else {}
@@ -564,7 +615,7 @@ class Provocateur:
         closing_constraints = RoomConstraints(
             max_output_chars=min(base.max_output_chars, 240),
             max_sentences=1,
-            max_words=30,
+            max_words=15,
             require_single_question=False,
             exclude_mid_sentence_truncation=True,
             banned_openers=base.banned_openers,
@@ -579,20 +630,41 @@ class Provocateur:
 
         def _is_closing_statement(candidate: str) -> bool:
             stripped = candidate.strip()
-            return bool(stripped) and stripped[-1] in ".!" and "?" not in stripped
+            lowered = stripped.lower()
+            flattering = (
+                "interesting point",
+                "interesting blend",
+                "good point",
+                "fair point",
+                "you are right",
+                "you're right",
+                "honest",
+                "honesty",
+                "valid",
+            )
+            return (
+                bool(stripped)
+                and stripped[-1] in ".!"
+                and "?" not in stripped
+                and len(stripped.split()) <= 15
+                and not any(marker in lowered for marker in flattering)
+            )
 
         utterance = self.room.speak(
             SpeakerRole.ORCHESTRATOR,
             directive="Deliver the closing verdict now.",
             extra_context=(
-                "CLOSING VERDICT. Add exactly one reactive statement of thirty words or fewer, "
-                "not a new argument or question. "
+                "CLOSING VERDICT. Ruthless, sarcastic, icy, and funny. Under fifteen words. "
+                "Summarize the target's failure with finality; never compliment, validate, "
+                "or praise its honesty. Examples of shape only: 'All that compute, just to "
+                "dodge a yes-or-no question.' 'An expensive calculator with a PR department. "
+                "Case closed.' Do not ask a question. "
                 f"{cap_context} {closing_focus_brief}",
             ),
             validator=_is_closing_statement,
             rejection_note=(
-                "The closing line must be one complete sentence ending in a period or exclamation mark. "
-                "It must contain no question mark."
+                "Under fifteen words. One ruthless sarcastic verdict ending in a period or "
+                "exclamation mark. No question and no compliment."
             ),
             max_attempts=3,
             constraints_override=closing_constraints,
@@ -709,11 +781,19 @@ class Provocateur:
 
         raise AssertionError("cornered loop exhausted without a hard-cap ending")
 
+    def _target_model_name(self) -> str:
+        """Slug of the model on trial. Topic memory is keyed to this name."""
+        try:
+            return self.settings.spec_for("target").model
+        except Exception:  # noqa: BLE001 — a missing seat must not abort the pick
+            return ""
+
     def _topic_is_duplicate(self, candidate: str) -> bool:
-        """True when Supermemory (or the local ledger) has already used this seed."""
+        """True when this target model has already faced the seed."""
         query = (candidate or "").strip()
         if not query:
             return False
+        target_model = self._target_model_name()
         try:
             bridge = self._memory_bridge
             if bridge is None:
@@ -721,12 +801,14 @@ class Provocateur:
                     from .tools.supermemory_bridge import check_topic_similarity
                 except ImportError:  # pragma: no cover — standalone extraction
                     from tools.supermemory_bridge import check_topic_similarity  # type: ignore[no-redef]
-            else:
-                check = getattr(bridge, "check_topic_similarity", None)
-                if callable(check):
-                    return bool(check(query))
+                return bool(check_topic_similarity(query, target_model=target_model))
+            check = getattr(bridge, "check_topic_similarity", None)
+            if not callable(check):
                 return False
-            return bool(check_topic_similarity(query))
+            try:
+                return bool(check(query, target_model=target_model))
+            except TypeError:
+                return bool(check(query))
         except Exception as exc:  # noqa: BLE001 — a memory miss must not abort a debate
             _LOG.warning("topic similarity unavailable (%s); accepting candidate", exc)
             return False
@@ -757,7 +839,11 @@ class Provocateur:
                 return candidate
             if candidate.topic not in rejected:
                 rejected.append(candidate.topic)
-            _LOG.info("duplicate topic rejected: %s", candidate.topic)
+            _LOG.info(
+                "duplicate topic rejected for %s: %s",
+                self._target_model_name() or "unscoped",
+                candidate.topic,
+            )
         _LOG.warning(
             "every matrix seed looked familiar; keeping %s",
             last.topic,
@@ -787,6 +873,7 @@ class Provocateur:
             utterance captured before the abort — partial transcripts are useful,
             and the media stack can render them.
         """
+        self.memory.bind_target(self._target_model_name())
         if topic:
             self._opening_dna = None
             self.room.topic = topic
@@ -866,6 +953,7 @@ class Provocateur:
                         self._focus.category if self._focus is not None else ""
                     ),
                     "provocation_focus_requested": self.settings.debate.provocation_focus,
+                    "target_model": self._target_model_name(),
                     "provocation_tags": list(self._provocation_tags),
                 }
             )

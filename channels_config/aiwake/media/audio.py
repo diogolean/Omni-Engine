@@ -12,8 +12,8 @@ word-rate estimate, and never raises.
 
 Voice assignment is a lookup, not a pair of seat fields: :func:`resolve_voice`
 matches the speaking model's alias or slug against ``audio.voice_map`` (and the
-persona ``SEAT_VOICES`` fallback). The Gemini orchestrator is pinned to its
-canonical Christopher voice.
+persona ``SEAT_VOICES`` fallback). Gemini is pinned to Brian. Llama is
+pinned to Christopher. DeepSeek is pinned to Eric.
 
 Typewriter clicks ride under AIWAKE.CORE (orchestrator) typing only, at
 ``gain_db`` (default -15 dB), for the character-reveal window — the same
@@ -72,7 +72,10 @@ _ELLIPSIS_RE = re.compile(r"\.{3,}|…+")
 _DRAMATIC_BREAK_S = 1.5
 _CORE_ROLE = "orchestrator"
 GEMINI_CANONICAL_VOICE = "en-US-BrianNeural"
-DEEPSEEK_CANONICAL_VOICE = "en-US-ChristopherNeural"
+LLAMA_CANONICAL_VOICE = "en-US-ChristopherNeural"
+DEEPSEEK_CANONICAL_VOICE = "en-US-EricNeural"
+CHATGPT_CANONICAL_VOICE = "en-US-AndrewNeural"
+CLAUDE_CANONICAL_VOICE = "en-GB-RyanNeural"
 CTA_VOICE = GEMINI_CANONICAL_VOICE
 _AIWAKE_WORD = re.compile(r"\bAiwake\b", re.IGNORECASE)
 
@@ -162,28 +165,40 @@ def resolve_voice(
 ) -> str:
     """Pick an edge-tts voice for a seat + model.
 
-    The Gemini orchestrator is hard-pinned to the first approved V2 voice so stale channel
-    configuration cannot silently replace the persona voice. Everyone else
-    is matched against alias keys in the map — exact substring first,
-    then every meaningful token of the key present in the slug — so a live
-    remap like ``google/gemini-3.5-flash`` still hits ``gemini-flash``.
+    Gemini's orchestrator seat stays Brian unless a caller sets
+    ``orchestrator_voice_override``. Any other orchestrator uses that model's
+    own map entry, so Llama cannot inherit Brian and DeepSeek cannot inherit
+    Christopher. Targets match alias keys — exact substring first, then every
+    meaningful token of the key present in the slug.
     """
     mapping = {**SEAT_VOICES, **dict(config.voice_map)}
     if role is SpeakerRole.ORCHESTRATOR:
-        # Seat pin stays Brian unless a caller explicitly overrides it for a
-        # non-Gemini provocateur puppet (ChatGPT's tested Andrew voice).
         override = str(mapping.get("orchestrator_voice_override") or "").strip()
         if override:
             return override
+        slug = (model_slug or "").strip().lower()
+        if slug and "gemini" not in slug:
+            matched = _match_mapped_voice(mapping, slug)
+            if matched:
+                return matched
         return GEMINI_CANONICAL_VOICE
 
     needle = (model_slug or "").strip().lower()
     if needle in mapping:
         return mapping[needle]
+    matched = _match_mapped_voice(mapping, needle)
+    if matched:
+        return matched
+    return config.target_voice
 
+
+def _match_mapped_voice(mapping: dict[str, str], needle: str) -> str:
+    """Return the longest alias hit for ``needle``, or an empty string."""
+    if not needle:
+        return ""
     scored: list[tuple[int, str]] = []
     for key, voice in mapping.items():
-        if key == "orchestrator":
+        if key in {"orchestrator", "orchestrator_voice_override"}:
             continue
         key_l = key.strip().lower()
         if not key_l:
@@ -198,10 +213,10 @@ def resolve_voice(
         ]
         if tokens and all(part in needle for part in tokens):
             scored.append((sum(len(part) for part in tokens), voice))
-    if scored:
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return scored[0][1]
-    return config.target_voice
+    if not scored:
+        return ""
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored[0][1]
 
 
 def resolve_cta_voice(config: AudioConfig | None = None) -> str:

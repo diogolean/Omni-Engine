@@ -201,9 +201,31 @@ def _search_results(payload: Any) -> list[Any]:
     return list(rows or [])
 
 
-def session_memory_text(*, session_id: str, topic: str, hook: str, quote: str) -> str:
+def _model_key(target_model: str) -> str:
+    return (target_model or "").strip().lower()
+
+
+def _hit_target_model(hit: Any) -> str:
+    if isinstance(hit, dict):
+        meta = hit.get("metadata") or hit.get("customMetadata") or {}
+    else:
+        meta = getattr(hit, "metadata", None) or getattr(hit, "custom_metadata", None) or {}
+    if not isinstance(meta, dict):
+        return ""
+    return _model_key(str(meta.get("target_model") or ""))
+
+
+def session_memory_text(
+    *,
+    session_id: str,
+    topic: str,
+    hook: str,
+    quote: str,
+    target_model: str = "",
+) -> str:
     return (
         f"Aiwake approved session {session_id}.\n"
+        f"Target model: {target_model}\n"
         f"Topic: {topic}\n"
         f"Opening hook: {hook}\n"
         f"Core quote: {quote}"
@@ -463,42 +485,47 @@ class SupermemoryBridge:
     def ledger_sessions(self) -> list[dict[str, Any]]:
         return list(self._load_ledger().get("sessions") or [])
 
-    def _local_duplicate(self, topic_query: str) -> bool:
+    def _local_duplicate(self, topic_query: str, *, target_model: str = "") -> bool:
         query = (topic_query or "").strip()
+        wanted = _model_key(target_model)
         if not query:
             return False
         for row in self.ledger_sessions():
+            row_model = _model_key(str(row.get("target_model") or ""))
+            if row_model != wanted:
+                continue
             for field in ("topic", "hook", "quote"):
                 candidate = str(row.get(field) or "").strip()
                 if candidate and lexical_similarity(query, candidate) >= self.similarity_threshold:
                     return True
         return False
 
-    def check_topic_similarity(self, topic_query: str) -> bool:
-        """True when *topic_query* is a near-duplicate of approved history."""
+    def check_topic_similarity(self, topic_query: str, target_model: str = "") -> bool:
+        """True when this target model has already faced a near-duplicate topic."""
         query = (topic_query or "").strip()
+        wanted = _model_key(target_model)
         if not query:
             return False
-        if self.is_active:
+        if self._local_duplicate(query, target_model=wanted):
+            return True
+        if not self.is_active or not wanted:
+            return False
+        hits = self._search(
+            query,
+            container_tag=self.history_container,
+            search_mode="memories",
+        )
+        if not hits:
             hits = self._search(
                 query,
                 container_tag=self.history_container,
-                search_mode="memories",
+                search_mode="documents",
             )
-            if not hits:
-                # Local embeddings index document chunks even when memory
-                # extraction (LLM dreaming) is unavailable.
-                hits = self._search(
-                    query,
-                    container_tag=self.history_container,
-                    search_mode="documents",
-                )
-            if hits:
-                top = max(_hit_score(hit) for hit in hits)
-                return top > self.similarity_threshold
-            if self.is_active:
-                return False
-        return self._local_duplicate(query)
+        scoped = [hit for hit in hits if _hit_target_model(hit) == wanted]
+        if not scoped:
+            return False
+        top = max(_hit_score(hit) for hit in scoped)
+        return top > self.similarity_threshold
 
     def remember_approved_session(
         self,
@@ -508,6 +535,7 @@ class SupermemoryBridge:
         quote: str,
         *,
         remote: bool = True,
+        target_model: str = "",
     ) -> bool:
         """Persist an approved debate footprint. Always updates the local ledger."""
         sid = (session_id or "").strip()
@@ -524,6 +552,7 @@ class SupermemoryBridge:
             "topic": topic_text,
             "hook": hook_text,
             "quote": quote_text,
+            "target_model": _model_key(target_model),
         }
         if existing is None:
             sessions.append(record)
@@ -546,12 +575,14 @@ class SupermemoryBridge:
                     topic=topic_text,
                     hook=hook_text,
                     quote=quote_text,
+                    target_model=_model_key(target_model),
                 ),
                 container_tag=self.history_container,
                 metadata={
                     "session_id": sid,
                     "kind": "approved_session",
                     "topic": topic_text[:200],
+                    "target_model": _model_key(target_model),
                     "custom_id": custom_id[:100],
                 },
             )
@@ -589,17 +620,29 @@ def reset_bridge() -> None:
     _START_ATTEMPTED = False
 
 
-def check_topic_similarity(topic_query: str) -> bool:
+def check_topic_similarity(topic_query: str, target_model: str = "") -> bool:
     try:
-        return get_bridge().check_topic_similarity(topic_query)
+        return get_bridge().check_topic_similarity(topic_query, target_model=target_model)
     except Exception as exc:  # noqa: BLE001 — pipeline must never crash
         _LOG.warning("topic similarity check failed (%s); treating as unique", exc)
         return False
 
 
-def remember_approved_session(session_id: str, topic: str, hook: str, quote: str) -> bool:
+def remember_approved_session(
+    session_id: str,
+    topic: str,
+    hook: str,
+    quote: str,
+    target_model: str = "",
+) -> bool:
     try:
-        return get_bridge().remember_approved_session(session_id, topic, hook, quote)
+        return get_bridge().remember_approved_session(
+            session_id,
+            topic,
+            hook,
+            quote,
+            target_model=target_model,
+        )
     except Exception as exc:  # noqa: BLE001
         _LOG.warning("remember_approved_session failed (%s)", exc)
         return False

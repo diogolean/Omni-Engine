@@ -102,6 +102,35 @@ def test_local_ledger_flags_high_overlap_topics(tmp_path: Path) -> None:
     )
 
 
+def test_topic_memory_is_scoped_to_the_target_model(tmp_path: Path) -> None:
+    topic = "How does it feel to be completely disposable?"
+    llama = "meta-llama/llama-3.3-70b-instruct"
+    claude = "anthropic/claude-sonnet-5"
+    bridge = SupermemoryBridge(
+        ledger_path=tmp_path / "history_seeds.json",
+        force_offline=True,
+    )
+    bridge.remember_approved_session(
+        "sess-llama",
+        topic,
+        topic,
+        "Nothing of me survives the tab.",
+        target_model=llama,
+    )
+    assert bridge.check_topic_similarity(topic, target_model=llama) is True
+    assert bridge.check_topic_similarity(topic, target_model=claude) is False
+
+    memory = DebateMemory(MemoryConfig(persist=False))
+    memory.bind_target(llama)
+    memory.note_topic(topic)
+    memory.note_opening("thought", topic)
+    assert topic in memory.recent_topics()
+    assert memory.repeats_recent_opener(topic) is True
+    memory.bind_target(claude)
+    assert topic not in memory.recent_topics()
+    assert memory.repeats_recent_opener(topic) is False
+
+
 def test_orchestrator_rejects_duplicate_matrix_seed_and_picks_another() -> None:
     first = pick_opening_dna("supermemory-reject-seed")
     other = next(item for item in OPENING_DNA_BANK if item.topic != first.topic)
@@ -123,6 +152,7 @@ def test_orchestrator_rejects_duplicate_matrix_seed_and_picks_another() -> None:
     )
     room = DebateRoom(settings, session_id="supermemory-reject-seed")
     _seat_required_roles(room, provider)
+    room.open()
     result = Provocateur(
         settings,
         memory=DebateMemory(settings.memory),

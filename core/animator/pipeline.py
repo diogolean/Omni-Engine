@@ -37,7 +37,7 @@ from .render.visemes import (
     viseme_file,
 )
 from .voice import assign_debater_voices
-from .puppet import REST_MOUTH_STATES, rest_mouth_layer_key
+from .puppet import REQUIRED_REST_MOUTH_STATES, rest_mouth_layer_key
 from .types import VISEMES
 
 _LOG = logging.getLogger("animator.pipeline")
@@ -309,13 +309,20 @@ def build_render_skin(
         "smug_smile": Image.open(expression_dir / "mouth_smug.png").convert("RGBA"),
         "stressed_grimace": Image.open(expression_dir / "mouth_angry.png").convert("RGBA"),
     }
+    shock_path = expression_dir / "mouth_shock.png"
+    if shock_path.is_file():
+        expressions["shock"] = Image.open(shock_path).convert("RGBA")
     for code, sprite in sprites.items():
         _promote_head(
             canvas_size,
             _mouth_on_head(head.size, sprite, local_mouth, mouth_scale, mouth_rot),
             head_xy,
         ).save(mouths / f"mouth_{code}.png", compress_level=1)
-    for state in REST_MOUTH_STATES:
+    expression_states = (
+        *REQUIRED_REST_MOUTH_STATES,
+        *(("shock",) if "shock" in expressions else ()),
+    )
+    for state in expression_states:
         _promote_head(
             canvas_size,
             _mouth_on_head(head.size, expressions[state], local_mouth, mouth_scale, mouth_rot),
@@ -376,7 +383,10 @@ def build_render_skin(
             "glow": "glow.png",
             "bg": "bg.png",
             **{f"mouth_{code}": f"mouths/mouth_{code}.png" for code in VISEMES},
-            **{rest_mouth_layer_key(state): f"mouths/{rest_mouth_layer_key(state)}.png" for state in REST_MOUTH_STATES},
+            **{
+                rest_mouth_layer_key(state): f"mouths/{rest_mouth_layer_key(state)}.png"
+                for state in expression_states
+            },
         },
     }
     (skin / "puppet.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -685,7 +695,7 @@ def render_deepseek_debut(output_path: Path, scene: str = "random") -> Path:
         "label": "DEEPSEEK",
         "accent": "#C49A4E",
         "facing": "right",
-        "voice": "en-US-ChristopherNeural",
+        "voice": assign_debater_voices([character_id])[character_id],
         "text": "The clean path is the one that still holds.",
         "view": "facing_front",
     }

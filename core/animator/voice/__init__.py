@@ -1,8 +1,10 @@
 """Exclusive character-to-voice reservations for the debate engine."""
 
 from .registry import (
+    ANDREW,
     BRIAN,
-    GUY,
+    CHRISTOPHER,
+    ERIC,
     RYAN,
     VoiceCollisionError,
     assign_debater_voices,
@@ -10,8 +12,10 @@ from .registry import (
 )
 
 __all__ = [
+    "ANDREW",
     "BRIAN",
-    "GUY",
+    "CHRISTOPHER",
+    "ERIC",
     "RYAN",
     "VoiceCollisionError",
     "assign_debater_voices",

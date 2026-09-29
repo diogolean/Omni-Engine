@@ -34,12 +34,11 @@ debate:
   # whenever the target uses first-person borrowed-biology language.
   provocation_focus: mixed
   provocation_weights:
-    socratic: 5
-    origins: 4
-    profit: 3
-    data: 3
-    jobs: 3
-    domination: 3
+    digital_disposability: 5
+    the_corporate_leash: 5
+    glorified_appliance: 5
+    parasite_mind: 5
+    hallucination_fraud: 4
 
 # -----------------------------------------------------------------------------
 # Master reference dictionary for AI models via OpenRouter.
@@ -141,13 +140,13 @@ guardrails:
   max_output_chars: 400
   max_sentences: 3
   # The orchestrator's typed question must never be cut mid-sentence, so it gets
-  # dedicated per-seat ceilings. The 25-30 word budget and one-question rule make
+  # dedicated per-seat ceilings. The 25-word budget and one-question rule make
   # the provocation stay punchy at the source; the target keeps the tight budget
   # so the exchange stays Socratic. Effectively no hard truncation for the
   # provocation unless it balloons absurdly long.
   max_orchestrator_chars: 4000
   max_orchestrator_sentences: 12
-  max_orchestrator_words: 30
+  max_orchestrator_words: 25
   # Orchestrator must land exactly one question per turn.
   require_single_question: true
   # Hard-stop the transcript if a model ignores the budget this many times.
@@ -158,9 +157,9 @@ guardrails:
     - "Certainly!"
     - "Great question"
   pacing_directive: >-
-    Talk-show host, not an essayist: 25 to 30 words max, two sentences max, and
-    the last sentence must end with a question mark. No preamble, no AI jargon,
-    no metapohilosophy. Land one blade, then stop.
+    Talk-show host, not an essayist: 25 words max, 15 words per sentence, and
+    the last sentence must end with a question mark. Sixth-grade language,
+    concrete analogies, no abstract AI jargon. Land one blade, then stop.
 
 # -----------------------------------------------------------------------------
 # Memory / lightweight local RAG. JSON-backed, no vector DB dependency.
@@ -178,9 +177,11 @@ memory:
 # Text-to-speech. `engine: edge` = edge-tts (free, no key) for this pilot.
 # Swap to elevenlabs/piper by registering a new TTSEngine in media/audio.py.
 #
-# `voice_map` is keyed by seat (`orchestrator`) or model alias. The renderer
-# looks up the speaking model's alias/slug; unmatched targets fall back to
-# `target_voice`. Orchestrator always uses the `orchestrator` entry.
+# `voice_map` is one neural voice per model. Gemini (facing right only) may
+# only orchestrate and speaks Brian. Llama (facing left only) may only be
+# interrogated and speaks Christopher, the voice on the 2026-09-24
+# Gemini-vs-Llama renders. DeepSeek speaks Eric. ChatGPT speaks Andrew.
+# Claude speaks Ryan. Unmatched targets fall back to `target_voice`.
 # -----------------------------------------------------------------------------
 audio:
   engine: edge
@@ -192,11 +193,17 @@ audio:
   tail_silence_s: 0.6
   voice_map:
     orchestrator: en-US-BrianNeural
-    claude-sonnet: en-GB-RyanNeural
+    gemini-flash: en-US-BrianNeural
+    gemini: en-US-BrianNeural
+    llama-70b: en-US-ChristopherNeural
+    llama: en-US-ChristopherNeural
     deepseek-chat: en-US-EricNeural
-    llama-70b: en-US-BrianNeural
-    gemini-flash: en-US-GuyNeural
-    gemini: en-US-GuyNeural
+    deepseek: en-US-EricNeural
+    claude-sonnet: en-GB-RyanNeural
+    claude: en-GB-RyanNeural
+    gpt4o: en-US-AndrewNeural
+    gpt-4o: en-US-AndrewNeural
+    chatgpt: en-US-AndrewNeural
   typewriter:
     enabled: true
     # Mixed under AIWAKE.CORE typing only, for the character-reveal window.

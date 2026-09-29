@@ -34,7 +34,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from .puppet import (
     ALL_LAYER_KEYS,
     LAYER_KEYS,
-    REST_MOUTH_STATES,
+    REQUIRED_REST_MOUTH_STATES,
     PuppetSkin,
     rest_mouth_layer_key,
     viseme_layer_key,
@@ -1616,7 +1616,7 @@ def generate_ghibli_llama_assets(puppet_dir: Path) -> dict[str, object]:
             ),
         )
         layer.save(mouths_dir / f"mouth_{viseme}.png")
-    for state in REST_MOUTH_STATES:
+    for state in REQUIRED_REST_MOUTH_STATES:
         patch = _draw_ghibli_mouth_patch(
             "X",
             plate_width=plate_width,
@@ -1718,7 +1718,7 @@ def generate_ghibli_llama_assets(puppet_dir: Path) -> dict[str, object]:
     layers.update(
         {
             rest_mouth_layer_key(state): f"mouths/{rest_mouth_layer_key(state)}.png"
-            for state in REST_MOUTH_STATES
+            for state in REQUIRED_REST_MOUTH_STATES
         }
     )
     payload["layers"] = layers
@@ -1802,7 +1802,7 @@ def generate_gemini_anime_assets(puppet_dir: Path) -> dict[str, object]:
             ),
         )
         layer.save(mouths_dir / f"mouth_{viseme}.png")
-    for state in REST_MOUTH_STATES:
+    for state in REQUIRED_REST_MOUTH_STATES:
         patch = _draw_ghibli_mouth_patch(
             "X",
             plate_width=plate_bbox[2] - plate_bbox[0],
@@ -1909,7 +1909,7 @@ def generate_gemini_anime_assets(puppet_dir: Path) -> dict[str, object]:
     layers.update(
         {
             rest_mouth_layer_key(state): f"mouths/{rest_mouth_layer_key(state)}.png"
-            for state in REST_MOUTH_STATES
+            for state in REQUIRED_REST_MOUTH_STATES
         }
     )
     payload["layers"] = layers
@@ -1947,7 +1947,7 @@ def generate_puppet_assets(skin: PuppetSkin, *, missing: list[str] | None = None
     }
     for viseme in VISEMES:
         generators[viseme_layer_key(viseme)] = lambda v=viseme: _draw_viseme(v, palette)
-    for state in REST_MOUTH_STATES:
+    for state in REQUIRED_REST_MOUTH_STATES:
         generators[rest_mouth_layer_key(state)] = (
             lambda s=state: _draw_viseme("X", palette, rest_state=s)
         )
@@ -2013,7 +2013,7 @@ def generate_default_puppet(
                     / "mouths"
                     / f"{rest_mouth_layer_key(state)}.png"
                 ).is_file()
-                for state in REST_MOUTH_STATES
+                for state in REQUIRED_REST_MOUTH_STATES
             )
             if (
                 payload.get("asset_profile") != expected_profile

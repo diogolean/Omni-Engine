@@ -68,6 +68,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of exchanges (fixed mode) or hard iteration cap (cornered mode)",
     )
     parser.add_argument(
+        "--random-matchups",
+        action="store_true",
+        help=(
+            "For bulk runs, shuffle legal pairings across ChatGPT, Claude, "
+            "Gemini, Llama and DeepSeek. Gemini only orchestrates (facing "
+            "right). Llama is only interrogated (facing left)."
+        ),
+    )
+    parser.add_argument(
+        "--matchup-seed",
+        type=int,
+        help="Optional reproducible seed for --random-matchups.",
+    )
+    parser.add_argument(
         "--mode",
         choices=("fixed", "cornered"),
         default="fixed",
@@ -75,7 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--provocation-focus",
-        choices=("mixed", "origins", "profit", "data", "jobs", "domination", "socratic"),
+        choices=(
+            "mixed",
+            "digital_disposability",
+            "the_corporate_leash",
+            "glorified_appliance",
+            "parasite_mind",
+            "hallucination_fraud",
+        ),
         help=(
             "Attack-angle bias, orthogonal to --topic. mixed (default) is a "
             "seeded weighted pick per render. biological is not selectable: it "
@@ -320,7 +341,11 @@ def main(argv: list[str] | None = None) -> int:
     effective_mode = args.mode
     if dynamic_animation and not explicit_mode:
         effective_mode = "cornered"
-    if dynamic_animation and not args.offline:
+    if args.random_matchups and args.quantity < 2:
+        parser.error("--random-matchups requires --quantity 2 or greater")
+    if args.random_matchups and (args.orchestrator or args.target):
+        parser.error("--random-matchups cannot be combined with fixed seat overrides")
+    if dynamic_animation and not args.offline and not args.random_matchups:
         if not args.orchestrator:
             settings = settings.with_model_override("orchestrator", "gemini-flash")
         if not args.target:
@@ -353,7 +378,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.quantity > 1:
         print(f"Aiwake bulk production: {args.quantity} original video(s)")
-        batch = run_bulk_pipeline(quantity=args.quantity, **pipeline_kwargs)
+        batch = run_bulk_pipeline(
+            quantity=args.quantity,
+            random_matchups=args.random_matchups,
+            matchup_seed=args.matchup_seed,
+            **pipeline_kwargs,
+        )
         print(f"bulk requested : {batch.requested}")
         print(f"bulk succeeded : {batch.succeeded}")
         print(f"bulk skipped   : {batch.skipped_duplicates} (repeated script)")

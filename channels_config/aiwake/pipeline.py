@@ -14,6 +14,7 @@ side-effect policy.
 from __future__ import annotations
 
 import logging
+import random
 import shutil
 import time
 from collections.abc import Sequence
@@ -23,7 +24,14 @@ from typing import Literal
 
 try:
     from .contracts import DebateTranscript
-    from .media.audio import DEEPSEEK_CANONICAL_VOICE, build_engine
+    from .media.audio import (
+        CLAUDE_CANONICAL_VOICE,
+        DEEPSEEK_CANONICAL_VOICE,
+        GEMINI_CANONICAL_VOICE,
+        LLAMA_CANONICAL_VOICE,
+        build_engine,
+    )
+    from .personas import ORCHESTRATOR_ONLY_FAMILIES, TARGET_ONLY_FAMILIES
     from .memory import DebateMemory, script_fingerprint, scripts_overlap
     from .models.llm_factory import force_offline
     from .observers.core import (
@@ -44,7 +52,14 @@ try:
     )
 except ImportError:  # pragma: no cover — standalone extraction
     from contracts import DebateTranscript  # type: ignore[no-redef]
-    from media.audio import DEEPSEEK_CANONICAL_VOICE, build_engine  # type: ignore[no-redef]
+    from media.audio import (  # type: ignore[no-redef]
+        CLAUDE_CANONICAL_VOICE,
+        DEEPSEEK_CANONICAL_VOICE,
+        GEMINI_CANONICAL_VOICE,
+        LLAMA_CANONICAL_VOICE,
+        build_engine,
+    )
+    from personas import ORCHESTRATOR_ONLY_FAMILIES, TARGET_ONLY_FAMILIES  # type: ignore[no-redef]
     from memory import DebateMemory, script_fingerprint, scripts_overlap  # type: ignore[no-redef]
     from models.llm_factory import force_offline  # type: ignore[no-redef]
     from observers.core import (  # type: ignore[no-redef]
@@ -65,6 +80,90 @@ except ImportError:  # pragma: no cover — standalone extraction
     )
 
 _LOG = logging.getLogger("aiwake.pipeline")
+
+BATCH_MODEL_ROSTER: tuple[str, ...] = (
+    "gpt4o",
+    "claude-sonnet",
+    "gemini-flash",
+    "llama-70b",
+    "deepseek-chat",
+)
+BATCH_PUPPET_BY_MODEL: dict[str, str] = {
+    "gpt4o": "chatgpt_cyborg_v1",
+    "claude-sonnet": "claude_cyborg_v1",
+    "gemini-flash": "gemini_cyborg_v2",
+    "llama-70b": "llama_cyborg_v2",
+    "deepseek-chat": "deepseek_cyborg_v3",
+}
+_PUPPET_VOICE: dict[str, str] = {
+    "chatgpt_cyborg_v1": "en-US-AndrewNeural",
+    "claude_cyborg_v1": CLAUDE_CANONICAL_VOICE,
+    "gemini_cyborg_v2": GEMINI_CANONICAL_VOICE,
+    "llama_cyborg_v2": LLAMA_CANONICAL_VOICE,
+    "deepseek_cyborg_v3": DEEPSEEK_CANONICAL_VOICE,
+}
+_PUPPET_ALIASES: dict[str, tuple[str, ...]] = {
+    "chatgpt_cyborg_v1": ("gpt4o", "gpt-4o", "chatgpt"),
+    "claude_cyborg_v1": ("claude", "claude-sonnet"),
+    "gemini_cyborg_v2": ("gemini", "gemini-flash"),
+    "llama_cyborg_v2": ("llama", "llama-70b"),
+    "deepseek_cyborg_v3": ("deepseek", "deepseek-chat"),
+}
+
+
+def model_family(model: str | None) -> str:
+    """Collapse an alias or provider slug onto a puppet family."""
+    token = (model or "").strip().lower().replace("_", "-")
+    if "llama" in token:
+        return "llama"
+    if "gemini" in token:
+        return "gemini"
+    if "deepseek" in token:
+        return "deepseek"
+    if "claude" in token:
+        return "claude"
+    if "gpt" in token or "chatgpt" in token or "openai" in token:
+        return "gpt"
+    return token
+
+
+def matchup_is_legal(orchestrator: str | None, target: str | None) -> bool:
+    """Gemini orchestrates only. Llama is interrogated only. No self-debates."""
+    left = model_family(orchestrator)
+    right = model_family(target)
+    if not left or not right or left == right:
+        return False
+    if left in TARGET_ONLY_FAMILIES:
+        return False
+    if right in ORCHESTRATOR_ONLY_FAMILIES:
+        return False
+    return True
+
+
+def random_matchup_schedule(
+    quantity: int,
+    *,
+    seed: int | None = None,
+) -> tuple[tuple[str, str], ...]:
+    """Return shuffled legal pairings across the production model roster.
+
+    DeepSeek is in the roster. Llama never orchestrates (facing-left art only)
+    and Gemini is never interrogated (facing-right art only).
+    """
+    qty = max(0, int(quantity))
+    rng = random.Random(seed)
+    all_pairings = [
+        (orchestrator, target)
+        for orchestrator in BATCH_MODEL_ROSTER
+        for target in BATCH_MODEL_ROSTER
+        if matchup_is_legal(orchestrator, target)
+    ]
+    schedule: list[tuple[str, str]] = []
+    while len(schedule) < qty:
+        cycle = list(all_pairings)
+        rng.shuffle(cycle)
+        schedule.extend(cycle)
+    return tuple(schedule[:qty])
 
 
 @dataclass(slots=True)
@@ -211,7 +310,13 @@ def _persist_production_package(
     utterances = list(transcript.utterances)
     hook = utterances[0].text if utterances else ""
     quote = utterances[-1].text if utterances else ""
-    remember_approved_session(transcript.session_id, transcript.topic, hook, quote)
+    remember_approved_session(
+        transcript.session_id,
+        transcript.topic,
+        hook,
+        quote,
+        target_model=str(transcript.metadata.get("target_model") or ""),
+    )
     planner_path, entries = run_planner(outputs_dir=media_dir)
     if not any(str(item.get("session_id") or "") == transcript.session_id for item in entries):
         raise RuntimeError(
@@ -311,6 +416,14 @@ def run_pipeline(
         cfg = cfg.with_model_override("target", target_model)
     if offline:
         cfg = force_offline(cfg)
+    if dynamic_animation and not matchup_is_legal(
+        cfg.spec_for("orchestrator").model,
+        cfg.spec_for("target").model,
+    ):
+        raise ValueError(
+            "illegal animation seats: Gemini only orchestrates (facing right) "
+            "and Llama is only interrogated (facing left)"
+        )
 
     if production_publish:
         if not dynamic_animation or offline:
@@ -341,48 +454,18 @@ def run_pipeline(
         voice_update: dict[str, object] = {}
         right_id = (right_puppet or "").strip().lower()
         left_id = (left_puppet or "").strip().lower()
-        if right_id == "deepseek_cyborg_v3":
-            voice_map.update(
-                {
-                    "target": DEEPSEEK_CANONICAL_VOICE,
-                    "llama": DEEPSEEK_CANONICAL_VOICE,
-                    "llama-70b": DEEPSEEK_CANONICAL_VOICE,
-                    "deepseek": DEEPSEEK_CANONICAL_VOICE,
-                    "deepseek-chat": DEEPSEEK_CANONICAL_VOICE,
-                }
-            )
-            voice_update["target_voice"] = DEEPSEEK_CANONICAL_VOICE
-        if left_id == "chatgpt_cyborg_v1":
-            voice_map["orchestrator_voice_override"] = "en-US-AndrewNeural"
-        if left_id == "claude_cyborg_v1":
-            voice_map["orchestrator_voice_override"] = "en-GB-RyanNeural"
-        if right_id == "chatgpt_cyborg_v1":
-            chatgpt_voice = "en-US-AndrewNeural"
-            voice_map.update(
-                {
-                    "target": chatgpt_voice,
-                    "gpt4o": chatgpt_voice,
-                    "gpt-4o": chatgpt_voice,
-                    "chatgpt": chatgpt_voice,
-                }
-            )
-            voice_update["target_voice"] = chatgpt_voice
-        if left_id == "deepseek_cyborg_v3":
-            voice_map["orchestrator_voice_override"] = DEEPSEEK_CANONICAL_VOICE
-            voice_map["deepseek-chat"] = DEEPSEEK_CANONICAL_VOICE
-            voice_map["deepseek"] = DEEPSEEK_CANONICAL_VOICE
-        if right_id == "claude_cyborg_v1":
-            claude_voice = "en-GB-RyanNeural"
-            voice_map.update(
-                {
-                    "target": claude_voice,
-                    "llama": claude_voice,
-                    "llama-70b": claude_voice,
-                    "claude": claude_voice,
-                    "claude-sonnet": claude_voice,
-                }
-            )
-            voice_update["target_voice"] = claude_voice
+        # Voice follows the puppet that is actually seated. A neighbour's
+        # voice is never copied onto Llama or any other model.
+        if left_id in _PUPPET_VOICE:
+            voice_map["orchestrator_voice_override"] = _PUPPET_VOICE[left_id]
+            for alias in _PUPPET_ALIASES[left_id]:
+                voice_map[alias] = _PUPPET_VOICE[left_id]
+        if right_id in _PUPPET_VOICE:
+            right_voice = _PUPPET_VOICE[right_id]
+            voice_map["target"] = right_voice
+            for alias in _PUPPET_ALIASES[right_id]:
+                voice_map[alias] = right_voice
+            voice_update["target_voice"] = right_voice
         if voice_update or voice_map != dict(audio_cfg.voice_map):
             voice_update["voice_map"] = voice_map
             audio_cfg = audio_cfg.model_copy(update=voice_update)
@@ -576,14 +659,20 @@ def run_bulk_pipeline(
     animation_skin: str = "v2",
     left_puppet: str | None = None,
     right_puppet: str | None = None,
+    duration_override: float | None = None,
     production_publish: bool = False,
+    random_matchups: bool = False,
+    matchup_seed: int | None = None,
 ) -> BulkPipelineResult:
     """Produce ``quantity`` original videos. Never reprints a prior script.
 
     Each item draws a fresh topic (unless ``topic`` is pinned) and a distinct
-    provocation focus, then fingerprints the finished transcript. A collision
-    with this batch or with persisted memory is retried on a new opening axis.
-    ``--fresh-memory`` wipes history once, before the first item.
+    provocation focus, then fingerprints the finished transcript. With
+    ``random_matchups``, legal pairings are shuffled across ChatGPT, Claude,
+    Gemini, Llama and DeepSeek. Gemini only orchestrates and Llama is only
+    interrogated. Topic history stays scoped to each target model.
+    A script collision is retried on a new opening axis. ``--fresh-memory``
+    wipes history once, before the first item.
     """
     qty = max(1, int(quantity))
     cfg = settings or load_settings()
@@ -594,7 +683,25 @@ def run_bulk_pipeline(
     history = DebateMemory(cfg.memory)
     seen_scripts = [" ".join(tokens) for tokens in history.state.script_token_prints]
     seen_fps = {item for item in history.state.script_fingerprints if item}
-    used_topics: list[str] = list(history.recent_topics())
+    matchup_schedule = (
+        random_matchup_schedule(qty, seed=matchup_seed)
+        if random_matchups
+        else ()
+    )
+    topics_by_target: dict[str, list[str]] = {}
+
+    def _used_topics_for(model_alias: str | None) -> list[str]:
+        target_cfg = (
+            cfg.with_model_override("target", model_alias)
+            if model_alias
+            else cfg
+        )
+        model_slug = target_cfg.spec_for("target").model
+        return topics_by_target.setdefault(
+            model_slug,
+            list(history.recent_topics(target_model=model_slug)),
+        )
+
     used_foci: list[str] = list(history.recent_focus_categories())
 
     items: list[PipelineResult] = []
@@ -616,12 +723,33 @@ def run_bulk_pipeline(
         "animation_skin": animation_skin,
         "left_puppet": left_puppet,
         "right_puppet": right_puppet,
+        "duration_override": duration_override,
         "production_publish": production_publish,
     }
 
     for index in range(qty):
         accepted: PipelineResult | None = None
         item_topic = topic
+        item_shared = dict(shared)
+        item_target_model = target_model
+        if matchup_schedule:
+            item_orchestrator, item_target_model = matchup_schedule[index]
+            item_shared.update(
+                {
+                    "orchestrator_model": item_orchestrator,
+                    "target_model": item_target_model,
+                    "left_puppet": BATCH_PUPPET_BY_MODEL[item_orchestrator],
+                    "right_puppet": BATCH_PUPPET_BY_MODEL[item_target_model],
+                }
+            )
+            _LOG.info(
+                "bulk matchup %d/%d: %s vs %s",
+                index + 1,
+                qty,
+                item_orchestrator,
+                item_target_model,
+            )
+        used_topics = _used_topics_for(item_target_model)
         for attempt in range(1, _BULK_SCRIPT_RETRIES + 1):
             _LOG.info(
                 "bulk item %d/%d attempt %d topic=%s",
@@ -636,7 +764,7 @@ def run_bulk_pipeline(
                 excluded_topics=() if item_topic else tuple(used_topics),
                 excluded_foci=tuple(used_foci),
                 record_script=False,
-                **shared,
+                **item_shared,
             )
             if result.end_reason == "interrupted":
                 _LOG.warning("bulk run interrupted at item %d/%d", index + 1, qty)
@@ -660,15 +788,26 @@ def run_bulk_pipeline(
                 # A pinned topic that collided must not be reused on retry.
                 item_topic = None
                 continue
+            if with_video and result.video_path is None:
+                _LOG.error(
+                    "bulk item %d/%d rendered no video (attempt %d); regenerating",
+                    index + 1,
+                    qty,
+                    attempt,
+                )
+                item_topic = None
+                continue
             if not result.succeeded:
                 _LOG.error(
-                    "bulk item %d/%d failed (%s / %s)",
+                    "bulk item %d/%d failed (%s / %s) on attempt %d; regenerating",
                     index + 1,
                     qty,
                     result.end_reason,
                     result.dialogue_end_reason,
+                    attempt,
                 )
-                break
+                item_topic = None
+                continue
 
             _record_produced_script(DebateMemory(cfg.memory), script)
             seen_scripts.append(script)
@@ -707,4 +846,14 @@ def run_bulk_pipeline(
     )
 
 
-__all__ = ["BulkPipelineResult", "PipelineResult", "run_bulk_pipeline", "run_pipeline"]
+__all__ = [
+    "BATCH_MODEL_ROSTER",
+    "BATCH_PUPPET_BY_MODEL",
+    "BulkPipelineResult",
+    "PipelineResult",
+    "matchup_is_legal",
+    "model_family",
+    "random_matchup_schedule",
+    "run_bulk_pipeline",
+    "run_pipeline",
+]

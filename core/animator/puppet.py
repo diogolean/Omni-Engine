@@ -43,6 +43,13 @@ REST_MOUTH_STATES: tuple[str, ...] = (
     "neutral",
     "smug_smile",
     "stressed_grimace",
+    "shock",
+)
+#: Shock is optional. Legacy skins (Gemini, Llama) omit the layer and must
+#: keep rendering; ``ensure_assets`` must not invent a stand-in texture.
+OPTIONAL_REST_MOUTH_STATES: frozenset[str] = frozenset({"shock"})
+REQUIRED_REST_MOUTH_STATES: tuple[str, ...] = tuple(
+    state for state in REST_MOUTH_STATES if state not in OPTIONAL_REST_MOUTH_STATES
 )
 
 
@@ -50,8 +57,15 @@ def rest_mouth_layer_key(state: str) -> str:
     normalized = (state or "neutral").strip().lower()
     normalized = {
         "smug": "smug_smile",
+        "checkmate": "smug_smile",
+        "deboche": "smug_smile",
         "defeated": "stressed_grimace",
         "stressed": "stressed_grimace",
+        "sad": "stressed_grimace",
+        "shock_surprise": "shock",
+        "shock_perplexed": "shock",
+        "perplexed": "shock",
+        "cornered": "shock",
     }.get(normalized, normalized)
     if normalized not in REST_MOUTH_STATES:
         normalized = "neutral"
@@ -63,7 +77,7 @@ def rest_mouth_layer_key(state: str) -> str:
 #: The phonetic mouth set: one sprite per canonical Rhubarb shape.
 VISEME_LAYER_KEYS: tuple[str, ...] = tuple(viseme_layer_key(v) for v in VISEMES)
 REST_MOUTH_LAYER_KEYS: tuple[str, ...] = tuple(
-    rest_mouth_layer_key(state) for state in REST_MOUTH_STATES
+    rest_mouth_layer_key(state) for state in REQUIRED_REST_MOUTH_STATES
 )
 
 #: Everything a fully-featured skin ships: base layers + the viseme set.
@@ -110,26 +124,91 @@ def emotion_brow_angles(emotion: str, pulse_deg: float = 0.0) -> tuple[float, fl
 
 
 def emotion_brow_state(emotion: str) -> str:
+    """Map a dialogue emotion onto a V14 brow pose.
+
+    Shock is the high arch, sad and conceded are the inverted V, and angry
+    or a press is the straight blade. Unknown labels stay neutral so a legacy
+    rig never asks for a brow sprite it does not have.
+    """
     state = (emotion or "neutral").strip().lower()
-    if state == "deboche":
-        return "skeptical"
-    if state in {"sad_pout", "sad"}:
+    if state in {"deboche", "smug", "checkmate"}:
+        # Smirk mouth with straight blade brows: amused superiority rather
+        # than the old stern/angry checkmate face.
+        return "inquisitor"
+    if state in {"sad_pout", "sad", "sad_melancholy"}:
         return "sad"
-    if state in {"shock_surprise", "shock"}:
+    if state in {
+        "shock_surprise",
+        "shock_perplexed",
+        "shock",
+        "perplexed",
+        "cornered",
+    }:
         return "shock"
-    if state in {"defeated", "stressed"}:
+    if state in {"angry", "presses"}:
+        return "angry"
+    if state in {"defeated", "stressed", "stressed_grimace"}:
         return "conceded"
     if state in {"disbelief", "troubled", "concerned"}:
         return "troubled"
     return state if state in BROW_STATES else "neutral"
 
 
-def emotion_rest_mouth_state(emotion: str) -> str:
-    state = (emotion or "neutral").strip().lower()
-    if state in {"inquisitor", "confident", "deboche"}:
+_PUNCHLINE_SMILE = frozenset({"deboche", "smug", "checkmate"})
+
+
+def onset_rest_mouth(emotion: str, viseme: str | None = None) -> str:
+    """Resolve the expression mouth, pinning deboche throughout its speech."""
+    shape = (viseme or REST_VISEME).upper()[:1]
+    token = (emotion or "neutral").strip().lower()
+    if token in _PUNCHLINE_SMILE:
         return "smug_smile"
-    if state in {"conceded", "defeated", "stressed"}:
+    if shape != REST_VISEME:
+        return "neutral"
+    state = emotion_rest_mouth_state(emotion)
+    return state
+
+
+def emotion_rest_mouth_state(emotion: str) -> str:
+    """Map a dialogue emotion onto a rest-mouth sprite.
+
+    Regular speech, including ``inquisitor``, ``resolute`` and ``confident``,
+    stays on the neutral seam. ``smug_smile`` is only the deboche / smug
+    punchline (``checkmate`` is that same face). Shock and the stressed
+    grimace are requested by name; a skin that lacks the file falls back in
+    :func:`supported_rest_mouth`.
+    """
+    state = (emotion or "neutral").strip().lower()
+    if state in {"deboche", "smug", "checkmate"}:
+        return "smug_smile"
+    if state in {
+        "shock",
+        "shock_perplexed",
+        "perplexed",
+        "cornered",
+        "shock_surprise",
+    }:
+        return "shock"
+    if state in {
+        "conceded",
+        "defeated",
+        "stressed",
+        "sad",
+        "sad_pout",
+        "sad_melancholy",
+        "stressed_grimace",
+    }:
         return "stressed_grimace"
+    return "neutral"
+
+
+def supported_rest_mouth(state: str, available: set[str] | frozenset[str]) -> str:
+    """Return ``state`` when the rig loaded it, otherwise the neutral seam."""
+    token = (state or "neutral").strip().lower()
+    if token in {"", "neutral"}:
+        return "neutral"
+    if token in available:
+        return token
     return "neutral"
 
 @dataclass(frozen=True, slots=True)
@@ -289,7 +368,7 @@ class PuppetSkin:
         for viseme in VISEMES:
             key = viseme_layer_key(viseme)
             layer_files[key] = resolve_file(key)
-        for state in REST_MOUTH_STATES:
+        for state in REQUIRED_REST_MOUTH_STATES:
             key = rest_mouth_layer_key(state)
             layer_files[key] = resolve_file(key)
 
@@ -383,9 +462,17 @@ class PuppetRig:
         for viseme in VISEMES:
             key = viseme_layer_key(viseme)
             layers[key] = Image.open(skin.layer_path(key)).convert("RGBA")
-        for state in REST_MOUTH_STATES:
+        for state in REQUIRED_REST_MOUTH_STATES:
             key = rest_mouth_layer_key(state)
-            layers[key] = Image.open(skin.layer_path(key)).convert("RGBA")
+            path = skin.layer_path(key)
+            if not path.is_file():
+                _LOG.warning(
+                    "puppet %s has no %s layer; rest mouth falls back to neutral",
+                    skin.character_id,
+                    key,
+                )
+                continue
+            layers[key] = Image.open(path).convert("RGBA")
 
         # The body defines the aligned sprite canvas. External high-res
         # overlays are accepted as-is when aligned, or normalized to that
@@ -484,14 +571,26 @@ class PuppetRig:
             self._head_crown_y = int(stats[largest, cv2.CC_STAT_TOP])
         else:
             self._head_crown_y = self._head_content_bbox[1]
-        for state in REST_MOUTH_STATES:
+        for state in REQUIRED_REST_MOUTH_STATES:
+            key = rest_mouth_layer_key(state)
+            if key not in layers:
+                continue
             mouth = np.asarray(
-                layers[rest_mouth_layer_key(state)],
+                layers[key],
                 dtype=np.uint8,
             )
             bbox = _alpha_bbox(mouth[..., 3].astype(np.float32), pad=3)
             x0, y0, x1, y1 = bbox
             self._rest_mouth_crop[state] = (mouth[y0:y1, x0:x1].copy(), bbox)
+        self._load_optional_rest_mouth(
+            "shock",
+            (
+                self.skin.root / "mouth_shock.png",
+                self.skin.root / "mouths" / "mouth_shock.png",
+                self.skin.root / "mouths" / "expressions" / "mouth_shock.png",
+                self.skin.root / "mouths" / "expressions" / "mouth_shock_surprise.png",
+            ),
+        )
 
         ref_w, ref_h = self.skin.reference_canvas_size
         reference_scale = min(
@@ -656,9 +755,15 @@ class PuppetRig:
         brow_state = emotion_brow_state(
             emotion if mix >= 0.5 else previous_emotion
         )
-        rest_state = emotion_rest_mouth_state(
-            emotion if mix >= 0.5 else previous_emotion
+        rest_state = onset_rest_mouth(
+            emotion if mix >= 0.5 else previous_emotion,
+            shape,
         )
+        if rest_state == "smug_smile":
+            # Row 3 of the master sheet is a complete sarcastic mouth pose.
+            # Keep it visible for the whole attack instead of replacing it
+            # with neutral phoneme cels after the first frame.
+            shape = REST_VISEME
         head = (
             self._rest_head(rest_state)
             if shape == REST_VISEME
@@ -748,15 +853,40 @@ class PuppetRig:
         bbox = self._mouth_bbox[shape]
         return self._mouth_overlay[shape], bbox
 
+    def _load_optional_rest_mouth(self, state: str, candidates: tuple[Path, ...]) -> None:
+        """Attach a rest mouth only when the skin actually ships the file."""
+        path = next((item for item in candidates if item.is_file()), None)
+        if path is None:
+            return
+        try:
+            image = Image.open(path).convert("RGBA")
+        except (OSError, ValueError) as exc:
+            _LOG.warning(
+                "puppet %s skipped optional rest mouth %s (%s)",
+                self.skin.character_id,
+                path,
+                exc,
+            )
+            return
+        if image.size != self.canvas_size:
+            image = _contain_rgba(image, self.canvas_size)
+        mouth = np.asarray(image, dtype=np.uint8)
+        bbox = _alpha_bbox(mouth[..., 3].astype(np.float32), pad=3)
+        x0, y0, x1, y1 = bbox
+        if x1 <= x0 or y1 <= y0:
+            return
+        self._rest_mouth_crop[state] = (mouth[y0:y1, x0:x1].copy(), bbox)
+
     def _rest_head(self, state: str) -> np.ndarray:
-        if state == "neutral":
+        resolved = supported_rest_mouth(state, set(self._rest_mouth_crop))
+        if resolved == "neutral" or resolved not in self._rest_mouth_crop:
             return self._head_stack[REST_VISEME]
-        cached = self._rest_head_cache.get(state)
+        cached = self._rest_head_cache.get(resolved)
         if cached is not None:
             return cached
-        crop, bbox = self._rest_mouth_crop[state]
+        crop, bbox = self._rest_mouth_crop[resolved]
         head = _alpha_composite_crop(self._bare_head, crop, bbox)
-        self._rest_head_cache[state] = head
+        self._rest_head_cache[resolved] = head
         return head
 
     def _stencil_to_lenses(self, overlay: np.ndarray) -> np.ndarray:
@@ -871,8 +1001,10 @@ class PuppetRig:
             return float(configured[brow_state])
         if brow_state == "inquisitor":
             return -5.5
-        if brow_state in {"conceded", "skeptical", "troubled"}:
+        if brow_state in {"conceded", "skeptical", "troubled", "sad"}:
             return 12.0
+        if brow_state in {"angry", "shock"}:
+            return 0.0
         return 0.0
 
     def _brow_overlay(
@@ -891,6 +1023,8 @@ class PuppetRig:
                 expression = "sad"
             elif brow_state == "shock":
                 expression = "shock"
+            elif brow_state in {"angry", "inquisitor"}:
+                expression = "angry"
             else:
                 expression = "neutral"
             key = ("rig", expression)
@@ -899,12 +1033,22 @@ class PuppetRig:
             from .render.facial_rig import stamp_scene_brows
 
             layer = Image.new("RGBA", self.canvas_size, (0, 0, 0, 0))
-            stamp_scene_brows(
-                layer,
-                brow_config["rig_brows"],
-                expression,
-                (16, 18, 22, 255),
-            )
+            try:
+                stamp_scene_brows(
+                    layer,
+                    brow_config["rig_brows"],
+                    expression,
+                    (16, 18, 22, 255),
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                _LOG.warning(
+                    "puppet %s has no %s brow; expression falls back to neutral (%s)",
+                    self.skin.character_id,
+                    expression,
+                    exc,
+                )
+                self._brow_cache[key] = None
+                return None
             rgba = np.asarray(layer, dtype=np.uint8)
             bbox = _alpha_bbox(rgba[..., 3].astype(np.float32), pad=4)
             x0, y0, x1, y1 = bbox
@@ -1017,10 +1161,14 @@ class PuppetRig:
                 brow_y = min(lowest, max(int(brow_y), highest))
             x_nudge = 0
             y_nudge = 0
+            if brow_state == "shock":
+                # Legacy bars cannot arch. A small lift is the available
+                # stand-in when the skin has no shock brow sprite.
+                y_nudge -= 8
             if is_gemini and index == 1:
                 x_nudge = 4  # far optic, viewer's right
             elif is_gemini and index == 0:
-                y_nudge = -2  # near optic sits higher
+                y_nudge -= 2  # near optic sits higher
             elif is_llama and index == 0:
                 x_nudge = -3  # viewer's left
             layer.alpha_composite(
@@ -1048,14 +1196,21 @@ class PuppetRig:
         angle_deg: float,
         brow_angle_deg: float | None = None,
         rest_mouth_state: str | None = None,
+        force_static_mouth: bool = False,
     ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
         """Return a cached, neck-pivoted head crop with all facial sprites attached."""
         shape = (viseme or REST_VISEME).upper()[:1]
         if shape not in self._head_stack:
             shape = REST_VISEME
+        if force_static_mouth:
+            # Silent reactions must be visually deterministic even if a noisy
+            # upstream track accidentally supplies a phonetic mouth shape.
+            shape = REST_VISEME
         state = emotion_brow_state(brow_state)
         angle = float(np.clip(round(float(angle_deg) / 0.3) * 0.3, -1.5, 1.5))
         rest_state = rest_mouth_state or emotion_rest_mouth_state(brow_state)
+        if rest_state == "smug_smile":
+            shape = REST_VISEME
         cache_rest_state = rest_state if shape == REST_VISEME else ""
         resolved_brow_angle = (
             self.brow_angle(state)
@@ -1295,12 +1450,16 @@ __all__ = [
     "LAYER_KEYS",
     "PuppetRig",
     "PuppetSkin",
+    "OPTIONAL_REST_MOUTH_STATES",
+    "REQUIRED_REST_MOUTH_STATES",
     "REST_MOUTH_LAYER_KEYS",
     "REST_MOUTH_STATES",
     "VISEME_LAYER_KEYS",
     "emotion_brow_angles",
     "emotion_brow_state",
     "emotion_rest_mouth_state",
+    "onset_rest_mouth",
     "rest_mouth_layer_key",
+    "supported_rest_mouth",
     "viseme_layer_key",
 ]

@@ -4,16 +4,24 @@ from __future__ import annotations
 
 BRIAN = "en-US-BrianNeural"
 RYAN = "en-GB-RyanNeural"
-GUY = "en-US-GuyNeural"
+ANDREW = "en-US-AndrewNeural"
+CHRISTOPHER = "en-US-ChristopherNeural"
+ERIC = "en-US-EricNeural"
 
 # Character id -> the only voice that puppet may speak with.
+# Llama is Christopher (the 2026-09-24 Gemini-vs-Llama answering voice).
+# DeepSeek is Eric so it does not share Christopher. ChatGPT is Andrew.
 RESERVED: dict[str, str] = {
     "gemini": BRIAN,
     "gemini_cyborg_v2": BRIAN,
     "claude_cyborg_v1": RYAN,
     "claude": RYAN,
-    "chatgpt_cyborg_v1": GUY,
-    "chatgpt": GUY,
+    "chatgpt_cyborg_v1": ANDREW,
+    "chatgpt": ANDREW,
+    "llama": CHRISTOPHER,
+    "llama_cyborg_v2": CHRISTOPHER,
+    "deepseek": ERIC,
+    "deepseek_cyborg_v3": ERIC,
 }
 
 
@@ -35,8 +43,12 @@ def voice_for(character_id: str) -> str:
         return BRIAN
     if "claude" in lowered:
         return RYAN
-    if "chatgpt" in lowered:
-        return GUY
+    if "chatgpt" in lowered or "gpt" in lowered:
+        return ANDREW
+    if "llama" in lowered:
+        return CHRISTOPHER
+    if "deepseek" in lowered:
+        return ERIC
     raise KeyError(f"no reserved voice for {character_id}")
 
 

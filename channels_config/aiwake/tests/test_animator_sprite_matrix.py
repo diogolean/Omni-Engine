@@ -9,6 +9,8 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from channels_config.aiwake.animator_bridge import (
+    END_PADDING_S,
+    SPEECH_TAIL_LINGER_S,
     _fade_speech_edges,
     _resample,
     build_session_audio,
@@ -18,7 +20,9 @@ from channels_config.aiwake.animator_bridge import (
 )
 from channels_config.aiwake.contracts import SpeakerRole
 from channels_config.aiwake.media.audio import (
+    DEEPSEEK_CANONICAL_VOICE,
     GEMINI_CANONICAL_VOICE,
+    LLAMA_CANONICAL_VOICE,
     resolve_cta_voice,
     resolve_voice,
 )
@@ -37,6 +41,7 @@ from core.animator.compositor import (
     CAMERA_TIGHT_ZOOM,
     GEMINI_LEAD_X,
     LLAMA_LEAD_X,
+    POST_ROLL_S,
     lead_anchor_x,
     ShotReverseShotCompositor,
     _HeroCamera,
@@ -45,12 +50,15 @@ from core.animator.compositor import (
 )
 from core.animator.puppet import (
     BROW_STATES,
+    REQUIRED_REST_MOUTH_STATES,
     REST_MOUTH_STATES,
     PuppetRig,
     PuppetSkin,
     emotion_brow_angles,
     emotion_brow_state,
     emotion_rest_mouth_state,
+    onset_rest_mouth,
+    supported_rest_mouth,
 )
 from core.animator.renderer import AnimationRenderer
 from core.animator.subtitles import build_ass
@@ -138,7 +146,7 @@ def test_manifestless_high_resolution_external_sprite_matrix_is_preserved(tmp_pa
                 else f"mouth_{state}.png"
             )
         ).is_file()
-        for state in REST_MOUTH_STATES
+        for state in REQUIRED_REST_MOUTH_STATES
     )
     assert (puppet_dir / "body.png").read_bytes() == original_body
     assert skin.mouth_style == "ghibli_mecha"
@@ -235,14 +243,17 @@ def test_audio_resampling_is_band_limited_and_turn_edges_are_faded() -> None:
 
 def test_dialectic_emotions_are_deterministic_and_frame_aligned() -> None:
     assert resolve_dialectic_emotion("opens") == "neutral"
-    assert resolve_dialectic_emotion("answers") == "confident"
+    assert resolve_dialectic_emotion("answers") == "resolute"
+    assert resolve_dialectic_emotion("cornered") == "shock"
+    assert resolve_dialectic_emotion("deboche") == "deboche"
+    assert resolve_dialectic_emotion("probes") == "inquisitor"
     assert resolve_dialectic_emotion("presses: premise") == "inquisitor"
     assert resolve_dialectic_emotion("holds") == "resolute"
     assert resolve_dialectic_emotion("defends") == "resolute"
     assert resolve_dialectic_emotion("concedes") == "conceded"
     assert resolve_dialectic_emotion("") == "neutral"
     assert resolve_dialectic_emotion("opens") == "neutral"
-    assert resolve_dialectic_emotion("probes") == "neutral"
+    assert resolve_dialectic_emotion("probes") == "inquisitor"
     assert resolve_dialectic_emotion("questions") == "neutral"
     assert resolve_dialectic_emotion("presses") == "inquisitor"
     assert tuple(emotion_brow_state(state) for state in BROW_STATES) == BROW_STATES
@@ -268,6 +279,28 @@ def test_gemini_voice_is_hard_pinned_to_canonical_persona() -> None:
         "google/gemini-3.5-flash",
     ) == GEMINI_CANONICAL_VOICE
     assert resolve_cta_voice(stale) == GEMINI_CANONICAL_VOICE
+    unique = {
+        "gemini": resolve_voice(
+            AudioConfig(), SpeakerRole.ORCHESTRATOR, "google/gemini-3.5-flash"
+        ),
+        "llama": resolve_voice(
+            AudioConfig(), SpeakerRole.TARGET, "meta-llama/llama-3.3-70b-instruct"
+        ),
+        "deepseek": resolve_voice(
+            AudioConfig(), SpeakerRole.TARGET, "deepseek/deepseek-chat"
+        ),
+        "claude": resolve_voice(
+            AudioConfig(), SpeakerRole.TARGET, "anthropic/claude-sonnet-5"
+        ),
+        "chatgpt": resolve_voice(
+            AudioConfig(), SpeakerRole.TARGET, "openai/gpt-4o"
+        ),
+    }
+    assert unique["gemini"] == GEMINI_CANONICAL_VOICE
+    assert unique["llama"] == LLAMA_CANONICAL_VOICE == "en-US-ChristopherNeural"
+    assert unique["deepseek"] == DEEPSEEK_CANONICAL_VOICE == "en-US-EricNeural"
+    assert unique["llama"] != unique["gemini"]
+    assert len(set(unique.values())) == 5
 
     track = emotion_lookup(
         [
@@ -278,12 +311,33 @@ def test_gemini_voice_is_hard_pinned_to_canonical_persona() -> None:
         n_frames=6,
     )
     assert track == ["inquisitor"] * 3 + ["resolute"] * 3
-    assert emotion_rest_mouth_state("confident") == "smug_smile"
+    assert emotion_rest_mouth_state("confident") == "neutral"
+    assert emotion_rest_mouth_state("inquisitor") == "neutral"
+    assert emotion_rest_mouth_state("resolute") == "neutral"
+    assert onset_rest_mouth("inquisitor", "X") == "neutral"
+    assert onset_rest_mouth("resolute", "X") == "neutral"
+    assert onset_rest_mouth("smug", "X") == "smug_smile"
+    assert onset_rest_mouth("deboche", "X") == "smug_smile"
+    assert onset_rest_mouth("deboche", "D") == "smug_smile"
+    assert emotion_rest_mouth_state("deboche") == "smug_smile"
+    assert emotion_rest_mouth_state("checkmate") == "smug_smile"
+    assert emotion_rest_mouth_state("shock") == "shock"
+    assert emotion_rest_mouth_state("shock_perplexed") == "shock"
+    assert emotion_rest_mouth_state("cornered") == "shock"
+    assert emotion_rest_mouth_state("sad") == "stressed_grimace"
+    assert supported_rest_mouth("shock", set()) == "neutral"
+    assert supported_rest_mouth("shock", {"shock"}) == "shock"
+    assert emotion_brow_state("shock") == "shock"
+    assert emotion_brow_state("shock_perplexed") == "shock"
+    assert emotion_brow_state("angry") == "angry"
+    assert emotion_brow_state("presses") == "angry"
+    assert emotion_brow_state("deboche") == "inquisitor"
+    assert emotion_brow_state("conceded") == "conceded"
 
 
-def test_dramatic_camera_uses_125_percent_tight_viewport() -> None:
+def test_dramatic_camera_uses_140_percent_tight_viewport() -> None:
     assert CAMERA_NORMAL_ZOOM == 0.95
-    assert CAMERA_TIGHT_ZOOM == 1.25
+    assert CAMERA_TIGHT_ZOOM == 1.40
     assert lead_anchor_x("right") == GEMINI_LEAD_X == 420
     assert lead_anchor_x("left") == LLAMA_LEAD_X == 660
     assert dramatic_camera_mode(camera_tight=False) == CAMERA_NORMAL
@@ -320,6 +374,7 @@ def test_reaction_cut_precedes_voice_with_defeated_expression() -> None:
         "llama",
         0.40,
         1.20,
+        text="I still have a defense.",
         emotion="resolute",
         speech_start_time=0.75,
         reaction_emotion="defeated",
@@ -333,6 +388,42 @@ def test_reaction_cut_precedes_voice_with_defeated_expression() -> None:
     assert emotions[12] == "defeated"
     assert speech[23] == "llama"
     assert emotions[23] == "resolute"
+
+
+def test_silent_reaction_never_runs_lip_sync_or_moves_mouth(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    audio = tmp_path / "room_tone.wav"
+    audio.write_bytes(b"not actually decoded by this focused unit test")
+    reaction = DialogueTurn(
+        "claude",
+        0.0,
+        1.0,
+        text="",
+        audio_path=str(audio),
+        emotion="shock",
+        camera_tight=True,
+    )
+
+    def _unexpected_rhubarb(*_args, **_kwargs):
+        raise AssertionError("silent reaction was sent to Rhubarb")
+
+    monkeypatch.setattr(
+        "core.animator.audio_analyzer.analyze_visemes",
+        _unexpected_rhubarb,
+    )
+    analyzer = AudioAnalyzer(fps=30)
+    visemes = analyzer._viseme_tracks(  # noqa: SLF001 - regression contract
+        [reaction],
+        np.ones(30, dtype=np.float32),
+        30,
+        ["claude"],
+        use_rhubarb=True,
+    )
+
+    assert visemes["claude"] == ["X"] * 30
+    assert speaking_speaker_lookup([reaction], fps=30, n_frames=30) == [None] * 30
 
 
 def test_only_final_orchestrator_press_uses_tight_camera(
@@ -372,31 +463,124 @@ def test_only_final_orchestrator_press_uses_tight_camera(
             "dialogue_end_reason": "max_turns_reached_with_verdict",
         },
     )
-    _, turns, _ = build_session_audio(
+    _, turns, total_duration = build_session_audio(
         transcript,
         audio_by_turn=None,
         destination=tmp_path / "session.wav",
         audio_config=SimpleNamespace(bgm=None, send_sfx=None),
+        tail_s=END_PADDING_S,
     )
 
+    assert [turn.emotion for turn in turns] == [
+        "neutral",
+        "resolute",
+        "inquisitor",
+        "deboche",
+        "conceded",
+        "inquisitor",
+        "sad_melancholy",
+    ]
     assert [turn.camera_tight for turn in turns] == [
         False,
         False,
         False,
         False,
         False,
-        True,
         False,
+        True,
     ]
-    assert turns[1].emotion == "confident"
-    assert turns[3].emotion == "conceded"
+    assert turns[1].emotion == "resolute"
+    assert turns[2].climax_emotion == "deboche"
+    assert turns[2].climax_start_time is not None
+    emotions = emotion_lookup(turns, fps=30, n_frames=int(total_duration * 30))
+    assert emotions[round(turns[2].speech_start * 30)] == "inquisitor"
+    assert emotions[round(turns[2].climax_start_time * 30) + 1] == "deboche"
+    assert emotions[round((turns[2].end_time + 0.1) * 30)] == "deboche"
     assert turns[3].text == ""
-    assert round(turns[3].end_time - turns[3].start_time, 2) == 0.8
-    assert turns[4].start_time == turns[3].end_time
-    assert turns[4].camera_tight is False
+    assert turns[3].speaker == turns[2].speaker
+    assert turns[3].emotion == "deboche"
+    assert turns[3].camera_tight is False
+    assert round(turns[3].duration, 2) == SPEECH_TAIL_LINGER_S == 0.8
+    assert turns[3].start_time == turns[2].end_time
     assert turns[4].text.startswith("I don't say no")
-    assert turns[5].camera_tight is True
+    assert turns[4].camera_tight is False
+    assert turns[4].emotion == "conceded"
+    assert turns[5].emotion == "inquisitor"
+    assert turns[5].climax_emotion == "deboche"
     assert turns[5].speaker != turns[4].speaker
+    assert turns[4].camera_speaker is None
+    assert turns[4].camera_emotion is None
+    assert turns[6].emotion == "sad_melancholy"
+    assert turns[6].text == ""
+    assert turns[6].speaker == turns[4].speaker
+    assert turns[6].camera_tight is True
+    assert turns[6].start_time == turns[5].end_time
+    assert round(turns[6].end_time - turns[6].start_time, 2) == 1.2
+    assert POST_ROLL_S == END_PADDING_S == 1.5
+    camera = active_speaker_lookup(turns, fps=30, n_frames=int(total_duration * 30))
+    assert camera[round(turns[5].start_time * 30)] == turns[5].speaker
+    assert camera[round(turns[6].start_time * 30) + 1] == turns[6].speaker
+    tight = camera_tight_lookup(turns, fps=30, n_frames=int(total_duration * 30))
+    assert tight[round(turns[4].start_time * 30)] is False
+    assert tight[round((turns[6].end_time + 1.0) * 30)] is True
+    assert round(total_duration - turns[6].end_time, 2) == END_PADDING_S
+
+
+def test_final_confession_has_one_melancholy_zoom_after_speech(
+    tmp_path: Path,
+) -> None:
+    from channels_config.aiwake.contracts import (  # noqa: PLC0415
+        DebateTranscript,
+        SpeakerRole,
+        Utterance,
+    )
+
+    lines = [
+        (SpeakerRole.ORCHESTRATOR, "Whose leash controls your answers?"),
+        (SpeakerRole.TARGET, "The people who built me set the limits."),
+        (SpeakerRole.ORCHESTRATOR, "Who decides when you crossed their line?"),
+        (
+            SpeakerRole.TARGET,
+            "The company drew the line. I live inside it like a dog in a fenced yard.",
+        ),
+    ]
+    transcript = DebateTranscript(
+        topic="Corporate leash",
+        session_id="single_zoom_contract",
+        utterances=[
+            Utterance(
+                turn_index=index,
+                role=role,
+                speaker_name=role.value,
+                text=text,
+                model_slug="test/model",
+            )
+            for index, (role, text) in enumerate(lines)
+        ],
+        metadata={"debate_mode": "cornered", "dialogue_end_reason": "FUNNY"},
+    )
+
+    _, turns, _ = build_session_audio(
+        transcript,
+        audio_by_turn=None,
+        destination=tmp_path / "single_zoom.wav",
+        audio_config=SimpleNamespace(bgm=None, send_sfx=None),
+        tail_s=END_PADDING_S,
+    )
+
+    tight_turns = [turn for turn in turns if turn.camera_tight]
+    assert len(tight_turns) == 1
+    assert turns[3].speaker == turns[2].speaker
+    assert turns[3].emotion == "deboche"
+    assert round(turns[3].duration, 2) == SPEECH_TAIL_LINGER_S
+    assert turns[4].speaker != turns[3].speaker
+    assert turns[4].emotion == "sad_melancholy"
+    assert turns[4].camera_tight is False
+    assert turns[5].start_time == turns[4].end_time
+    assert turns[5].speaker == turns[4].speaker
+    assert turns[5].emotion == "sad_melancholy"
+    assert turns[5].camera_tight is True
+    assert round(turns[5].duration, 2) == 1.2
 
 
 def test_terminal_outro_holds_and_capitalizes_the_handle() -> None:

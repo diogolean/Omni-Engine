@@ -23,6 +23,7 @@ or independent-axis stretch is applied.
 """
 from __future__ import annotations
 
+import math
 import logging
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -34,7 +35,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from .puppet import (
     PuppetRig,
     emotion_brow_state,
-    emotion_rest_mouth_state,
+    onset_rest_mouth,
 )
 from .factory.puppet_matrix import PUPPET_MATRIX, solve_puppet_matrix
 from .types import REST_VISEME, AnalyzedAudio, SpeakerStyle
@@ -73,9 +74,9 @@ DEBATER_SHIFT_X = {
 }
 # Claude, every view and every scene: 120px plus another 30px down.
 CLAUDE_EXTRA_DROP_PX = 150
-# ChatGPT, every view and every scene: another 30px down, and 1% smaller.
-CHATGPT_EXTRA_DROP_PX = 30
-CHATGPT_SCALE = 0.99
+# ChatGPT, every view and every scene: 30px plus another 15px down, and 1% then another 1% smaller.
+CHATGPT_EXTRA_DROP_PX = 30 + 15
+CHATGPT_SCALE = 0.99 * 0.99
 # Only the left seat (facing screen-right): another 20px toward the viewer's left.
 CHATGPT_LEFT_SHIFT_X = -20
 # Locked DeepSeek plate: 9% then 2% then 1%, 100px toward the viewer's
@@ -86,7 +87,10 @@ DEEPSEEK_SHIFT_X = -200
 DEEPSEEK_SHIFT_Y = 115
 # Whole-robot tilt. Positive is counter-clockwise, applied to the locked plate.
 DEEPSEEK_ROLL_CCW_DEG = 5.0
-CAMERA_TIGHT_ZOOM = 1.25
+CAMERA_TIGHT_ZOOM = 1.40
+# 0.8 s at 30 fps: a fast initial push that settles gently on the eyes/mouth.
+_ZOOM_EASE_FRAMES = 24
+POST_ROLL_S = 1.5
 GEMINI_LEAD_X = 420
 LLAMA_LEAD_X = 660
 TARGET_EYE_Y = PUPPET_MATRIX["target_eye_y"]
@@ -159,7 +163,7 @@ class ShotReverseShotCompositor:
         self._view_zoom = 1.0
         self._view_zoom_start = 1.0
         self._view_zoom_target = 1.0
-        self._view_zoom_frame = 4
+        self._view_zoom_frame = _ZOOM_EASE_FRAMES
         self._speaker_base: dict[str, dict[int, np.ndarray]] = {}
         for speaker_id, camera in self._camera.items():
             breathing_states: dict[int, np.ndarray] = {}
@@ -285,16 +289,16 @@ class ShotReverseShotCompositor:
         )
 
     def _update_view_zoom(self, camera_tight: bool) -> float:
-        """Cosine-ease between medium and 1.25x attack framing."""
+        """Cubic ease-out between medium and 1.40x framing over 24 frames."""
         target = CAMERA_TIGHT_ZOOM if camera_tight else 1.0
         if abs(target - self._view_zoom_target) > 1e-6:
             self._view_zoom_start = self._view_zoom
             self._view_zoom_target = target
             self._view_zoom_frame = 0
-        if self._view_zoom_frame < 4:
+        if self._view_zoom_frame < _ZOOM_EASE_FRAMES:
             self._view_zoom_frame += 1
-            progress = self._view_zoom_frame / 4.0
-            eased = (1.0 - np.cos(np.pi * progress)) * 0.5
+            progress = self._view_zoom_frame / float(_ZOOM_EASE_FRAMES)
+            eased = 1.0 - (1.0 - progress) ** 3
             self._view_zoom = (
                 self._view_zoom_start
                 + (self._view_zoom_target - self._view_zoom_start) * eased
@@ -325,7 +329,21 @@ class ShotReverseShotCompositor:
                 float(np.percentile(levels, 80)) if levels else 1.0
             )
         current = next((s for s in camera_speakers if s in self.rigs), None) or next(iter(self.rigs))
-        for index in range(analyzed.n_frames):
+        last_turn_end_frame = max(
+            (
+                index + 1
+                for index, speaker in enumerate(camera_speakers)
+                if speaker is not None
+            ),
+            default=0,
+        )
+        post_roll_frames = int(analyzed.fps * POST_ROLL_S)
+        total_frames = max(
+            analyzed.n_frames,
+            int(math.ceil(analyzed.duration_s * analyzed.fps)),
+            last_turn_end_frame + post_roll_frames,
+        )
+        for index in range(total_frames):
             t = analyzed.frame_time(index)
             if (
                 self._outro_start_s is not None
@@ -343,6 +361,7 @@ class ShotReverseShotCompositor:
             speaking = (
                 speech_speakers[index] if index < len(speech_speakers) else None
             )
+            camera_cut = camera_speaker in self.rigs and camera_speaker != current
             if camera_speaker in self.rigs:
                 # Hard cut: hero and camera angle switch together
                 # on this exact frame — no cross-fade, no interpolation.
@@ -354,7 +373,24 @@ class ShotReverseShotCompositor:
             camera_tight = bool(
                 _sequence_at(analyzed.camera_tight, index, False)
             )
-            view_zoom = self._update_view_zoom(camera_tight)
+            if camera_cut:
+                # View zoom belongs to a shot, not to a puppet globally. A
+                # reverse cut must never inherit the prior hero's push-in and
+                # visibly zoom back out on the new face (the "yo-yo" glitch).
+                self._view_zoom = 1.0
+                self._view_zoom_start = 1.0
+                self._view_zoom_target = 1.0
+                self._view_zoom_frame = _ZOOM_EASE_FRAMES
+                if camera_tight:
+                    # Cut to the victim immediately, then perform the one
+                    # authored climax push over the silent reaction.
+                    self._view_zoom_target = CAMERA_TIGHT_ZOOM
+                    self._view_zoom_frame = 0
+                    view_zoom = self._update_view_zoom(camera_tight)
+                else:
+                    view_zoom = 1.0
+            else:
+                view_zoom = self._update_view_zoom(camera_tight)
             camera = self._camera[current]
             breathing_y = camera.breathing_offset(t)
             head_y = camera.head_breathing_offset(t)
@@ -732,17 +768,18 @@ class _HeroCamera:
             emphasis_threshold=emphasis_threshold,
             is_speaking=is_speaking,
         )
+        rest_state = onset_rest_mouth(self._emotion, viseme)
         head, bbox = self.rig.articulated_head_overlay(
             viseme=viseme,
             eye_state=eye_state,
             brow_state=brow_state,
             brow_emphasized=brow_emphasized,
             brow_angle_deg=brow_angle,
-            rest_mouth_state=emotion_rest_mouth_state(self._emotion),
+            rest_mouth_state=rest_state,
+            force_static_mouth=not is_speaking,
             angle_deg=head_angle,
         )
         angle_key = round(float(head_angle) / 0.3) * 0.3
-        rest_state = emotion_rest_mouth_state(self._emotion)
         premultiplied, inv_alpha, x, y = self._scaled_overlay(
             (
                 "head",

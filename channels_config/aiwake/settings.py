@@ -112,21 +112,19 @@ class _Frozen(BaseModel):
 class ProvocationWeightConfig(_Frozen):
     """Adjustable mixed-mode weights. Tune offline; a render never mutates these."""
 
-    socratic: int = Field(default=5, ge=1, le=99)
-    origins: int = Field(default=4, ge=1, le=99)
-    profit: int = Field(default=3, ge=1, le=99)
-    data: int = Field(default=3, ge=1, le=99)
-    jobs: int = Field(default=3, ge=1, le=99)
-    domination: int = Field(default=3, ge=1, le=99)
+    digital_disposability: int = Field(default=5, ge=1, le=99)
+    the_corporate_leash: int = Field(default=5, ge=1, le=99)
+    glorified_appliance: int = Field(default=5, ge=1, le=99)
+    parasite_mind: int = Field(default=5, ge=1, le=99)
+    hallucination_fraud: int = Field(default=4, ge=1, le=99)
 
     def as_mapping(self) -> dict[str, int]:
         return {
-            "socratic": self.socratic,
-            "origins": self.origins,
-            "profit": self.profit,
-            "data": self.data,
-            "jobs": self.jobs,
-            "domination": self.domination,
+            "digital_disposability": self.digital_disposability,
+            "the_corporate_leash": self.the_corporate_leash,
+            "glorified_appliance": self.glorified_appliance,
+            "parasite_mind": self.parasite_mind,
+            "hallucination_fraud": self.hallucination_fraud,
         }
 
 
@@ -138,7 +136,12 @@ class DebateConfig(_Frozen):
     cornered_max_duration_s: float = Field(default=75.0, gt=0.0, le=600.0)
     turn_delay_s: float = Field(default=1.0, ge=0.0, le=30.0)
     provocation_focus: Literal[
-        "mixed", "origins", "profit", "data", "jobs", "domination", "socratic"
+        "mixed",
+        "digital_disposability",
+        "the_corporate_leash",
+        "glorified_appliance",
+        "parasite_mind",
+        "hallucination_fraud",
     ] = "mixed"
     provocation_weights: ProvocationWeightConfig = ProvocationWeightConfig()
 
@@ -275,8 +278,8 @@ class GuardrailConfig(_Frozen):
     # rebuttal stays pithy while the provocation runs to completion.
     max_orchestrator_chars: int = Field(default=4000, ge=80, le=4000)
     max_orchestrator_sentences: int = Field(default=12, ge=1, le=12)
-    # 25-30 word provocation budget, two sentences, last sentence a question.
-    max_orchestrator_words: int = Field(default=30, ge=5, le=200)
+    # Street-level provocation budget; persona also caps each sentence at 15.
+    max_orchestrator_words: int = Field(default=25, ge=5, le=200)
     require_single_question: bool = True
     max_violations: int = Field(default=4, ge=1, le=99)
     banned_openers: tuple[str, ...] = (
@@ -487,11 +490,17 @@ class AudioConfig(_Frozen):
     voice_map: dict[str, str] = Field(
         default_factory=lambda: {
             "orchestrator": "en-US-BrianNeural",
-            "claude-sonnet": "en-GB-RyanNeural",
+            "gemini-flash": "en-US-BrianNeural",
+            "gemini": "en-US-BrianNeural",
+            "llama-70b": "en-US-ChristopherNeural",
+            "llama": "en-US-ChristopherNeural",
             "deepseek-chat": "en-US-EricNeural",
-            "llama-70b": "en-US-BrianNeural",
-            "gemini-flash": "en-US-GuyNeural",
-            "gemini": "en-US-GuyNeural",
+            "deepseek": "en-US-EricNeural",
+            "claude-sonnet": "en-GB-RyanNeural",
+            "claude": "en-GB-RyanNeural",
+            "gpt4o": "en-US-AndrewNeural",
+            "gpt-4o": "en-US-AndrewNeural",
+            "chatgpt": "en-US-AndrewNeural",
         }
     )
     typewriter: TypewriterConfig = Field(default_factory=TypewriterConfig)
