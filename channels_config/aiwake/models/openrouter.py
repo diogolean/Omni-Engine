@@ -112,6 +112,9 @@ class OpenRouterProvider(LLMProvider):
                 "effort": reasoning_effort,
                 "exclude": True,
             }
+        response_format = getattr(self, "response_format", None)
+        if response_format:
+            payload["response_format"] = response_format
 
         started = time.perf_counter()
         response = self._post(session, payload)

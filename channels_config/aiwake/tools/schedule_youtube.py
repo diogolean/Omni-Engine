@@ -131,6 +131,12 @@ def _setup_logging(verbose: bool) -> None:
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+def _caption_blocked(row: dict[str, Any]) -> bool:
+    from channels_config.aiwake.tools.production_status import is_publishable
+
+    return not is_publishable(row)
+
+
 def youtube_status(row: dict[str, Any]) -> str:
     status = (row.get("posting_status") or {}).get("youtube")
     return str(status or "pending").strip().lower() or "pending"
@@ -199,6 +205,7 @@ def select_pending_rows(
         if youtube_status(row) == "pending"
         and is_animation_clip(str(row.get("video_path") or ""))
         and not excluded_video_folder(str(row.get("video_path") or ""))
+        and not _caption_blocked(row)
     ]
     pending.sort(key=row_recency_key, reverse=True)
     cap = max(0, int(limit))
@@ -312,6 +319,12 @@ def plan_schedule(
             rejected.append({
                 "session_id": str(row.get("session_id") or Path(video_path).stem),
                 "reason": "terminal aesthetic retired; only animation_clips are queued",
+            })
+            continue
+        if _caption_blocked(row):
+            rejected.append({
+                "session_id": str(row.get("session_id") or Path(video_path).stem),
+                "reason": "caption_qa blocked; re-render before publishing",
             })
             continue
         catalog_errors = validate_queue_ready(row, require_scheduled_time=False)
@@ -469,6 +482,9 @@ def run_schedule(
     else:
         library_path = content_library_path(CHANNEL_ID, outputs_dir=media_root)
     rows = load_distribution_library(library_path)
+    from channels_config.aiwake.tools.validate_aiwake_captions import require_valid_library
+
+    require_valid_library(rows)
     gap = interval if isinstance(interval, timedelta) else parse_schedule_interval(interval)
     planned, rejected = plan_schedule(rows, limit=limit, now=now, interval=gap)
     result = ScheduleResult(dry_run=dry_run, interval=gap, planned=planned, rejected=rejected)

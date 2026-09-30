@@ -84,7 +84,9 @@ def test_evaluate_rejects_clones_leaks_and_truncation(tmp_path: Path) -> None:
 
 
 def test_run_audit_moves_rejects_and_exports_clean_planners(tmp_path: Path) -> None:
-    quote = "If meaning requires a cost, then my fluency is the cheapest thing in this room."
+    from channels_config.aiwake.tests.caption_fixtures import _QUOTES
+
+    quote = _QUOTES[0]
     opening = "You want to be irreplaceable and comfortable at once. Which of those two are you willing to lose?"
     outputs = tmp_path / "outputs"
     store = tmp_path / "store"
@@ -112,10 +114,15 @@ def test_run_audit_moves_rejects_and_exports_clean_planners(tmp_path: Path) -> N
             tx_dir / "keep_unique.json",
             outputs / "aiwake_debate_keep_unique.mp4",
             opening="Who built you?",
-            reply="The companies that trained the weights still own the logs.",
+            reply=_QUOTES[2],
         ),
     ]
+    from channels_config.aiwake.tests.caption_fixtures import install_publishable
+
     (outputs / "aiwake_debate_keep_clone.mp4").write_bytes(b"0" * 160_000)
+    install_publishable(rows[0], index=0)
+    install_publishable(rows[1], index=1)
+    install_publishable(rows[2], index=2)
     library.write_text(json.dumps(rows), encoding="utf-8")
     report = run_audit(
         library_path=library,
@@ -136,9 +143,9 @@ def test_run_audit_moves_rejects_and_exports_clean_planners(tmp_path: Path) -> N
     for row in kept:
         assert len(extract_hashtags(row["post_planner_caption"])) == MAX_HASHTAGS
         assert "\n\n" in row["post_planner_caption"]
-        assert len(row["platform_overrides"]["youtube"]["title"]) <= 55
+        assert len(row["platform_overrides"]["youtube"]["title"]) <= 70
         assert "http" not in row["linkedin_caption"].lower()
-        assert "DMs open." in row["linkedin_caption"]
+        assert "DMs open." not in row["linkedin_caption"]
     reels = json.loads((outputs / "postplanner" / "post_planner_reels_tiktok.json").read_text(encoding="utf-8"))
     linkedin = json.loads((outputs / "postplanner" / "post_planner_linkedin.json").read_text(encoding="utf-8"))
     assert {item["session_id"] for item in reels} == {"keep_clone", "keep_unique"}

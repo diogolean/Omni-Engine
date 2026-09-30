@@ -40,13 +40,9 @@ _LOG = logging.getLogger("aiwake.refresh_metadata")
 
 
 def approved_rows(rows: list[dict]) -> list[dict]:
-    kept: list[dict] = []
-    for row in rows:
-        path = str(row.get("video_path") or row.get("local_path") or "")
-        if path and excluded_video_folder(path):
-            continue
-        kept.append(row)
-    return kept
+    from channels_config.aiwake.tools.production_status import is_publishable
+
+    return [row for row in rows if is_publishable(row)]
 
 
 def _ensure_model_tags(row: dict) -> None:
@@ -91,6 +87,9 @@ def refresh_library(rows: list[dict]) -> tuple[int, list[str]]:
 
 
 def write_planner_exports(rows: list[dict], *, outputs_dir: Path | None = None) -> None:
+    from channels_config.aiwake.tools.validate_aiwake_captions import require_valid_library
+
+    require_valid_library(rows)
     entries = [
         {
             "session_id": str(row.get("session_id") or ""),
