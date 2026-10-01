@@ -158,7 +158,7 @@ def install_publishable(row: dict[str, Any], *, index: int = 0) -> dict[str, Any
     row["production_status_reason"] = "test fixture"
     row["production_status_source"] = "channels_config/aiwake/tests/caption_fixtures.py"
     row["production_scope"] = "in"
-    row["quality_review"] = {"status": "pass", "reasons": [], "checked_at": "2026-09-30T00:00:00Z"}
+    row["quality_review"] = {"status": "pass", "guard": "pass", "reasons": [], "checked_at": "2026-09-30T00:00:00Z"}
     row["caption_qa"] = {
         "status": "ok",
         "generator": "captions_v4",

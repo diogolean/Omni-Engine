@@ -113,6 +113,7 @@ BANNED_PHRASES = (
     "in this video",
     "unedited",
     "this exchange",
+    "showcases",
     "truly",
     "blunt",
     "the very nature",
@@ -133,6 +134,7 @@ AI_TELLS = (
     "intriguing",
     "tapestry",
     "in this video",
+    "showcases",
 )
 
 

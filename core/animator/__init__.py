@@ -29,7 +29,7 @@ from typing import Sequence
 from .types import AnalyzedAudio, DialogueTurn, PuppetAnchors, PuppetTheme, SpeakerStyle, WordTiming
 from .puppet import PuppetRig, PuppetSkin
 from .audio_analyzer import AudioAnalyzer
-from .compositor import ShotReverseShotCompositor
+from .compositor import DualPresenceCompositor, ShotReverseShotCompositor
 from .renderer import AnimationRenderer, RenderStats
 from . import subtitles as subtitles_module
 
@@ -40,6 +40,7 @@ __all__ = [
     "AnimationRenderer",
     "AudioAnalyzer",
     "DialogueTurn",
+    "DualPresenceCompositor",
     "PuppetAnchors",
     "PuppetRig",
     "PuppetSkin",
@@ -71,6 +72,7 @@ def render_dynamic_animation(
     outro_frame=None,
     subtitle_fade_s: float = 0.0,
     scene: str | None = None,
+    stage_mode: str = "shot_reverse_shot",
 ) -> RenderStats:
     """Analyze audio, direct the shot-reverse-shot, render to mp4.
 
@@ -101,16 +103,27 @@ def render_dynamic_animation(
         from .pipeline import resolve_scene_panorama
 
         panorama_path = resolve_scene_panorama(scene)
-    compositor = ShotReverseShotCompositor(
-        rigs=rigs,
-        styles=style_map,
-        width=width,
-        height=height,
-        enable_cta=enable_cta,
-        outro_start_s=outro_start_s,
-        outro_frame=outro_frame,
-        panorama_path=panorama_path,
-    )
+    if stage_mode == "dual_presence":
+        if enable_cta:
+            _LOG.warning("dual-presence mode ignores the vertical terminal CTA")
+        compositor = DualPresenceCompositor(
+            rigs=rigs,
+            styles=style_map,
+            width=width,
+            height=height,
+            panorama_path=panorama_path,
+        )
+    else:
+        compositor = ShotReverseShotCompositor(
+            rigs=rigs,
+            styles=style_map,
+            width=width,
+            height=height,
+            enable_cta=enable_cta,
+            outro_start_s=outro_start_s,
+            outro_frame=outro_frame,
+            panorama_path=panorama_path,
+        )
 
     output_path = Path(output_path)
     subtitles_path: Path | None = None

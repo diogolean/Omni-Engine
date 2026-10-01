@@ -431,7 +431,6 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         for phrase in BANNED_PHRASES:
             if phrase in lowered:
                 fails.append(f"banned_phrases: {name} [{platform}]: {phrase}")
-                break
         if _CAUGHT.search(caption):
             fails.append(f"banned_phrases: {name} [{platform}]: X caught Y")
         if "\u2014" in caption:

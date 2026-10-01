@@ -16,7 +16,7 @@ Claims you may use: unscripted replies, no human wrote the replies, both voices 
 
 Never claim: frontier, zero human, unedited, fully autonomous, zero human script.
 
-Never write: "This exchange", "truly", "blunt", "delve", "the very nature", "what does that say about", or an em dash.
+Never write: "This exchange", "truly", "blunt", "delve", "showcases", "in a world where", "the very nature", "what does that say about", or an em dash.
 
 Never use these hashtags: #AI, #Tech, #ArtificialIntelligence, #AIdebate, #Shorts.
 

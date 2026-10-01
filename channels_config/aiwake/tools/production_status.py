@@ -186,7 +186,7 @@ def is_publishable(row: dict[str, Any] | None) -> bool:
     if str(row.get("production_scope") or "") != "in":
         return False
     review = row.get("quality_review") if isinstance(row.get("quality_review"), dict) else {}
-    if str(review.get("status") or "") != "pass":
+    if str(review.get("status") or "") != "pass" or str(review.get("guard") or "") != "pass":
         return False
     qa = row.get("caption_qa") if isinstance(row.get("caption_qa"), dict) else {}
     if str(qa.get("status") or "") != "ok":

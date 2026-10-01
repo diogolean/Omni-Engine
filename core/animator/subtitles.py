@@ -31,6 +31,13 @@ MAX_CHARS_PER_LINE = 24
 #: Social-safe karaoke anchor across the upper portion of the lower chest.
 SUBTITLE_CENTRE_Y = 1440
 
+
+def subtitle_centre_y(width: int, height: int) -> int:
+    """Aspect-aware karaoke anchor; preserve the approved vertical pixel."""
+    if (width, height) == (1080, 1920):
+        return SUBTITLE_CENTRE_Y
+    return int(round(height * (0.80 if width > height else 0.75)))
+
 _FONT_NAME = "Arial Black"
 _FONT_SIZE = 64
 _WHITE = "&H00FFFFFF"
@@ -139,6 +146,7 @@ def build_ass(
     del words_per_phrase  # Compatibility argument; bursts are now dynamically sized.
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    centre_y = subtitle_centre_y(width, height)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -179,7 +187,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 rendered = " ".join(rendered_words[:split])
                 if second_plain:
                     rendered += r"\N" + " ".join(rendered_words[split:])
-                text = f"{{\\an5\\q2\\pos({width // 2},{SUBTITLE_CENTRE_Y})}}{rendered}"
+                text = f"{{\\an5\\q2\\pos({width // 2},{centre_y})}}{rendered}"
                 events.append(
                     "Dialogue: 0,"
                     f"{_ass_time(active.start_time)},{_ass_time(active.end_time)},"
@@ -209,5 +217,6 @@ __all__ = [
     "MIN_WORDS_PER_PHRASE",
     "SUBTITLE_CENTRE_Y",
     "build_ass",
+    "subtitle_centre_y",
     "word_timings",
 ]

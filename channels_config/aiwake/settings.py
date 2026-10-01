@@ -298,6 +298,26 @@ class MemoryConfig(_Frozen):
     store_filename: str = "aiwake_memory.json"
 
 
+class LongFormatPreset(_Frozen):
+    """Isolated defaults for widescreen YouTube episodes."""
+
+    resolution: tuple[int, int] = (1920, 1080)
+    aspect_ratio: Literal["16:9"] = "16:9"
+    target_duration_s: float = Field(default=360.0, ge=300.0, le=600.0)
+    min_turns: int = Field(default=16, ge=16, le=24)
+    max_turns: int = Field(default=24, ge=16, le=24)
+    default_turns: int = Field(default=20, ge=16, le=24)
+    stage_mode: Literal["dual_presence"] = "dual_presence"
+    generate_thumbnail: bool = True
+    output_subdir: str = "long_format"
+
+    @model_validator(mode="after")
+    def _ordered_turn_limits(self) -> "LongFormatPreset":
+        if not self.min_turns <= self.default_turns <= self.max_turns:
+            raise ValueError("long-format turn limits must contain default_turns")
+        return self
+
+
 class TypewriterConfig(_Frozen):
     """Keyboard clicks mixed under TTS during the character-reveal window."""
 
@@ -823,6 +843,7 @@ class AiwakeSettings(_Frozen):
     google: GoogleConfig = GoogleConfig()
     guardrails: GuardrailConfig = GuardrailConfig()
     memory: MemoryConfig = MemoryConfig()
+    long_format: LongFormatPreset = LongFormatPreset()
     audio: AudioConfig = AudioConfig()
     render: RenderConfig = RenderConfig()
     themes: dict[str, Palette] = Field(default_factory=_builtin_themes)
@@ -1070,6 +1091,7 @@ __all__ = [
     "GoogleConfig",
     "MODULE_ROOT",
     "MemoryConfig",
+    "LongFormatPreset",
     "ModelRouting",
     "ModelSpec",
     "OpenRouterConfig",

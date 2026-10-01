@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -669,19 +670,19 @@ def test_karaoke_subtitles_use_outline_without_opaque_box(tmp_path: Path) -> Non
         assert all(len(line) <= 24 for line in plain.split(r"\N"))
 
 
-def test_versioned_skin_registry_defaults_to_v2_and_supports_overrides() -> None:
-    assert resolve_character_map() == {
+def test_versioned_skin_registry_follows_the_models() -> None:
+    assert resolve_character_map(orchestrator_model="gemini-flash", target_model="llama-70b") == {
         "orchestrator": "gemini_cyborg_v2",
         "target": "llama_cyborg_v2",
     }
-    assert resolve_character_map(skin="v1") == {
-        "orchestrator": "gemini_robot_v1",
-        "target": "llama_robot_v1",
-    }
-    assert resolve_character_map(skin="v2", left_puppet="custom_left") == {
-        "orchestrator": "custom_left",
-        "target": "llama_cyborg_v2",
-    }
+    with pytest.raises(ValueError):
+        resolve_character_map(skin="v1")
+    with pytest.raises(ValueError):
+        resolve_character_map(
+            orchestrator_model="gemini-flash",
+            target_model="llama-70b",
+            left_puppet="custom_left",
+        )
 
 
 def test_llama_blink_follows_the_circular_lens() -> None:

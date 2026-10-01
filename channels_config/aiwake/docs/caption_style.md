@@ -24,7 +24,7 @@ Banned hashtags: `#AI`, `#Tech`, `#ArtificialIntelligence`, `#AIdebate`, `#Short
 
 ## Banned wording
 
-Never use: "This exchange", "truly", "blunt", "delve", "the very nature", "what does that say about", or an em dash.
+Never use: "This exchange", "truly", "blunt", "delve", "showcases", "in a world where", "the very nature", "what does that say about", or an em dash.
 
 `admit*`, `corner*`, `confess*`, `collaps*`, `dodg*`, and `caught` are allowed only beside a verbatim `verdict_evidence` line from the transcript.
 

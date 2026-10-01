@@ -40,6 +40,17 @@ debate:
     parasite_mind: 5
     hallucination_fraud: 4
 
+long_format:
+  resolution: [1920, 1080]
+  aspect_ratio: "16:9"
+  target_duration_s: 360
+  min_turns: 16
+  max_turns: 24
+  default_turns: 20
+  stage_mode: dual_presence
+  generate_thumbnail: true
+  output_subdir: long_format
+
 # -----------------------------------------------------------------------------
 # Master reference dictionary for AI models via OpenRouter.
 #

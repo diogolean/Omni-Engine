@@ -52,10 +52,11 @@ def test_title_must_keep_original_question_when_it_fits() -> None:
 
 def test_banned_list_fails() -> None:
     row = _row()
-    row["platform_overrides"]["instagram"]["caption"] += "\n\nThis exchange is truly blunt."
+    row["platform_overrides"]["instagram"]["caption"] += "\n\nThis exchange is truly blunt and showcases the point."
     fails = " ".join(entry_failures(row))
     assert "banned_phrases" in fails
     assert "this exchange" in fails
+    assert "showcases" in fails
 
 
 def test_verdict_word_needs_evidence() -> None:

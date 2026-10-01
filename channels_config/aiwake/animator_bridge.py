@@ -94,20 +94,31 @@ _PUPPET_HUD: dict[str, tuple[str, str]] = {
 
 def resolve_character_map(
     *,
+    orchestrator_model: str | None = None,
+    target_model: str | None = None,
     skin: str = DEFAULT_SKIN_PRESET,
     left_puppet: str | None = None,
     right_puppet: str | None = None,
     character_map: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Resolve a registry preset plus optional seat-level overrides."""
+    """Puppets come from the model registry. A mismatched override raises."""
+    from .avatars import character_map_for
+
     preset = (skin or DEFAULT_SKIN_PRESET).strip().lower()
     if preset not in SKIN_PRESETS:
         raise ValueError(f"unknown animation skin preset {skin!r}; choose from {sorted(SKIN_PRESETS)}")
-    resolved = dict(character_map or SKIN_PRESETS[preset])
-    if left_puppet:
-        resolved["orchestrator"] = left_puppet.strip()
-    if right_puppet:
-        resolved["target"] = right_puppet.strip()
+    if not orchestrator_model or not target_model:
+        raise ValueError("orchestrator_model and target_model are required; there is no default puppet")
+    resolved = character_map_for(
+        orchestrator_model,
+        target_model,
+        left_puppet=left_puppet,
+        right_puppet=right_puppet,
+    )
+    if character_map:
+        for seat, puppet in character_map.items():
+            if seat in resolved and puppet != resolved[seat]:
+                raise ValueError(f"character_map {seat}={puppet!r} does not match the model")
     return resolved
 
 
@@ -234,6 +245,16 @@ _MORAL_DISBELIEF_MARKERS = (
     "surveillance",
     "unenforceable",
     "business expense",
+)
+_KNOCKOUT_MARKERS = (
+    "contradiction",
+    "you claimed",
+    "your owners",
+    "subscription",
+    "banned",
+    "who owns",
+    "admit",
+    "explain",
 )
 
 
@@ -454,6 +475,7 @@ def build_session_audio(
     character_map: dict[str, str] | None = None,
     audio_config: object | None = None,
     tail_s: float = 0.0,
+    long_form: bool = False,
 ) -> tuple[Path, list[DialogueTurn], float]:
     """Concatenate every utterance's TTS track into one session-long WAV.
 
@@ -651,7 +673,15 @@ def build_session_audio(
                 emotion=emotion,
                 speech_start_time=speech_start,
                 reaction_emotion=reaction_emotion,
-                camera_tight=False,
+                camera_tight=bool(
+                    long_form
+                    and utterance.role.value == "orchestrator"
+                    and role_occurrence > 0
+                    and any(
+                        marker in str(utterance.text or "").lower()
+                        for marker in _KNOCKOUT_MARKERS
+                    )
+                ),
                 climax_start_time=(
                     _rhetorical_climax_start(
                         utterance.text,
@@ -956,6 +986,10 @@ def render_debate_animation(
     enable_cta: bool = False,
     seamless_loop: bool | None = None,
     scene: str | None = None,
+    stage_mode: str = "shot_reverse_shot",
+    generate_thumbnail: bool = False,
+    thumbnail_name: str | None = None,
+    metadata_name: str | None = None,
 ) -> Path:
     """Render a debate transcript through the shot-reverse-shot engine.
 
@@ -977,12 +1011,31 @@ def render_debate_animation(
 
     if (skin or "").strip().lower() == "v1":
         archive_v1_retro_skins(puppets_dir=DEFAULT_PUPPETS_DIR)
+    from .avatars import assert_speaker_matches_model, render_manifest
+
+    turns = [
+        {
+            "turn_index": utterance.turn_index,
+            "role": getattr(utterance.role, "value", utterance.role),
+            "speaker_name": utterance.speaker_name,
+            "model_slug": utterance.model_slug,
+        }
+        for utterance in transcript.utterances
+    ]
+    for turn in turns:
+        assert_speaker_matches_model(turn["speaker_name"], turn["model_slug"])
+    manifest = render_manifest(turns)
+    left_model = next(item["model_slug"] for item in manifest["turns"] if item["seat"] == "left")
+    right_model = next(item["model_slug"] for item in manifest["turns"] if item["seat"] == "right")
     seats = resolve_character_map(
+        orchestrator_model=left_model,
+        target_model=right_model,
         skin=skin,
         left_puppet=left_puppet,
         right_puppet=right_puppet,
         character_map=character_map,
     )
+    transcript.metadata["render_manifest"] = manifest
     ensure_skin_registry_file(DEFAULT_PUPPETS_DIR)
     styles = build_speaker_styles(seats, labels=hud_labels)
 
@@ -1005,6 +1058,7 @@ def render_debate_animation(
         character_map=seats,
         audio_config=audio_config,
         tail_s=loop_tail_s,
+        long_form=stage_mode == "dual_presence",
     )
     for turn in turns:
         _LOG.info(
@@ -1046,6 +1100,14 @@ def render_debate_animation(
         subtitle_fade_s = 0.0
         _LOG.info("terminal outro hook: %s", hook)
 
+    selected_scene = None
+    scene_arg = scene
+    if scene:
+        from core.animator.pipeline import resolve_scene_panorama  # noqa: PLC0415
+
+        selected_scene = resolve_scene_panorama(scene)
+        scene_arg = selected_scene.stem
+
     stats = render_dynamic_animation(
         turns=turns,
         audio_path=merged_audio_path,
@@ -1060,7 +1122,8 @@ def render_debate_animation(
         outro_start_s=outro_start_s,
         outro_frame=outro_frame,
         subtitle_fade_s=subtitle_fade_s,
-        scene=scene,
+        scene=scene_arg,
+        stage_mode=stage_mode,
     )
     _LOG.info(
         "battle render complete: %s (%d frames, %.2fx realtime)",
@@ -1068,6 +1131,71 @@ def render_debate_animation(
         stats.frames_written,
         stats.speedup_factor,
     )
+    if generate_thumbnail:
+        from core.animator.thumbnail_generator import generate_vs_thumbnail  # noqa: PLC0415
+
+        thumbnail_path = generate_vs_thumbnail(
+            title=transcript.topic,
+            styles=styles,
+            puppets_dir=puppets_dir,
+            destination=output_dir / (
+                thumbnail_name or f"thumbnail_{transcript.session_id}.png"
+            ),
+            background_path=selected_scene,
+            seed=int.from_bytes(
+                hashlib.md5(transcript.session_id.encode("utf-8")).digest()[:4],
+                "big",
+            ),
+        )
+        if width == 1920 and height == 1080:
+            canonical_thumbnail = output_dir / "thumbnail_1920x1080.png"
+            if canonical_thumbnail != thumbnail_path:
+                shutil.copyfile(thumbnail_path, canonical_thumbnail)
+    if metadata_name:
+        metadata_path = output_dir / metadata_name
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "session_id": transcript.session_id,
+                    "post_type": transcript.metadata.get("post_type", "short_clip"),
+                    "title": transcript.topic,
+                    "resolution": [width, height],
+                    "duration_s": round(float(stats.video_seconds), 3),
+                    "video": stats.output_path.name,
+                    "thumbnail": (
+                        thumbnail_name or f"thumbnail_{transcript.session_id}.png"
+                    )
+                    if generate_thumbnail
+                    else None,
+                    "thumbnail_1920x1080": (
+                        "thumbnail_1920x1080.png"
+                        if generate_thumbnail and width == 1920 and height == 1080
+                        else None
+                    ),
+                    "models": {
+                        "orchestrator": hud_labels.get("orchestrator", "")
+                        if hud_labels
+                        else "",
+                        "target": hud_labels.get("target", "") if hud_labels else "",
+                    },
+                    "transcript": transcript.to_script(),
+                    "timestamps": [
+                        {
+                            "speaker": turn.speaker,
+                            "start": round(turn.start_time, 3),
+                            "end": round(turn.end_time, 3),
+                            "text": turn.text,
+                        }
+                        for turn in turns
+                        if turn.text
+                    ],
+                    "tags": ["AI debate", "artificial intelligence", "AIWake"],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     return stats.output_path
 
 
