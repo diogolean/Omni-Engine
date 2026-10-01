@@ -138,8 +138,9 @@ def _caption_blocked(row: dict[str, Any]) -> bool:
 
 
 def youtube_status(row: dict[str, Any]) -> str:
-    status = (row.get("posting_status") or {}).get("youtube")
-    return str(status or "pending").strip().lower() or "pending"
+    from channels_config.aiwake.tools.production_status import distribution_status
+
+    return distribution_status(row, "youtube")
 
 
 def _nested(row: dict[str, Any], *keys: str) -> Any:

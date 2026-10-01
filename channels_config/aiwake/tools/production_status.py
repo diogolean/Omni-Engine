@@ -178,21 +178,36 @@ def stored_status(row: dict[str, Any]) -> str:
 
 
 def is_publishable(row: dict[str, Any] | None) -> bool:
-    """True only for a ready row whose v3 captions pass the per-entry validator."""
+    """True only for an in-scope ready row that passed QC and captions v4."""
     if not isinstance(row, dict):
         return False
     if stored_status(row) != "ready":
         return False
+    if str(row.get("production_scope") or "") != "in":
+        return False
+    review = row.get("quality_review") if isinstance(row.get("quality_review"), dict) else {}
+    if str(review.get("status") or "") != "pass":
+        return False
     qa = row.get("caption_qa") if isinstance(row.get("caption_qa"), dict) else {}
     if str(qa.get("status") or "") != "ok":
         return False
-    if str(qa.get("generator") or "") != "captions_v3":
+    if str(qa.get("generator") or "") != "captions_v4":
         return False
     if not str(qa.get("model") or "").strip():
         return False
     from channels_config.aiwake.tools.validate_aiwake_captions import entry_failures
 
     return not entry_failures(row)
+
+
+def distribution_status(row: dict[str, Any], platform: str) -> str:
+    """Posting status for one platform. ``distribution`` wins when it is set."""
+    dist = row.get("distribution") if isinstance(row.get("distribution"), dict) else {}
+    block = dist.get(platform) if isinstance(dist, dict) else None
+    if isinstance(block, dict) and str(block.get("status") or "").strip():
+        return str(block.get("status") or "").strip().lower()
+    posting = row.get("posting_status") if isinstance(row.get("posting_status"), dict) else {}
+    return str(posting.get(platform) or "pending").strip().lower() or "pending"
 
 
 def scheduled_time_of(row: dict[str, Any]) -> str:

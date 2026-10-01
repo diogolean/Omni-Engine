@@ -21,7 +21,7 @@ def _ready(index: int = 0) -> dict:
 
 
 def test_good_fixture_passes() -> None:
-    assert VALIDATOR_VERSION == "captions_v3"
+    assert VALIDATOR_VERSION == "captions_v4"
     row = _ready()
     assert entry_failures(row) == []
     code, grouped = validate_library([row])
@@ -90,7 +90,7 @@ def test_four_hashtags_fail() -> None:
 def test_wrong_model_tag_fails() -> None:
     row = _ready()
     row["platform_overrides"]["kwai"]["caption"] = row["platform_overrides"]["kwai"]["caption"].replace(
-        "#Llama", "#Claude"
+        "#Gemini", "#Claude"
     )
     fails = " ".join(entry_failures(row))
     assert "hashtags" in fails
@@ -118,7 +118,7 @@ def test_non_ready_must_be_parked() -> None:
 
 def test_needs_review_is_reported_not_failed() -> None:
     row = _ready()
-    row["caption_qa"] = {"status": "needs_review", "reason": "speaker_relabeled_post_hoc", "generator": "captions_v3"}
+    row["caption_qa"] = {"status": "needs_review", "reason": "speaker_relabeled_post_hoc", "generator": "captions_v4"}
     code, grouped = validate_library([row])
     assert code == 0
     assert is_publishable(row) is False

@@ -1406,6 +1406,10 @@ def build_planner_entries(
 
         if caption_blocked(row):
             continue
+        from channels_config.aiwake.tools.production_status import distribution_status
+
+        if distribution_status(row, "tiktok") != "pending":
+            continue
         session_id = str(row.get("session_id") or video.stem)
         caption = str(row.get("post_planner_caption") or "")
         instagram = str(((row.get("platform_overrides") or {}).get("instagram") or {}).get("caption") or "")

@@ -20,7 +20,9 @@ from typing import Any
 
 from channels_config.aiwake.tools.caption_generator import (
     BANNED_PHRASES,
+    BROAD_TAGS,
     _DANGLING,
+    _clean,
     _read_turns,
     allowed_hashtags,
     build_headline,
@@ -33,7 +35,7 @@ from channels_config.aiwake.tools.production_status import (
     posting_order,
 )
 
-VALIDATOR_VERSION = "captions_v3"
+VALIDATOR_VERSION = "captions_v4"
 
 _HEADLINE_RE = re.compile(
     r"^(Gemini|Llama|GPT-4o|DeepSeek|Claude) vs "
@@ -49,7 +51,10 @@ _PLACEHOLDER = re.compile(
     r"AIWAKE\.CORE|TARGET\.NODE|\[Unscripted AI Battle\]|\{\w+\}|<M>|TODO|lorem",
     re.IGNORECASE,
 )
-_VERDICT = re.compile(r"\b(cornered|collapse|admitted|dodged|lost)\b", re.IGNORECASE)
+_VERDICT = re.compile(
+    r"\b(\w*admit\w*|\w*corner\w*|\w*confess\w*|\w*collaps\w*|\w*dodg\w*|caught)\b",
+    re.IGNORECASE,
+)
 _AI_CUE = re.compile(r"\bAI\b|AI-generated|AI-animated|AI voices", re.IGNORECASE)
 _PT_EXTRA = re.compile(
     r"\b(?:não|nao|você|voce|está|estão|também|tambem|porque|obrigado|"
@@ -67,7 +72,7 @@ _GENERIC_CLOSERS = {
     "does that concession hold?",
 }
 _PLATFORMS = {
-    "tiktok": ("platform_overrides.tiktok.caption", 2200, 80, 3, 3),
+    "tiktok": ("platform_overrides.tiktok.caption", 300, 80, 3, 3),
     "instagram": ("platform_overrides.instagram.caption", 2200, 125, 3, 3),
     "facebook": ("platform_overrides.facebook.caption", 1000, 125, 3, 3),
     "youtube": ("platform_overrides.youtube.caption", 700, 100, 3, 3),
@@ -108,10 +113,15 @@ def _qa(row: dict[str, Any]) -> dict[str, Any]:
 def _ready_ok(row: dict[str, Any]) -> bool:
     if str(row.get("production_status") or "") != "ready":
         return False
+    if str(row.get("production_scope") or "") == "out":
+        return False
+    review = row.get("quality_review") if isinstance(row.get("quality_review"), dict) else {}
+    if str(review.get("status") or "") == "fail":
+        return False
     qa = _qa(row)
     return (
         str(qa.get("status") or "") == "ok"
-        and str(qa.get("generator") or "") == "captions_v3"
+        and str(qa.get("generator") or "") == "captions_v4"
         and bool(str(qa.get("model") or "").strip())
     )
 
@@ -194,12 +204,18 @@ def _mask(line: str, row: dict[str, Any]) -> str:
         return word
 
     text = re.sub(r"[A-Za-z']+|<[A-Za-z]+>", _swap, text)
-    return re.sub(r"\s+", " ", text).strip().lower()
+    text = re.sub(r"[^a-z<>\s]", " ", text.lower())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _placeholder(token: str) -> bool:
+    core = re.sub(r"[^a-z<>]", "", token.lower())
+    return core in {"<w>", "<m>", "<q>", "<n>"}
 
 
 def _editorial(masked: str) -> bool:
     for token in masked.split():
-        if token not in {"<w>", "<m>", "<q>", "<n>"} and re.search(r"[a-z]", token):
+        if not _placeholder(token) and re.search(r"[a-z]", token):
             return True
     return False
 
@@ -237,6 +253,25 @@ def _closing(caption: str) -> str:
 def _opening(caption: str) -> str:
     sentences = _body_sentences(caption)
     return sentences[0] if sentences else ""
+
+
+def _channel_metadata_only(row: dict[str, Any]) -> bool:
+    """Rejected uploads may keep the YouTube snippet that is already on the channel."""
+    if _live_captions_empty(row):
+        return True
+    yt = ((row.get("platform_overrides") or {}).get("youtube") or {})
+    if not str(yt.get("video_id") or "").strip():
+        return False
+    clone = json.loads(json.dumps(row))
+    block = ((clone.get("platform_overrides") or {}).get("youtube") or {})
+    block["title"] = ""
+    block["caption"] = ""
+    base = clone.get("base_metadata") if isinstance(clone.get("base_metadata"), dict) else {}
+    if str(base.get("title") or "") == str(yt.get("title") or ""):
+        base["title"] = ""
+    if str(base.get("caption") or "") == str(yt.get("caption") or ""):
+        base["caption"] = ""
+    return _live_captions_empty(clone)
 
 
 def _live_captions_empty(row: dict[str, Any]) -> bool:
@@ -318,7 +353,7 @@ def _fourgrams(masked: str) -> list[tuple[str, ...]]:
     grams = []
     for index in range(len(tokens) - 3):
         gram = tuple(tokens[index : index + 4])
-        if all(token in {"<w>", "<m>", "<q>", "<n>"} for token in gram):
+        if all(_placeholder(token) for token in gram):
             continue
         grams.append(gram)
     return grams
@@ -327,6 +362,11 @@ def _fourgrams(masked: str) -> list[tuple[str, ...]]:
 def entry_failures(row: dict[str, Any]) -> list[str]:
     """Per-entry hard failures. Cross-post rules live in ``candidate_failures``."""
     if str(row.get("production_status") or "") not in {"", "ready"}:
+        return []
+    if str(row.get("production_scope") or "") == "out":
+        return []
+    review = row.get("quality_review") if isinstance(row.get("quality_review"), dict) else {}
+    if str(review.get("status") or "") == "fail":
         return []
     fails: list[str] = []
     name = str(row.get("session_id") or "?")
@@ -347,7 +387,12 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         topic = headline.split(" - ", 1)[1]
     if topic and (_words_dropped(topic, orchestrator) or any(_run_on(topic, line) for line in orchestrator)):
         fails.append(f"question_words_dropped: {name}: {topic[:90]}")
-    if _dangling(topic):
+    opening_exact = ""
+    for item in turns:
+        if str(item.get("role") or "") == "orchestrator" and str(item.get("text") or "").strip():
+            opening_exact = str(item.get("text") or "").strip()
+            break
+    if _dangling(topic) and _clean(topic) != _clean(opening_exact):
         fails.append(f"truncated_sentence: {name}: {topic[:90]}")
     qa = _qa(row)
     quote = str(qa.get("quote") or "")
@@ -382,7 +427,7 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
             fails.append(f"hashtags: {name} [{platform}]: {count} tags")
         if _PLACEHOLDER.search(caption):
             fails.append(f"placeholder_or_template: {name} [{platform}]")
-        lowered = caption.lower()
+        lowered = _outside_quotes(caption).lower()
         for phrase in BANNED_PHRASES:
             if phrase in lowered:
                 fails.append(f"banned_phrases: {name} [{platform}]: {phrase}")
@@ -393,11 +438,13 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
             fails.append(f"banned_phrases: {name} [{platform}]: em dash")
         if len(_EMOJI.findall(caption)) > 1:
             fails.append(f"banned_phrases: {name} [{platform}]: emoji spam")
-        for line in lines:
+        if lines and _english_fail(lines[0]):
+            fails.append(f"english_only: {name} [{platform}]")
+        for line in lines[1:]:
             if _english_fail(line):
                 fails.append(f"english_only: {name} [{platform}]")
                 break
-            if line.endswith("?") and _dangling(line):
+            if line.endswith("?") and _dangling(line) and _clean(line) != _clean(orchestrator[0] if orchestrator else ""):
                 fails.append(f"truncated_sentence: {name} [{platform}]: {line[-80:]}")
         if platform in _FEED and not any(line.endswith("?") for line in lines):
             fails.append(f"{platform}_no_question: {name}")
@@ -462,6 +509,37 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     closer = _closing(str(_get(row, _PLATFORMS["tiktok"][0]) or ""))
     if closer.strip().lower() in _GENERIC_CLOSERS:
         fails.append(f"unique_closers: {name}: {closer}")
+    opening = ""
+    for item in turns:
+        if str(item.get("role") or "") == "orchestrator" and str(item.get("text") or "").strip():
+            opening = _clean(str(item.get("text") or ""))
+            break
+    if asker and answerer and opening:
+        fitted = f"{asker} vs {answerer} - {opening}"
+        banned_opening = any(phrase in opening.lower() for phrase in BANNED_PHRASES)
+        if len(fitted) <= 80 and _clean(topic) != opening and not banned_opening:
+            fails.append(f"title_not_original_question: {name}: {topic[:90]}")
+    for platform in _FEED:
+        caption = str(_get(row, _PLATFORMS[platform][0]) or "")
+        lines = _lines(caption)
+        quote_lines = [line for line in lines if line.startswith('"') and line.endswith('"')]
+        if not quote_lines:
+            fails.append(f"quote_line: {name} [{platform}]: quote is not on its own line")
+        elif len(quote_lines[0].strip('"').split()) > 20:
+            fails.append(f"quote_line: {name} [{platform}]: quote is over 20 words")
+        if lines:
+            follow = ""
+            for line in lines[1:]:
+                if line.startswith('"'):
+                    break
+                follow = line
+                break
+            if follow and len(follow.split()) > 12:
+                fails.append(f"context_line: {name} [{platform}]: {len(follow.split())} words")
+        if any(tag.lower() in {item.lower() for item in BROAD_TAGS} for tag in _tags(caption)):
+            fails.append(f"hashtags: {name} [{platform}]: broad tag banned")
+        if "\u2014" in caption or "\u2013" in caption:
+            fails.append(f"banned_phrases: {name} [{platform}]: em dash")
     return fails
 
 
@@ -472,7 +550,13 @@ def _active(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) -> list[str]:
     active = _active(rows)
     if expected is None:
-        ready_count = sum(1 for row in rows if str(row.get("production_status") or "") == "ready")
+        ready_count = sum(
+            1
+            for row in rows
+            if str(row.get("production_status") or "") == "ready"
+            and str(row.get("production_scope") or "") != "out"
+            and str((row.get("quality_review") or {}).get("status") or "") != "fail"
+        )
         expected = ready_count or len(active)
     expected = max(int(expected), 1)
     fails: list[str] = []
@@ -508,6 +592,16 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
         if count > 1:
             fails.append(f"unique_closers: {count} posts share {closer[:80]}")
             break
+    closer_list = list(closers)
+    for left in range(len(closer_list)):
+        for right in range(left + 1, len(closer_list)):
+            ratio = difflib.SequenceMatcher(None, closer_list[left], closer_list[right]).ratio()
+            if ratio >= 0.7:
+                fails.append(f"unique_closers: similarity {ratio:.2f}")
+                break
+        else:
+            continue
+        break
     for platform in _FEED:
         field = _PLATFORMS[platform][0]
         openings: list[str] = []
@@ -540,7 +634,8 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
         if len(openings) != len(set(openings)):
             fails.append(f"skeleton_similarity: {platform} opening repeats")
         if len(closings) != len(set(closings)):
-            fails.append(f"skeleton_similarity: {platform} closing repeats")
+            repeated = collections.Counter(closings).most_common(1)
+            fails.append(f"skeleton_similarity: {platform} closing repeats {repeated}")
         for left in range(len(positioned)):
             for right in range(left + 1, len(positioned)):
                 limit = min(len(positioned[left]), len(positioned[right]))
@@ -560,14 +655,15 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
             break
         for gram, count in grams.items():
             if count >= 3 and count / expected > 0.05:
-                fails.append(f"skeleton_similarity: {platform} 4-gram in {count} posts")
+                fails.append(f"skeleton_similarity: {platform} 4-gram {' '.join(gram)} in {count} posts")
                 break
         for signature, count in tag_sets.items():
-            if count > 3:
+            if count > 12:
                 fails.append(f"hashtags: {platform} set used {count} times")
                 break
+        exempt = {"#ai", "#shorts", "#gemini", "#llama", "#chatgpt", "#deepseek", "#claude", "#aiconsciousness", "#philosophy", "#aiethics", "#aialignment", "#bigtech", "#dataprivacy", "#aihallucination", "#futureofwork"}
         for tag, count in tag_freq.items():
-            if tag not in {"#ai", "#shorts"} and count >= 3 and count / expected > 0.4:
+            if tag not in exempt and count >= 3 and count / expected > 0.4:
                 fails.append(f"hashtags: {platform} {tag} in {count}/{expected}")
                 break
         for line, users in raw_lines.items():
@@ -599,13 +695,18 @@ def status_gate_failures(rows: list[dict[str, Any]]) -> list[str]:
         qa = _qa(row)
         qa_status = str(qa.get("status") or "")
         if status == "ready":
+            if str(row.get("production_scope") or "") == "out":
+                continue
+            review = row.get("quality_review") if isinstance(row.get("quality_review"), dict) else {}
+            if str(review.get("status") or "") == "fail":
+                continue
             if qa_status == "needs_review":
                 needs.append(f"{sid}: {qa.get('reason') or 'needs_review'}")
                 continue
-            if qa_status != "ok" or str(qa.get("generator") or "") != "captions_v3" or not str(qa.get("model") or "").strip():
+            if qa_status != "ok" or str(qa.get("generator") or "") != "captions_v4" or not str(qa.get("model") or "").strip():
                 fails.append(f"status_gate: {sid}: caption_qa {qa_status or 'missing'} generator={qa.get('generator')}")
             continue
-        if not isinstance(row.get("legacy_captions"), dict) or not _live_captions_empty(row):
+        if not isinstance(row.get("legacy_captions"), dict) or not _channel_metadata_only(row):
             fails.append(f"status_gate: {sid}: non-ready captions were not parked")
     return fails
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """LLM captions for one Aiwake video. The model writes every sentence.
 
-``prompts/captions_v3.md`` is the system prompt. This module prepends the
+``prompts/captions_v4.md`` is the system prompt. This module prepends the
 headline and appends hashtags. It does not keep a template, a salt word, or a
 batch-wide kill switch.
 """
@@ -19,9 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-_LOG = logging.getLogger("aiwake.captions_v3")
+_LOG = logging.getLogger("aiwake.captions_v4")
 
-_PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "captions_v3.md"
+_PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "captions_v4.md"
 _BACKOFF_S = (2.0, 4.0, 8.0, 16.0)
 _PLACEHOLDER = {"aiwake.core", "target.node", "room"}
 _DANGLING = set(
@@ -30,7 +30,7 @@ _DANGLING = set(
     "who when while what".split()
 )
 
-BROAD_TAGS = ("#AI", "#Tech", "#ArtificialIntelligence", "#AIdebate")
+BROAD_TAGS = ("#AI", "#Tech", "#ArtificialIntelligence", "#AIdebate", "#Shorts")
 _MODEL_TAGS = {
     "gemini": "#Gemini",
     "llama": "#Llama",
@@ -112,6 +112,11 @@ BANNED_PHRASES = (
     "tapestry",
     "in this video",
     "unedited",
+    "this exchange",
+    "truly",
+    "blunt",
+    "the very nature",
+    "what does that say about",
 )
 
 AI_TELLS = (
@@ -261,8 +266,11 @@ def categories_of(row: dict[str, Any]) -> set[str]:
 
 
 def allowed_hashtags(row: dict[str, Any]) -> set[str]:
-    """Broad tags, model tags for seats in this video, and topic tags for its categories."""
-    allowed = set(BROAD_TAGS)
+    """Model tags for seats in this video, and topic tags for its categories.
+
+    Broad tags (#AI, #Tech, #ArtificialIntelligence, #AIdebate, #Shorts) are banned.
+    """
+    allowed: set[str] = set()
     asker, answerer = seat_names(row)
     for name in (asker, answerer):
         tag = _MODEL_TAGS.get(name.lower())
@@ -714,7 +722,7 @@ def _pack_from_payload(
         "hashtags": tags,
         "caption_qa": {
             "status": "ok",
-            "generator": "captions_v3",
+            "generator": "captions_v4",
             "model": model,
             "prompt_sha": prompt_sha256(),
             "attempts": attempts,
@@ -723,7 +731,7 @@ def _pack_from_payload(
             "quote": quote,
             "quote_speaker": display_name(str(payload.get("quote_speaker") or "")) or _clean(str(payload.get("quote_speaker") or "")),
             "disclosure_line": _clean(str(payload.get("disclosure_line") or "")),
-            "validator_version": "captions_v3",
+            "validator_version": "captions_v4",
             "generated_at": _now(),
         },
     }
@@ -802,7 +810,7 @@ def _needs_review(reason: str, *, attempts: int, last_error: str) -> dict[str, A
             "reason": reason,
             "attempts": attempts,
             "last_error": last_error[:500],
-            "generator": "captions_v3",
+            "generator": "captions_v4",
             "checked_at": _now(),
         }
     }

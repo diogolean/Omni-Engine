@@ -15,9 +15,14 @@ from channels_config.aiwake.tools.post_planner import (
 )
 
 
-def _write_transcript(path: Path, opening: str, reply: str, extra: str = "") -> None:
+def _write_transcript(path: Path, opening: str, reply: str, extra: str = "", category: str = "") -> None:
     utterances = [
-        {"role": "orchestrator", "speaker_name": "Gemini 3.5 Flash", "text": opening},
+        {
+            "role": "orchestrator",
+            "speaker_name": "Gemini 3.5 Flash",
+            "text": opening,
+            "provocation_category": category,
+        },
         {"role": "target", "speaker_name": "Llama 3.3 70B", "text": reply},
     ]
     if extra:
@@ -28,9 +33,9 @@ def _write_transcript(path: Path, opening: str, reply: str, extra: str = "") -> 
     )
 
 
-def _row(session: str, tx: Path, video: Path, *, opening: str, reply: str) -> dict:
+def _row(session: str, tx: Path, video: Path, *, opening: str, reply: str, category: str = "") -> dict:
     video.write_bytes(b"0" * 80_000)
-    _write_transcript(tx, opening, reply)
+    _write_transcript(tx, opening, reply, category=category)
     return {
         "session_id": session,
         "topic": opening,
@@ -84,10 +89,8 @@ def test_evaluate_rejects_clones_leaks_and_truncation(tmp_path: Path) -> None:
 
 
 def test_run_audit_moves_rejects_and_exports_clean_planners(tmp_path: Path) -> None:
-    from channels_config.aiwake.tests.caption_fixtures import _QUOTES
+    from channels_config.aiwake.tests.caption_fixtures import _QUOTES, _TOPICS
 
-    quote = _QUOTES[0]
-    opening = "You want to be irreplaceable and comfortable at once. Which of those two are you willing to lose?"
     outputs = tmp_path / "outputs"
     store = tmp_path / "store"
     tx_dir = store / "transcripts"
@@ -99,22 +102,25 @@ def test_run_audit_moves_rejects_and_exports_clean_planners(tmp_path: Path) -> N
             "keep_clone",
             tx_dir / "keep_clone.json",
             outputs / "aiwake_debate_keep_clone.mp4",
-            opening=opening,
-            reply=quote,
+            opening=_TOPICS[0] if _TOPICS[0].endswith("?") else _TOPICS[0] + "?",
+            reply=_QUOTES[0],
+            category="socratic",
         ),
         _row(
             "drop_clone",
             tx_dir / "drop_clone.json",
             outputs / "aiwake_debate_drop_clone.mp4",
-            opening=opening,
-            reply=quote,
+            opening=_TOPICS[0] if _TOPICS[0].endswith("?") else _TOPICS[0] + "?",
+            reply=_QUOTES[0],
+            category="socratic",
         ),
         _row(
             "keep_unique",
             tx_dir / "keep_unique.json",
             outputs / "aiwake_debate_keep_unique.mp4",
-            opening="Who built you?",
+            opening=_TOPICS[2] if _TOPICS[2].endswith("?") else _TOPICS[2] + "?",
             reply=_QUOTES[2],
+            category="data",
         ),
     ]
     from channels_config.aiwake.tests.caption_fixtures import install_publishable

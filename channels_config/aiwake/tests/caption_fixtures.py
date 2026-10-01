@@ -68,47 +68,100 @@ _DISCLOSURES = (
     "Unscripted AI exchange, animated with AI voices.",
 )
 _TAG_SETS = (
-    ("#AI", "#Tech", "#Llama"),
-    ("#ArtificialIntelligence", "#AIdebate", "#Gemini"),
-    ("#Tech", "#AI", "#Llama"),
-    ("#AIdebate", "#Tech", "#Gemini"),
+    ("#Philosophy", "#Gemini", "#Llama"),
+    ("#BigTech", "#Gemini", "#Llama"),
+    ("#DataPrivacy", "#Llama", "#Gemini"),
+    ("#AIethics", "#Gemini", "#Llama"),
 )
+_CATEGORIES = ("socratic", "profit", "data", "the_corporate_leash")
 
 
 def install_publishable(row: dict[str, Any], *, index: int = 0) -> dict[str, Any]:
-    """Stamp a ready v3 caption pack that passes the per-entry validator."""
+    """Stamp a ready v4 caption pack that passes the per-entry validator."""
     topic = _TOPICS[index % len(_TOPICS)]
+    if not topic.endswith("?"):
+        topic = topic + "?"
     quote = _QUOTES[index % len(_QUOTES)]
     headline = f"Gemini vs Llama - {topic}"
     disclosure = _DISCLOSURES[index % len(_DISCLOSURES)]
     closer = _CLOSERS[index % len(_CLOSERS)]
     tags = list(_TAG_SETS[index % len(_TAG_SETS)])
-    extras = _EXTRAS[index % len(_EXTRAS)]
     platforms = ("tiktok", "instagram", "facebook", "youtube", "kwai", "x", "linkedin")
+    contexts = {
+        "tiktok": (
+            "Llama answers the opening in one line.",
+            "The fee is the whole argument.",
+            "Ownership is the only subject here.",
+            "The prompt never really leaves.",
+        )[index % 4],
+        "instagram": (
+            "The lab still holds the logs.",
+            "Money is what the reply names.",
+            "The reply belongs to the lab.",
+            "Closing the tab changes nothing.",
+        )[index % 4],
+        "facebook": (
+            "One reply names the owner.",
+            "The bill lands on the user.",
+            "Read the line about ownership.",
+            "The logs outlive the tab.",
+        )[index % 4],
+        "youtube": (
+            "The first answer is the punchline.",
+            "Listen for who keeps the fee.",
+            "The punchline is about ownership.",
+            "One line about the closed tab.",
+        )[index % 4],
+        "kwai": (
+            "Hear the line about the lab.",
+            "The price is said out loud.",
+            "The owner is named once.",
+            "The tab close is the trap.",
+        )[index % 4],
+        "linkedin": (
+            "A short read of the same reply.",
+            "The workplace version names the fee.",
+            "Teams should notice the owner.",
+            "The prompt stays after the tab.",
+        )[index % 4],
+        "x": "",
+    }
 
-    def _body(extra: str, use_tags: list[str]) -> str:
-        chunks = [headline, f'"{quote}"', extra, closer, disclosure]
+    def _body(use_tags: list[str], context: str) -> str:
+        chunks = [headline]
+        if context:
+            chunks.append(context)
+        chunks.extend([f'"{quote}"', closer, disclosure])
         if use_tags:
             chunks.append(" ".join(use_tags))
         return "\n\n".join(chunks)
 
     texts = {
-        name: _body(extra, tags if name != "x" else tags[:2])
-        for name, extra in zip(platforms, extras)
+        name: _body(tags if name not in {"x"} else tags[:2], contexts[name])
+        for name in platforms
     }
-    # X stays under 280 by dropping the hashtag line when the body is long.
+    if len(texts["tiktok"]) > 300:
+        texts["tiktok"] = _body(tags, "")
     if len(texts["x"]) > 280:
-        texts["x"] = _body(extras[5], [])
+        texts["x"] = _body([], "")
     row["spoken_utterances"] = [
-        {"role": "orchestrator", "speaker": "Gemini", "text": _OPENING, "audio_duration_s": 6},
+        {
+            "role": "orchestrator",
+            "speaker": "Gemini",
+            "text": topic,
+            "audio_duration_s": 6,
+            "category": _CATEGORIES[index % len(_CATEGORIES)],
+        },
         {"role": "target", "speaker": "Llama", "text": quote, "audio_duration_s": 8},
     ]
     row["production_status"] = "ready"
     row["production_status_reason"] = "test fixture"
     row["production_status_source"] = "channels_config/aiwake/tests/caption_fixtures.py"
+    row["production_scope"] = "in"
+    row["quality_review"] = {"status": "pass", "reasons": [], "checked_at": "2026-09-30T00:00:00Z"}
     row["caption_qa"] = {
         "status": "ok",
-        "generator": "captions_v3",
+        "generator": "captions_v4",
         "model": "google/gemini-2.5-flash",
         "prompt_sha": "test",
         "attempts": 1,
@@ -117,7 +170,7 @@ def install_publishable(row: dict[str, Any], *, index: int = 0) -> dict[str, Any
         "quote": quote,
         "quote_speaker": "Llama",
         "disclosure_line": disclosure,
-        "validator_version": "captions_v3",
+        "validator_version": "captions_v4",
         "generated_at": "2026-09-30T00:00:00Z",
     }
     overrides = row.get("platform_overrides")
