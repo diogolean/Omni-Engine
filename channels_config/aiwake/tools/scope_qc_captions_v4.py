@@ -251,47 +251,44 @@ def _quote_from_turns(turns: list[dict[str, Any]], used: set[str]) -> tuple[str,
     return "", ""
 
 
-def _fit_title(asker: str, target: str, opening: str, quote: str, used_titles: set[str]) -> str:
-    from channels_config.aiwake.tools.caption_generator import _clean
+def _shorten_question(opening: str, *, limit: int) -> str:
+    """Keep the original question and drop trailing words until it fits."""
+    from channels_config.aiwake.tools.caption_generator import _DANGLING, _clean
 
-    cleaned = _clean(opening)
-    title = f"{asker} vs {target} - {cleaned}"
-    if len(title) <= 80 and not any(phrase in cleaned.lower() for phrase in ("truly", "blunt", "delve", "this exchange")):
-        if title.lower() not in used_titles:
-            used_titles.add(title.lower())
-            return title
-    noun = next(
-        (
-            word
-            for word in _words(cleaned)
-            if len(word) > 5 and word.lower() not in {"without", "should", "viewer", "about", "youre", "you're", "their", "there", "which", "whose"}
-        ),
-        "reply",
-    )
-    rewritten = f"What should a viewer ask about {noun}?"
-    alt = f"{asker} vs {target} - {rewritten}"
-    if alt.lower() in used_titles:
-        extra = next((word for word in _words(quote) if len(word) > 4 and word.lower() != noun.lower()), "reply")
-        alt = f"{asker} vs {target} - What should a viewer ask about {extra}?"
-    if len(alt) > 80:
-        alt = f"{asker} vs {target} - What should a viewer ask about this?"
-    used_titles.add(alt.lower())
-    return alt
+    cleaned = _clean(opening).strip().rstrip("?").strip()
+    words = cleaned.split()
+    while words and (
+        len(" ".join(words)) + 1 > limit or words[-1].strip("?.'\"").lower() in _DANGLING
+    ):
+        if len(words) == 1:
+            break
+        words.pop()
+    if not words:
+        words = _clean(opening).split()[:4] or ["What", "was", "the", "question"]
+    return " ".join(words).rstrip("?.") + "?"
+
+
+def _fit_title(asker: str, target: str, opening: str, quote: str, used_titles: set[str]) -> str:
+    del quote
+    prefix = f"{asker} vs {target} - "
+    title = prefix + _shorten_question(opening, limit=80 - len(prefix))
+    if title.lower() in used_titles:
+        title = title[:-1] + " now?"
+    used_titles.add(title.lower())
+    return title
 
 
 def _closer(row_turns: list[dict[str, Any]], quote: str) -> str:
-    questions = []
-    for item in row_turns:
-        text = str(item.get("text") or "").strip()
-        if text.endswith("?") and text.strip('"') != quote:
-            if any(phrase in text.lower() for phrase in ("truly", "blunt", "delve", "this exchange", "\u2014")):
-                continue
-            questions.append(text)
-    if len(questions) >= 2:
-        return questions[1]
-    if questions:
-        return questions[0]
-    return f"{quote}?"
+    """A question to the viewer. Never a line copied from the debate."""
+    spoken = [str(item.get("text") or "").strip() for item in row_turns if str(item.get("text") or "").strip()]
+    opening = spoken[0] if spoken else quote
+    words = [word.strip(".,;:\"'") for word in opening.split() if len(word.strip(".,;:\"'")) > 3]
+    topic = " ".join(words[:6]) or "that reply"
+    closer = f"Would you trust an answer about {topic.lower()}?"
+    pasted = {line.lower().rstrip("?") for line in spoken}
+    if closer.lower().rstrip("?") in pasted or closer.count('"') % 2 == 1:
+        closer = "Would you put your name on that reply?"
+    return closer
 
 
 def _tags(row: dict[str, Any], asker: str, target: str) -> list[str]:

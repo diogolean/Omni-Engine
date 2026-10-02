@@ -804,19 +804,35 @@ class _HeroCamera:
                 if body_xs.size
                 else native_eye_x
             )
-            self.offset_x = int(
-                round((target_width * 0.5) - native_body_center_x * self.scale)
+            # Seat from facing. Centering the body put a left-seat Gemini on the right.
+            self.offset_x = place_body_offset(
+                self.facing,
+                native_body_center_x,
+                self.scale,
+                frame_width=target_width,
             )
             self.lead_anchor_x = int(
                 round(self.offset_x + native_eye_x * self.scale)
             )
         else:
-            shift_x = DEBATER_SHIFT_X.get(rig.skin.character_id, 0)
-            if rig.skin.character_id == "chatgpt_cyborg_v1" and self.facing == "right":
-                shift_x += CHATGPT_LEFT_SHIFT_X
-            if shift_x:
-                self.lead_anchor_x = int(self.lead_anchor_x) + shift_x
-            self.offset_x = int(round(self.lead_anchor_x - (self.out_w / 2.0)))
+            body_alpha = rig.body_rgba[..., 3]
+            _body_ys, body_xs = np.nonzero(body_alpha > 8)
+            native_body_center_x = (
+                float(body_xs.min() + body_xs.max() + 1) * 0.5
+                if body_xs.size
+                else float(native_eye_x)
+            )
+            # Same dock as the Gemini path. Canvas-center anchoring left an
+            # asymmetric right-facing sprite on the right side of the frame.
+            self.offset_x = place_body_offset(
+                self.facing,
+                native_body_center_x,
+                self.scale,
+                frame_width=target_width,
+            )
+            self.lead_anchor_x = int(
+                round(self.offset_x + native_eye_x * self.scale)
+            )
         if parametric_v3:
             self.body_scale = matrix.body_scale * (target_width / 1080.0)
             self.body_scale_x = self.body_scale
@@ -1116,6 +1132,28 @@ class _HeroCamera:
         if not emphasized and abs(self._head_angle) < 0.01:
             self._head_angle = 0.0
         return self._head_angle
+
+
+def place_body_offset(
+    facing: str,
+    native_body_center_x: float,
+    scale: float,
+    *,
+    frame_width: int = 1080,
+) -> int:
+    """Put a right-facing body on the left, and a left-facing body on the right.
+
+    Raises if that dock would land on the forbidden half of the frame.
+    """
+    lead = lead_anchor_x(facing, frame_width)
+    offset = int(round(lead - native_body_center_x * scale))
+    drawn = offset + native_body_center_x * scale
+    side = "left" if drawn < frame_width / 2 else "right"
+    if (facing or "").lower() == "right" and side != "left":
+        raise ValueError("right-facing sprite would be drawn on the right")
+    if (facing or "").lower() == "left" and side != "right":
+        raise ValueError("left-facing sprite would be drawn on the left")
+    return offset
 
 
 def lead_anchor_x(facing: str, width: int = 1080) -> int:

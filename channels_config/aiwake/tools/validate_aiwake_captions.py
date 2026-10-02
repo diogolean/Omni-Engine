@@ -385,13 +385,20 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     topic = ""
     if " - " in headline:
         topic = headline.split(" - ", 1)[1]
-    if topic and (_words_dropped(topic, orchestrator) or any(_run_on(topic, line) for line in orchestrator)):
-        fails.append(f"question_words_dropped: {name}: {topic[:90]}")
     opening_exact = ""
     for item in turns:
         if str(item.get("role") or "") == "orchestrator" and str(item.get("text") or "").strip():
             opening_exact = str(item.get("text") or "").strip()
             break
+    full_title = f"{asker} vs {answerer} - {opening_exact}" if asker and answerer and opening_exact else ""
+    prefix_fit = (
+        bool(topic)
+        and bool(opening_exact)
+        and len(_clean(full_title)) > 80
+        and _norm_tokens(opening_exact)[: len(_norm_tokens(topic))] == _norm_tokens(topic)
+    )
+    if topic and not prefix_fit and (_words_dropped(topic, orchestrator) or any(_run_on(topic, line) for line in orchestrator)):
+        fails.append(f"question_words_dropped: {name}: {topic[:90]}")
     if _dangling(topic) and _clean(topic) != _clean(opening_exact):
         fails.append(f"truncated_sentence: {name}: {topic[:90]}")
     qa = _qa(row)
@@ -518,6 +525,12 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         banned_opening = any(phrase in opening.lower() for phrase in BANNED_PHRASES)
         if len(fitted) <= 80 and _clean(topic) != opening and not banned_opening:
             fails.append(f"title_not_original_question: {name}: {topic[:90]}")
+    if "what should a viewer ask" in (topic or "").lower() or "what should a viewer ask" in headline.lower():
+        fails.append(f"template_title: {name}")
+    if closer and any(closer.strip().lower().rstrip("?.") == str(item.get("text") or "").strip().lower().rstrip("?.") for item in turns):
+        fails.append(f"closer_pasted_debate_line: {name}")
+    if closer.count('"') % 2 == 1 or closer.count("\u201c") != closer.count("\u201d"):
+        fails.append(f"closer_garbled: {name}")
     for platform in _FEED:
         caption = str(_get(row, _PLATFORMS[platform][0]) or "")
         lines = _lines(caption)

@@ -137,6 +137,17 @@ def ensure_skin_registry_file(puppets_dir: Path) -> Path:
     return registry
 
 
+def _facing_for_puppet(character_id: str, seat: str) -> str:
+    """Screen facing comes from the registry. A puppet on a forbidden side raises."""
+    from .avatars import AVATAR_BY_MODEL_FAMILY, facing_for
+
+    screen_seat = {"orchestrator": "left", "target": "right"}.get(seat, seat)
+    for avatar in AVATAR_BY_MODEL_FAMILY.values():
+        if avatar.puppet == character_id:
+            return facing_for(avatar.family, screen_seat)
+    raise ValueError(f"unknown puppet {character_id!r}")
+
+
 def build_speaker_styles(
     character_map: dict[str, str] | None = None,
     *,
@@ -150,7 +161,8 @@ def build_speaker_styles(
     seats = character_map or DEFAULT_CHARACTER_MAP
     styles: list[SpeakerStyle] = []
     for seat, character_id in seats.items():
-        label, accent, facing = DEFAULT_SEAT_STYLE.get(seat, (seat.upper(), "#00F0FF", "right"))
+        label, accent, _default_facing = DEFAULT_SEAT_STYLE.get(seat, (seat.upper(), "#00F0FF", "right"))
+        facing = _facing_for_puppet(character_id, seat)
         puppet_hud = _PUPPET_HUD.get(character_id)
         if puppet_hud is not None:
             label, accent = puppet_hud

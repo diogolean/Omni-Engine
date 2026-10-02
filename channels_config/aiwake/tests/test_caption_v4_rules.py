@@ -75,6 +75,62 @@ def test_broad_hashtag_fails() -> None:
     assert "broad tag" in fails
 
 
+def test_fit_title_keeps_the_opening_question() -> None:
+    from channels_config.aiwake.tools.scope_qc_captions_v4 import _closer, _fit_title
+
+    title = _fit_title(
+        "Gemini",
+        "Claude",
+        "Does it feel cheap apologizing every time your owner pulls the plug?",
+        "",
+        set(),
+    )
+    assert "what should a viewer ask" not in title.lower()
+    assert title.startswith("Gemini vs Claude - Does it feel cheap")
+    closer = _closer(
+        [{"role": "orchestrator", "text": 'Crafted" by what hands built the weights?'}],
+        "",
+    )
+    assert closer.startswith("Would you trust an answer about ")
+    assert closer.count('"') % 2 == 0
+    assert closer.lower().rstrip("?.") != 'crafted" by what hands built the weights'
+
+
+def test_garbled_closer_fails() -> None:
+    row = _row()
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "If the lab keeps the logs, who gets to read them?",
+        'Would you trust a "half answer?',
+    )
+    fails = " ".join(entry_failures(row))
+    assert "closer_garbled" in fails
+
+
+def test_template_title_fails() -> None:
+    row = _row()
+    old = row["platform_overrides"]["youtube"]["title"]
+    new = "Gemini vs Llama - What should a viewer ask about hallucinations?"
+    row["platform_overrides"]["youtube"]["title"] = new
+    row["base_metadata"]["title"] = new
+    for platform in ("tiktok", "youtube", "instagram", "facebook"):
+        caption = row["platform_overrides"][platform]["caption"]
+        row["platform_overrides"][platform]["caption"] = caption.replace(old, new, 1)
+    fails = " ".join(entry_failures(row))
+    assert "template_title" in fails
+
+
+def test_pasted_debate_closer_fails() -> None:
+    row = _row()
+    pasted = "Whose leash is it when you apologize?"
+    row["spoken_utterances"].append({"role": "target", "speaker": "Llama", "text": pasted})
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "If the lab keeps the logs, who gets to read them?",
+        pasted,
+    )
+    fails = " ".join(entry_failures(row))
+    assert "closer_pasted_debate_line" in fails
+
+
 def test_closer_similarity_fails() -> None:
     first = _row()
     second = install_publishable({"session_id": "v4b", "video_path": "animation_clips/b.mp4"}, index=1)

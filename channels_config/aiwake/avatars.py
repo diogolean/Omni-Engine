@@ -118,13 +118,36 @@ def avatar_for(model: str | None) -> Avatar:
 
 def facing_for(model: str | None, seat: str) -> str:
     avatar = avatar_for(model)
+    if seat not in avatar.allowed_seats:
+        raise ValueError(f"{avatar.family} cannot sit on the {seat}")
     if avatar.facing == "seat":
         if seat == "left":
             return "right"
         if seat == "right":
             return "left"
         raise ValueError(f"unknown seat {seat!r}")
+    if avatar.facing == "right" and seat != "left":
+        raise ValueError(f"{avatar.family} faces right and cannot sit on the {seat}")
+    if avatar.facing == "left" and seat != "right":
+        raise ValueError(f"{avatar.family} faces left and cannot sit on the {seat}")
     return avatar.facing
+
+
+# Body-center docks. Left of mid-frame faces right; right of mid-frame faces left.
+LEFT_BODY_X = 420
+RIGHT_BODY_X = 660
+
+
+def screen_placement(model: str | None, seat: str, *, frame_width: int = 1080) -> dict[str, Any]:
+    """Screen side and facing for one seated model. A forbidden side raises."""
+    facing = facing_for(model, seat)
+    center_x = LEFT_BODY_X if seat == "left" else RIGHT_BODY_X
+    if frame_width != 1080:
+        center_x = int(round(center_x * frame_width / 1080))
+    side = "left" if center_x < frame_width / 2 else "right"
+    if side != seat:
+        raise ValueError(f"{model_family(model)} would be drawn on the {side}, seat is {seat}")
+    return {"facing": facing, "center_x": center_x, "side": side, "frame_width": frame_width}
 
 
 def require_pairing(orchestrator: str | None, target: str | None) -> tuple[Avatar, Avatar]:
