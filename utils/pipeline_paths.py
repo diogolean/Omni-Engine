@@ -228,6 +228,30 @@ def pipeline_tmp_dir(*parts: str) -> Path:
     return path
 
 
+def _channel_slug(channel: str) -> str:
+    return (channel or "unknown").strip().lower() or "unknown"
+
+
+def temp_path(channel: str, *parts: str) -> Path:
+    """Scratch files for one project: ``{outputs}/<channel>/_tmp``.
+
+    Never create a ``_tmp*`` directory at the repository root.
+    """
+    path = page_outputs_dir(_channel_slug(channel)).joinpath("_tmp", *parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def review_path(channel: str, *parts: str) -> Path:
+    """Preview and review dumps for one project: ``{outputs}/<channel>/_review``.
+
+    Never create a ``_review`` or ``_cp_preview`` directory at the repository root.
+    """
+    path = page_outputs_dir(_channel_slug(channel)).joinpath("_review", *parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def moviepy_temp_audio_dir() -> str:
     """Directory MoviePy uses for ``*TEMP_MPY_wvf_snd*`` temp audio."""
     return str(pipeline_tmp_dir("moviepy"))

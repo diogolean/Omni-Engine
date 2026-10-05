@@ -222,6 +222,18 @@ main.py
 
 ---
 
+## Project structure rules
+
+The repository root holds entry points, config, and top-level packages only: `main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `.env`, and packages such as `agents/`, `channels_config/`, `core/`, `utils/`, and `tests/`.
+
+- Temp, preview, review, and log files go in the per-project folder under `outputs/<project>/`. Use `temp_path(channel, *parts)` and `review_path(channel, *parts)` from `utils/pipeline_paths.py` (`outputs/<channel>/_tmp/` and `outputs/<channel>/_review/`). Do not create `_tmp*`, `_cp_preview`, `_review`, or log folders at the repo root.
+- Tests live in that project's `tests/` folder (`tests/` or `channels_config/<channel>/tests/`).
+- Unused temp folders are deleted once nothing references them.
+
+See `docs/PROJECT_STRUCTURE.md`.
+
+---
+
 ## Directory Structure
 
 ```

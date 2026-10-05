@@ -55,9 +55,11 @@ env/Scripts/
 env/Include/
 pyvenv.cfg
 
-# IDE / Cursor local state
+# IDE / Cursor local state. Shared project rules stay tracked.
 .cursor_local/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 .idea/
 .vscode/
 
@@ -84,6 +86,12 @@ core/economic_reel_lofi/store/aphorism_recent.json
 .supermemory/
 _e2e_frames/
 *.log
+
+# Scratch anywhere in the tree. Write these under outputs/<channel>/
+# via utils.pipeline_paths.temp_path / review_path, never at the repo root.
+_tmp*/
+_cp_preview/
+_review/
 
 # OS noise
 .DS_Store

@@ -26,7 +26,7 @@ from agents.media.audio_engine import (  # noqa: E402
     _audio_file_duration_s,
 )
 from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi._tools.vo_pace_probe import silencedetect  # noqa: E402
+from tests.lofi.vo_pace_probe import silencedetect  # noqa: E402
 from core.economic_reel_lofi.pipeline import (  # noqa: E402
     _tts_breath_commas,
     _tts_text_with_breaks,
