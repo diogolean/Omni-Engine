@@ -4,7 +4,7 @@
 This is a foundational ``core/`` capability — completely decoupled from any
 single channel's theme. Every module here accepts generic inputs: a dialogue
 turn ledger, any audio track, a ``puppet.json`` skin directory, and a
-:class:`~core.animator.types.SpeakerStyle` per speaker describing how that
+:class:`~core.animator.animator_types.SpeakerStyle` per speaker describing how that
 speaker is presented (HUD label, accent colour, which way the hero looks).
 Dropping in a new pair of characters re-skins the video without touching a
 single line of animation logic.
@@ -26,7 +26,7 @@ import logging
 from pathlib import Path
 from typing import Sequence
 
-from .types import AnalyzedAudio, DialogueTurn, PuppetAnchors, PuppetTheme, SpeakerStyle, WordTiming
+from .animator_types import AnalyzedAudio, DialogueTurn, PuppetAnchors, PuppetTheme, SpeakerStyle, WordTiming
 from .puppet import PuppetRig, PuppetSkin
 from .audio_analyzer import AudioAnalyzer
 from .compositor import DualPresenceCompositor, ShotReverseShotCompositor

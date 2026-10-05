@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from utils.pipeline_paths import assets_root, outputs_root
+from utils.pipeline_paths import assets_root, outputs_path, outputs_root
 
 from .render.facial_rig import (
     export_pilot_facial_sheet,
@@ -38,18 +38,12 @@ from .render.visemes import (
 )
 from .voice import assign_debater_voices
 from .puppet import REQUIRED_REST_MOUTH_STATES, rest_mouth_layer_key
-from .types import VISEMES
+from .animator_types import VISEMES
 
 _LOG = logging.getLogger("animator.pipeline")
 
 _SOURCE_ALIASES = {"llama": "llama_cyborg_v2"}
-_HARNESS = (
-    Path(r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT")
-    / "Unified Multi-Page Factory"
-    / "outputs"
-    / "aiwake"
-    / "_test_harness"
-)
+_HARNESS = outputs_path("aiwake", "_test_harness")
 _TEST_OUTPUT = _HARNESS / "chatgpt_vs_claude_mouth_test.mp4"
 _CONTRAPLANO_OUTPUT = _HARNESS / "chatgpt_vs_claude_contraplano_test.mp4"
 _PILOT_SHEET = _HARNESS / "chatgpt_pilot_facial_inspection.png"
@@ -565,7 +559,7 @@ def render_test_dialogue(
 ) -> Path:
     """Render a few seconds of ChatGPT answering Claude through the standard engine."""
     from . import render_dynamic_animation
-    from .types import DialogueTurn, SpeakerStyle
+    from .animator_types import DialogueTurn, SpeakerStyle
 
     workdir = outputs_root() / "aiwake" / "_test_harness" / (
         "chatgpt_vs_claude_contraplano_build" if contraplano else "chatgpt_vs_claude_mouth_build"
@@ -687,7 +681,7 @@ def build_solo_audio(
 def render_deepseek_debut(output_path: Path, scene: str = "random") -> Path:
     """Five-second solo: Rhubarb visemes, blinks, and a deboche blade."""
     from . import render_dynamic_animation
-    from .types import DialogueTurn, SpeakerStyle
+    from .animator_types import DialogueTurn, SpeakerStyle
 
     character_id = "deepseek_cyborg_v3"
     line = {
@@ -742,7 +736,7 @@ def render_deepseek_debut(output_path: Path, scene: str = "random") -> Path:
 def render_pilot_acting(character_id: str, output_path: Path, scene: str = "random") -> Path:
     """Four-second solo: reserved male voice, visemes, a cocked brow, and a blink."""
     from . import render_dynamic_animation
-    from .types import DialogueTurn, SpeakerStyle
+    from .animator_types import DialogueTurn, SpeakerStyle
 
     card = _CAST[character_id]
     voice = assign_debater_voices([character_id])[character_id]
@@ -798,7 +792,7 @@ def render_pilot_acting(character_id: str, output_path: Path, scene: str = "rand
 def render_v6_contraplano(output_path: Path, scene: str = "random") -> Path:
     """Six-second shot-reverse-shot using the approved V6 mouths, lids, and deboche."""
     from . import render_dynamic_animation
-    from .types import DialogueTurn, SpeakerStyle
+    from .animator_types import DialogueTurn, SpeakerStyle
 
     lines = debate_lines(
         left_id="chatgpt_cyborg_v1",
@@ -1091,7 +1085,7 @@ def resolve_scene_panorama(scene_arg: str = "random") -> Path:
     if scene_arg == "random" or not scene_arg:
         chosen_scene = random.choice(approved_arenas_pool())
         logging.getLogger("animator.pipeline").info(
-            "[ARENA SELECTOR] Sorteando arena automática: %s",
+            "[ARENA SELECTOR] Selecting a random arena: %s",
             chosen_scene.name,
         )
         return chosen_scene
@@ -1101,7 +1095,7 @@ def resolve_scene_panorama(scene_arg: str = "random") -> Path:
 def verify_arena_camera_crops() -> None:
     """Each official plate must crop to the two 1080x1920 reverse angles."""
     from .compositor import ShotReverseShotCompositor
-    from .types import SpeakerStyle
+    from .animator_types import SpeakerStyle
 
     director = ShotReverseShotCompositor.__new__(ShotReverseShotCompositor)
     director.width = 1080
@@ -1421,7 +1415,7 @@ def preview_contraplano_crops(
     """Left camera on the panorama's left half, reverse camera on the right half."""
     from .compositor import ShotReverseShotCompositor
     from .puppet import PuppetRig, PuppetSkin
-    from .types import SpeakerStyle
+    from .animator_types import SpeakerStyle
 
     workdir = destination.parent / "build" / "puppets"
     build_render_skin(speaker_left, workdir, view_name="facing_right", contraplano=True)

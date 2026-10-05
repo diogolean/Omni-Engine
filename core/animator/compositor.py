@@ -38,7 +38,7 @@ from .puppet import (
     onset_rest_mouth,
 )
 from .factory.puppet_matrix import PUPPET_MATRIX, solve_puppet_matrix
-from .types import REST_VISEME, AnalyzedAudio, SpeakerStyle
+from .animator_types import REST_VISEME, AnalyzedAudio, SpeakerStyle
 
 _LOG = logging.getLogger("animator.compositor")
 

@@ -39,7 +39,7 @@ from .puppet import (
     rest_mouth_layer_key,
     viseme_layer_key,
 )
-from .types import VISEMES
+from .animator_types import VISEMES
 
 _LOG = logging.getLogger("animator.asset_generator")
 

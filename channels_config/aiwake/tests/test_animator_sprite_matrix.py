@@ -43,6 +43,7 @@ from core.animator.compositor import (
     GEMINI_LEAD_X,
     LLAMA_LEAD_X,
     POST_ROLL_S,
+    PRESENT_SCALE,
     lead_anchor_x,
     ShotReverseShotCompositor,
     _HeroCamera,
@@ -63,7 +64,7 @@ from core.animator.puppet import (
 )
 from core.animator.renderer import AnimationRenderer
 from core.animator.subtitles import build_ass
-from core.animator.types import VISEMES, DialogueTurn, SpeakerStyle
+from core.animator.animator_types import VISEMES, DialogueTurn, SpeakerStyle
 
 
 def _layer(path: Path, size: tuple[int, int], box: tuple[int, int, int, int]) -> None:
@@ -104,7 +105,13 @@ def test_manifestless_high_resolution_external_sprite_matrix_is_preserved(tmp_pa
     assert rig.canvas_size == size
     assert camera.pixel_aspect_error < 0.001
     assert native_camera.crop == (0, 0, size[0], size[1])
-    assert (native_camera.out_w, native_camera.out_h) == size
+    # Compatibility camera: 1:1 fit, then PRESENT_SCALE. The sprite matrix
+    # stays at `size` (canvas, crop, body bytes). Debater extra scale applies
+    # only to chatgpt_cyborg_v1 and claude_cyborg_v1.
+    assert (native_camera.out_w, native_camera.out_h) == (
+        int(size[0] * PRESENT_SCALE),
+        int(size[1] * PRESENT_SCALE),
+    )
     assert camera._update_head_angle(  # noqa: SLF001 - verifies stateful easing contract
         t=0.1,
         rms=0.5,

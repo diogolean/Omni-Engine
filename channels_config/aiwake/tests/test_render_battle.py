@@ -494,7 +494,7 @@ def _assert_brow_peak_separation(audio_by_turn: dict) -> str:
 def _assert_real_rhubarb_schedules(transcript) -> list[str]:
     """Require real phonetic schedules from every exported spoken turn."""
     from core.animator.rhubarb import analyze_visemes
-    from core.animator.types import VISEMES
+    from core.animator.animator_types import VISEMES
 
     turn_dir = ANIMATION_CLIPS_DIR / f"{transcript.session_id}_battle_audio_turns"
     wavs = sorted(turn_dir.glob("turn_*.wav"))

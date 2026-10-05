@@ -106,6 +106,40 @@ def assets_root() -> Path:
     return _env_path("ASSETS_PATH") or outputs_root()
 
 
+# Historical Google Drive layout. Used only when the matching env key is unset
+# so existing Windows machines keep resolving the same folders.
+WINDOWS_FACTORY_ROOT: Path = Path(
+    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
+) / "Unified Multi-Page Factory"
+WINDOWS_OUTPUTS_ROOT: Path = WINDOWS_FACTORY_ROOT / "outputs"
+WINDOWS_ASSETS_ROOT: Path = WINDOWS_FACTORY_ROOT / "assets"
+
+
+def path_from_env(names: tuple[str, ...], fallback: Path, *relative: str) -> Path:
+    """Return the first env/``.env`` path in ``names``, else ``fallback``.
+
+    ``relative`` is joined onto whichever base wins, so an unset key still
+    lands on the historical Windows path plus the same suffix.
+    """
+    resolved = _env_path(*names)
+    base = resolved if resolved is not None else Path(fallback)
+    return base.joinpath(*relative) if relative else base
+
+
+def assets_path(*relative: str) -> Path:
+    """``ASSETS_PATH`` plus ``relative``, or the historical Windows assets root."""
+    return path_from_env(("ASSETS_PATH",), WINDOWS_ASSETS_ROOT, *relative)
+
+
+def outputs_path(*relative: str) -> Path:
+    """``OUTPUT_PATH`` or ``OUTPUTS_DIR`` plus ``relative``.
+
+    Unlike :func:`outputs_root`, an unset key falls back to the Windows Drive
+    outputs root these call sites used before, not ``<repo>/outputs``.
+    """
+    return path_from_env(("OUTPUT_PATH", "OUTPUTS_DIR"), WINDOWS_OUTPUTS_ROOT, *relative)
+
+
 def outputs_dir() -> Path:
     """Backward-compatible alias for :func:`outputs_root`."""
     return outputs_root()

@@ -46,6 +46,7 @@ from utils.gemini_usage import (
     unwrap_json_object,
 )
 from utils.ocr_text import strip_wrapping_quotes
+from utils.pipeline_paths import assets_path, path_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -53,16 +54,9 @@ logger = logging.getLogger(__name__)
 # Path / model constants
 # ---------------------------------------------------------------------------
 
-TARGET_FOLDER: Path = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
-    r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory\assets\OCR SOURCE\momma"
-)
-VAULT_PATH: Path = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
-    r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory\assets\ocr_vault.json"
-)
+_ASSETS_ROOT: Path = assets_path()
+TARGET_FOLDER: Path = path_from_env(("OCR_SOURCE_DIR",), _ASSETS_ROOT / "OCR SOURCE" / "momma")
+VAULT_PATH: Path = path_from_env(("OCR_VAULT_PATH",), _ASSETS_ROOT / "ocr_vault.json")
 DATASET_KEY: str = "ocr_momma_deploy"
 GEMINI_OCR_MODEL: str = "gemini-2.5-flash"
 

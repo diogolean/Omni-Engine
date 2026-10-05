@@ -13,6 +13,7 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -320,14 +321,12 @@ class AnimationRenderer:
                 proc.stdin.write(yuv420.tobytes())
                 frames_written += 1
         except (BrokenPipeError, OSError) as exc:
-            proc.stdin.close()
-            _, stderr = proc.communicate(timeout=30)
+            stderr = _finish_ffmpeg_pipe(proc, timeout=30)
             raise _FfmpegFailure(
                 str(exc) + " :: " + stderr.decode("utf-8", "ignore")[-2000:],
                 [],
             )
-        proc.stdin.close()
-        _, stderr = proc.communicate(timeout=120)
+        stderr = _finish_ffmpeg_pipe(proc, timeout=120)
         elapsed = time.perf_counter() - start
         if proc.returncode != 0 or not output_path.is_file():
             raise _FfmpegFailure(stderr.decode("utf-8", "ignore")[-2000:], [])
@@ -338,6 +337,48 @@ class _FfmpegFailure(RuntimeError):
     def __init__(self, message: str, consumed_frames: list[np.ndarray]) -> None:
         super().__init__(message)
         self.consumed_frames = consumed_frames
+
+
+def _finish_ffmpeg_pipe(proc: subprocess.Popen, timeout: float) -> bytes:
+    """Close ffmpeg's stdin, drain both pipes, and wait for the process.
+
+    Calling ``stdin.close()`` and then ``communicate()`` makes POSIX flush
+    the already-closed pipe (``ValueError: flush of closed file``). Stdout
+    and stderr are read on separate threads so neither pipe can fill and
+    stall the other. The return code and stderr bytes are what callers
+    already inspect.
+    """
+    stdin = proc.stdin
+    if stdin is not None and not stdin.closed:
+        try:
+            stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+    stderr_parts: list[bytes] = []
+
+    def _drain(stream, sink: list[bytes] | None) -> None:
+        if stream is None:
+            return
+        try:
+            data = stream.read()
+        except (OSError, ValueError):
+            data = b""
+        if sink is not None:
+            sink.append(data)
+
+    stdout_reader = threading.Thread(
+        target=_drain, args=(proc.stdout, None), name="ffmpeg-stdout", daemon=True
+    )
+    stderr_reader = threading.Thread(
+        target=_drain, args=(proc.stderr, stderr_parts), name="ffmpeg-stderr", daemon=True
+    )
+    stdout_reader.start()
+    stderr_reader.start()
+    proc.wait(timeout=timeout)
+    stdout_reader.join(timeout)
+    stderr_reader.join(timeout)
+    return b"".join(stderr_parts)
 
 
 def resolve_ffmpeg() -> str:

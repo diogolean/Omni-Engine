@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .types import DialogueTurn, SpeakerStyle, WordTiming
+from .animator_types import DialogueTurn, SpeakerStyle, WordTiming
 
 _LOG = logging.getLogger("animator.subtitles")
 

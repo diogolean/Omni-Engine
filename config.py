@@ -612,15 +612,14 @@ if not PERSONA_DNA_PATH.is_file() and ACTIVE_PAGE == "anna_protocol":
 # Page-aware asset paths
 # ---------------------------------------------------------------------------
 
-# Reference avatar: prefer channels_config/{page}/avatar_reference/avatar.png,
-# then fall back to the legacy hardcoded Drive path for anna_protocol.
+# Reference avatar: REFERENCE_IMAGE_PATH, then the in-repo page avatar,
+# then the historical Windows Drive file for anna_protocol.
 _page_ref_avatar: Path = ACTIVE_PAGE_DIR / "avatar_reference" / "avatar.png"
-_REFERENCE_AVATAR_LEGACY = Path(
+_REFERENCE_AVATAR_WINDOWS = Path(
     r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@_Content 2026\The Holistic Legacy - Anna's Protocol"
-    r"\Anna's Automated Image Posts Engine\avatar_reference\avatar.png",
-)
+) / "Anna's Automated Image Posts Engine" / "avatar_reference" / "avatar.png"
 _ref_avatar_default: Path = (
-    _page_ref_avatar if _page_ref_avatar.parent.is_dir() else _REFERENCE_AVATAR_LEGACY
+    _page_ref_avatar if _page_ref_avatar.parent.is_dir() else _REFERENCE_AVATAR_WINDOWS
 )
 REFERENCE_IMAGE_PATH: Path = _resolve_path(
     os.getenv("REFERENCE_IMAGE_PATH"), _ref_avatar_default

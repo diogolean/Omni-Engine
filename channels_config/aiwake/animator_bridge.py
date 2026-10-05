@@ -10,7 +10,7 @@ Responsibilities:
 
 1. Flatten a :class:`~channels_config.aiwake.contracts.DebateTranscript` (and
    its per-turn TTS assets) into one continuous session audio track plus a
-   generic :class:`core.animator.types.DialogueTurn` ledger.
+   generic :class:`core.animator.animator_types.DialogueTurn` ledger.
 2. Resolve the versioned skin registry and map Aiwake's two seats onto a
    preset or explicit puppet IDs.
 3. Call :func:`core.animator.render_dynamic_animation` and hand back a video
@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from core.animator.audio_analyzer import load_mono_waveform
-from core.animator.types import DialogueTurn, SpeakerStyle
+from core.animator.animator_types import DialogueTurn, SpeakerStyle
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import, avoids a hard runtime dependency
     from .contracts import DebateTranscript

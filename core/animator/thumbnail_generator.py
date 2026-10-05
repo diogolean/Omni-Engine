@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
 from .puppet import PuppetRig, PuppetSkin
-from .types import SpeakerStyle
+from .animator_types import SpeakerStyle
 
 
 def _font(size: int) -> ImageFont.ImageFont:

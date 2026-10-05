@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
+from utils.pipeline_paths import outputs_path  # noqa: E402
+
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 os.environ["ACTIVE_PAGE"] = "ancient_knowledge"
@@ -55,11 +57,7 @@ CAPTION = (
 OLD_YT_ID = "8tfBySnnHc0"
 OLD_PUBLISH_AT = datetime(2026, 9, 9, 6, 56, 57, tzinfo=timezone.utc)
 CTA_TEXT = "Follow Ancient Knowledge for more hidden mysteries."
-CLIPS = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
-    r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory\outputs\ancient_knowledge\clips"
-)
+CLIPS = outputs_path("ancient_knowledge", "clips")
 STEM = "the_nazca_lines_vast_c86fe8_v02"
 REEL_NAME = "reel_nazca_lines__who_saw_these_from__v02.mp4"
 MAX_WORKERS = 3
