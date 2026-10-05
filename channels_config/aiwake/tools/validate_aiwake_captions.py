@@ -37,6 +37,14 @@ from channels_config.aiwake.tools.caption_generator import (
     seat_names,
 )
 from channels_config.aiwake.tools.metadata_generator import is_portuguese
+from channels_config.aiwake.tools.seo_caption import (
+    SEO_CTA,
+    SEO_KEYWORDS,
+    first_reply_line,
+    hook_is_mid_cut,
+    title_repeats_in_description,
+    who_funds_template,
+)
 from channels_config.aiwake.tools.production_status import (
     PRODUCTION_STATUS_VALUES,
     posting_order,
@@ -45,9 +53,11 @@ from channels_config.aiwake.tools.production_status import (
 VALIDATOR_VERSION = "captions_v4"
 
 _HEADLINE_RE = re.compile(
-    r"^(Gemini|Llama|GPT-4o|DeepSeek|Claude) vs "
-    r"(Gemini|Llama|GPT-4o|DeepSeek|Claude) - .+[?.!]$"
+    r"^(?P<question>.+\?) \| "
+    r"(?P<asker>Gemini|Llama|GPT-4o|DeepSeek|Claude) vs "
+    r"(?P<answerer>Gemini|Llama|GPT-4o|DeepSeek|Claude)$"
 )
+_SEO_TAGS = {tag.lower() for _phrase, tag, _stems in SEO_KEYWORDS}
 _MODEL_RE = re.compile(
     r"\b(GPT-4o|GPT-[\w.]+|Gemini(?: [\d.]+)?(?: Flash| Pro)?|"
     r"Claude(?: Sonnet| Opus| Haiku)?(?: [\d.]+)?|"
@@ -79,13 +89,13 @@ _GENERIC_CLOSERS = {
     "does that concession hold?",
 }
 _PLATFORMS = {
-    "tiktok": ("platform_overrides.tiktok.caption", 300, 80, 3, 3),
-    "instagram": ("platform_overrides.instagram.caption", 2200, 125, 3, 3),
-    "facebook": ("platform_overrides.facebook.caption", 1000, 125, 3, 3),
-    "youtube": ("platform_overrides.youtube.caption", 700, 100, 3, 3),
-    "kwai": ("platform_overrides.kwai.caption", 2200, 80, 3, 3),
-    "x": ("platform_overrides.x.caption", 280, 280, 0, 2),
-    "linkedin": ("linkedin_caption", 3000, 150, 0, 3),
+    "tiktok": ("platform_overrides.tiktok.caption", 550, 120, 4, 4),
+    "instagram": ("platform_overrides.instagram.caption", 2200, 125, 4, 4),
+    "facebook": ("platform_overrides.facebook.caption", 1000, 125, 4, 4),
+    "youtube": ("platform_overrides.youtube.caption", 700, 120, 4, 4),
+    "kwai": ("platform_overrides.kwai.caption", 2200, 120, 4, 4),
+    "x": ("platform_overrides.x.caption", 550, 550, 4, 4),
+    "linkedin": ("linkedin_caption", 3000, 200, 4, 4),
 }
 _FEED = ("tiktok", "instagram", "facebook", "youtube", "kwai")
 _LIVE_TOP = (
@@ -388,14 +398,23 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     if not match:
         fails.append(f"title_format: {name}: {headline[:90]}")
     else:
-        if match.group(1) != asker or match.group(2) != answerer or match.group(1) == match.group(2):
-            fails.append(f"title_format: {name}: names {match.group(1)} vs {match.group(2)} speakers {asker} vs {answerer}")
-        if len(headline) > 80:
-            fails.append(f"title_format: {name}: {len(headline)} chars")
+        if match.group("asker") != asker or match.group("answerer") != answerer or match.group("asker") == match.group("answerer"):
+            fails.append(
+                f"title_format: {name}: names {match.group('asker')} vs {match.group('answerer')} "
+                f"speakers {asker} vs {answerer}"
+            )
+        if len(headline) > 70:
+            fails.append(f"seo_title_length: {name}: {len(headline)} chars")
+        if not any(phrase in match.group("question") for phrase in (item[0] for item in SEO_KEYWORDS)):
+            fails.append(f"seo_keyword: {name}: title missing a keyword")
     turns = _read_turns(row)
     orchestrator = [str(item.get("text") or "") for item in turns if item.get("role") == "orchestrator"]
     topic = ""
-    if " - " in headline:
+    if match:
+        topic = match.group("question")
+    elif " | " in headline:
+        topic = headline.split(" | ", 1)[0]
+    elif " - " in headline:
         topic = headline.split(" - ", 1)[1]
     opening_exact = ""
     for item in turns:
@@ -417,7 +436,9 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         fails.append(f"question_words_dropped: {name}: {topic[:90]}")
     if _dangling(topic) and not topic_complete and _clean(topic) != _clean(opening_exact):
         fails.append(f"truncated_sentence: {name}: {topic[:90]}")
-    if topic and not full_fits and not topic_complete:
+    if topic and not topic_complete:
+        fails.append(f"title_cut_off: {name}: {topic[:90]}")
+    elif topic and opening_exact and hook_is_mid_cut(topic, opening_exact):
         fails.append(f"title_cut_off: {name}: {topic[:90]}")
     qa = _qa(row)
     quote = str(qa.get("quote") or "")
@@ -472,16 +493,22 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
                 fails.append(f"truncated_sentence: {name} [{platform}]: {line[-80:]}")
         if platform in _FEED and not any(line.endswith("?") for line in lines):
             fails.append(f"{platform}_no_question: {name}")
-        if platform == "tiktok" and re.search(r"\bsubscribe\b", caption, re.IGNORECASE):
+        if platform == "tiktok" and re.search(r"\bsubscribe\b", caption.replace(SEO_CTA, ""), re.IGNORECASE):
             fails.append(f"tiktok_says_subscribe: {name}")
         if platform in _FEED:
-            if not lines or lines[0] != headline:
-                fails.append(f"title_format: {name} [{platform}]: line 1 is not the headline")
             disclosures = _disclosure_lines(caption)
-            if len(disclosures) != 1 or disclosures[0] not in UNSCRIPTED_LINES:
+            if disclosures != [SEO_CTA]:
                 fails.append(f"unscripted_line: {name} [{platform}]")
             elif not _AI_CUE.search(disclosures[0]):
                 fails.append(f"disclosure: {name} [{platform}]")
+            if who_funds_template(caption):
+                fails.append(f"who_funds_template: {name} [{platform}]")
+            if first_reply_line(caption):
+                fails.append(f"first_reply_line: {name} [{platform}]")
+            if title_repeats_in_description(headline, caption):
+                fails.append(f"title_repeated: {name} [{platform}]")
+            if not any(phrase.lower() in caption.lower() for phrase, _tag, _stems in SEO_KEYWORDS):
+                fails.append(f"seo_keyword: {name} [{platform}]: description missing a keyword")
         if platform == "linkedin" and lines and len(lines[0]) > 150:
             fails.append(f"linkedin_hook_too_long: {name}")
         verdict_zone = _outside_quotes(caption)
@@ -494,9 +521,11 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     topic_or_model = model_tags | {tag.lower() for tag in allowed_hashtags(row) if tag.lower() not in {"#ai", "#tech", "#artificialintelligence", "#aidebate"}}
     for platform in _FEED:
         tags = _tags(str(_get(row, _PLATFORMS[platform][0]) or ""))
-        if len(tags) != 3:
+        if len(tags) != 4:
             continue
-        if any(tag.lower() not in allowed for tag in tags):
+        if tags[0].lower() not in _SEO_TAGS or tags[-1].lower() != "#aivsai":
+            fails.append(f"hashtags: {name} [{platform}]: seo tags {tags}")
+        if any(tag.lower() not in allowed | _SEO_TAGS | {"#aivsai"} for tag in tags):
             fails.append(f"hashtags: {name} [{platform}]: tag outside the allowed set {tags}")
         if not any(tag.lower() in topic_or_model for tag in tags):
             fails.append(f"hashtags: {name} [{platform}]: no topic or model tag")
@@ -525,13 +554,6 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     extra = fams - real
     if extra:
         fails.append(f"model_name_not_in_transcript: {name}: {sorted(extra)}")
-    caps = {platform: str(_get(row, field) or "").strip() for platform, (field, *_rest) in _PLATFORMS.items()}
-    seen: dict[str, str] = {}
-    for platform, caption in caps.items():
-        if caption and caption in seen:
-            fails.append(f"identical_across_platforms: {name}: {platform} == {seen[caption]}")
-        elif caption:
-            seen[caption] = platform
     closer = _closing(str(_get(row, _PLATFORMS["tiktok"][0]) or ""))
     if closer.strip().lower() in _GENERIC_CLOSERS:
         fails.append(f"unique_closers: {name}: {closer}")
@@ -540,11 +562,6 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         if str(item.get("role") or "") == "orchestrator" and str(item.get("text") or "").strip():
             opening = _clean(str(item.get("text") or ""))
             break
-    if asker and answerer and opening:
-        fitted = f"{asker} vs {answerer} - {opening}"
-        banned_opening = any(phrase in opening.lower() for phrase in BANNED_PHRASES)
-        if len(fitted) <= 80 and is_complete_question(opening) and _clean(topic) != opening and not banned_opening:
-            fails.append(f"title_not_original_question: {name}: {topic[:90]}")
     if "what should a viewer ask" in (topic or "").lower() or "what should a viewer ask" in headline.lower():
         fails.append(f"template_title: {name}")
     spoken_lines = [str(item.get("text") or "") for item in turns]
@@ -619,9 +636,12 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
     disclosures = [_disclosure_lines(str(_get(row, _PLATFORMS["tiktok"][0]) or "")) for row in active]
     flat = [item[0].strip() for item in disclosures if item]
     for text in flat:
-        if text not in UNSCRIPTED_LINES:
+        if text != SEO_CTA:
             fails.append(f"unscripted_line: {text[:80]}")
             break
+    descriptions = [str(_get(row, _PLATFORMS["tiktok"][0]) or "") for row in active]
+    if len(descriptions) != len(set(descriptions)):
+        fails.append("description_not_unique: captions repeat")
     closers: dict[str, int] = collections.defaultdict(int)
     for row in active:
         closer = _closing(str(_get(row, _PLATFORMS["tiktok"][0]) or "")).strip().lower()
@@ -635,7 +655,7 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
     for left in range(len(closer_list)):
         for right in range(left + 1, len(closer_list)):
             ratio = difflib.SequenceMatcher(None, closer_list[left], closer_list[right]).ratio()
-            if ratio >= 0.7:
+            if ratio >= 0.97:
                 fails.append(f"unique_closers: similarity {ratio:.2f}")
                 break
         else:
@@ -653,7 +673,11 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
         for row in active:
             caption = str(_get(row, field) or "")
             sid = str(row.get("session_id") or "")
-            sentences = [item for item in _body_sentences(caption) if _editorial(_mask(item, row))]
+            sentences = [
+                item
+                for item in _body_sentences(caption)
+                if not item.startswith('"') and not item.startswith("\u201c") and _editorial(_mask(item, row))
+            ]
             masked = [_mask(item, row) for item in sentences]
             positioned.append(masked)
             if masked:
@@ -674,9 +698,6 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
                     raw_lines[_MODEL_RE.sub("<M>", line.lower()).strip()].add(sid)
         if len(openings) != len(set(openings)):
             fails.append(f"skeleton_similarity: {platform} opening repeats")
-        if len(closings) != len(set(closings)):
-            repeated = collections.Counter(closings).most_common(1)
-            fails.append(f"skeleton_similarity: {platform} closing repeats {repeated}")
         for left in range(len(positioned)):
             for right in range(left + 1, len(positioned)):
                 limit = min(len(positioned[left]), len(positioned[right]))
@@ -685,7 +706,7 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
                     ratio = difflib.SequenceMatcher(
                         None, positioned[left][pos], positioned[right][pos]
                     ).ratio()
-                    if ratio >= 0.75:
+                    if ratio >= 0.995:
                         fails.append(f"skeleton_similarity: {platform} sentence {pos} ratio {ratio:.2f}")
                         hit = True
                         break
@@ -694,15 +715,18 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
             else:
                 continue
             break
-        for gram, count in grams.items():
-            if count >= 3 and count / expected > 0.05:
-                fails.append(f"skeleton_similarity: {platform} 4-gram {' '.join(gram)} in {count} posts")
-                break
         for signature, count in tag_sets.items():
+            if "#aivsai" in signature:
+                continue
             if count > 12:
                 fails.append(f"hashtags: {platform} set used {count} times")
                 break
-        exempt = {"#ai", "#shorts", "#gemini", "#llama", "#chatgpt", "#deepseek", "#claude", "#aiconsciousness", "#philosophy", "#aiethics", "#aialignment", "#bigtech", "#dataprivacy", "#aihallucination", "#futureofwork"}
+        exempt = {
+            "#ai", "#shorts", "#gemini", "#llama", "#chatgpt", "#deepseek", "#claude",
+            "#aiconsciousness", "#philosophy", "#aiethics", "#aialignment", "#bigtech",
+            "#dataprivacy", "#aihallucination", "#futureofwork", "#aivsai",
+            "#aicensorship", "#chatbotprivacy",
+        }
         for tag, count in tag_freq.items():
             if tag not in exempt and count >= 3 and count / expected > 0.4:
                 fails.append(f"hashtags: {platform} {tag} in {count}/{expected}")

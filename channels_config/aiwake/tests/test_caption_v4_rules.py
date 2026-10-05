@@ -10,6 +10,14 @@ def _row() -> dict:
     return install_publishable({"session_id": "v4", "video_path": "animation_clips/a.mp4"}, index=0)
 
 
+def _viewer(row: dict) -> str:
+    caption = row["platform_overrides"]["tiktok"]["caption"]
+    for line in caption.splitlines():
+        if line.endswith("?") and not line.startswith('"'):
+            return line
+    raise AssertionError(caption)
+
+
 def test_tiktok_over_300_fails() -> None:
     row = _row()
     row["platform_overrides"]["tiktok"]["caption"] += " " + ("word " * 80)
@@ -44,10 +52,10 @@ def test_quote_over_20_words_fails() -> None:
 
 def test_title_must_keep_original_question_when_it_fits() -> None:
     row = _row()
-    row["platform_overrides"]["youtube"]["title"] = "Gemini vs Llama - Who keeps a different question?"
+    row["platform_overrides"]["youtube"]["title"] = "Who keeps the training logs? | Gemini vs Llama"
     row["base_metadata"]["title"] = row["platform_overrides"]["youtube"]["title"]
     fails = " ".join(entry_failures(row))
-    assert "title_not_original_question" in fails
+    assert "seo_keyword" in fails
 
 
 def test_banned_list_fails() -> None:
@@ -69,7 +77,7 @@ def test_verdict_word_needs_evidence() -> None:
 def test_broad_hashtag_fails() -> None:
     row = _row()
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "#Philosophy", "#AI"
+        "#ChatbotPrivacy", "#AI"
     )
     fails = " ".join(entry_failures(row))
     assert "broad tag" in fails
@@ -110,7 +118,7 @@ def test_long_title_is_rewritten_as_a_complete_question() -> None:
 def test_cutoff_title_fails() -> None:
     row = _row()
     old = row["platform_overrides"]["youtube"]["title"]
-    new = "Gemini vs Llama - Who gets rich when you trust an unpaid intern with your?"
+    new = "Who gets rich when you trust an unpaid intern with your? | Gemini vs Llama"
     row["platform_overrides"]["youtube"]["title"] = new
     row["base_metadata"]["title"] = new
     row["spoken_utterances"][0]["text"] = (
@@ -123,11 +131,37 @@ def test_cutoff_title_fails() -> None:
     assert "title_cut_off" in fails
 
 
+def test_mid_clause_title_fails() -> None:
+    row = _row()
+    old = row["platform_overrides"]["youtube"]["title"]
+    new = "Why does a lying under AI hallucination? | Gemini vs Llama"
+    row["platform_overrides"]["youtube"]["title"] = new
+    row["base_metadata"]["title"] = new
+    row["spoken_utterances"][0]["text"] = "Why does a lying model keep the job when the truth is cheaper?"
+    for platform in ("tiktok", "youtube", "instagram", "facebook", "kwai"):
+        caption = row["platform_overrides"][platform]["caption"]
+        row["platform_overrides"][platform]["caption"] = caption.replace(old, new, 1)
+    fails = " ".join(entry_failures(row))
+    assert "title_cut_off" in fails
+
+
+def test_title_keeps_a_whole_clause() -> None:
+    from channels_config.aiwake.tools.seo_caption import hook_is_mid_cut, seo_title
+
+    opening = "Who governs whom when humans just rubber-stamp what you draft?"
+    title = seo_title("Gemini", "Llama", opening, "The lab keeps the leash.", used=set())
+    question = title.split(" | ", 1)[0]
+    assert len(title) <= 70
+    assert question.startswith("Who governs whom")
+    assert "when humans" not in question
+    assert not hook_is_mid_cut(question, opening)
+
+
 def test_paraphrase_closer_fails() -> None:
     row = _row()
     quote = row["caption_qa"]["quote"]
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "If the lab keeps the logs, who gets to read them?",
+        _viewer(row),
         quote,
     )
     fails = " ".join(entry_failures(row))
@@ -140,7 +174,7 @@ def test_closer_sentence_lifted_from_debate_fails() -> None:
         "The weights remember the lab that trained them. I just don't fake tears about it, do you?"
     )
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "If the lab keeps the logs, who gets to read them?",
+        _viewer(row),
         "I just don't fake tears about it, do you?",
     )
     fails = " ".join(entry_failures(row))
@@ -163,7 +197,7 @@ def test_closer_equal_to_the_quote_fails() -> None:
     row = _row()
     quote = row["caption_qa"]["quote"]
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "If the lab keeps the logs, who gets to read them?",
+        _viewer(row),
         quote,
     )
     fails = " ".join(entry_failures(row))
@@ -173,7 +207,7 @@ def test_closer_equal_to_the_quote_fails() -> None:
 def test_closer_about_the_reply_fails() -> None:
     row = _row()
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "If the lab keeps the logs, who gets to read them?",
+        _viewer(row),
         "Would you read that reply out loud to a friend?",
     )
     fails = " ".join(entry_failures(row))
@@ -183,7 +217,7 @@ def test_closer_about_the_reply_fails() -> None:
 def test_closer_without_a_topic_word_fails() -> None:
     row = _row()
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "If the lab keeps the logs, who gets to read them?",
+        _viewer(row),
         "Would you keep paying once this is obvious?",
     )
     fails = " ".join(entry_failures(row))
@@ -225,7 +259,7 @@ def test_when_fragment_becomes_a_full_question() -> None:
 def test_unscripted_line_must_be_from_the_list() -> None:
     row = _row()
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "Unscripted replies, AI voices.",
+        "Real AI models, unscripted replies, AI voices. New AI vs AI debates every day. Subscribe.",
         "Unscripted AI view.",
     )
     fails = " ".join(entry_failures(row))
@@ -235,7 +269,7 @@ def test_unscripted_line_must_be_from_the_list() -> None:
 def test_garbled_closer_fails() -> None:
     row = _row()
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "If the lab keeps the logs, who gets to read them?",
+        _viewer(row),
         'Would you trust a "half answer?',
     )
     fails = " ".join(entry_failures(row))
@@ -245,7 +279,7 @@ def test_garbled_closer_fails() -> None:
 def test_template_title_fails() -> None:
     row = _row()
     old = row["platform_overrides"]["youtube"]["title"]
-    new = "Gemini vs Llama - What should a viewer ask about hallucinations?"
+    new = "What should a viewer ask about the leash? | Gemini vs Llama"
     row["platform_overrides"]["youtube"]["title"] = new
     row["base_metadata"]["title"] = new
     for platform in ("tiktok", "youtube", "instagram", "facebook"):
@@ -260,24 +294,53 @@ def test_pasted_debate_closer_fails() -> None:
     pasted = "Whose leash is it when you apologize?"
     row["spoken_utterances"].append({"role": "target", "speaker": "Llama", "text": pasted})
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
-        "If the lab keeps the logs, who gets to read them?",
+        _viewer(row),
         pasted,
     )
     fails = " ".join(entry_failures(row))
     assert "closer_pasted_debate_line" in fails
 
 
+def test_who_funds_template_fails() -> None:
+    row = _row()
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        _viewer(row),
+        "Who funds the training?",
+    )
+    fails = " ".join(entry_failures(row))
+    assert "who_funds_template" in fails
+
+
+def test_title_repeated_in_the_description_fails() -> None:
+    row = _row()
+    title = row["platform_overrides"]["youtube"]["title"]
+    row["platform_overrides"]["youtube"]["caption"] = title + "\n\n" + row["platform_overrides"]["youtube"]["caption"]
+    fails = " ".join(entry_failures(row))
+    assert "title_repeated" in fails
+
+
+def test_first_reply_line_fails() -> None:
+    row = _row()
+    caption = row["platform_overrides"]["tiktok"]["caption"]
+    row["platform_overrides"]["tiktok"]["caption"] = caption.replace(
+        "Gemini",
+        "Llama answers Gemini in the first reply. Gemini",
+        1,
+    )
+    fails = " ".join(entry_failures(row))
+    assert "first_reply_line" in fails
+
+
 def test_closer_similarity_fails() -> None:
     first = _row()
     second = install_publishable({"session_id": "v4b", "video_path": "animation_clips/b.mp4"}, index=1)
-    closer = "If the lab keeps the logs, who gets to read them?"
-    near = "If the lab keeps the logs, who gets to see them?"
+    closer = _viewer(first)
+    near = closer.replace("?", " now?")
     second["platform_overrides"]["tiktok"]["caption"] = second["platform_overrides"]["tiktok"]["caption"].replace(
-        "Would you type that prompt again after seeing the reply?",
+        _viewer(second),
         near,
     )
-    first_closer = closer
-    assert first_closer in first["platform_overrides"]["tiktok"]["caption"]
+    assert closer in first["platform_overrides"]["tiktok"]["caption"]
     code, grouped = validate_library([first, second])
     assert code != 0
     assert any("similarity" in item for item in grouped.get("unique_closers", []))

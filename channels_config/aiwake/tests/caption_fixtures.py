@@ -78,6 +78,8 @@ _CATEGORIES = ("socratic", "profit", "data", "the_corporate_leash")
 
 def install_publishable(row: dict[str, Any], *, index: int = 0) -> dict[str, Any]:
     """Stamp a ready v4 caption pack that passes the per-entry validator."""
+    from channels_config.aiwake.tools.seo_caption import SEO_CTA, apply_seo_row
+
     topic = _TOPICS[index % len(_TOPICS)]
     if not topic.endswith("?"):
         topic = topic + "?"
@@ -196,19 +198,12 @@ def install_publishable(row: dict[str, Any], *, index: int = 0) -> dict[str, Any
         overrides["pinterest"] = pin
     pin["title"] = topic
     pin["description"] = f"{headline} {quote}"
-    row["tiktok_caption"] = texts["tiktok"]
-    row["post_planner_caption"] = texts["tiktok"]
-    row["humanized_caption"] = texts["tiktok"]
-    row["facebook_caption"] = texts["facebook"]
-    row["linkedin_caption"] = texts["linkedin"]
-    row["final_caption"] = texts["youtube"]
+    row["caption_qa"]["disclosure_line"] = SEO_CTA
+    apply_seo_row(row, {"titles": set(), "questions": []})
     base = row.get("base_metadata")
     if not isinstance(base, dict):
         base = {}
         row["base_metadata"] = base
-    base["title"] = headline
-    base["caption"] = texts["youtube"]
-    base["hashtags"] = tags
     if not base.get("search_tags"):
         base["search_tags"] = ["ai debate", "llama", "gemini"]
     return row
