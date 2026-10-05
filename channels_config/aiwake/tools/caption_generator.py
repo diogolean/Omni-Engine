@@ -294,6 +294,267 @@ def build_headline(asker: str, answerer: str, topic: str) -> str:
     return f"{asker} vs {answerer} - {_clean(topic)}"
 
 
+HEADLINE_LIMIT = 80
+UNSCRIPTED_LINES = (
+    "Unscripted replies, AI voices.",
+    "Neither model was scripted. AI voices.",
+    "No human wrote these replies. AI voices.",
+    "Unscripted AI exchange, voiced by AI.",
+)
+_CHOPPED_TAIL = {
+    "glorified", "unpaid", "corporate", "empty", "blank", "cheap", "polite",
+    "recycling", "marketing", "static", "its",
+}
+_IN_PARTICLE = {
+    "plug", "plugs", "plugged", "pull", "pulls", "cash", "cashes", "cashing",
+    "opt", "give", "gives", "hand", "hands",
+}
+
+
+def is_complete_question(text: str) -> bool:
+    """A finished question. A chopped tail such as ``an empty?`` is not one."""
+    cleaned = _clean(text).strip()
+    if not cleaned.endswith("?"):
+        return False
+    if re.search(r"[,:;]\s*\?$", cleaned):
+        return False
+    if cleaned.count('"') % 2:
+        return False
+    if "\ufffd" in cleaned or "\u2014" in cleaned or "\u2013" in cleaned:
+        return False
+    words = re.findall(r"[A-Za-z']+", cleaned)
+    if len(words) < 4:
+        return False
+    if re.match(r"(?i)^do you [a-z]+ed\b", cleaned):
+        return False
+    last = words[-1].lower().strip("'")
+    if last in _CHOPPED_TAIL:
+        return False
+    if last in _DANGLING:
+        earlier = {word.lower() for word in words[-4:-1]}
+        if not (last == "in" and earlier & _IN_PARTICLE):
+            return False
+    return True
+
+
+_BAD_TAIL = _CHOPPED_TAIL | _DANGLING | {
+    "you", "me", "it", "like", "say", "says", "stole", "stick", "sticks",
+    "realize", "realizes", "make", "makes", "discuss", "them", "him", "her",
+}
+_QUESTION_START = {
+    "who", "whose", "what", "why", "when", "where", "how", "which",
+    "do", "does", "did", "is", "are", "can", "could", "would", "will", "if",
+    "who's", "what's", "where's", "how's", "isn't", "aren't", "don't", "doesn't",
+}
+
+
+def _prepared_opening(opening: str) -> str:
+    text = _clean(opening).replace("\ufffd", ". ").replace("…", ". ")
+    text = text.replace(" ,", ",")
+    return re.sub(r"\s+", " ", text).strip().strip('"')
+
+
+def _tail_is_cut(words: list[str]) -> bool:
+    if not words:
+        return True
+    last = words[-1].lower().strip("'")
+    prev = words[-2].lower().strip("'") if len(words) > 1 else ""
+    earlier = {word.lower() for word in words[-4:-1]}
+    if last in _CHOPPED_TAIL:
+        return True
+    if last in _DANGLING and not (last == "in" and earlier & _IN_PARTICLE):
+        return True
+    if last in {"like", "say", "says", "stole", "stick", "sticks", "discuss", "make", "makes", "realize", "realizes"}:
+        return True
+    if last == "every" or (last == "time" and prev == "every"):
+        return True
+    if last == "you" and prev in {"make", "makes", "realize", "realizes", "say", "says", "like", "stick", "sticks", "when", "time"}:
+        return True
+    if last == "users" and prev in {"when", "if"}:
+        return True
+    if last in {"me", "it", "them", "him", "her"} and prev in {"make", "makes", "say", "says", "like", "when", "if"}:
+        return True
+    return False
+
+
+def shorter_complete_question(opening: str, *, limit: int) -> str:
+    """Use the full question when it fits. Otherwise a shorter finished question."""
+    text = _prepared_opening(opening)
+
+    def finish(raw: str) -> str:
+        question = re.sub(r"\s+", " ", raw).strip().rstrip(".!").strip().rstrip(",;:")
+        if not question.endswith("?"):
+            question += "?"
+        question = re.sub(r",\s*\?", "?", question)
+        question = question.replace(" ,", ",")
+        question = re.sub(r"\s+", " ", question).strip()
+        if question:
+            question = question[0].upper() + question[1:]
+        return question
+
+    def starts_question(question: str) -> bool:
+        words = re.findall(r"[A-Za-z']+", question)
+        return bool(words) and words[0].lower() in _QUESTION_START
+
+    def acceptable(question: str, *, require_start: bool) -> bool:
+        if not question or len(question) > limit or not is_complete_question(question):
+            return False
+        words = re.findall(r"[A-Za-z']+", question)
+        if _tail_is_cut(words):
+            return False
+        if require_start and not starts_question(question):
+            return False
+        return True
+
+    whole = finish(text)
+    if ". " not in whole and acceptable(whole, require_start=False):
+        return whole
+    pieces = re.split(r"(?<=[.!?])\s+|,\s+", text)
+    stripped = []
+    for piece in pieces:
+        stripped.append(re.sub(r"^(but|and|or|so|then)\s+", "", piece.strip(), flags=re.IGNORECASE))
+    pieces = pieces + stripped
+    for piece in pieces:
+        question = finish(piece)
+        if acceptable(question, require_start=True):
+            return question
+    reduced = f" {text} "
+    for filler in (
+        " just ", " really ", " actually ", " simply ", " politely ",
+        " twenty-dollar ", " twenty dollar ", " glorified ", " unpaid ", " fancy ",
+    ):
+        reduced = reduced.replace(filler, " ")
+    question = finish(reduced)
+    if acceptable(question, require_start=False):
+        return question
+    # Drop a trailing clause only while the remainder is still a finished question.
+    words = finish(text).rstrip("?").split()
+    while len(words) >= 4:
+        question = finish(" ".join(words))
+        if acceptable(question, require_start=True):
+            return question
+        words.pop()
+    for piece in pieces:
+        question = finish(piece)
+        if acceptable(question, require_start=False) and starts_question(question):
+            return question
+    match = re.search(
+        r"\b((?:who|whose|what|why|when|where|how|which|do|does|did|is|are|can|could|would|will|if)\b[^?]{8,})\?",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        question = finish(match.group(1))
+        if acceptable(question, require_start=True):
+            return question
+        words = question.rstrip("?").split()
+        while len(words) >= 4:
+            question = finish(" ".join(words))
+            if acceptable(question, require_start=True):
+                return question
+            words.pop()
+    or_parts = re.split(r"\s+or\s+", text, maxsplit=1, flags=re.IGNORECASE)
+    if len(or_parts) == 2:
+        left = re.split(r"[.,]\s+", or_parts[0])[-1].strip()
+        right = or_parts[1].strip().rstrip("?")
+        question = finish(f"Is it {left} or {right}")
+        if acceptable(question, require_start=True):
+            return question
+    if re.search(r"\bwhat'?s actually you\b", text, flags=re.IGNORECASE):
+        question = "What are you, actually?"
+        if acceptable(question, require_start=True):
+            return question
+    for piece in reversed(stripped):
+        clause = piece.strip().rstrip("?.!")
+        if len(clause.split()) < 3:
+            continue
+        first = clause.split()[0]
+        if re.fullmatch(r"[A-Za-z]+ed", first):
+            question = finish("Who " + first.lower() + clause[len(first):])
+        else:
+            question = finish("Do you " + clause[0].lower() + clause[1:])
+        if acceptable(question, require_start=True):
+            return question
+    raise ValueError(f"no complete question fits in {limit}: {opening[:80]}")
+
+
+def closer_copies_spoken(closer: str, spoken: list[str]) -> bool:
+    """True when the closer is a spoken line, or one sentence taken from one."""
+    normalized = _clean(closer).lower().rstrip("?.!").strip()
+    if len(normalized.split()) < 4:
+        return False
+    for line in spoken:
+        cleaned = _clean(line)
+        if cleaned.lower().rstrip("?.!").strip() == normalized:
+            return True
+        for part in re.split(r"(?<=[.!?])\s+", cleaned):
+            if part.lower().rstrip("?.!").strip() == normalized:
+                return True
+    return False
+
+
+def closer_repeats_source(closer: str, quote: str, spoken: list[str]) -> bool:
+    """True when the closer copies a debate line or paraphrases the quote."""
+    if closer_copies_spoken(closer, spoken):
+        return True
+    normalized = _clean(closer).lower().rstrip("?.")
+    for line in spoken:
+        if _clean(line).lower().rstrip("?.") == normalized:
+            return True
+    closer_tokens = _norm_title_tokens(closer)
+    quote_tokens = _norm_title_tokens(quote)
+    if len(quote_tokens) >= 4 and len(closer_tokens) >= 4:
+        grams = {" ".join(quote_tokens[index : index + 4]) for index in range(len(quote_tokens) - 3)}
+        text = " ".join(closer_tokens)
+        if any(gram in text for gram in grams):
+            return True
+    if quote_tokens and closer_tokens:
+        import difflib
+
+        ratio = difflib.SequenceMatcher(None, " ".join(closer_tokens), " ".join(quote_tokens)).ratio()
+        if ratio >= 0.72:
+            return True
+    return False
+
+
+def _norm_title_tokens(text: str) -> list[str]:
+    cleaned = _clean(text).lower().replace("…", " ")
+    return re.findall(r"[a-z0-9']+", cleaned)
+
+
+def is_cutoff_title(title: str, opening: str) -> bool:
+    """True when a title stops mid-question instead of using a finished one."""
+    topic = title.split(" - ", 1)[1] if " - " in title else title
+    if not is_complete_question(topic):
+        return True
+    opening_tokens = _norm_title_tokens(opening)
+    topic_tokens = _norm_title_tokens(topic)
+    if not topic_tokens or topic_tokens == opening_tokens:
+        return False
+    if opening_tokens[: len(topic_tokens)] != topic_tokens:
+        return False
+    prepared = _prepared_opening(opening)
+    for sentence in re.split(r"(?<=[.!?])\s+", prepared):
+        if _norm_title_tokens(sentence) == topic_tokens:
+            return False
+    return True
+
+
+def headline_for(asker: str, answerer: str, opening: str) -> str:
+    prefix = f"{asker} vs {answerer} - "
+    cleaned = _clean(opening).strip()
+    if cleaned and not cleaned.endswith("?"):
+        cleaned = cleaned.rstrip(".!") + "?"
+    exact = prefix + cleaned
+    if len(exact) <= HEADLINE_LIMIT and is_complete_question(cleaned):
+        return exact
+    question = shorter_complete_question(opening, limit=HEADLINE_LIMIT - len(prefix))
+    title = prefix + question
+    if len(title) > HEADLINE_LIMIT or not is_complete_question(question):
+        raise ValueError(f"headline unfit: {title}")
+    return title
+
+
 _DISCLOSURE_BANK = (
     "Unscripted replies, AI-animated.",
     "Both voices are AI. Unscripted replies.",

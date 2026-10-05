@@ -62,10 +62,10 @@ _EXTRAS = (
     ),
 )
 _DISCLOSURES = (
-    "Unscripted replies, AI-animated.",
-    "Both voices are AI. Unscripted replies.",
-    "Nobody wrote Llama's lines. Unscripted AI.",
-    "Unscripted AI exchange, animated with AI voices.",
+    "Unscripted replies, AI voices.",
+    "Neither model was scripted. AI voices.",
+    "No human wrote these replies. AI voices.",
+    "Unscripted AI exchange, voiced by AI.",
 )
 _TAG_SETS = (
     ("#Philosophy", "#Gemini", "#Llama"),

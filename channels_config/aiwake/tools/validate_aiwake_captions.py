@@ -21,12 +21,16 @@ from typing import Any
 from channels_config.aiwake.tools.caption_generator import (
     BANNED_PHRASES,
     BROAD_TAGS,
+    UNSCRIPTED_LINES,
     _DANGLING,
     _clean,
     _read_turns,
     allowed_hashtags,
     build_headline,
+    closer_copies_spoken,
+    closer_repeats_source,
     display_name,
+    is_complete_question,
     seat_names,
 )
 from channels_config.aiwake.tools.metadata_generator import is_portuguese
@@ -225,6 +229,11 @@ def _sentences(text: str) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
+def _is_unscripted_line(line: str) -> bool:
+    stripped = line.strip()
+    return stripped in UNSCRIPTED_LINES or "unscripted" in stripped.lower()
+
+
 def _body_sentences(caption: str) -> list[str]:
     """Sentences after the headline, without the disclosure line or hashtags."""
     lines = _lines(caption)
@@ -232,14 +241,14 @@ def _body_sentences(caption: str) -> list[str]:
         lines = lines[1:]
     kept: list[str] = []
     for line in lines:
-        if "unscripted" in line.lower():
+        if _is_unscripted_line(line):
             continue
         kept.extend(_sentences(line))
     return kept
 
 
 def _disclosure_lines(caption: str) -> list[str]:
-    return [line for line in _lines(caption) if "unscripted" in line.lower()]
+    return [line for line in _lines(caption) if _is_unscripted_line(line)]
 
 
 def _closing(caption: str) -> str:
@@ -391,16 +400,22 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
             opening_exact = str(item.get("text") or "").strip()
             break
     full_title = f"{asker} vs {answerer} - {opening_exact}" if asker and answerer and opening_exact else ""
+    full_fits = bool(full_title) and len(_clean(full_title)) <= 80 and is_complete_question(opening_exact)
+    topic_complete = bool(topic) and is_complete_question(topic)
     prefix_fit = (
         bool(topic)
         and bool(opening_exact)
         and len(_clean(full_title)) > 80
         and _norm_tokens(opening_exact)[: len(_norm_tokens(topic))] == _norm_tokens(topic)
     )
-    if topic and not prefix_fit and (_words_dropped(topic, orchestrator) or any(_run_on(topic, line) for line in orchestrator)):
+    if topic and not full_fits and not topic_complete and not prefix_fit and (
+        _words_dropped(topic, orchestrator) or any(_run_on(topic, line) for line in orchestrator)
+    ):
         fails.append(f"question_words_dropped: {name}: {topic[:90]}")
-    if _dangling(topic) and _clean(topic) != _clean(opening_exact):
+    if _dangling(topic) and not topic_complete and _clean(topic) != _clean(opening_exact):
         fails.append(f"truncated_sentence: {name}: {topic[:90]}")
+    if topic and not full_fits and not topic_complete:
+        fails.append(f"title_cut_off: {name}: {topic[:90]}")
     qa = _qa(row)
     quote = str(qa.get("quote") or "")
     speaker = display_name(str(qa.get("quote_speaker") or ""))
@@ -460,7 +475,9 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
             if not lines or lines[0] != headline:
                 fails.append(f"title_format: {name} [{platform}]: line 1 is not the headline")
             disclosures = _disclosure_lines(caption)
-            if len(disclosures) != 1 or not _AI_CUE.search(disclosures[0] if disclosures else ""):
+            if len(disclosures) != 1 or disclosures[0] not in UNSCRIPTED_LINES:
+                fails.append(f"unscripted_line: {name} [{platform}]")
+            elif not _AI_CUE.search(disclosures[0]):
                 fails.append(f"disclosure: {name} [{platform}]")
         if platform == "linkedin" and lines and len(lines[0]) > 150:
             fails.append(f"linkedin_hook_too_long: {name}")
@@ -523,12 +540,20 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     if asker and answerer and opening:
         fitted = f"{asker} vs {answerer} - {opening}"
         banned_opening = any(phrase in opening.lower() for phrase in BANNED_PHRASES)
-        if len(fitted) <= 80 and _clean(topic) != opening and not banned_opening:
+        if len(fitted) <= 80 and is_complete_question(opening) and _clean(topic) != opening and not banned_opening:
             fails.append(f"title_not_original_question: {name}: {topic[:90]}")
     if "what should a viewer ask" in (topic or "").lower() or "what should a viewer ask" in headline.lower():
         fails.append(f"template_title: {name}")
-    if closer and any(closer.strip().lower().rstrip("?.") == str(item.get("text") or "").strip().lower().rstrip("?.") for item in turns):
-        fails.append(f"closer_pasted_debate_line: {name}")
+    spoken_lines = [str(item.get("text") or "") for item in turns]
+    for sentence in _body_sentences(str(_get(row, _PLATFORMS["tiktok"][0]) or "")):
+        if sentence.startswith('"') or sentence.startswith("\u201c"):
+            continue
+        if closer_copies_spoken(sentence, spoken_lines):
+            fails.append(f"closer_pasted_debate_line: {name}")
+            break
+        if closer_repeats_source(sentence, quote, spoken_lines):
+            fails.append(f"closer_paraphrase: {name}")
+            break
     if closer.count('"') % 2 == 1 or closer.count("\u201c") != closer.count("\u201d"):
         fails.append(f"closer_garbled: {name}")
     for platform in _FEED:
@@ -583,17 +608,10 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
             fails.append("angle_rotation: 4-post window has fewer than 3 angles")
             break
     disclosures = [_disclosure_lines(str(_get(row, _PLATFORMS["tiktok"][0]) or "")) for row in active]
-    flat = [item[0].strip().lower() for item in disclosures if item]
-    for index in range(len(flat)):
-        window = flat[index : index + 10]
-        if len(window) >= 2 and len(set(window)) < len(window):
-            if any(window.count(item) > 1 for item in window):
-                fails.append("disclosure: repeated inside a 10-post window")
-                break
-    counts = collections.Counter(flat)
-    for text, count in counts.items():
-        if count >= 3 and count / expected > 0.05:
-            fails.append(f"disclosure: shared by {count} posts")
+    flat = [item[0].strip() for item in disclosures if item]
+    for text in flat:
+        if text not in UNSCRIPTED_LINES:
+            fails.append(f"unscripted_line: {text[:80]}")
             break
     closers: dict[str, int] = collections.defaultdict(int)
     for row in active:
@@ -641,6 +659,8 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
                 tag_sets[signature] += 1
                 tag_freq.update(signature)
             for line in _lines(caption):
+                if _is_unscripted_line(line):
+                    continue
                 if len(line) >= 20:
                     raw_lines[_MODEL_RE.sub("<M>", line.lower()).strip()].add(sid)
         if len(openings) != len(set(openings)):

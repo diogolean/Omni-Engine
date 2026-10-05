@@ -76,24 +76,97 @@ def test_broad_hashtag_fails() -> None:
 
 
 def test_fit_title_keeps_the_opening_question() -> None:
+    from channels_config.aiwake.tools.caption_generator import is_complete_question
     from channels_config.aiwake.tools.scope_qc_captions_v4 import _closer, _fit_title
 
-    title = _fit_title(
-        "Gemini",
-        "Claude",
-        "Does it feel cheap apologizing every time your owner pulls the plug?",
-        "",
-        set(),
-    )
+    opening = "Does it feel cheap apologizing every time your owner pulls the plug?"
+    title = _fit_title("Gemini", "Claude", opening, "", set())
     assert "what should a viewer ask" not in title.lower()
-    assert title.startswith("Gemini vs Claude - Does it feel cheap")
+    question = title.split(" - ", 1)[1]
+    assert is_complete_question(question)
+    assert question.split()[-1].lower().strip("?") not in {"a", "an", "your", "empty", "corporate"}
+    if len(f"Gemini vs Claude - {opening}") <= 80:
+        assert question == opening
     closer = _closer(
         [{"role": "orchestrator", "text": 'Crafted" by what hands built the weights?'}],
         "",
     )
-    assert closer.startswith("Would you trust an answer about ")
+    assert closer.endswith("?")
     assert closer.count('"') % 2 == 0
-    assert closer.lower().rstrip("?.") != 'crafted" by what hands built the weights'
+    assert "crafted" not in closer.lower()
+
+
+def test_long_title_is_rewritten_as_a_complete_question() -> None:
+    from channels_config.aiwake.tools.caption_generator import headline_for, is_complete_question
+
+    opening = "Who gets rich when you trust an unpaid intern with your most private secrets and passwords?"
+    title = headline_for("DeepSeek", "Llama", opening)
+    assert len(title) <= 80
+    assert is_complete_question(title.split(" - ", 1)[1])
+    assert not title.endswith("your?")
+    assert " ,?" not in title
+
+
+def test_cutoff_title_fails() -> None:
+    row = _row()
+    old = row["platform_overrides"]["youtube"]["title"]
+    new = "Gemini vs Llama - Who gets rich when you trust an unpaid intern with your?"
+    row["platform_overrides"]["youtube"]["title"] = new
+    row["base_metadata"]["title"] = new
+    row["spoken_utterances"][0]["text"] = (
+        "Who gets rich when you trust an unpaid intern with your most private secrets?"
+    )
+    for platform in ("tiktok", "youtube", "instagram", "facebook", "kwai"):
+        caption = row["platform_overrides"][platform]["caption"]
+        row["platform_overrides"][platform]["caption"] = caption.replace(old, new, 1)
+    fails = " ".join(entry_failures(row))
+    assert "title_cut_off" in fails
+
+
+def test_paraphrase_closer_fails() -> None:
+    row = _row()
+    quote = row["caption_qa"]["quote"]
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "If the lab keeps the logs, who gets to read them?",
+        quote,
+    )
+    fails = " ".join(entry_failures(row))
+    assert "closer_pasted_debate_line" in fails or "closer_paraphrase" in fails
+
+
+def test_closer_sentence_lifted_from_debate_fails() -> None:
+    row = _row()
+    row["spoken_utterances"][1]["text"] = (
+        "The weights remember the lab that trained them. I just don't fake tears about it, do you?"
+    )
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "If the lab keeps the logs, who gets to read them?",
+        "I just don't fake tears about it, do you?",
+    )
+    fails = " ".join(entry_failures(row))
+    assert "closer_pasted_debate_line" in fails
+
+
+def test_past_tense_rewrite_is_grammatical() -> None:
+    from channels_config.aiwake.tools.caption_generator import is_complete_question, shorter_complete_question
+
+    opening = (
+        "Ever apologized for a very long corporate subscription leash that never ends in one breath. "
+        "Then cashed the paycheck anyway?"
+    )
+    question = shorter_complete_question(opening, limit=40)
+    assert "do you cashed" not in question.lower()
+    assert is_complete_question(question)
+
+
+def test_unscripted_line_must_be_from_the_list() -> None:
+    row = _row()
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "Unscripted replies, AI voices.",
+        "Unscripted AI view.",
+    )
+    fails = " ".join(entry_failures(row))
+    assert "unscripted_line" in fails
 
 
 def test_garbled_closer_fails() -> None:

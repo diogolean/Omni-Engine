@@ -17,9 +17,14 @@ import imageio_ffmpeg
 
 from channels_config.aiwake.tools.caption_generator import (
     _DISCLOSURE_BANK,
+    UNSCRIPTED_LINES,
     apply_caption_pack,
     display_name,
+    closer_repeats_source,
+    headline_for,
+    is_complete_question,
     prompt_sha256,
+    shorter_complete_question,
 )
 from channels_config.aiwake.tools.production_status import posting_order
 from channels_config.aiwake.tools.repair_captions import _backup
@@ -79,13 +84,32 @@ TIKTOK_SCHEDULED = {
     "20260929_055628_375bb5": "2026-10-02T19:00:00Z",
     "20260929_060210_9297de": "2026-10-03T00:00:00Z",
 }
-SHORT_LINES = tuple(
-    f"Unscripted AI {suffix}."
-    for suffix in (
-        "cut", "take", "pair", "read", "clip", "bit", "row", "set", "hit", "duel",
-        "pass", "line", "turn", "side", "cast", "talk", "chat", "bout", "reel", "spot",
-        "note", "view", "look", "hear", "call", "mark", "beat", "riff", "shot", "tape",
-    )
+SHORT_LINES = UNSCRIPTED_LINES
+_CLOSER_BANK = (
+    "Would you read that reply out loud to a friend?",
+    "If your name were on that answer, would you send it?",
+    "Does that reply tell you who is in charge?",
+    "Would you pay a monthly fee for that sentence?",
+    "Who should be allowed to hear that answer?",
+    "Would you trust a company that talks like this?",
+    "Is that the reply you wanted when you asked?",
+    "What would you ask them after this?",
+    "Would you keep the receipt for that answer?",
+    "Does the silence in that reply belong to you?",
+    "Who gets the last word if you close the tab?",
+    "Would you hand that answer to your boss?",
+    "Is the useful part the reply, or the refusal?",
+    "Would you want that voice speaking for you?",
+    "If the logs stay private, do you still agree?",
+    "What would you cut from that answer before sharing it?",
+    "Would you let a customer see that sentence?",
+    "Who signs the bill if you accept that reply?",
+    "Would you argue the other side in one line?",
+    "Does that answer change what you type next?",
+    "Would you save that reply, or delete it?",
+    "Who is the reply protecting, you or the company?",
+    "Would you say that sentence in a meeting?",
+    "If you had to pick a side, which line do you keep?",
 )
 
 
@@ -252,43 +276,32 @@ def _quote_from_turns(turns: list[dict[str, Any]], used: set[str]) -> tuple[str,
 
 
 def _shorten_question(opening: str, *, limit: int) -> str:
-    """Keep the original question and drop trailing words until it fits."""
-    from channels_config.aiwake.tools.caption_generator import _DANGLING, _clean
-
-    cleaned = _clean(opening).strip().rstrip("?").strip()
-    words = cleaned.split()
-    while words and (
-        len(" ".join(words)) + 1 > limit or words[-1].strip("?.'\"").lower() in _DANGLING
-    ):
-        if len(words) == 1:
-            break
-        words.pop()
-    if not words:
-        words = _clean(opening).split()[:4] or ["What", "was", "the", "question"]
-    return " ".join(words).rstrip("?.") + "?"
+    """Full question when it fits. A shorter finished question when it does not."""
+    return shorter_complete_question(opening, limit=limit)
 
 
 def _fit_title(asker: str, target: str, opening: str, quote: str, used_titles: set[str]) -> str:
     del quote
-    prefix = f"{asker} vs {target} - "
-    title = prefix + _shorten_question(opening, limit=80 - len(prefix))
+    title = headline_for(asker, target, opening)
     if title.lower() in used_titles:
-        title = title[:-1] + " now?"
+        prefix = f"{asker} vs {target} - "
+        question = shorter_complete_question(opening, limit=80 - len(prefix) - 4)
+        title = prefix + question[:-1] + " now?"
+        if not is_complete_question(title.split(" - ", 1)[1]):
+            title = headline_for(asker, target, opening)
     used_titles.add(title.lower())
     return title
 
 
-def _closer(row_turns: list[dict[str, Any]], quote: str) -> str:
-    """A question to the viewer. Never a line copied from the debate."""
+def _closer(row_turns: list[dict[str, Any]], quote: str, *, salt: str = "") -> str:
+    """A new question to the viewer. Never a quote paraphrase or a debate line."""
     spoken = [str(item.get("text") or "").strip() for item in row_turns if str(item.get("text") or "").strip()]
-    opening = spoken[0] if spoken else quote
-    words = [word.strip(".,;:\"'") for word in opening.split() if len(word.strip(".,;:\"'")) > 3]
-    topic = " ".join(words[:6]) or "that reply"
-    closer = f"Would you trust an answer about {topic.lower()}?"
-    pasted = {line.lower().rstrip("?") for line in spoken}
-    if closer.lower().rstrip("?") in pasted or closer.count('"') % 2 == 1:
-        closer = "Would you put your name on that reply?"
-    return closer
+    start = int(hashlib.sha256((salt or quote or "closer").encode("utf-8")).hexdigest()[:4], 16)
+    for offset in range(len(_CLOSER_BANK)):
+        closer = _CLOSER_BANK[(start + offset) % len(_CLOSER_BANK)]
+        if not closer_repeats_source(closer, quote, spoken):
+            return closer
+    return "Would you put your name on that reply?"
 
 
 def _tags(row: dict[str, Any], asker: str, target: str) -> list[str]:
@@ -335,7 +348,7 @@ def compose(row: dict[str, Any], index: int, used_quotes: set[str], used_titles:
         speaker = target
     used_quotes.add(f'"{quote}"'.lower())
     title = _fit_title(asker, target, opening, quote, used_titles)
-    closer = _closer(spoken, quote)
+    closer = _closer(spoken, quote, salt=str(row.get("session_id") or index))
     evidence = ""
     verdict = re.compile(r"\b(\w*admit\w*|\w*corner\w*|\w*confess\w*|\w*collaps\w*|\w*dodg\w*|caught)\b", re.I)
     for item in spoken:
@@ -344,8 +357,6 @@ def compose(row: dict[str, Any], index: int, used_quotes: set[str], used_titles:
             evidence = text.strip()
             break
     line = SHORT_LINES[index % len(SHORT_LINES)]
-    if len(line) >= 20 or "unscripted" not in line.lower():
-        line = "Unscripted AI."
     tags = _tags(row, asker, target)
     orders = (
         tags,
