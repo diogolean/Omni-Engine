@@ -23,6 +23,7 @@ from channels_config.aiwake.tools.caption_generator import (
     closer_repeats_source,
     headline_for,
     is_complete_question,
+    side_closer,
     prompt_sha256,
     shorter_complete_question,
 )
@@ -294,14 +295,18 @@ def _fit_title(asker: str, target: str, opening: str, quote: str, used_titles: s
 
 
 def _closer(row_turns: list[dict[str, Any]], quote: str, *, salt: str = "") -> str:
-    """A new question to the viewer. Never a quote paraphrase or a debate line."""
+    """A stance on the topic. Never a quote paraphrase or a note about the reply."""
     spoken = [str(item.get("text") or "").strip() for item in row_turns if str(item.get("text") or "").strip()]
+    opening = next(
+        (
+            str(item.get("text") or "")
+            for item in row_turns
+            if item.get("role") == "orchestrator" and item.get("text")
+        ),
+        spoken[0] if spoken else "",
+    )
     start = int(hashlib.sha256((salt or quote or "closer").encode("utf-8")).hexdigest()[:4], 16)
-    for offset in range(len(_CLOSER_BANK)):
-        closer = _CLOSER_BANK[(start + offset) % len(_CLOSER_BANK)]
-        if not closer_repeats_source(closer, quote, spoken):
-            return closer
-    return "Would you put your name on that reply?"
+    return side_closer(opening, opening, quote, spoken, [], {}, start=start)
 
 
 def _tags(row: dict[str, Any], asker: str, target: str) -> list[str]:

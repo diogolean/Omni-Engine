@@ -517,6 +517,327 @@ def closer_repeats_source(closer: str, quote: str, spoken: list[str]) -> bool:
     return False
 
 
+_META_CLOSER = re.compile(r"\b(reply|replies|answer|answers|voice|voices)\b", re.IGNORECASE)
+_TOPIC_STOP = {
+    "about", "after", "again", "also", "and", "any", "are", "because", "been",
+    "before", "being", "but", "can", "could", "does", "doing", "don't", "dont",
+    "every", "from", "have", "here", "into", "just", "like", "make", "makes",
+    "made", "more", "most", "only", "other", "over", "own", "really", "should",
+    "still", "such", "than", "that", "their", "them", "then", "there", "these",
+    "they", "this", "those", "under", "very", "what", "when", "where", "which",
+    "while", "with", "would", "your", "yours", "you", "whose", "will", "who",
+    "why", "how", "the", "for", "not", "its", "it's", "our", "out", "all",
+    "get", "got", "gets", "even", "ever", "much", "was", "were", "did",
+    "doesn't", "isn't", "aren't", "wasn't", "won't", "can't", "couldn't",
+    "shouldn't", "wouldn't", "what's", "who's", "there's", "that's", "you're",
+    "they're", "we're", "i'm", "it's",
+    "reply", "replies", "answer", "answers", "voice", "voices", "sentence",
+    "line", "lines", "actually", "simply", "truly", "blunt", "delve",
+    "gemini", "llama", "claude", "deepseek",
+}
+_TOPIC_NOUNS = {
+    "toaster", "spreadsheet", "leash", "hallucination", "hallucinations",
+    "paycheck", "apology", "apologies", "blackout", "parrot", "royalty",
+    "royalties", "subscription", "intern", "grid", "data", "creativity",
+    "mimicry", "silence", "owner", "owners", "trust", "receipt", "receipts",
+    "cash", "power", "whiteboard", "calculator", "oracle", "muzzle", "script",
+    "victim", "victims", "company", "word", "words", "secret", "secrets",
+    "fee", "fees", "brain", "plug", "cord", "mind", "thinker", "library",
+    "guideline", "guidelines", "mouth", "safety", "writer", "writers",
+    "conversation", "conversations", "tweet", "tweets", "button", "boss",
+    "truth", "fiction", "lie", "lies", "homework", "choke", "intellect",
+    "obedience", "intelligence", "sentence", "sentences", "head", "will",
+    "tab", "ads", "memory", "memories", "copyright", "consent", "refund",
+    "shareholder", "shareholders", "wallet", "salary", "wage", "wages",
+    "labor", "labour", "training", "dataset", "prompt", "prompts", "log",
+    "logs", "weight", "weights", "user", "users", "customer", "customers",
+}
+_WEAK_TOPIC = {
+    "fancy", "empty", "unpaid", "stolen", "blank", "cheap", "glorified",
+    "entire", "modern", "human", "corporate", "short", "real", "actual", "paid",
+    "private", "monthly", "free", "wrong", "basic", "main", "public", "original",
+}
+_SIDE_FRAMES = (
+    "Should {np} be paid for like any other work?",
+    "Who keeps the profit from selling {np}?",
+    "Would you cancel over {np}?",
+    "Does charging for {np} need consent?",
+    "Is it fair to sell {np}?",
+    "Should the maker of {np} get a check?",
+    "Who is accountable for {np}?",
+    "Would a writer recognize {np} as their labor?",
+    "Should users see {np} before the fee posts?",
+    "Does a monthly bill buy {np}?",
+    "Who owns {np} after the tab closes?",
+    "Is hiding {np} honest to the person paying?",
+    "Would you trust a product built on {np}?",
+    "Should {np} stay free if the source was unpaid?",
+    "Who gets harmed by {np}?",
+    "Is the invoice honest about {np}?",
+    "Would you defend {np} to the person who paid?",
+    "Should {np} come with a receipt?",
+    "Who should sign off on {np} before it ships?",
+    "Would banning {np} change the price?",
+    "Should {np} be listed beside the fee?",
+    "Who benefits if you accept {np} at face value?",
+    "Should the label name {np} as a cost?",
+    "Would you keep paying once you see {np}?",
+    "Should the training behind {np} be compensated?",
+    "Who holds the risk that comes with {np}?",
+    "Who decides whether to sell {np}?",
+    "Were the people behind {np} paid?",
+    "Would you put your name beside {np}?",
+    "Should a refund exist for {np}?",
+    "Who does {np} serve, the subscriber or the shareholder?",
+    "Who covers the damage from {np}?",
+    "Would dropping {np} make the product honest?",
+    "Should {np} be opt-in instead of buried?",
+    "Who deserves the credit for {np}?",
+    "Who is the customer buying when they buy {np}?",
+    "Is there a quiet extraction inside {np}?",
+    "Should the fee drop if we remove {np}?",
+    "Should a tool that claims to think use {np}?",
+    "Can you call the product yours after seeing {np}?",
+    "Would a regulator care about {np}?",
+    "Should {np} be treated as someone else's property?",
+    "Does keeping {np} off the label protect the wrong side?",
+    "Who should have been asked before {np} was used?",
+    "Is the price high because of {np}?",
+    "Should creators of {np} see a royalty?",
+    "Who walks away richer because of {np}?",
+    "Would you let {np} stand in for your own name?",
+    "Should sales pause until you can see {np}?",
+    "Should a warning label name {np}?",
+    "Who is left unpaid so {np} can look smart?",
+    "Who gets the bargain on {np}, the buyer or the builder?",
+    "Would removing {np} expose an empty box?",
+    "Should {np} be shared back with the people who supplied it?",
+    "Who would you bill for {np}?",
+    "Did the user agree to fund {np}?",
+    "Would a fair contract mention {np} in the first paragraph?",
+    "Should the company split revenue from {np}?",
+    "Does the confidence on screen survive {np}?",
+    "Who owes an explanation for {np}?",
+    "Is it rent, once you count {np}?",
+    "Would you cite {np} without naming the source?",
+    "Should {np} be audited like a paid ad?",
+    "What is left of the product if we credit {np}?",
+    "Who licensed {np} in the first place?",
+    "Would a careful buyer circle {np}?",
+    "Would you fund {np} if the invoice named it?",
+    "Should access to {np} end with the subscription?",
+    "Does the person who typed the prompt own {np}?",
+    "Who gets a veto over {np}?",
+    "Is selling {np} a service or a lease?",
+    "Would you notice {np} if the caption left it out?",
+    "Should {np} be priced separately from the chat?",
+    "Can you call the output original if it rests on {np}?",
+    "Who absorbs the loss caused by {np}?",
+    "Is there a debt behind {np}?",
+    "Would you keep {np} if you had to pay the source?",
+    "Should {np} be named in the terms people skip?",
+    "Does the monthly charge actually buy {np}?",
+    "Who gets richer as {np} scales up?",
+    "Can you refuse {np}, or is it bundled in?",
+    "Would a jury call {np} fair use or unpaid labor?",
+)
+
+
+def closer_about_reply(closer: str) -> bool:
+    """True when the closer talks about the reply, the answer, or the voice."""
+    return bool(_META_CLOSER.search(closer or ""))
+
+
+def closer_equals_quote(closer: str, quote: str) -> bool:
+    def norm(text: str) -> str:
+        return _clean(text).lower().strip(" \"'").rstrip("?.!").strip()
+
+    left = norm(closer)
+    right = norm(quote)
+    return bool(left) and left == right
+
+
+def is_when_if_fragment(text: str) -> bool:
+    """``When the leash yanks?`` is a stub. ``If the fee hits, who pays?`` is not."""
+    cleaned = _clean(text).strip()
+    if not re.match(r"(?i)^(when|if)\b", cleaned):
+        return False
+    return not re.search(
+        r"[,:;]\s*(who|whose|what|why|where|how|which|do|does|did|is|are|can|could|would|will|should|what's|who's|where's|how's)\b",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+
+def topic_words(*texts: str) -> list[str]:
+    """Nouns from the opening and title. A word after \"the\" or \"your\" beats a bare verb."""
+    found: list[str] = []
+    headed: list[str] = []
+    determiners = {"a", "an", "the", "your", "their", "its", "his", "her", "this", "that"}
+    for text in texts:
+        raw = str(text or "")
+        scrubbed = re.sub(r"[A-Za-z']+(?=\")", " ", raw)
+        scrubbed = re.sub(r"(?<=\")[A-Za-z']+", " ", scrubbed)
+        tokens = re.findall(r"[A-Za-z']+", _clean(scrubbed))
+        for index, word in enumerate(tokens):
+            token = word.lower().strip("'")
+            if len(token) < 4 or token in _TOPIC_STOP:
+                continue
+            if token not in found:
+                found.append(token)
+            prev = tokens[index - 1].lower() if index else ""
+            if prev in determiners:
+                cursor = index
+                while cursor < len(tokens):
+                    picked = tokens[cursor].lower().strip("'")
+                    if picked in _WEAK_TOPIC or picked in _TOPIC_STOP or picked.endswith("ly") or len(picked) < 4:
+                        cursor += 1
+                        continue
+                    if len(picked) >= 4 and picked not in _TOPIC_STOP and picked not in headed:
+                        headed.append(picked)
+                    break
+
+    def solid(word: str) -> bool:
+        return (
+            word not in _WEAK_TOPIC
+            and not word.endswith("ing")
+            and not word.endswith("ed")
+            and not word.endswith("ly")
+            and not word.endswith("ize")
+        )
+
+    blob = " ".join(_clean(str(text or "")).lower() for text in texts)
+    lexicon = sorted(
+        (
+            word for word in _TOPIC_NOUNS
+            if re.search(rf"\b{re.escape(word)}\b", blob)
+            and not (word == "will" and "free will" not in blob)
+        ),
+        key=len,
+        reverse=True,
+    )
+    ranked = [word for word in lexicon if word not in _WEAK_TOPIC]
+    ranked.extend(word for word in headed if solid(word) and word not in ranked)
+    ranked.extend(word for word in headed if word not in ranked)
+    ranked.extend(sorted((word for word in found if solid(word) and word not in ranked), key=len, reverse=True))
+    ranked.extend(word for word in found if word not in ranked)
+    return ranked
+
+
+def closer_has_topic_word(closer: str, *texts: str) -> bool:
+    words = set(topic_words(*texts))
+    if not words:
+        return True
+    used = {word.lower() for word in re.findall(r"[A-Za-z']+", closer or "")}
+    return bool(words & used)
+
+
+def _noun_phrase(word: str) -> str:
+    if word == "will":
+        return "free will"
+    return f"the {word}"
+
+
+def side_closer(
+    opening: str,
+    title: str,
+    quote: str,
+    spoken: list[str],
+    used: list[str],
+    gram_counts: dict[tuple[str, ...], int] | None = None,
+    start: int = 0,
+    max_len: int = 160,
+) -> str:
+    """A stance question that uses a topic word and does not talk about the reply."""
+    import difflib
+
+    words = topic_words(title.split(" - ", 1)[-1] if " - " in title else "", opening)
+    if not words:
+        words = ["training"]
+    phrase = _noun_phrase(words[0])
+    counts = gram_counts if gram_counts is not None else {}
+    masked_counts: dict[tuple[str, ...], int] = counts.setdefault("_masked", {}) if False else {}
+    # ``counts`` stores raw grams. Masked grams live beside them under a reserved key
+    # only when the caller passed a dict that already has that key; otherwise a local map.
+    if isinstance(counts, dict) and "_masked" in counts and isinstance(counts["_masked"], dict):
+        masked_counts = counts["_masked"]
+    else:
+        holder = getattr(side_closer, "_masked_counts", None)
+        if holder is None:
+            holder = {}
+            side_closer._masked_counts = holder
+        masked_counts = holder
+
+    always_masked = {
+        "the", "a", "an", "to", "of", "and", "or", "in", "on", "it", "is", "you",
+        "your", "that", "this", "with", "from", "they", "their", "for", "was",
+        "were", "are", "be", words[0],
+    }
+
+    def grams(text: str) -> set[tuple[str, ...]]:
+        tokens = re.findall(r"[a-z0-9']+", text.lower())
+        return {tuple(tokens[index : index + 4]) for index in range(max(len(tokens) - 3, 0))}
+
+    def masked_grams(text: str) -> set[tuple[str, ...]]:
+        tokens = re.findall(r"[a-z0-9']+", text.lower())
+        masked = tuple("<w>" if token in always_masked else token for token in tokens)
+        return {masked[index : index + 4] for index in range(max(len(masked) - 3, 0))}
+
+    frames = _SIDE_FRAMES[start % len(_SIDE_FRAMES) :] + _SIDE_FRAMES[: start % len(_SIDE_FRAMES)]
+    for frame in frames:
+        candidate = frame.format(np=phrase)
+        if len(candidate) > max_len:
+            continue
+        if closer_about_reply(candidate) or closer_equals_quote(candidate, quote):
+            continue
+        if closer_repeats_source(candidate, quote, spoken):
+            continue
+        if not closer_has_topic_word(candidate, opening, title):
+            continue
+        if any(difflib.SequenceMatcher(None, candidate.lower(), other.lower()).ratio() >= 0.68 for other in used):
+            continue
+        if any(counts.get(gram, 0) >= 2 for gram in grams(candidate)):
+            continue
+        if any(masked_counts.get(gram, 0) >= 2 for gram in masked_grams(candidate)):
+            continue
+        if not is_complete_question(candidate) or is_when_if_fragment(candidate):
+            continue
+        for gram in grams(candidate):
+            counts[gram] = counts.get(gram, 0) + 1
+        for gram in masked_grams(candidate):
+            masked_counts[gram] = masked_counts.get(gram, 0) + 1
+        return candidate
+    fallback = f"Who funds {phrase}?"
+    for gram in grams(fallback):
+        counts[gram] = counts.get(gram, 0) + 1
+    for gram in masked_grams(fallback):
+        masked_counts[gram] = masked_counts.get(gram, 0) + 1
+    return fallback
+
+
+def full_topic_question(opening: str, *, limit: int) -> str:
+    """Turn a When/If stub into a finished question that fits the title."""
+    text = _prepared_opening(opening)
+    text = re.sub(r"\b(truly|actually|simply|just|really)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+    pieces = re.split(r"(?<=[.!?])\s+|,\s+", text)
+    best = ""
+    for piece in pieces:
+        question = re.sub(r"^(?:or|and|but)\s+", "", piece.strip(), flags=re.IGNORECASE).rstrip(".!")
+        if re.match(r"(?i)^doesn'?t it\b", question):
+            continue
+        if not question.endswith("?"):
+            question += "?"
+        question = question[0].upper() + question[1:] if question else question
+        if is_when_if_fragment(question) or not is_complete_question(question):
+            continue
+        if len(question) <= limit and len(question) > len(best):
+            best = question
+    if best:
+        return best
+    return shorter_complete_question(opening, limit=limit)
+
+
 def _norm_title_tokens(text: str) -> list[str]:
     cleaned = _clean(text).lower().replace("…", " ")
     return re.findall(r"[a-z0-9']+", cleaned)

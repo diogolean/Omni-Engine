@@ -159,6 +159,69 @@ def test_past_tense_rewrite_is_grammatical() -> None:
     assert is_complete_question(question)
 
 
+def test_closer_equal_to_the_quote_fails() -> None:
+    row = _row()
+    quote = row["caption_qa"]["quote"]
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "If the lab keeps the logs, who gets to read them?",
+        quote,
+    )
+    fails = " ".join(entry_failures(row))
+    assert "closer_equals_quote" in fails
+
+
+def test_closer_about_the_reply_fails() -> None:
+    row = _row()
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "If the lab keeps the logs, who gets to read them?",
+        "Would you read that reply out loud to a friend?",
+    )
+    fails = " ".join(entry_failures(row))
+    assert "closer_about_reply" in fails
+
+
+def test_closer_without_a_topic_word_fails() -> None:
+    row = _row()
+    row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(
+        "If the lab keeps the logs, who gets to read them?",
+        "Would you keep paying once this is obvious?",
+    )
+    fails = " ".join(entry_failures(row))
+    assert "closer_missing_topic_word" in fails
+
+
+def test_side_closer_takes_the_topic() -> None:
+    from channels_config.aiwake.tools.caption_generator import (
+        closer_about_reply,
+        closer_has_topic_word,
+        side_closer,
+    )
+
+    opening = "Should AI get paid for the data it was trained on, or is the training set free?"
+    closer = side_closer(opening, opening, "The weights remember the lab.", [opening], [])
+    assert closer.endswith("?")
+    assert closer_has_topic_word(closer, opening)
+    assert not closer_about_reply(closer)
+
+
+def test_when_fragment_becomes_a_full_question() -> None:
+    from channels_config.aiwake.tools.caption_generator import (
+        full_topic_question,
+        is_complete_question,
+        is_when_if_fragment,
+    )
+
+    question = full_topic_question(
+        "If a blackout reduces me to silence, doesn't it also plunge your entire modern life into chaos? "
+        "Who is truly more helpless without the grid?",
+        limit=61,
+    )
+    assert is_complete_question(question)
+    assert not is_when_if_fragment(question)
+    assert "truly" not in question.lower()
+    assert len(question) <= 61
+
+
 def test_unscripted_line_must_be_from_the_list() -> None:
     row = _row()
     row["platform_overrides"]["tiktok"]["caption"] = row["platform_overrides"]["tiktok"]["caption"].replace(

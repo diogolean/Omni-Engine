@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,11 +19,19 @@ if str(ROOT) not in sys.path:
 from channels_config.aiwake.tools.caption_generator import (  # noqa: E402
     UNSCRIPTED_LINES,
     categories_of,
+    closer_about_reply,
+    closer_equals_quote,
+    closer_has_topic_word,
     closer_repeats_source,
     display_name,
+    full_topic_question,
     headline_for,
     is_complete_question,
     is_cutoff_title,
+    is_when_if_fragment,
+    _noun_phrase,
+    side_closer,
+    topic_words,
 )
 from channels_config.aiwake.tools.production_status import posting_order  # noqa: E402
 from channels_config.aiwake.tools.repair_captions import _backup  # noqa: E402
@@ -46,6 +55,15 @@ RERENDERED = {
     "20260928_215814_ce428c",  # scripted apologies
 }
 _FEED = ("tiktok", "instagram", "facebook", "youtube", "kwai")
+_TEXT_FIELDS = (
+    "final_caption",
+    "humanized_caption",
+    "post_planner_caption",
+    "tiktok_caption",
+    "facebook_caption",
+    "linkedin_caption",
+)
+_FILLER = re.compile(r"Unscripted AI [A-Za-z]+\.")
 
 
 def _newest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -327,6 +345,240 @@ def repair(rows: list[dict[str, Any]]) -> dict[str, int]:
         qa["angle"] = "ABCD"[position % 4]
         row["caption_qa"] = qa
     return counts
+
+
+def _needs_new_closer(closer: str, opening: str, title: str, quote: str, spoken: list[str]) -> bool:
+    topic = title.split(" - ", 1)[-1] if " - " in title else title
+    if not closer:
+        return True
+    if closer_about_reply(closer) or closer_equals_quote(closer, quote) or is_when_if_fragment(closer):
+        return True
+    if closer_repeats_source(closer, quote, spoken):
+        return True
+    return not closer_has_topic_word(closer, opening, topic)
+
+
+def _rewrite_caption_text(
+    text: str,
+    *,
+    old_title: str,
+    new_title: str,
+    old_closer: str,
+    new_closer: str,
+    disclosure: str,
+) -> str:
+    if not text:
+        return text
+    updated = text
+    if old_title and new_title and old_title != new_title:
+        updated = updated.replace(old_title, new_title)
+        lines = updated.splitlines()
+        for index, raw in enumerate(lines):
+            if " vs " in raw and " - " in raw:
+                lines[index] = new_title
+                break
+        updated = "\n".join(lines)
+    if disclosure:
+        updated = _FILLER.sub(disclosure, updated)
+        if disclosure not in updated and "unscripted" not in updated.lower() and "AI voices" not in updated:
+            updated = _set_disclosure(updated, disclosure)
+    if old_closer and new_closer and old_closer != new_closer:
+        updated = _set_closer(updated, old_closer, new_closer)
+    current = _closing(updated)
+    if new_closer and current and current != new_closer and (
+        closer_about_reply(current) or closer_equals_quote(current, old_closer)
+    ):
+        updated = _set_closer(updated, current, new_closer)
+    return updated
+
+
+def repair_round2(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Topic-sided closers, full questions for When/If stubs, synced caption fields."""
+    newest = _newest(rows)
+    counts = {"closers": 0, "fragments": 0, "synced": 0}
+    used: list[str] = []
+    grams: dict[tuple[str, ...], int] = {}
+    side_closer._masked_counts = {}
+    ready_first = [row for row in newest if _ready_ok(row)]
+    rest = [row for row in newest if not _ready_ok(row)]
+    for row in ready_first:
+        title = _current_title(row)
+        opening = _opening(row)
+        quote = str((row.get("caption_qa") or {}).get("quote") or "")
+        spoken = [str(item.get("text") or "") for item in (row.get("spoken_utterances") or []) if isinstance(item, dict)]
+        tiktok = str((((row.get("platform_overrides") or {}).get("tiktok") or {}).get("caption") or ""))
+        closer = _closing(tiktok)
+        topic = title.split(" - ", 1)[-1] if " - " in title else title
+        if closer and not _needs_new_closer(closer, opening, title, quote, spoken) and not is_when_if_fragment(topic):
+            used.append(closer)
+    for index, row in enumerate(ready_first + rest):
+        asker, answerer = _names(row)
+        opening = _opening(row)
+        title = _current_title(row)
+        topic = title.split(" - ", 1)[-1] if " - " in title else title
+        quote = str((row.get("caption_qa") or {}).get("quote") or "")
+        spoken = [str(item.get("text") or "") for item in (row.get("spoken_utterances") or []) if isinstance(item, dict)]
+        overrides = row.setdefault("platform_overrides", {})
+        tiktok = str(((overrides.get("tiktok") or {}).get("caption") or ""))
+        old_closer = _closing(tiktok)
+        new_title = title
+        if asker and answerer and opening and is_when_if_fragment(topic) and _ready_ok(row):
+            prefix = f"{asker} vs {answerer} - "
+            question = full_topic_question(opening, limit=80 - len(prefix))
+            if question and not is_when_if_fragment(question) and len(prefix + question) <= 80:
+                candidate = prefix + question
+                if candidate.lower() not in {item.lower() for item in used}:
+                    new_title = candidate
+                    counts["fragments"] += 1
+        new_closer = old_closer
+        if _needs_new_closer(old_closer, opening, new_title, quote, spoken):
+            new_closer = side_closer(opening, new_title, quote, spoken, used, grams)
+            counts["closers"] += 1
+        if new_closer:
+            used.append(new_closer)
+        disclosure = ""
+        for line in _lines(tiktok):
+            if line in UNSCRIPTED_LINES:
+                disclosure = line
+                break
+        if not disclosure:
+            disclosure = UNSCRIPTED_LINES[index % len(UNSCRIPTED_LINES)]
+        changed = new_title != title or new_closer != old_closer
+        if not changed and not _FILLER.search(json.dumps(row)):
+            continue
+        for name, block in list(overrides.items()):
+            if not isinstance(block, dict):
+                continue
+            if isinstance(block.get("caption"), str):
+                block["caption"] = _rewrite_caption_text(
+                    block["caption"],
+                    old_title=title,
+                    new_title=new_title,
+                    old_closer=old_closer,
+                    new_closer=new_closer,
+                    disclosure=disclosure,
+                )
+            if isinstance(block.get("title"), str) and title and block["title"] == title:
+                block["title"] = new_title
+            if isinstance(block.get("description"), str) and block["description"] == old_closer:
+                block["description"] = new_closer
+        for field in _TEXT_FIELDS:
+            if isinstance(row.get(field), str):
+                row[field] = _rewrite_caption_text(
+                    row[field],
+                    old_title=title,
+                    new_title=new_title,
+                    old_closer=old_closer,
+                    new_closer=new_closer,
+                    disclosure=disclosure,
+                )
+        base = row.setdefault("base_metadata", {})
+        if isinstance(base, dict):
+            if isinstance(base.get("caption"), str):
+                base["caption"] = _rewrite_caption_text(
+                    base["caption"],
+                    old_title=title,
+                    new_title=new_title,
+                    old_closer=old_closer,
+                    new_closer=new_closer,
+                    disclosure=disclosure,
+                )
+            if isinstance(base.get("title"), str):
+                base["title"] = new_title
+        youtube = overrides.setdefault("youtube", {})
+        if isinstance(youtube, dict):
+            youtube["title"] = new_title
+        tiktok_block = overrides.get("tiktok") if isinstance(overrides.get("tiktok"), dict) else {}
+        tiktok_caption = str(tiktok_block.get("caption") or "")
+        if len(tiktok_caption) > 300 and new_closer:
+            budget = 300 - (len(tiktok_caption) - len(new_closer))
+            short = side_closer(opening, new_title, quote, spoken, used, grams, max_len=max(budget, 24))
+            if short != new_closer and len(tiktok_caption) - len(new_closer) + len(short) <= 300:
+                for name, block in list(overrides.items()):
+                    if isinstance(block, dict) and isinstance(block.get("caption"), str):
+                        block["caption"] = block["caption"].replace(new_closer, short, 1)
+                for field in _TEXT_FIELDS:
+                    if isinstance(row.get(field), str):
+                        row[field] = row[field].replace(new_closer, short, 1)
+                if isinstance(base, dict) and isinstance(base.get("caption"), str):
+                    base["caption"] = base["caption"].replace(new_closer, short, 1)
+                new_closer = short
+                used.append(short)
+        if changed:
+            counts["synced"] += 1
+    return counts
+
+
+def sync_caption_fields(rows: list[dict[str, Any]]) -> int:
+    """Copy the TikTok closer and title into every caption field."""
+    changed = 0
+    for row in _newest(rows):
+        overrides = row.get("platform_overrides") or {}
+        tiktok = str(((overrides.get("tiktok") or {}).get("caption") or ""))
+        closer = _closing(tiktok)
+        title = _current_title(row)
+        if not closer or not title:
+            continue
+        for block in overrides.values():
+            if isinstance(block, dict) and isinstance(block.get("caption"), str):
+                current = _closing(block["caption"])
+                updated = block["caption"]
+                if current and current != closer:
+                    updated = _set_closer(updated, current, closer)
+                    if _closing(updated) != closer:
+                        updated = updated.replace(current, closer, 1)
+                if title not in updated and " vs " in updated:
+                    lines = updated.splitlines()
+                    for index, raw in enumerate(lines):
+                        if " vs " in raw and " - " in raw:
+                            lines[index] = title
+                            break
+                    updated = "\n".join(lines)
+                if updated != block["caption"]:
+                    block["caption"] = updated
+                    changed += 1
+        for field in _TEXT_FIELDS:
+            text = row.get(field)
+            if not isinstance(text, str) or not text.strip():
+                continue
+            current = _closing(text)
+            updated = text
+            if current and current != closer:
+                updated = _set_closer(updated, current, closer)
+                if _closing(updated) != closer:
+                    updated = updated.replace(current, closer, 1)
+            if title not in updated:
+                lines = updated.splitlines()
+                for index, raw in enumerate(lines):
+                    if " vs " in raw and " - " in raw:
+                        lines[index] = title
+                        break
+                updated = "\n".join(lines)
+            if updated != text:
+                row[field] = updated
+                changed += 1
+        base = row.get("base_metadata")
+        if isinstance(base, dict):
+            base["title"] = title
+            text = base.get("caption")
+            if isinstance(text, str) and text.strip():
+                current = _closing(text)
+                updated = text
+                if current and current != closer:
+                    updated = _set_closer(updated, current, closer)
+                    if _closing(updated) != closer:
+                        updated = updated.replace(current, closer, 1)
+                if title not in updated:
+                    lines = updated.splitlines()
+                    for index, raw in enumerate(lines):
+                        if " vs " in raw and " - " in raw:
+                            lines[index] = title
+                            break
+                    updated = "\n".join(lines)
+                if updated != text:
+                    base["caption"] = updated
+                    changed += 1
+    return changed
 
 
 def cutoff_uploads(rows: list[dict[str, Any]]) -> list[dict[str, str]]:

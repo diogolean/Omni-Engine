@@ -27,7 +27,10 @@ from channels_config.aiwake.tools.caption_generator import (
     _read_turns,
     allowed_hashtags,
     build_headline,
+    closer_about_reply,
     closer_copies_spoken,
+    closer_equals_quote,
+    closer_has_topic_word,
     closer_repeats_source,
     display_name,
     is_complete_question,
@@ -545,6 +548,12 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     if "what should a viewer ask" in (topic or "").lower() or "what should a viewer ask" in headline.lower():
         fails.append(f"template_title: {name}")
     spoken_lines = [str(item.get("text") or "") for item in turns]
+    if closer and closer_equals_quote(closer, quote):
+        fails.append(f"closer_equals_quote: {name}")
+    if closer and closer_about_reply(closer):
+        fails.append(f"closer_about_reply: {name}")
+    if closer and not closer_has_topic_word(closer, opening, topic):
+        fails.append(f"closer_missing_topic_word: {name}")
     for sentence in _body_sentences(str(_get(row, _PLATFORMS["tiktok"][0]) or "")):
         if sentence.startswith('"') or sentence.startswith("\u201c"):
             continue
