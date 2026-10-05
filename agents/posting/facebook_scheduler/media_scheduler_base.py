@@ -37,6 +37,7 @@ from typing import Any, TYPE_CHECKING
 from agents.posting.facebook_scheduler import config
 from agents.posting.facebook_scheduler.human_behavior import HumanBehavior
 from agents.posting.facebook_scheduler.logger import get_logger, save_screenshot
+from utils.pipeline_paths import outputs_path
 
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page
@@ -47,11 +48,7 @@ _log = get_logger(__name__)
 # Paths / scheduling defaults
 # ---------------------------------------------------------------------------
 
-OUTPUTS_BASE_DIR: Path = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
-    r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory\outputs"
-)
+OUTPUTS_BASE_DIR: Path = outputs_path()
 
 BUSINESS_SUITE_HOME = "https://business.facebook.com/latest/"
 REELS_COMPOSER_URL = "https://business.facebook.com/latest/reels_composer"

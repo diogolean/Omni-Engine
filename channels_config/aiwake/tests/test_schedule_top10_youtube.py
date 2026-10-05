@@ -19,6 +19,7 @@ from channels_config.aiwake.tools.schedule_youtube import (
     slot_iso_utc_z,
     validate_library_rows,
 )
+from channels_config.aiwake.tests.caption_fixtures import install_publishable
 from modules.distribution_contract import load_distribution_library, validate_queue_ready
 
 
@@ -86,6 +87,7 @@ def test_plan_skips_tests_and_reproved_folders() -> None:
         timestamp="2026-09-08T10:00:00+00:00",
         path="/outputs/aiwake/tmp/aiwake_debate_tmp.mp4",
     )
+    install_publishable(ok)
     planned, rejected = plan_schedule([ok, reproved, tests, scratch], limit=10)
     assert [item.session_id for item in planned] == ["ok"]
     reasons = " ".join(item["reason"] for item in rejected)
@@ -106,6 +108,7 @@ def test_plan_rejects_retired_terminal_aesthetic() -> None:
         session="animation",
         timestamp="2026-09-08T10:00:00+00:00",
     )
+    install_publishable(animation)
     planned, rejected = plan_schedule([terminal, animation], limit=10)
     assert [item.session_id for item in planned] == ["animation"]
     assert rejected[0]["session_id"] == "terminal"
@@ -120,6 +123,9 @@ def test_select_pending_newest_first_top_10() -> None:
         _row(session="new", timestamp="2026-09-05T10:00:00+00:00", youtube="pending"),
         _row(session="done", timestamp="2026-09-06T10:00:00+00:00", youtube="scheduled"),
     ]
+    for row in rows:
+        if row["session_id"] != "done":
+            install_publishable(row, index={"old": 0, "mid": 1, "new": 2}[row["session_id"]])
     picked = select_pending_rows(rows, limit=2)
     assert [row["session_id"] for row in picked] == ["new", "mid"]
 
@@ -193,7 +199,7 @@ def test_plan_continues_after_existing_future_slots() -> None:
         youtube="scheduled",
     )
     already["platform_overrides"]["youtube"]["scheduled_time"] = "2026-09-15T22:00:00Z"
-    pending = _row(session="next", timestamp="2026-09-10T00:00:00+00:00")
+    pending = install_publishable(_row(session="next", timestamp="2026-09-10T00:00:00+00:00"), index=1)
     planned, rejected = plan_schedule(
         [already, pending],
         limit=10,
@@ -206,8 +212,8 @@ def test_plan_continues_after_existing_future_slots() -> None:
 
 def test_plan_binds_newest_to_earliest_slot() -> None:
     rows = [
-        _row(session="older", timestamp="2026-09-01T00:00:00+00:00"),
-        _row(session="newer", timestamp="2026-09-05T00:00:00+00:00"),
+        install_publishable(_row(session="older", timestamp="2026-09-01T00:00:00+00:00"), index=0),
+        install_publishable(_row(session="newer", timestamp="2026-09-05T00:00:00+00:00"), index=1),
     ]
     planned, rejected = plan_schedule(rows, limit=10, now=datetime(2026, 9, 5, 12, 0, tzinfo=ET))
     assert rejected == []
@@ -222,7 +228,7 @@ def test_plan_binds_newest_to_earliest_slot() -> None:
 
 def test_persist_scheduled_updates_library(tmp_path: Path) -> None:
     library = tmp_path / "content_library.json"
-    row = _row(session="sess1", timestamp="2026-09-05T10:00:00+00:00")
+    row = install_publishable(_row(session="sess1", timestamp="2026-09-05T10:00:00+00:00"))
     library.write_text("[" + __import__("json").dumps(row) + "]\n", encoding="utf-8")
     planned, rejected = plan_schedule(
         [row],
@@ -265,11 +271,11 @@ def test_execute_uses_publisher_wrapper(tmp_path: Path) -> None:
     video = tmp_path / "animation_clips" / "aiwake_battle_sess1.mp4"
     video.parent.mkdir()
     video.write_bytes(b"0" * 8)
-    row = _row(
+    row = install_publishable(_row(
         session="sess1",
         timestamp="2026-09-05T10:00:00+00:00",
         path=str(video),
-    )
+    ))
     library.write_text("[" + __import__("json").dumps(row) + "]\n", encoding="utf-8")
     calls: list[dict] = []
 
@@ -300,9 +306,9 @@ def test_execute_uses_publisher_wrapper(tmp_path: Path) -> None:
 
 
 def test_plan_rejects_incomplete_rows() -> None:
-    incomplete = _row(session="broken", timestamp="2026-09-05T10:00:00+00:00")
+    incomplete = install_publishable(_row(session="broken", timestamp="2026-09-05T10:00:00+00:00"), index=1)
     incomplete["base_metadata"]["search_tags"] = []
-    complete = _row(session="ok", timestamp="2026-09-04T10:00:00+00:00")
+    complete = install_publishable(_row(session="ok", timestamp="2026-09-04T10:00:00+00:00"))
     planned, rejected = plan_schedule([incomplete, complete], limit=10)
     assert [item.session_id for item in planned] == ["ok"]
     assert rejected[0]["session_id"] == "broken"

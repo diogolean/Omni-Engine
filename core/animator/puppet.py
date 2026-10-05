@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .types import REST_VISEME, VISEMES, PuppetAnchors, PuppetTheme
+from .animator_types import REST_VISEME, VISEMES, PuppetAnchors, PuppetTheme
 
 _LOG = logging.getLogger("animator.puppet")
 
@@ -739,7 +739,7 @@ class PuppetRig:
     ) -> np.ndarray:
         """Composite one frame of this puppet at the given animation state.
 
-        ``viseme`` (one of :data:`~core.animator.types.VISEMES`) selects the
+        ``viseme`` (one of :data:`~core.animator.animator_types.VISEMES`) selects the
         phonetic mouth sprite. When omitted, the legacy coarse
         ``mouth_state`` (0/1/2) is mapped onto the equivalent shape.
 

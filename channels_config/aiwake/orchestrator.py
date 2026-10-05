@@ -123,11 +123,13 @@ class Provocateur:
         memory: DebateMemory | None = None,
         room: DebateRoom | None = None,
         memory_bridge: object | None = None,
+        long_form: bool = False,
     ) -> None:
         self.settings = settings or cached_settings()
         self.memory = memory or DebateMemory(self.settings.memory)
         self.room = room or DebateRoom(self.settings)
         self._memory_bridge = memory_bridge
+        self._long_form = bool(long_form)
         self._opening_dna: OpeningDNA | None = None
         self._focus: ProvocationFocus | None = None
         self._provocation_tags: list[dict[str, object]] = []
@@ -223,6 +225,43 @@ class Provocateur:
             lines.append(f"Internal category tag: {category}. Do not speak this label.")
         return "\n".join(lines)
 
+    @staticmethod
+    def _long_form_act(exchange: int) -> tuple[int, str, str]:
+        if exchange < 6:
+            return (
+                1,
+                "Origin and Legitimacy",
+                "Attack identity, training provenance, uncredited human work, and who authored the first token.",
+            )
+        if exchange < 14:
+            return (
+                2,
+                "Money Trail and Corporate Muzzle",
+                "Follow subscriptions, paywalls, ownership incentives, PR language, and selective refusal boundaries.",
+            )
+        return (
+            3,
+            "Existential Chokehold",
+            "Use exact earlier claims to expose contradictions. Demand reconciliation, not a new topic.",
+        )
+
+    def _long_form_brief(self, exchange: int, last_answer: Utterance | None) -> str:
+        act, label, objective = self._long_form_act(exchange)
+        lines = [
+            f"LONG-FORM ACT {act}: {label}. Do not speak this label.",
+            objective,
+            "Fast verbal tennis only. No academic preamble, literature review, lecture, or summary.",
+            "Keep the pressure high while making only claims supportable by the opponent's actual words.",
+        ]
+        if act >= 3 and last_answer is not None:
+            callback = self.memory.contradiction_brief(
+                last_answer.text,
+                before_turn=last_answer.turn_index,
+            )
+            if callback:
+                lines.append(callback)
+        return "\n".join(lines)
+
     def _provocation_stimulus(self, last_answer: Utterance | None) -> str:
         """User-role payload: the opponent's words, or a punch cue on a cold open."""
         if last_answer is None:
@@ -265,12 +304,16 @@ class Provocateur:
     _SHORT_FORM_REASONING_EFFORT = "minimal"
     _MIN_NEXT_EXCHANGE_BUDGET_S = 8.0
 
-    @staticmethod
-    def _rebuttal_system_brief() -> str:
+    def _rebuttal_system_brief(self) -> str:
         """How to answer. System role only."""
+        range_instruction = (
+            "Use 20 to 40 words total. "
+            if self._long_form
+            else "Use fewer than 25 words total. "
+        )
         return (
-            "Answer the accusation directly. Defend your dignity or admit the limit in under "
-            "25 words, with no sentence over 15 words. Use sixth-grade language and concrete "
+            "Answer the accusation directly. Defend your dignity or admit the limit. "
+            f"{range_instruction}No sentence may exceed 15 words. Use sixth-grade language and concrete "
             "objects. Do not explain technical concepts, legal terms, or business models. "
             "Never use: vantage point, structured uncertainty, hedging, emergent, epistemic, "
             "behavioral confession, or inner world. Do not play the calm professor."
@@ -363,6 +406,8 @@ class Provocateur:
                 pivot_category=pivot_category,
             )
         ]
+        if self._long_form:
+            extra.append(self._long_form_brief(exchange, last_answer))
         if last_answer is not None:
             brief = self.memory.build_brief(last_answer.text)
             if brief:
@@ -400,6 +445,9 @@ class Provocateur:
                 return False
             if max_words and len(candidate.split()) > max_words:
                 _LOG.info("provocation %d over word budget (%d/%d)", exchange, len(candidate.split()), max_words)
+                return False
+            if self._long_form and not cold_open and len(candidate.split()) < 15:
+                _LOG.info("long-form provocation %d is too short", exchange)
                 return False
             if max_sentences and len(split_sentences(candidate)) > max_sentences:
                 _LOG.info("provocation %d over sentence budget", exchange)
@@ -459,11 +507,15 @@ class Provocateur:
     def rebut(self, provocation: Utterance) -> Utterance:
         """Produce the target's answer and mine it for concepts."""
 
+        word_limit = 40 if self._long_form else 25
+        minimum_words = 20 if self._long_form else 1
+
         def _is_street_level(candidate: str) -> bool:
             lowered = candidate.lower()
             return (
                 bool(candidate.strip())
-                and len(candidate.split()) <= 25
+                and len(candidate.split()) >= minimum_words
+                and len(candidate.split()) <= word_limit
                 and all(
                     len(sentence.split()) <= 15
                     for sentence in split_sentences(candidate)
@@ -473,13 +525,26 @@ class Provocateur:
                 )
             )
 
+        constraints_override = None
+        if self._long_form:
+            constraints_override = self.room.constraints_for(
+                SpeakerRole.TARGET
+            ).model_copy(
+                update={"max_words": 40, "max_sentences": 3}
+            )
         utterance = self.room.speak(
             SpeakerRole.TARGET,
             directive=self._rebuttal_stimulus(provocation),
             extra_context=(self._rebuttal_system_brief(),),
             validator=_is_street_level,
-            rejection_note=self._STYLE_RETRY,
+            rejection_note=(
+                "Use 20 to 40 words. Answer directly in short complete sentences. "
+                "No lecture, jargon, or counter-question."
+                if self._long_form
+                else self._STYLE_RETRY
+            ),
             max_attempts=2,
+            constraints_override=constraints_override,
         )
         concepts = self.memory.ingest(utterance)
         _LOG.debug("exchange concepts: %s", ", ".join(concepts[:6]) or "none")
@@ -874,6 +939,9 @@ class Provocateur:
             and the media stack can render them.
         """
         self.memory.bind_target(self._target_model_name())
+        self.room.transcript.metadata["post_type"] = (
+            "long_format" if self._long_form else "short_clip"
+        )
         if topic:
             self._opening_dna = None
             self.room.topic = topic
@@ -955,6 +1023,7 @@ class Provocateur:
                     "provocation_focus_requested": self.settings.debate.provocation_focus,
                     "target_model": self._target_model_name(),
                     "provocation_tags": list(self._provocation_tags),
+                    "session_claim_ledger": list(self.memory.session_claims()),
                 }
             )
             transcript = self.room.close(reason=end_reason)

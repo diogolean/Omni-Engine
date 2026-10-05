@@ -282,6 +282,13 @@ class SpeakerRole(str, Enum):
         }[self]
 
 
+class PostType(str, Enum):
+    """Delivery format. The default preserves the approved vertical pipeline."""
+
+    SHORT_CLIP = "short_clip"
+    LONG_FORMAT = "long_format"
+
+
 def pretty_model_name(slug: str, fallback: str = "model") -> str:
     """Human display label for a speaker/model slug.
 
@@ -596,6 +603,7 @@ __all__ = [
     "ConceptRecord",
     "DebateTranscript",
     "OUTPUT_ISOLATION",
+    "PostType",
     "RoomConstraints",
     "SpeakerRole",
     "Utterance",

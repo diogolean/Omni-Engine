@@ -157,6 +157,9 @@ class DebateMemory:
         # MemoryObserver may be on the event bus; both paths must be safe.
         self._ingested: set[tuple[int, int]] = set()
         self._active_target = ""
+        # Session-local exact-quote ledger. It is intentionally not loaded
+        # from prior videos: long-form contradictions must cite this debate.
+        self._session_claims: list[tuple[int, str, tuple[str, ...]]] = []
 
     # -- Persistence -------------------------------------------------------- #
     def _load(self) -> MemoryState:
@@ -202,6 +205,7 @@ class DebateMemory:
         self.state = MemoryState()
         self._ingested.clear()
         self._active_target = ""
+        self._session_claims.clear()
         self.flush()
 
     # -- Write path --------------------------------------------------------- #
@@ -224,6 +228,10 @@ class DebateMemory:
             return []
 
         self.state.exchanges += 1
+        claim_tokens = tuple(sorted(set(_tokenise(utterance.text))))
+        self._session_claims.append(
+            (utterance.turn_index, utterance.text, claim_tokens)
+        )
         return self._extract_concepts(utterance.text, utterance.turn_index)
 
     def bind_target(self, target_model: str) -> None:
@@ -473,6 +481,37 @@ class DebateMemory:
 
         lines.append("Advance the interrogation from this material. Do not re-litigate covered ground.")
         return "\n".join(lines)
+
+    def contradiction_brief(self, query: str, *, before_turn: int | None = None) -> str:
+        """Return one exact earlier claim suitable for a contradiction callback."""
+        candidates = [
+            item
+            for item in self._session_claims
+            if before_turn is None or item[0] < before_turn
+        ]
+        if not candidates:
+            return ""
+        query_tokens = _tokenise(query)
+        turn_index, quote, _tokens = max(
+            candidates,
+            key=lambda item: (
+                _jaccard(query_tokens, item[2]),
+                -item[0],
+            ),
+        )
+        return (
+            "SESSION CLAIM LEDGER. Use this exact earlier claim only if it creates "
+            "a real contradiction; never invent a quote. "
+            f'Turn {turn_index + 1}: "{quote}" '
+            "Name the conflict plainly and demand a direct reconciliation."
+        )
+
+    def session_claims(self) -> tuple[dict[str, object], ...]:
+        """JSON-safe exact claims for transcript metadata and SuperMemory export."""
+        return tuple(
+            {"turn_index": index, "text": text}
+            for index, text, _tokens in self._session_claims
+        )
 
     # -- Introspection ------------------------------------------------------ #
     @property

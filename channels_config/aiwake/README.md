@@ -32,12 +32,22 @@ python -m channels_config.aiwake --turns 4 --no-audio --no-video
 # Bulk: N original videos. Scripts are never reused across the batch or later runs.
 python -m channels_config.aiwake --quantity 5
 
+# Long-form YouTube arena (20 exchanges by default, isolated outputs)
+python -m channels_config.aiwake --mode longform --resolution 1920x1080 \
+  --target-duration 360 --random-matchups --generate-thumbnail
+
 python -m channels_config.aiwake --list-models      # alias table + current seats
 python -m channels_config.aiwake --list-providers
 python -m channels_config.aiwake --test-bgm         # force-overwrite inspection clip; print path
 python -m channels_config.aiwake --generate-bgm-batch  # production library (approved inspection bed)
 python -m pytest channels_config/aiwake/tests -q
 ```
+
+Long-form artifacts are written under
+`outputs/aiwake/animation_clips/long_format/{session_id}/`: the episode MP4,
+session thumbnail, `thumbnail_1920x1080.png`, and `metadata.json`. Omitting
+`--long-format`, `--post-type long_format`, and `--mode longform` preserves the
+approved vertical pipeline.
 
 Or from Python:
 

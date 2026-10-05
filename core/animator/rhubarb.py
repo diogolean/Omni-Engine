@@ -5,10 +5,11 @@
 speech recording and emits time-stamped mouth cues using nine canonical
 shapes (A-H plus X for rest). This module:
 
-1. Locates ``rhubarb`` — an explicit ``RHUBARB_PATH``/``RHUBARB_EXE`` env
-   var, a previous download under ``core/animator/bin/``, or ``PATH``.
-2. Auto-downloads and unpacks the official Windows/Linux/macOS release into
-   ``core/animator/bin/`` when it is missing.
+1. Locates ``rhubarb`` — ``RHUBARB_PATH``/``RHUBARB_EXE``, then ``PATH``,
+   then a previous download under ``core/animator/bin/``.
+2. Auto-downloads the official Windows release into ``core/animator/bin/``
+   when it is missing. Linux and macOS do not auto-download; they fall
+   back to the RMS volume envelope after the path search.
 3. Runs it over a turn's audio and parses the JSON cue list.
 
 Every step degrades gracefully: no network, a blocked download, a corrupt
@@ -31,7 +32,7 @@ from typing import Sequence
 
 import numpy as np
 
-from .types import REST_VISEME, VISEMES
+from .animator_types import REST_VISEME, VISEMES
 
 _LOG = logging.getLogger("animator.rhubarb")
 
@@ -53,24 +54,67 @@ def _exe_name() -> str:
     return "rhubarb.exe" if os.name == "nt" else "rhubarb"
 
 
-def find_rhubarb() -> Path | None:
-    """Locate an existing Rhubarb binary without attempting a download."""
+def _rhubarb_from_env() -> Path | None:
+    """``RHUBARB_PATH`` / ``RHUBARB_EXE``: a binary, or a directory that contains one."""
     for env_var in ("RHUBARB_PATH", "RHUBARB_EXE"):
         raw = (os.getenv(env_var) or "").strip().strip('"')
-        if raw and Path(raw).is_file():
-            return Path(raw)
+        if not raw:
+            continue
+        candidate = Path(raw).expanduser()
+        if candidate.is_file():
+            return candidate
+        if not candidate.is_dir():
+            continue
+        direct = candidate / _exe_name()
+        if direct.is_file():
+            return direct
+        for nested in candidate.rglob(_exe_name()):
+            if nested.is_file():
+                return nested
+    return None
 
+
+def _rhubarb_in_bin() -> Path | None:
+    """A previous Windows auto-download under ``core/animator/bin/``."""
     local = BIN_DIR / _exe_name()
     if local.is_file():
         return local
-    # Release zips unpack into a versioned subfolder; accept that layout too.
     if BIN_DIR.is_dir():
         for candidate in BIN_DIR.rglob(_exe_name()):
             if candidate.is_file():
                 return candidate
+    return None
 
+
+def find_rhubarb() -> Path | None:
+    """Locate an existing Rhubarb binary without attempting a download.
+
+    Order: ``RHUBARB_PATH`` / ``RHUBARB_EXE``, then ``PATH`` via
+    ``shutil.which("rhubarb")``, then a binary already unpacked under
+    ``core/animator/bin/``.
+    """
+    from_env = _rhubarb_from_env()
+    if from_env is not None:
+        return from_env
     found = shutil.which("rhubarb")
-    return Path(found) if found else None
+    if found:
+        return Path(found)
+    return _rhubarb_in_bin()
+
+
+def _warn_volume_fallback(reason: str) -> None:
+    """One clear warning, then the RMS volume-envelope viseme fallback."""
+    global _DOWNLOAD_BLOCKED
+    if _DOWNLOAD_BLOCKED:
+        return
+    _DOWNLOAD_BLOCKED = True
+    _LOG.warning(
+        "Rhubarb executable not found (%s). Checked RHUBARB_PATH, then PATH "
+        "(shutil.which('rhubarb')), then %s. Falling back to the RMS "
+        "volume-envelope visemes.",
+        reason,
+        BIN_DIR,
+    )
 
 
 def ensure_rhubarb(*, allow_download: bool = True) -> Path | None:
@@ -78,17 +122,18 @@ def ensure_rhubarb(*, allow_download: bool = True) -> Path | None:
 
     Returns ``None`` (never raises) when Rhubarb cannot be obtained, which
     is the caller's signal to fall back to the envelope approximation.
+    Search order is ``RHUBARB_PATH``, then ``PATH``, then the Windows
+    release download. Anything still missing uses the volume-envelope fallback.
     """
     global _DOWNLOAD_BLOCKED
 
     existing = find_rhubarb()
     if existing is not None:
         return existing
-    if not allow_download or _DOWNLOAD_BLOCKED:
+    if _DOWNLOAD_BLOCKED or not allow_download:
         return None
     if os.name != "nt":
-        _LOG.info("no Rhubarb binary found; auto-download is Windows-only — using envelope fallback")
-        _DOWNLOAD_BLOCKED = True
+        _warn_volume_fallback("auto-download is Windows-only")
         return None
 
     BIN_DIR.mkdir(parents=True, exist_ok=True)
@@ -103,15 +148,14 @@ def ensure_rhubarb(*, allow_download: bool = True) -> Path | None:
             zf.extractall(BIN_DIR)
         archive.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001 — offline/blocked/proxied environments are expected
-        _LOG.warning("Rhubarb auto-download failed (%s); using RMS envelope fallback", exc)
+        _LOG.warning("Rhubarb auto-download failed (%s); using RMS volume-envelope fallback", exc)
         archive.unlink(missing_ok=True)
         _DOWNLOAD_BLOCKED = True
         return None
 
     resolved = find_rhubarb()
     if resolved is None:
-        _LOG.warning("Rhubarb archive unpacked but no %s found; using envelope fallback", _exe_name())
-        _DOWNLOAD_BLOCKED = True
+        _warn_volume_fallback(f"archive unpacked but no {_exe_name()} was found")
     return resolved
 
 

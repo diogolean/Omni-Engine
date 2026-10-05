@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 
 from utils.pipeline_paths import assets_root
 
-from ..types import VISEMES
+from ..animator_types import VISEMES
 from .skia_mouths import (
     archetype_for as skia_archetype_for,
     draw_emotion as draw_skia_emotion,

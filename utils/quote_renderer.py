@@ -43,13 +43,11 @@ if str(_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_ENGINE_ROOT))
 
 from utils.ocr_text import strip_wrapping_quotes
-from utils.pipeline_paths import page_outputs_dir
-FACTORY_ROOT: Path = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
-    r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory"
-)
-VAULT_PATH: Path = FACTORY_ROOT / "assets" / "ocr_vault.json"
+from utils.pipeline_paths import assets_path, page_outputs_dir
+
+_ASSETS_ROOT: Path = assets_path()
+FACTORY_ROOT: Path = _ASSETS_ROOT.parent
+VAULT_PATH: Path = _ASSETS_ROOT / "ocr_vault.json"
 
 IMAGE_TEXTS_DIRNAME: str = "image_texts"
 TEMPLATE_DIRNAME: str = "image_texts_templates"

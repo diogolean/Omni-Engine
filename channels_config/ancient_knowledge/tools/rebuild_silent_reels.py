@@ -30,11 +30,9 @@ from agents.media.audio_engine import (  # noqa: E402
     generate_voiceover_with_timestamps,
 )
 from main import _stitch_audio_sequential  # noqa: E402
+from utils.pipeline_paths import outputs_path  # noqa: E402
 
-CLIPS = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory\outputs\ancient_knowledge\clips"
-)
+CLIPS = outputs_path("ancient_knowledge", "clips")
 ASSETS = CLIPS.parent / "assets"
 CAPTIONS = CLIPS.parent / "last_captions_bundle.txt"
 FFMPEG = Path(

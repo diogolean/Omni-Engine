@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Literal
 
 try:
-    from .contracts import DebateTranscript
+    from .contracts import DebateTranscript, PostType
     from .media.audio import (
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -51,7 +51,7 @@ try:
         emit,
     )
 except ImportError:  # pragma: no cover — standalone extraction
-    from contracts import DebateTranscript  # type: ignore[no-redef]
+    from contracts import DebateTranscript, PostType  # type: ignore[no-redef]
     from media.audio import (  # type: ignore[no-redef]
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -184,6 +184,8 @@ class PipelineResult:
     end_reason: str
     audio_seconds: float
     dialogue_end_reason: str
+    thumbnail_path: Path | None = None
+    metadata_path: Path | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -334,7 +336,7 @@ def run_pipeline(
     *,
     topic: str | None = None,
     turns: int | None = None,
-    mode: Literal["fixed", "cornered"] | None = None,
+    mode: Literal["fixed", "cornered", "longform"] | None = None,
     provocation_focus: str | None = None,
     settings: AiwakeSettings | None = None,
     orchestrator_model: str | None = None,
@@ -355,6 +357,10 @@ def run_pipeline(
     right_puppet: str | None = None,
     duration_override: float | None = None,
     production_publish: bool = False,
+    post_type: PostType | str = PostType.SHORT_CLIP,
+    resolution: tuple[int, int] | None = None,
+    target_duration_s: float | None = None,
+    generate_thumbnail: bool | None = None,
 ) -> PipelineResult:
     """Run a debate and (optionally) produce the video.
 
@@ -397,6 +403,32 @@ def run_pipeline(
         and any video that could be built from it.
     """
     cfg = settings or load_settings()
+    if mode == "longform":
+        post_type = PostType.LONG_FORMAT
+        mode = "fixed"
+    resolved_post_type = (
+        post_type if isinstance(post_type, PostType) else PostType(post_type)
+    )
+    long_form = resolved_post_type is PostType.LONG_FORMAT
+    if long_form:
+        preset = cfg.long_format
+        dynamic_animation = True
+        turns = turns or preset.default_turns
+        if not preset.min_turns <= int(turns) <= preset.max_turns:
+            raise ValueError(
+                f"long_format requires {preset.min_turns}-{preset.max_turns} exchanges"
+            )
+        resolution = resolution or preset.resolution
+        target_duration_s = target_duration_s or preset.target_duration_s
+        generate_thumbnail = (
+            preset.generate_thumbnail
+            if generate_thumbnail is None
+            else generate_thumbnail
+        )
+        enable_cta = False
+    else:
+        resolution = resolution or (1080, 1920)
+        generate_thumbnail = bool(generate_thumbnail)
     debate_update: dict[str, object] = {}
     if mode is not None:
         debate_update["mode"] = mode
@@ -416,7 +448,7 @@ def run_pipeline(
         cfg = cfg.with_model_override("target", target_model)
     if offline:
         cfg = force_offline(cfg)
-    if dynamic_animation and not matchup_is_legal(
+    if dynamic_animation and not offline and not matchup_is_legal(
         cfg.spec_for("orchestrator").model,
         cfg.spec_for("target").model,
     ):
@@ -452,10 +484,20 @@ def run_pipeline(
         audio_cfg = cfg.audio if with_audio else cfg.audio.model_copy(update={"engine": "silent"})
         voice_map = dict(audio_cfg.voice_map)
         voice_update: dict[str, object] = {}
-        right_id = (right_puppet or "").strip().lower()
-        left_id = (left_puppet or "").strip().lower()
-        # Voice follows the puppet that is actually seated. A neighbour's
-        # voice is never copied onto Llama or any other model.
+        left_id = ""
+        right_id = ""
+        if dynamic_animation:
+            from .avatars import character_map_for
+
+            seated = character_map_for(
+                cfg.spec_for("orchestrator").model,
+                cfg.spec_for("target").model,
+                left_puppet=left_puppet,
+                right_puppet=right_puppet,
+            )
+            left_id = seated["orchestrator"]
+            right_id = seated["target"]
+        # Voice follows the model that is actually seated.
         if left_id in _PUPPET_VOICE:
             voice_map["orchestrator_voice_override"] = _PUPPET_VOICE[left_id]
             for alias in _PUPPET_ALIASES[left_id]:
@@ -505,8 +547,15 @@ def run_pipeline(
     if not quiet:
         room.subscribe(ConsoleObserver(verbose=True))
 
-    provocateur = Provocateur(cfg, memory=memory, room=room)
+    provocateur = Provocateur(
+        cfg,
+        memory=memory,
+        room=room,
+        long_form=long_form,
+    )
     video_path: Path | None = None
+    thumbnail_path: Path | None = None
+    metadata_path: Path | None = None
     audio_seconds = 0.0
     end_reason = "interrupted"
     exchanges = 0
@@ -516,6 +565,18 @@ def run_pipeline(
             turns=turns,
             excluded_topics=excluded_topics,
             excluded_foci=excluded_foci,
+        )
+        result.transcript.metadata.update(
+            {
+                "post_type": resolved_post_type.value,
+                "resolution": [resolution[0], resolution[1]],
+                "target_duration_s": target_duration_s,
+                "stage_mode": (
+                    cfg.long_format.stage_mode
+                    if long_form
+                    else "shot_reverse_shot"
+                ),
+            }
         )
         exchanges = result.exchanges
         end_reason = result.end_reason
@@ -548,7 +609,14 @@ def run_pipeline(
                 animation_dir = (
                     media_dir
                     if duration_override is not None
-                    else media_dir / "animation_clips"
+                    else (
+                        media_dir
+                        / "animation_clips"
+                        / cfg.long_format.output_subdir
+                        / room.session_id
+                        if long_form
+                        else media_dir / "animation_clips"
+                    )
                 )
                 if production_publish:
                     archive_animation_prototypes(animation_dir)
@@ -566,10 +634,31 @@ def run_pipeline(
                         output_name=(
                             "test_v3_iteration.mp4"
                             if duration_override is not None
-                            else None
+                            else (
+                                f"episode_{room.session_id}.mp4"
+                                if long_form
+                                else None
+                            )
                         ),
                         scene="random",
+                        width=resolution[0],
+                        height=resolution[1],
+                        stage_mode=(
+                            cfg.long_format.stage_mode
+                            if long_form
+                            else "shot_reverse_shot"
+                        ),
+                        generate_thumbnail=bool(generate_thumbnail),
+                        thumbnail_name=(
+                            f"thumbnail_{room.session_id}.png"
+                            if long_form
+                            else None
+                        ),
+                        metadata_name="metadata.json" if long_form else None,
                     )
+                    if long_form:
+                        thumbnail_path = animation_dir / f"thumbnail_{room.session_id}.png"
+                        metadata_path = animation_dir / "metadata.json"
                 except Exception as exc:  # noqa: BLE001 — a failed render must not lose the transcript
                     _LOG.error("dynamic_animation render failed: %s", exc)
             else:
@@ -603,11 +692,28 @@ def run_pipeline(
                 reply_gap_s=cfg.render.reply_gap_s,
                 send_flash_s=cfg.render.send_flash_s,
             )
-            if production_publish:
+            if production_publish and not long_form:
                 _persist_production_package(
                     transcript=result.transcript,
                     video_path=video_path,
                     media_dir=media_dir,
+                )
+            elif long_form and result.end_reason == "complete":
+                from .tools.supermemory_bridge import remember_approved_session
+
+                spoken = list(result.transcript.utterances)
+                remember_approved_session(
+                    result.transcript.session_id,
+                    result.transcript.topic,
+                    spoken[0].text if spoken else "",
+                    spoken[-1].text if spoken else "",
+                    target_model=str(
+                        result.transcript.metadata.get("target_model") or ""
+                    ),
+                    claims=tuple(
+                        result.transcript.metadata.get("session_claim_ledger")
+                        or ()
+                    ),
                 )
 
         pipeline_result = PipelineResult(
@@ -617,6 +723,8 @@ def run_pipeline(
             end_reason=result.end_reason,
             audio_seconds=audio_seconds,
             dialogue_end_reason=result.dialogue_end_reason,
+            thumbnail_path=thumbnail_path if thumbnail_path and thumbnail_path.is_file() else None,
+            metadata_path=metadata_path if metadata_path and metadata_path.is_file() else None,
         )
         if record_script:
             _record_produced_script(memory, _transcript_script(pipeline_result))
@@ -643,7 +751,7 @@ def run_bulk_pipeline(
     quantity: int,
     topic: str | None = None,
     turns: int | None = None,
-    mode: Literal["fixed", "cornered"] | None = None,
+    mode: Literal["fixed", "cornered", "longform"] | None = None,
     provocation_focus: str | None = None,
     settings: AiwakeSettings | None = None,
     orchestrator_model: str | None = None,
@@ -663,6 +771,10 @@ def run_bulk_pipeline(
     production_publish: bool = False,
     random_matchups: bool = False,
     matchup_seed: int | None = None,
+    post_type: PostType | str = PostType.SHORT_CLIP,
+    resolution: tuple[int, int] | None = None,
+    target_duration_s: float | None = None,
+    generate_thumbnail: bool | None = None,
 ) -> BulkPipelineResult:
     """Produce ``quantity`` original videos. Never reprints a prior script.
 
@@ -725,6 +837,10 @@ def run_bulk_pipeline(
         "right_puppet": right_puppet,
         "duration_override": duration_override,
         "production_publish": production_publish,
+        "post_type": post_type,
+        "resolution": resolution,
+        "target_duration_s": target_duration_s,
+        "generate_thumbnail": generate_thumbnail,
     }
 
     for index in range(qty):

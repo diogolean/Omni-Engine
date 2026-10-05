@@ -19,7 +19,7 @@ from core.animator.asset_generator import (  # noqa: E402
 from core.animator.compositor import _HeroCamera, _alpha_blend_paste  # noqa: E402
 from core.animator.factory.create_puppet import build_deepseek_stage1  # noqa: E402
 from core.animator.puppet import PuppetRig, PuppetSkin  # noqa: E402
-from core.animator.types import SpeakerStyle  # noqa: E402
+from core.animator.animator_types import SpeakerStyle  # noqa: E402
 from utils.pipeline_paths import outputs_root  # noqa: E402
 
 

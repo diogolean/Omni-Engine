@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -42,6 +43,7 @@ from core.animator.compositor import (
     GEMINI_LEAD_X,
     LLAMA_LEAD_X,
     POST_ROLL_S,
+    PRESENT_SCALE,
     lead_anchor_x,
     ShotReverseShotCompositor,
     _HeroCamera,
@@ -62,7 +64,7 @@ from core.animator.puppet import (
 )
 from core.animator.renderer import AnimationRenderer
 from core.animator.subtitles import build_ass
-from core.animator.types import VISEMES, DialogueTurn, SpeakerStyle
+from core.animator.animator_types import VISEMES, DialogueTurn, SpeakerStyle
 
 
 def _layer(path: Path, size: tuple[int, int], box: tuple[int, int, int, int]) -> None:
@@ -103,7 +105,13 @@ def test_manifestless_high_resolution_external_sprite_matrix_is_preserved(tmp_pa
     assert rig.canvas_size == size
     assert camera.pixel_aspect_error < 0.001
     assert native_camera.crop == (0, 0, size[0], size[1])
-    assert (native_camera.out_w, native_camera.out_h) == size
+    # Compatibility camera: 1:1 fit, then PRESENT_SCALE. The sprite matrix
+    # stays at `size` (canvas, crop, body bytes). Debater extra scale applies
+    # only to chatgpt_cyborg_v1 and claude_cyborg_v1.
+    assert (native_camera.out_w, native_camera.out_h) == (
+        int(size[0] * PRESENT_SCALE),
+        int(size[1] * PRESENT_SCALE),
+    )
     assert camera._update_head_angle(  # noqa: SLF001 - verifies stateful easing contract
         t=0.1,
         rms=0.5,
@@ -669,19 +677,19 @@ def test_karaoke_subtitles_use_outline_without_opaque_box(tmp_path: Path) -> Non
         assert all(len(line) <= 24 for line in plain.split(r"\N"))
 
 
-def test_versioned_skin_registry_defaults_to_v2_and_supports_overrides() -> None:
-    assert resolve_character_map() == {
+def test_versioned_skin_registry_follows_the_models() -> None:
+    assert resolve_character_map(orchestrator_model="gemini-flash", target_model="llama-70b") == {
         "orchestrator": "gemini_cyborg_v2",
         "target": "llama_cyborg_v2",
     }
-    assert resolve_character_map(skin="v1") == {
-        "orchestrator": "gemini_robot_v1",
-        "target": "llama_robot_v1",
-    }
-    assert resolve_character_map(skin="v2", left_puppet="custom_left") == {
-        "orchestrator": "custom_left",
-        "target": "llama_cyborg_v2",
-    }
+    with pytest.raises(ValueError):
+        resolve_character_map(skin="v1")
+    with pytest.raises(ValueError):
+        resolve_character_map(
+            orchestrator_model="gemini-flash",
+            target_model="llama-70b",
+            left_puppet="custom_left",
+        )
 
 
 def test_llama_blink_follows_the_circular_lens() -> None:

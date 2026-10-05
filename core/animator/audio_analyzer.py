@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from .rhubarb import analyze_visemes, cues_to_frames, visemes_from_envelope
-from .types import REST_VISEME, AnalyzedAudio, DialogueTurn
+from .animator_types import REST_VISEME, AnalyzedAudio, DialogueTurn
 
 _LOG = logging.getLogger("animator.audio_analyzer")
 

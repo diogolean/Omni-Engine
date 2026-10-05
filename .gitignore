@@ -38,13 +38,21 @@ build/
 *.spec
 pip-wheel-metadata/
 
-# Virtual environments
+# Virtual environments.
+# Do not ignore a bare Scripts/ directory. Git on Windows matches that
+# pattern case-insensitively, so it also hides the project scripts/ tree.
 venv/
 .venv/
 env/
-Lib/
-Scripts/
-Include/
+venv/Lib/
+venv/Scripts/
+venv/Include/
+.venv/Lib/
+.venv/Scripts/
+.venv/Include/
+env/Lib/
+env/Scripts/
+env/Include/
 pyvenv.cfg
 
 # IDE / Cursor local state

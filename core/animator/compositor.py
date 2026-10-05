@@ -30,7 +30,7 @@ from typing import Iterator, Sequence
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from .puppet import (
     PuppetRig,
@@ -38,7 +38,7 @@ from .puppet import (
     onset_rest_mouth,
 )
 from .factory.puppet_matrix import PUPPET_MATRIX, solve_puppet_matrix
-from .types import REST_VISEME, AnalyzedAudio, SpeakerStyle
+from .animator_types import REST_VISEME, AnalyzedAudio, SpeakerStyle
 
 _LOG = logging.getLogger("animator.compositor")
 
@@ -447,6 +447,189 @@ class ShotReverseShotCompositor:
             yield frame
 
 
+class DualPresenceCompositor:
+    """Landscape arena director that keeps both articulated rigs on screen."""
+
+    LEFT_ANCHOR_X = 420
+    RIGHT_ANCHOR_X = 1500
+    TIGHT_ZOOM = 1.35
+
+    def __init__(
+        self,
+        *,
+        rigs: dict[str, PuppetRig],
+        styles: dict[str, SpeakerStyle],
+        width: int = 1920,
+        height: int = 1080,
+        panorama_path: Path | None = None,
+    ) -> None:
+        if len(rigs) != 2:
+            raise ValueError("dual-presence staging requires exactly two rigs")
+        self.rigs = rigs
+        self.styles = styles
+        self.width = width
+        self.height = height
+        ordered = sorted(
+            rigs,
+            key=lambda item: 0 if styles[item].facing.lower() == "right" else 1,
+        )
+        self.left_id, self.right_id = ordered
+        self._cameras = {
+            speaker_id: _HeroCamera(
+                rig,
+                styles.get(speaker_id),
+                target_width=840,
+                target_height=height,
+                zoom=1.0,
+            )
+            for speaker_id, rig in rigs.items()
+        }
+        self._origins = {
+            self.left_id: self.LEFT_ANCHOR_X
+            - self._cameras[self.left_id].lead_anchor_x,
+            self.right_id: self.RIGHT_ANCHOR_X
+            - self._cameras[self.right_id].lead_anchor_x,
+        }
+        self._background = self._load_landscape_background(panorama_path)
+        self._gears = self._build_gear_frames()
+        self._zoom = 1.0
+
+    def _load_landscape_background(self, path: Path | None) -> np.ndarray:
+        if path is not None and Path(path).is_file():
+            with Image.open(path) as opened:
+                background = ImageOps.fit(
+                    opened.convert("RGB"),
+                    (self.width, self.height),
+                    method=Image.Resampling.LANCZOS,
+                    centering=(0.5, 0.48),
+                )
+        else:
+            director = ShotReverseShotCompositor.__new__(ShotReverseShotCompositor)
+            director.width = self.width
+            director.height = self.height
+            director.subtitle_band = (self.height, self.height)
+            background = director._build_background()
+        darkened = np.asarray(background, dtype=np.float32) * 0.72
+        return np.clip(darkened, 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _build_gear_frames() -> tuple[np.ndarray, ...]:
+        source = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(source, "RGBA")
+        center = (48, 48)
+        for tooth in range(12):
+            angle = math.tau * tooth / 12.0
+            x = center[0] + int(math.cos(angle) * 34)
+            y = center[1] + int(math.sin(angle) * 34)
+            draw.rectangle((x - 5, y - 5, x + 5, y + 5), fill=(205, 151, 55, 70))
+        draw.ellipse((17, 17, 79, 79), outline=(231, 181, 75, 85), width=6)
+        draw.ellipse((37, 37, 59, 59), outline=(35, 24, 10, 110), width=5)
+        return tuple(
+            np.asarray(
+                source.rotate(
+                    -(index * 15),
+                    resample=Image.Resampling.BICUBIC,
+                )
+            ).copy()
+            for index in range(24)
+        )
+
+    def _listener_emotion(self, active_emotion: str, tight: bool) -> str:
+        if tight or active_emotion in {"shock", "shock_perplexed", "conceded"}:
+            return "shock_perplexed"
+        if active_emotion in {"deboche", "inquisitor", "disbelief"}:
+            return "skeptical"
+        return "neutral"
+
+    def _tight_view(self, frame: np.ndarray, focus_x: int, zoom: float) -> np.ndarray:
+        crop_w = int(round(self.width / zoom))
+        crop_h = int(round(self.height / zoom))
+        left = int(np.clip(focus_x - crop_w // 2, 0, self.width - crop_w))
+        top = int(np.clip(int(self.height * 0.47) - crop_h // 2, 0, self.height - crop_h))
+        return cv2.resize(
+            frame[top : top + crop_h, left : left + crop_w],
+            (self.width, self.height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+    def iter_frames(self, analyzed: AnalyzedAudio) -> Iterator[np.ndarray]:
+        speech = analyzed.speaking_speaker or analyzed.active_speaker
+        camera = analyzed.active_speaker
+        focus = self.left_id
+        for index in range(analyzed.n_frames):
+            t = analyzed.frame_time(index)
+            speaking = _sequence_at(speech, index, None)
+            camera_speaker = _sequence_at(camera, index, None)
+            if camera_speaker in self.rigs:
+                focus = camera_speaker
+            tight = bool(_sequence_at(analyzed.camera_tight, index, False))
+            active_emotion = _sequence_at(analyzed.emotion, index, "neutral")
+            frame = self._background.copy()
+            rms = float(_sequence_at(analyzed.rms, index, 0.0))
+
+            for speaker_id, hero in self._cameras.items():
+                is_speaking = speaking == speaker_id
+                emotion = (
+                    active_emotion
+                    if camera_speaker == speaker_id or is_speaking
+                    else self._listener_emotion(active_emotion, tight)
+                )
+                origin_x = self._origins[speaker_id]
+                breathing_y = hero.breathing_offset(t)
+                _alpha_blend_paste(
+                    frame,
+                    hero.static_body,
+                    origin_x + hero.body_offset_x,
+                    hero.body_offset_y + breathing_y,
+                )
+                hero.render_dirty(
+                    frame,
+                    t=t,
+                    viseme=(
+                        _sequence_at(
+                            analyzed.viseme.get(speaker_id),
+                            index,
+                            REST_VISEME,
+                        )
+                        if is_speaking
+                        else REST_VISEME
+                    ),
+                    eye_state=_sequence_at(
+                        analyzed.eye_state.get(speaker_id),
+                        index,
+                        0,
+                    ),
+                    rms=rms if is_speaking else 0.0,
+                    emphasis_threshold=0.58,
+                    brow_emphasis_threshold=0.72,
+                    is_speaking=is_speaking,
+                    emotion=emotion,
+                    body_offset_y=hero.head_breathing_offset(t),
+                    plate_origin=(origin_x, 0),
+                    collar_offset_y=breathing_y,
+                )
+                # A translucent clockwork tick keeps the listener's torso alive
+                # even while its mouth is at rest.
+                gear = self._gears[int(t * (7 if is_speaking else 3)) % len(self._gears)]
+                chest_x = (
+                    self.LEFT_ANCHOR_X
+                    if speaker_id == self.left_id
+                    else self.RIGHT_ANCHOR_X
+                )
+                _alpha_blend_paste(frame, gear, chest_x - 48, int(self.height * 0.67))
+
+            target_zoom = self.TIGHT_ZOOM if tight else 1.0
+            self._zoom += (target_zoom - self._zoom) * 0.12
+            if self._zoom > 1.005:
+                focus_x = (
+                    self.LEFT_ANCHOR_X
+                    if focus == self.left_id
+                    else self.RIGHT_ANCHOR_X
+                )
+                frame = self._tight_view(frame, focus_x, self._zoom)
+            yield frame
+
+
 class _HeroCamera:
     """One character's native-aspect close-up camera and idle physics."""
 
@@ -621,19 +804,35 @@ class _HeroCamera:
                 if body_xs.size
                 else native_eye_x
             )
-            self.offset_x = int(
-                round((target_width * 0.5) - native_body_center_x * self.scale)
+            # Seat from facing. Centering the body put a left-seat Gemini on the right.
+            self.offset_x = place_body_offset(
+                self.facing,
+                native_body_center_x,
+                self.scale,
+                frame_width=target_width,
             )
             self.lead_anchor_x = int(
                 round(self.offset_x + native_eye_x * self.scale)
             )
         else:
-            shift_x = DEBATER_SHIFT_X.get(rig.skin.character_id, 0)
-            if rig.skin.character_id == "chatgpt_cyborg_v1" and self.facing == "right":
-                shift_x += CHATGPT_LEFT_SHIFT_X
-            if shift_x:
-                self.lead_anchor_x = int(self.lead_anchor_x) + shift_x
-            self.offset_x = int(round(self.lead_anchor_x - (self.out_w / 2.0)))
+            body_alpha = rig.body_rgba[..., 3]
+            _body_ys, body_xs = np.nonzero(body_alpha > 8)
+            native_body_center_x = (
+                float(body_xs.min() + body_xs.max() + 1) * 0.5
+                if body_xs.size
+                else float(native_eye_x)
+            )
+            # Same dock as the Gemini path. Canvas-center anchoring left an
+            # asymmetric right-facing sprite on the right side of the frame.
+            self.offset_x = place_body_offset(
+                self.facing,
+                native_body_center_x,
+                self.scale,
+                frame_width=target_width,
+            )
+            self.lead_anchor_x = int(
+                round(self.offset_x + native_eye_x * self.scale)
+            )
         if parametric_v3:
             self.body_scale = matrix.body_scale * (target_width / 1080.0)
             self.body_scale_x = self.body_scale
@@ -935,6 +1134,28 @@ class _HeroCamera:
         return self._head_angle
 
 
+def place_body_offset(
+    facing: str,
+    native_body_center_x: float,
+    scale: float,
+    *,
+    frame_width: int = 1080,
+) -> int:
+    """Put a right-facing body on the left, and a left-facing body on the right.
+
+    Raises if that dock would land on the forbidden half of the frame.
+    """
+    lead = lead_anchor_x(facing, frame_width)
+    offset = int(round(lead - native_body_center_x * scale))
+    drawn = offset + native_body_center_x * scale
+    side = "left" if drawn < frame_width / 2 else "right"
+    if (facing or "").lower() == "right" and side != "left":
+        raise ValueError("right-facing sprite would be drawn on the right")
+    if (facing or "").lower() == "left" and side != "right":
+        raise ValueError("left-facing sprite would be drawn on the left")
+    return offset
+
+
 def lead_anchor_x(facing: str, width: int = 1080) -> int:
     """Dock a right-facing hero left, and a left-facing hero right."""
     if (facing or "").lower() == "right":
@@ -1096,6 +1317,7 @@ __all__ = [
     "HERO_ELEVATION_PX",
     "HERO_YAW_DEG",
     "HUD_BAND_FRAC",
+    "DualPresenceCompositor",
     "ShotReverseShotCompositor",
     "dramatic_camera_mode",
     "emphasis_head_target",

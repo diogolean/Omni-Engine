@@ -30,8 +30,8 @@ from core.animator.factory.rigger import (  # noqa: E402
 from core.animator.compositor import _HeroCamera  # noqa: E402
 from core.animator.puppet import PuppetSkin  # noqa: E402
 from core.animator.puppet import PuppetRig  # noqa: E402
-from core.animator.types import SpeakerStyle  # noqa: E402
-from core.animator.types import VISEMES  # noqa: E402
+from core.animator.animator_types import SpeakerStyle  # noqa: E402
+from core.animator.animator_types import VISEMES  # noqa: E402
 
 
 def _digest(path: Path) -> str:

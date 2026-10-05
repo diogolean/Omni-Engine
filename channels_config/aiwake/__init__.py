@@ -18,7 +18,7 @@ and safe.
 """
 from __future__ import annotations
 
-from .contracts import DebateTranscript, SpeakerRole, Utterance
+from .contracts import DebateTranscript, PostType, SpeakerRole, Utterance
 from .memory import DebateMemory
 from .models import LLMFactory, LLMProvider
 from .orchestrator import DebateResult, Provocateur
@@ -40,6 +40,7 @@ __all__ = [
     "Participant",
     "BulkPipelineResult",
     "PipelineResult",
+    "PostType",
     "Provocateur",
     "RoomEvent",
     "SpeakerRole",

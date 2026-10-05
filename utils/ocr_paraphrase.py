@@ -36,6 +36,7 @@ from utils.gemini_usage import (
     unwrap_json_object,
 )
 from utils.ocr_text import strip_wrapping_quotes
+from utils.pipeline_paths import assets_path
 
 # ---------------------------------------------------------------------------
 # Keywords removed from every quote before / after paraphrase
@@ -53,12 +54,9 @@ REMOVE_KEYWORDS: tuple[str, ...] = (
 MAX_WORD_CHANGE_RATIO: float = 0.20
 GEMINI_MODEL: str = "gemini-2.5-flash"
 
-FACTORY_ROOT: Path = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
-    r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory"
-)
-DEFAULT_VAULT: Path = FACTORY_ROOT / "assets" / "ocr_vault.json"
+_ASSETS_ROOT: Path = assets_path()
+FACTORY_ROOT: Path = _ASSETS_ROOT.parent
+DEFAULT_VAULT: Path = _ASSETS_ROOT / "ocr_vault.json"
 DEFAULT_OUTPUT_NAME: str = "ocr_vault_original.json"
 
 _FENCE_RE = re.compile(

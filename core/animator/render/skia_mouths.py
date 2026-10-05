@@ -16,7 +16,7 @@ from PIL import Image
 
 from utils.pipeline_paths import assets_root
 
-from ..types import VISEMES
+from ..animator_types import VISEMES
 
 SPRITE_SIZE = 512
 DRAW_SCALE = 3

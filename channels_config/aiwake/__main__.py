@@ -24,12 +24,12 @@ if __package__ in (None, ""):  # pragma: no cover — standalone invocation
 try:
     from .models.llm_factory import available_providers
     from .models.sync import SyncError, run_sync_cli
-    from .pipeline import run_bulk_pipeline, run_pipeline
+    from .pipeline import BATCH_PUPPET_BY_MODEL, random_matchup_schedule, run_bulk_pipeline, run_pipeline
     from .settings import load_settings
 except ImportError:  # pragma: no cover — standalone extraction
     from models.llm_factory import available_providers  # type: ignore[no-redef]
     from models.sync import SyncError, run_sync_cli  # type: ignore[no-redef]
-    from pipeline import run_bulk_pipeline, run_pipeline  # type: ignore[no-redef]
+    from pipeline import BATCH_PUPPET_BY_MODEL, random_matchup_schedule, run_bulk_pipeline, run_pipeline  # type: ignore[no-redef]
     from settings import load_settings  # type: ignore[no-redef]
 
 
@@ -40,6 +40,17 @@ def _positive_quantity(value: str) -> int:
     if parsed > 64:
         raise argparse.ArgumentTypeError("quantity must be <= 64")
     return parsed
+
+
+def _resolution(value: str) -> tuple[int, int]:
+    try:
+        width_text, height_text = value.lower().split("x", 1)
+        width, height = int(width_text), int(height_text)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("resolution must look like 1920x1080") from exc
+    if width < 256 or height < 256 or width > 4096 or height > 4096:
+        raise argparse.ArgumentTypeError("resolution dimensions must be 256..4096")
+    return width, height
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,9 +94,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=("fixed", "cornered"),
+        choices=("fixed", "cornered", "longform"),
         default="fixed",
-        help="Debate ending: fixed count (default) or press until a judged win",
+        help="Debate ending, or longform as a compatibility alias for --long-format",
+    )
+    parser.add_argument(
+        "--long-format",
+        action="store_true",
+        help="Render an isolated 16:9 dual-presence YouTube episode.",
+    )
+    parser.add_argument(
+        "--post-type",
+        choices=("short_clip", "long_format"),
+        default="short_clip",
+        help="Explicit delivery type (default: short_clip).",
+    )
+    parser.add_argument(
+        "--format",
+        dest="output_format",
+        choices=("portrait", "landscape"),
+        help="Canvas family; landscape selects long_format.",
+    )
+    parser.add_argument(
+        "--resolution",
+        type=_resolution,
+        help="Output resolution, for example 1920x1080.",
+    )
+    parser.add_argument(
+        "--target-duration",
+        type=float,
+        metavar="SECONDS",
+        help="Long-form pacing target in seconds (300-600).",
+    )
+    parser.add_argument(
+        "--generate-thumbnail",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Generate the versus thumbnail (enabled by the long-format preset).",
     )
     parser.add_argument(
         "--provocation-focus",
@@ -333,23 +378,52 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc))
         return 2
 
-    dynamic_animation = args.dynamic_animation or args.render_mode == "dynamic_animation"
+    long_form = bool(
+        args.long_format
+        or args.post_type == "long_format"
+        or args.mode == "longform"
+        or args.output_format == "landscape"
+    )
+    if args.target_duration is not None and not 300 <= args.target_duration <= 600:
+        parser.error("--target-duration must be between 300 and 600 seconds")
+    if long_form and args.resolution is not None and args.resolution[0] <= args.resolution[1]:
+        parser.error("long-format resolution must be landscape")
+    dynamic_animation = (
+        long_form
+        or args.dynamic_animation
+        or args.render_mode == "dynamic_animation"
+    )
     explicit_mode = any(
         token == "--mode" or token.startswith("--mode=")
         for token in raw_argv
     )
-    effective_mode = args.mode
-    if dynamic_animation and not explicit_mode:
+    effective_mode = "fixed" if args.mode == "longform" else args.mode
+    if dynamic_animation and not explicit_mode and not long_form:
         effective_mode = "cornered"
-    if args.random_matchups and args.quantity < 2:
-        parser.error("--random-matchups requires --quantity 2 or greater")
     if args.random_matchups and (args.orchestrator or args.target):
         parser.error("--random-matchups cannot be combined with fixed seat overrides")
+    if args.random_matchups and args.quantity == 1:
+        random_left, random_right = random_matchup_schedule(
+            1,
+            seed=args.matchup_seed,
+        )[0]
+        settings = settings.with_model_override("orchestrator", random_left)
+        settings = settings.with_model_override("target", random_right)
+        args.left_puppet = BATCH_PUPPET_BY_MODEL[random_left]
+        args.right_puppet = BATCH_PUPPET_BY_MODEL[random_right]
     if dynamic_animation and not args.offline and not args.random_matchups:
-        if not args.orchestrator:
-            settings = settings.with_model_override("orchestrator", "gemini-flash")
-        if not args.target:
-            settings = settings.with_model_override("target", "llama-70b")
+        if not args.orchestrator or not args.target:
+            parser.error("dynamic animation requires --orchestrator and --target; there is no default model")
+        from .avatars import character_map_for
+
+        seated = character_map_for(
+            args.orchestrator,
+            args.target,
+            left_puppet=args.left_puppet,
+            right_puppet=args.right_puppet,
+        )
+        args.left_puppet = seated["orchestrator"]
+        args.right_puppet = seated["target"]
 
     pipeline_kwargs = {
         "topic": args.topic,
@@ -371,9 +445,14 @@ def main(argv: list[str] | None = None) -> int:
         "duration_override": args.duration,
         "production_publish": (
             dynamic_animation
+            and not long_form
             and not args.offline
             and args.duration is None
         ),
+        "post_type": "long_format" if long_form else "short_clip",
+        "resolution": args.resolution,
+        "target_duration_s": args.target_duration,
+        "generate_thumbnail": args.generate_thumbnail,
     }
 
     if args.quantity > 1:
@@ -400,6 +479,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"end reason    : {result.dialogue_end_reason}")
     print(f"audio         : {result.audio_seconds:.1f}s")
     print(f"video         : {result.video_path or '(none)'}")
+    if result.thumbnail_path:
+        print(f"thumbnail     : {result.thumbnail_path}")
+    if result.metadata_path:
+        print(f"metadata      : {result.metadata_path}")
     if dynamic_animation and args.duration is not None:
         from .media.audio import (  # noqa: PLC0415
             DEEPSEEK_CANONICAL_VOICE,

@@ -454,7 +454,39 @@ def extract_hook(row: dict[str, Any]) -> str:
     return "Is it thinking, or statistical inevitability?"
 
 
+def _matchup_names(utterances: Any) -> tuple[str, str]:
+    attacker = ""
+    defender = ""
+    if not isinstance(utterances, list):
+        return attacker, defender
+    for item in utterances:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        name = str(item.get("speaker") or item.get("speaker_name") or "").strip()
+        if role == "orchestrator" and name and not attacker:
+            attacker = name
+        elif role == "target" and name and not defender:
+            defender = name
+    return attacker, defender
+
+
 def extract_matchup(row: dict[str, Any]) -> tuple[str, str]:
+    """Name the models that actually spoke. The Gemini/Llama pair is only a fallback."""
+    attacker, defender = _matchup_names(row.get("spoken_utterances"))
+    transcript = Path(str(row.get("transcript_path") or ""))
+    if transcript.is_file():
+        try:
+            payload = json.loads(transcript.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        file_attacker, file_defender = _matchup_names(
+            payload.get("utterances") if isinstance(payload, dict) else None
+        )
+        if file_attacker and file_defender:
+            attacker, defender = file_attacker, file_defender
+    if attacker and defender:
+        return attacker, defender
     caption = str(
         _nested(row, "platform_overrides", "youtube", "caption")
         or _nested(row, "base_metadata", "caption")
@@ -943,59 +975,30 @@ def _dilemma_paragraph(
 
 
 def build_youtube_description(row: dict[str, Any], dialogue: dict[str, Any] | None = None) -> str:
-    from channels_config.aiwake.tools.metadata_generator import build_youtube_caption, master_anchor
+    _ = dialogue
+    from channels_config.aiwake.tools.caption_generator import caption_text
 
-    payload = dialogue or load_dialogue(row)
-    attacker, defender = extract_matchup(row)
-    opening_side, reply_side = _side_lines(payload)
-    if opening_side:
-        attacker = str(opening_side[0].get("speaker") or attacker)
-    if reply_side:
-        defender = str(reply_side[0].get("speaker") or defender)
-    anchor = master_anchor(payload, attacker=attacker, defender=defender)
-    return build_youtube_caption(anchor, payload, attacker=attacker, defender=defender)
+    return caption_text(row, "youtube")
 
 
 def build_linkedin_caption(hook: str = "", row: dict[str, Any] | None = None) -> str:
-    """Engine B: technical architecture copy. Stored on content_library only."""
-    from channels_config.aiwake.tools.metadata_generator import build_linkedin_caption as _linkedin
-    from channels_config.aiwake.tools.metadata_generator import master_anchor
+    """Professional caption for this debate. Stored on content_library only."""
+    from channels_config.aiwake.tools.caption_generator import caption_text
 
     payload = dict(row or {})
-    if hook and not payload.get("topic") and not _nested(payload, "base_metadata", "hooks"):
-        payload.setdefault("base_metadata", {})
-        if isinstance(payload["base_metadata"], dict):
-            payload["base_metadata"].setdefault("hooks", [hook])
+    if hook:
         payload.setdefault("topic", hook)
-    dialogue = load_dialogue(payload)
-    attacker, defender = extract_matchup(payload)
-    anchor = master_anchor(dialogue, attacker=attacker, defender=defender)
-    return _linkedin(anchor, seed=str(payload.get("session_id") or hook or ""))
+    return caption_text(payload, "linkedin")
 
 
 def build_post_planner_caption(hook: str = "", row: dict[str, Any] | None = None) -> str:
-    """Engine A: informal social caption for TikTok / Reels / Shorts / FB."""
-    payload = dict(row or {})
-    if hook and not payload.get("topic") and not _nested(payload, "base_metadata", "hooks"):
-        payload.setdefault("base_metadata", {})
-        if isinstance(payload["base_metadata"], dict):
-            payload["base_metadata"].setdefault("hooks", [hook])
-        payload.setdefault("topic", hook)
-    dialogue = load_dialogue(payload)
-    attacker, defender = extract_matchup(payload)
-    _opening_side, reply_side = _side_lines(dialogue)
-    opening = str(dialogue.get("opening") or hook or extract_hook(payload)).strip()
-    answer = str((reply_side[0].get("text") if reply_side else "") or dialogue.get("quote") or "").strip()
-    if opening_side_speaker := (str(_opening_side[0].get("speaker") or "") if _opening_side else ""):
-        attacker = opening_side_speaker
-    if reply_side:
-        defender = str(reply_side[0].get("speaker") or defender)
-    from channels_config.aiwake.tools.metadata_generator import build_social_caption, master_anchor
+    """TikTok / Reels caption grounded in this video's spoken turns."""
+    from channels_config.aiwake.tools.caption_generator import caption_text
 
-    anchor = master_anchor(dialogue, attacker=attacker, defender=defender)
-    if hook and not dialogue.get("opening"):
-        anchor["core_hook"] = hook if str(hook).endswith("?") else f"{hook}?"
-    return build_social_caption(anchor)
+    payload = dict(row or {})
+    if hook:
+        payload.setdefault("topic", hook)
+    return caption_text(payload, "tiktok")
 
 
 def _short_platform_caption(
@@ -1040,11 +1043,21 @@ def _short_platform_caption(
 
 
 def build_instagram_caption(hook: str = "", row: dict[str, Any] | None = None) -> str:
-    return build_post_planner_caption(hook, row)
+    from channels_config.aiwake.tools.caption_generator import caption_text
+
+    payload = dict(row or {})
+    if hook:
+        payload.setdefault("topic", hook)
+    return caption_text(payload, "instagram")
 
 
 def build_facebook_caption(hook: str = "", row: dict[str, Any] | None = None) -> str:
-    return build_post_planner_caption(hook, row)
+    from channels_config.aiwake.tools.caption_generator import caption_text
+
+    payload = dict(row or {})
+    if hook:
+        payload.setdefault("topic", hook)
+    return caption_text(payload, "facebook")
 
 
 def _build_variant_caption(hook: str, row: dict[str, Any] | None, variant: str) -> str:
@@ -1084,16 +1097,12 @@ def build_tiktok_caption(hook: str, *, challenger: str = "", defender: str = "",
 
 
 def build_x_caption(hook: str = "", row: dict[str, Any] | None = None) -> str:
+    from channels_config.aiwake.tools.caption_generator import caption_text
+
     payload = dict(row or {})
     if hook:
         payload.setdefault("topic", hook)
-        payload.setdefault("base_metadata", {})
-        if isinstance(payload["base_metadata"], dict):
-            payload["base_metadata"].setdefault("hooks", [hook])
-    dialogue = load_dialogue(payload)
-    opening = str(dialogue.get("opening") or hook or extract_hook(payload)).strip()
-    text = f"{opening} Two AIs. Zero script. Follow @aiwake."
-    return clip_text(text, X_CAPTION_MAX)
+    return caption_text(payload, "x")
 
 
 def linkedin_angle_index(hook: str, row: dict[str, Any] | None = None) -> int:
@@ -1124,63 +1133,11 @@ def _ensure_nested(row: dict[str, Any], *keys: str) -> dict[str, Any]:
 
 
 def stamp_dual_captions(row: dict[str, Any]) -> bool:
-    """Write both caption tracks plus YouTube / X adaptations onto the library row."""
-    dialogue = load_dialogue(row)
-    theme = str(dialogue.get("opening") or extract_hook(row)).strip()
-    if theme and str(row.get("topic") or "") != theme:
-        row["topic"] = theme
-    linkedin = build_linkedin_caption(row=row)
-    tiktok = build_post_planner_caption(row=row)
-    instagram = build_instagram_caption(row=row)
-    facebook = build_facebook_caption(row=row)
-    yt_title = format_youtube_title(str(dialogue.get("opening") or extract_hook(row)), row)
-    yt_desc = build_youtube_description(row, dialogue)
-    x_caption = build_x_caption(row=row)
-    changed = False
-    updates = {
-        "linkedin_caption": linkedin,
-        "post_planner_caption": tiktok,
-        "tiktok_caption": tiktok,
-        "humanized_caption": instagram,
-        "facebook_caption": facebook,
-        "final_caption": yt_desc,
-    }
-    for key, value in updates.items():
-        if str(row.get(key) or "") != value:
-            row[key] = value
-            changed = True
-    base = _ensure_nested(row, "base_metadata")
-    if str(base.get("title") or "") != yt_title:
-        base["title"] = yt_title
-        changed = True
-    if str(base.get("caption") or "") != yt_desc:
-        base["caption"] = yt_desc
-        changed = True
-    base["hashtags"] = social_hashtags(row, dialogue)[:MAX_HASHTAGS]
-    youtube = _ensure_nested(row, "platform_overrides", "youtube")
-    if str(youtube.get("title") or "") != yt_title:
-        youtube["title"] = yt_title
-        changed = True
-    if str(youtube.get("caption") or "") != yt_desc:
-        youtube["caption"] = yt_desc
-        changed = True
-    x_block = _ensure_nested(row, "platform_overrides", "x")
-    if str(x_block.get("caption") or "") != x_caption:
-        x_block["caption"] = x_caption
-        changed = True
-    tiktok_block = _ensure_nested(row, "platform_overrides", "tiktok")
-    if str(tiktok_block.get("caption") or "") != tiktok:
-        tiktok_block["caption"] = tiktok
-        changed = True
-    instagram_block = _ensure_nested(row, "platform_overrides", "instagram")
-    if str(instagram_block.get("caption") or "") != instagram:
-        instagram_block["caption"] = instagram
-        changed = True
-    facebook_block = _ensure_nested(row, "platform_overrides", "facebook")
-    if str(facebook_block.get("caption") or "") != facebook:
-        facebook_block["caption"] = facebook
-        changed = True
-    return changed
+    """Keep stored v3 captions. Do not rebuild them at export time."""
+    from channels_config.aiwake.tools.production_status import is_publishable
+
+    _ = is_publishable(row)
+    return False
 
 
 def stamp_library_captions(rows: list[dict[str, Any]]) -> int:
@@ -1190,18 +1147,12 @@ def stamp_library_captions(rows: list[dict[str, Any]]) -> int:
 def verify_linkedin_caption(caption: str, *, label: str = "linkedin") -> list[str]:
     errors: list[str] = []
     tags = extract_hashtags(caption)
-    if len(tags) > MAX_HASHTAGS:
-        errors.append(f"{label}: {len(tags)} hashtags>{MAX_HASHTAGS}")
-    from channels_config.aiwake.tools.metadata_generator import (
-        LINKEDIN_CLOSE,
-        LINKEDIN_FLEX,
-        has_chapter_timestamps,
-    )
+    if len(tags) > 5:
+        errors.append(f"{label}: {len(tags)} hashtags>5")
+    from channels_config.aiwake.tools.metadata_generator import has_chapter_timestamps
 
-    if LINKEDIN_FLEX not in caption:
-        errors.append(f"{label}: missing engineering flex")
-    if LINKEDIN_CLOSE not in caption:
-        errors.append(f"{label}: missing outreach line")
+    if "DMs open." in caption or "19s render time" in caption:
+        errors.append(f"{label}: repeated outreach or render-time line")
     if has_chapter_timestamps(caption):
         errors.append(f"{label}: chapter timestamps")
     if _CAPTION_URL_RE.search(caption):
@@ -1216,14 +1167,19 @@ def verify_linkedin_caption(caption: str, *, label: str = "linkedin") -> list[st
 def verify_social_caption(caption: str, *, label: str = "social") -> list[str]:
     errors: list[str] = []
     tags = extract_hashtags(caption)
-    if len(tags) != MAX_HASHTAGS:
-        errors.append(f"{label}: {len(tags)} hashtags, expected exactly {MAX_HASHTAGS}")
+    if not 3 <= len(tags) <= 5:
+        errors.append(f"{label}: {len(tags)} hashtags, expected 3-5")
     if "\n\n" not in caption:
         errors.append(f"{label}: missing paragraph breaks")
-    from channels_config.aiwake.tools.metadata_generator import SOCIAL_FOLLOW, has_chapter_timestamps
+    from channels_config.aiwake.tools.metadata_generator import (
+        has_chapter_timestamps,
+        is_portuguese,
+    )
 
-    if SOCIAL_FOLLOW not in caption:
-        errors.append(f"{label}: missing follow line")
+    if "[Unscripted AI Battle]" in caption or "zero human script" in caption.lower():
+        errors.append(f"{label}: banned boilerplate")
+    if is_portuguese(caption):
+        errors.append(f"{label}: Portuguese text leaked")
     if has_chapter_timestamps(caption):
         errors.append(f"{label}: chapter timestamps")
     if LINKEDIN_THESIS in caption or LINKEDIN_ENGINEERING_HEADER in caption or "GraphRAG" in caption:
@@ -1276,7 +1232,11 @@ def verify_engine_separation(
             errors.extend(verify_linkedin_caption(caption, label=str(item.get("plan_id") or "linkedin")))
             continue
         errors.extend(verify_social_caption(caption, label=str(item.get("plan_id") or "social")))
+    from channels_config.aiwake.tools.production_status import is_publishable
+
     for row in library_rows or []:
+        if not is_publishable(row):
+            continue
         session = str(row.get("session_id") or row.get("asset_id") or "row")
         if row.get("linkedin_caption"):
             errors.extend(verify_linkedin_caption(str(row["linkedin_caption"]), label=f"{session}-linkedin"))
@@ -1442,9 +1402,17 @@ def build_planner_entries(
     entries: list[dict[str, Any]] = []
     library_rows = [row for _, row in selected]
     for cursor, (video, row) in enumerate(selected):
-        stamp_dual_captions(row)
+        from channels_config.aiwake.tools.caption_generator import caption_blocked
+
+        if caption_blocked(row):
+            continue
+        from channels_config.aiwake.tools.production_status import distribution_status
+
+        if distribution_status(row, "tiktok") != "pending":
+            continue
         session_id = str(row.get("session_id") or video.stem)
         caption = str(row.get("post_planner_caption") or "")
+        instagram = str(((row.get("platform_overrides") or {}).get("instagram") or {}).get("caption") or "")
         hashtags = social_hashtags(row, load_dialogue(row))
         public_url = str(row.get("b2_url") or "").strip()
         if not is_public_media_url(public_url):
@@ -1464,6 +1432,8 @@ def build_planner_entries(
                 "optimized_caption": caption,
                 "post_planner_caption": caption,
                 "linkedin_caption": str(row.get("linkedin_caption") or ""),
+                "instagram_caption": instagram,
+                "ai_label_required": True,
                 "tags": hashtags,
                 "hashtags": hashtags,
                 "status": "ready",
@@ -1620,6 +1590,8 @@ def compact_reels_export(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         {
             "session_id": str(item.get("session_id") or ""),
             "caption": str(item.get("caption") or item.get("post_planner_caption") or ""),
+            "instagram_caption": str(item.get("instagram_caption") or ""),
+            "ai_label_required": True,
             "b2_url": planner_media_url(item),
         }
         for item in entries
@@ -1659,6 +1631,9 @@ def run_planner(
     if upload_b2 is None:
         upload_b2 = persist_store and not dry_run
     rows = load_distribution_library(library_path)
+    from channels_config.aiwake.tools.validate_aiwake_captions import require_valid_library
+
+    require_valid_library(rows)
     stamp_library_captions(rows)
     if not dry_run:
         save_distribution_library(library_path, rows)

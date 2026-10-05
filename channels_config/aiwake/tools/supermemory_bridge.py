@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 _LOG = logging.getLogger("aiwake.supermemory")
 
@@ -222,14 +222,21 @@ def session_memory_text(
     hook: str,
     quote: str,
     target_model: str = "",
+    claims: Sequence[dict[str, Any]] = (),
 ) -> str:
-    return (
+    claim_lines = "\n".join(
+        f"Turn {int(item.get('turn_index', 0)) + 1}: {str(item.get('text') or '').strip()}"
+        for item in claims
+        if str(item.get("text") or "").strip()
+    )
+    base = (
         f"Aiwake approved session {session_id}.\n"
         f"Target model: {target_model}\n"
         f"Topic: {topic}\n"
         f"Opening hook: {hook}\n"
         f"Core quote: {quote}"
     )
+    return f"{base}\nSession claim ledger:\n{claim_lines}" if claim_lines else base
 
 
 class SupermemoryBridge:
@@ -536,6 +543,7 @@ class SupermemoryBridge:
         *,
         remote: bool = True,
         target_model: str = "",
+        claims: Sequence[dict[str, Any]] = (),
     ) -> bool:
         """Persist an approved debate footprint. Always updates the local ledger."""
         sid = (session_id or "").strip()
@@ -553,6 +561,7 @@ class SupermemoryBridge:
             "hook": hook_text,
             "quote": quote_text,
             "target_model": _model_key(target_model),
+            "claims": [dict(item) for item in claims],
         }
         if existing is None:
             sessions.append(record)
@@ -576,6 +585,7 @@ class SupermemoryBridge:
                     hook=hook_text,
                     quote=quote_text,
                     target_model=_model_key(target_model),
+                    claims=claims,
                 ),
                 container_tag=self.history_container,
                 metadata={
@@ -634,6 +644,7 @@ def remember_approved_session(
     hook: str,
     quote: str,
     target_model: str = "",
+    claims: Sequence[dict[str, Any]] = (),
 ) -> bool:
     try:
         return get_bridge().remember_approved_session(
@@ -642,6 +653,7 @@ def remember_approved_session(
             hook,
             quote,
             target_model=target_model,
+            claims=claims,
         )
     except Exception as exc:  # noqa: BLE001
         _LOG.warning("remember_approved_session failed (%s)", exc)

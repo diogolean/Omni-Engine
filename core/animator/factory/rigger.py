@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from ..types import VISEMES
+from ..animator_types import VISEMES
 from .color_extractor import PuppetPalette, extract_palette
 from .landmark_detector import FacialLandmarks, detect_landmarks
 from .layer_slicer import slice_character_layers

@@ -2839,12 +2839,31 @@ def _produce_variant_worker(
         # that STYLE_REFERENCE_DIR misconfigs or directory-scan order can never
         # cause the wrong image (or no image) to be sent to Gemini.
         import os as _os
-        _WF_STYLE_REF_STR = (
-            r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
-            r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT\Unified Multi-Page Factory"
-            r"\channels_config\wonder_feed\style_reference\Screenshot 2026-06-01 183244.png"
+        from utils.pipeline_paths import WINDOWS_FACTORY_ROOT as _WINDOWS_FACTORY_ROOT
+
+        _wf_style_name = "Screenshot 2026-06-01 183244.png"
+        _wf_style_env = (_os.getenv("WONDER_FEED_STYLE_REFERENCE") or "").strip().strip('"').strip("'")
+        _wf_style_repo = (
+            Path(__file__).resolve().parent
+            / "channels_config"
+            / "wonder_feed"
+            / "style_reference"
+            / _wf_style_name
         )
-        _WF_STYLE_REF = Path(_WF_STYLE_REF_STR)
+        _wf_style_windows = (
+            _WINDOWS_FACTORY_ROOT
+            / "channels_config"
+            / "wonder_feed"
+            / "style_reference"
+            / _wf_style_name
+        )
+        if _wf_style_env:
+            _WF_STYLE_REF = Path(_wf_style_env).expanduser()
+        elif _wf_style_windows.is_file():
+            _WF_STYLE_REF = _wf_style_windows
+        else:
+            _WF_STYLE_REF = _wf_style_repo
+        _WF_STYLE_REF_STR = str(_WF_STYLE_REF)
         _style_ref_path: Path | None = None
         _style_ref_paths: list[Path] = []
         _style_ref_weight: float = 0.72

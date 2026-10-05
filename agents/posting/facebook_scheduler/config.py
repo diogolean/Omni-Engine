@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from utils.pipeline_paths import page_outputs_dir
+from utils.pipeline_paths import outputs_path, page_outputs_dir, path_from_env
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -22,9 +22,9 @@ PROJECT_ROOT = _HERE.parents[2]  # facebook_scheduler → posting → agents →
 
 # Google Sheets source — accepts either a .gsheet shortcut file or a raw ID.
 # Override via env var GSHEET_ID or GSHEET_FILE.
-GSHEET_FILE: Path = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-    r"\Unified Multi-Page Factory\outputs\momma_circle\quotes\quotes_to_post.gsheet"
+GSHEET_FILE: Path = path_from_env(
+    ("GSHEET_FILE",),
+    outputs_path("momma_circle", "quotes", "quotes_to_post.gsheet"),
 )
 GSHEET_ID: str = os.getenv("GSHEET_ID", "")   # set in .env to skip file parse
 
