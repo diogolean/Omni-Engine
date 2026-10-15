@@ -1,0 +1,99 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "cyberrealisticXL_v100_fp16.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["1", 0],
+      "clip": ["1", 1],
+      "lora_name": "Sophie-bennet-lora-X2ZY233J64G7JVYMHAC0GWE9H0.safetensors",
+      "strength_model": 0.75,
+      "strength_clip": 0.75
+    }
+  },
+  "3": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["2", 0],
+      "clip": ["2", 1],
+      "lora_name": "perfection_style_SDXL.safetensors",
+      "strength_model": 0.6,
+      "strength_clip": 0.6
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["25", 1],
+      "text": "Sophie Bennet, unedited candid photo, vertical 9:16 portrait, blonde woman standing near a bedroom window during golden hour, wearing a simple beige t-shirt, soft natural lighting, realistic skin pores, subtle depth of field, raw photo, natural feminine figure, medium bust, clean plain wall"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["25", 1],
+      "text": "cartoon, anime, illustration, deformed, bad hands, extra fingers, blurry, low quality, watermark, text, flat chest, wall artifacts, distorted objects, deformed background"
+    }
+  },
+  "6": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 832,
+      "height": 1216,
+      "batch_size": 1
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["25", 0],
+      "positive": ["4", 0],
+      "negative": ["5", 0],
+      "latent_image": ["6", 0],
+      "seed": 1106463508,
+      "steps": 30,
+      "cfg": 5,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 1
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["7", 0],
+      "vae": ["1", 2]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 0],
+      "filename_prefix": "sophie_final"
+    }
+  },
+  "20": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["3", 0],
+      "clip": ["3", 1],
+      "lora_name": "skin_texture_XL_v4.safetensors",
+      "strength_model": 0.1,
+      "strength_clip": 0.1
+    }
+  },
+  "25": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["20", 0],
+      "clip": ["20", 1],
+      "lora_name": "skin_realism_imperfections_xl.safetensors",
+      "strength_model": 0.1,
+      "strength_clip": 0.1
+    }
+  }
+}

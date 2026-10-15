@@ -1,0 +1,97 @@
+# Sophie Bennet — first models_avatar persona.
+# Identity stays on the trigger word. Do not add age, eye, or hair descriptors.
+id: sophie_bennet
+default_preset: fast
+
+identity:
+  name: Sophie Bennet
+  trigger: "Sophie Bennet"
+
+checkpoint:
+  filename: cyberrealisticXL_v100_fp16.safetensors
+  civitai_model_id: null
+  civitai_version_id: null
+
+identity_lora:
+  filename: Sophie-bennet-lora-X2ZY233J64G7JVYMHAC0GWE9H0.safetensors
+  # Numeric Civitai ids were not in the reference archive. The filename token
+  # is the on-site export id. Fill the numeric ids when the version is published.
+  civitai_model_id: null
+  civitai_version_id: null
+  civitai_file_token: X2ZY233J64G7JVYMHAC0GWE9H0
+  weight: 0.75
+  node: "2"
+
+extra_loras:
+  - filename: perfection_style_SDXL.safetensors
+    weight: 0.6
+    node: "3"
+  - filename: skin_texture_XL_v4.safetensors
+    weight: 0.10
+    node: "20"
+  - filename: skin_realism_imperfections_xl.safetensors
+    civitai_version_id: 340833
+    weight: 0.10
+    node: "25"
+
+negatives: >-
+  cartoon, anime, illustration, deformed, bad hands, extra fingers,
+  blurry, low quality, watermark, text, flat chest, wall artifacts,
+  distorted objects, deformed background
+
+quality_suffix: >-
+  unedited candid photo, vertical 9:16 portrait, realistic skin pores,
+  subtle depth of field, raw photo, natural feminine figure, medium bust
+
+prompt_policy:
+  # Built-in rules already reject these. Listed here so the folder shows the lesson.
+  extra_forbid_tokens:
+    - freckles
+
+graph:
+  workflow: workflow_fast.json
+  nodes:
+    checkpoint: "1"
+    identity_lora: "2"
+    positive: "4"
+    negative: "5"
+    latent: "6"
+    sampler: "7"
+    decode: "8"
+    save: "9"
+
+presets:
+  fast:
+    sampler_name: dpmpp_2m
+    scheduler: karras
+    steps: 30
+    cfg: 5
+    width: 832
+    height: 1216
+    denoise: 1
+    face_detailer:
+      enabled: false
+    hand_detailer:
+      enabled: false
+  ultra_detail:
+    sampler_name: dpmpp_2m
+    scheduler: karras
+    steps: 30
+    cfg: 5
+    width: 832
+    height: 1216
+    denoise: 1
+    face_detailer:
+      enabled: true
+      detector: bbox/face_yolov8m.pt
+      denoise: 0.48
+      steps: 20
+      cfg: 5
+      identity_lora_weight: 0.85
+    hand_detailer:
+      enabled: true
+      detector: bbox/hand_yolov8s.pt
+      denoise: 0.38
+      steps: 20
+      cfg: 5
+      identity_lora_weight: 0.85
