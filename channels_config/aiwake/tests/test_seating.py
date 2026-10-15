@@ -22,7 +22,15 @@ from channels_config.aiwake.seating import (
     plan_first_seats,
 )
 from channels_config.aiwake.tools.avatar_guard import read_first_seat
-from core.animator.compositor import _opening_id
+from core.animator.animator_types import SpeakerStyle
+from core.animator.compositor import (
+    DEEPSEEK_ROLL_CCW_DEG,
+    DEEPSEEK_SHIFT_X,
+    _HeroCamera,
+    _opening_id,
+)
+from core.animator.pipeline import build_render_skin
+from core.animator.puppet import PuppetRig, PuppetSkin
 
 FREE = ("claude-sonnet", "gpt4o", "deepseek-chat")
 
@@ -172,15 +180,6 @@ def test_guard_reads_the_stored_first_seat(tmp_path: Path) -> None:
 
 
 def test_deepseek_plate_tuning_mirrors_for_the_right_seat(tmp_path: Path) -> None:
-    from core.animator.animator_types import SpeakerStyle
-    from core.animator.pipeline import build_render_skin
-    from core.animator.compositor import (
-        DEEPSEEK_ROLL_CCW_DEG,
-        DEEPSEEK_SHIFT_X,
-        _HeroCamera,
-    )
-    from core.animator.puppet import PuppetRig, PuppetSkin
-
     def camera(facing: str) -> _HeroCamera:
         view = "facing_right" if facing == "right" else "facing_left"
         skins = tmp_path / facing
