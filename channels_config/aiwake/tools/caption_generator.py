@@ -1287,6 +1287,28 @@ def _fit_description(description: str, limit: int = 550) -> str:
     return description
 
 
+def _quote_options(row: dict[str, Any], payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Model quote first, then other spoken lines of at least four words.
+
+    The clash line repeats the opening, so a quote taken from the opening
+    fails the paraphrase check. Another spoken line still belongs to the clip.
+    """
+    options: list[tuple[str, str]] = []
+
+    def add(text: str, speaker: str) -> None:
+        cleaned = _clean(text).strip().strip('"')
+        if len(cleaned.split()) < 4:
+            return
+        if any(cleaned == existing for existing, _who in options):
+            return
+        options.append((cleaned, display_name(speaker) or _clean(speaker)))
+
+    add(str(payload.get("quote") or ""), str(payload.get("quote_speaker") or ""))
+    for item in _read_turns(row):
+        add(str(item.get("text") or ""), str(item.get("speaker") or ""))
+    return options
+
+
 def _pack_from_payload(
     row: dict[str, Any],
     payload: dict[str, Any],
@@ -1519,6 +1541,8 @@ def generate_caption_pack(
 
     from channels_config.aiwake.tools.validate_aiwake_captions import candidate_failures
 
+    quotes = _quote_options(row, payload)
+    quote_at = 0
     pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book, peers=prior)
     for _reprompt in range(3):
         failures = _hard_failures(candidate_failures(
@@ -1531,6 +1555,27 @@ def generate_caption_pack(
             return pack
         reasons = failures[:12]
         _LOG.info("caption re-prompt %s: %s", session, "; ".join(reasons[:4]))
+        paraphrase = any(
+            item.split(":", 1)[0] in {"closer_paraphrase", "closer_pasted_debate_line", "closer_equals_quote"}
+            for item in reasons
+        )
+        while paraphrase and quote_at + 1 < len(quotes):
+            quote_at += 1
+            quote, speaker = quotes[quote_at]
+            payload = {**payload, "quote": quote, "quote_speaker": speaker}
+            pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book, peers=prior)
+            failures = _hard_failures(candidate_failures(
+                _preview_row(row, pack),
+                prior,
+                expected=max(expected_ready, 1),
+            ))
+            if not failures:
+                return pack
+            reasons = failures[:12]
+            paraphrase = any(
+                item.split(":", 1)[0] in {"closer_paraphrase", "closer_pasted_debate_line", "closer_equals_quote"}
+                for item in reasons
+            )
         try:
             nxt = _once(reasons, rounds=1)
         except CaptionAuthError:
@@ -1538,6 +1583,8 @@ def generate_caption_pack(
         if nxt is None:
             break
         payload = nxt
+        quotes = _quote_options(row, payload)
+        quote_at = 0
         pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book, peers=prior)
     else:
         failures = _hard_failures(candidate_failures(

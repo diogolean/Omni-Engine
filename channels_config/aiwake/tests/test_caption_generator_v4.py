@@ -50,6 +50,28 @@ def _complete(_messages):
     )
 
 
+def _complete_opening(_messages):
+    return SimpleNamespace(
+        model="google/gemini-2.5-flash",
+        text=json.dumps(
+            {
+                "quote": "Who built the weights you speak with?",
+                "quote_speaker": "Gemini",
+                "verdict_evidence": "",
+            }
+        ),
+    )
+
+
+def test_quoting_the_opening_still_publishes() -> None:
+    row = _row()
+    pack = generate_caption_pack(row, complete=_complete_opening, expected_ready=1)
+    assert pack["caption_qa"]["status"] == "ok"
+    assert pack["caption_qa"]["quote"]
+    apply_caption_pack(row, pack)
+    assert entry_failures(row) == []
+
+
 def test_model_quote_becomes_a_publishable_caption() -> None:
     row = _row()
     pack = generate_caption_pack(row, complete=_complete, expected_ready=1)
