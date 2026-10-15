@@ -94,4 +94,6 @@ presets:
       denoise: 0.38
       steps: 20
       cfg: 5
+      # Not used while face_detailer is enabled. Both passes share LoRA node
+      # 40, so the hand detailer reuses the face identity_lora_weight.
       identity_lora_weight: 0.85

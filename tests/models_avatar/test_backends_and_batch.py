@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ from models_avatar.errors import (
 )
 from models_avatar.http_client import BROWSER_USER_AGENT
 from models_avatar.prompts import compose_positive
-from models_avatar.service import prepare_job
+from models_avatar.service import prepare_job, render
 
 _SCENE = (
     "relaxed closed-mouth smile, standing with shoulders square to the camera, "
@@ -379,6 +380,128 @@ def test_batch_is_resumable_and_records_a_manifest(
     assert again.skipped == 2
     assert again.completed == 0
     assert len(backend.calls) == calls_after_first
+
+
+def test_single_render_does_not_reuse_seed_filename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    backend = _FakeBackend()
+    first = render(
+        "sophie_bennet",
+        preset="fast",
+        prompt=_SCENE,
+        seed=99,
+        backend=backend,
+        day="2026-10-15",
+    )
+    second = render(
+        "sophie_bennet",
+        preset="fast",
+        prompt=_SCENE,
+        seed=99,
+        backend=backend,
+        day="2026-10-15",
+    )
+    assert first.path.name != "99.png"
+    assert second.path.name != "99.png"
+    assert first.path != second.path
+    stamp, short = first.path.stem.split("_", 1)
+    assert len(stamp) == 15 and stamp[8] == "T"
+    assert len(short) == 8
+    assert first.path.read_bytes() == b"png"
+    assert second.path.read_bytes() == b"png"
+    kept = tmp_path / "kept.png"
+    kept.write_bytes(b"original")
+    calls = len(backend.calls)
+    with pytest.raises(GenerationError):
+        render(
+            "sophie_bennet",
+            preset="fast",
+            prompt=_SCENE,
+            seed=99,
+            backend=backend,
+            dest=kept,
+        )
+    assert kept.read_bytes() == b"original"
+    assert len(backend.calls) == calls
+
+
+def test_pod_writes_part_then_replaces_and_refuses_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replaced: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def spy(src: str | Path, dst: str | Path) -> None:
+        replaced.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("models_avatar.paths.os.replace", spy)
+    seen: list = []
+
+    def transport(req, timeout=0):  # noqa: ANN001
+        seen.append(req)
+        url = req.full_url
+        if url.endswith("/prompt"):
+            return _Resp(json.dumps({"prompt_id": "pid-part"}).encode())
+        if "/history/" in url:
+            payload = {
+                "pid-part": {
+                    "outputs": {
+                        "9": {"images": [{"filename": "a.png", "subfolder": "", "type": "output"}]}
+                    }
+                }
+            }
+            return _Resp(json.dumps(payload).encode())
+        if "/view?" in url:
+            return _Resp(b"\x89PNG-bytes")
+        raise AssertionError(url)
+
+    backend = RunPodPodBackend(
+        base_url="https://example.proxy.runpod.net",
+        api_key="",
+        transport=transport,
+        poll_interval_s=0.01,
+        timeout_s=5,
+    )
+    result = backend.generate(_job(tmp_path))
+    assert result.path.read_bytes() == b"\x89PNG-bytes"
+    assert not Path(str(result.path) + ".part").exists()
+    assert len(replaced) == 1
+    assert replaced[0][0].name == result.path.name + ".part"
+    assert replaced[0][1] == result.path
+    for req in seen:
+        assert req.get_header("User-agent") == BROWSER_USER_AGENT
+    with pytest.raises(GenerationError):
+        backend.generate(_job(tmp_path))
+    assert result.path.read_bytes() == b"\x89PNG-bytes"
+    assert len(replaced) == 1
+
+
+def test_single_render_writes_sidecar(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    result = render(
+        "sophie_bennet",
+        preset="fast",
+        prompt=_SCENE,
+        seed=42,
+        backend=_FakeBackend(),
+        day="2026-10-15",
+    )
+    sidecar_path = result.path.with_suffix(".json")
+    assert sidecar_path.is_file()
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert set(sidecar) == {"prompt", "negative", "seed", "preset", "workflow"}
+    assert sidecar["prompt"].startswith("Sophie Bennet,")
+    assert sidecar["seed"] == 42
+    assert sidecar["preset"] == "fast"
+    assert "nude" in sidecar["negative"]
+    assert "wet t-shirt" in sidecar["negative"]
+    assert sidecar["workflow"]["7"]["inputs"]["seed"] == 42
+    assert sidecar["workflow"]["4"]["inputs"]["text"] == sidecar["prompt"]
 
 
 def test_compose_used_by_prepare_mentions_both_garments() -> None:

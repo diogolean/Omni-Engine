@@ -21,7 +21,8 @@ from models_avatar.env import (
     runpod_api_key,
 )
 from models_avatar.errors import GenerationError, RetryableGenerationError
-from models_avatar.http_client import Transport, join_url, request, request_json
+from models_avatar.http_client import BROWSER_USER_AGENT, Transport, join_url, request, request_json
+from models_avatar.paths import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -62,12 +63,14 @@ class RunPodPodBackend:
                 "RunPod pod URL is empty. Set MODELS_AVATAR_POD_URL, "
                 "REMOTE_GPU_BASE_URL, or COMFYUI_BASE_URL."
             )
+        if job.dest.exists():
+            raise GenerationError(f"Refusing to overwrite {job.dest}")
         prompt_id = self.queue_prompt(job.workflow)
         history = self.wait_for_history(prompt_id, job.save_node_id)
         image = _image_meta(history, job.save_node_id)
         payload = self.download_view(image)
-        job.dest.parent.mkdir(parents=True, exist_ok=True)
-        job.dest.write_bytes(payload)
+        # .part then os.replace so Drive does not sync a half-written still.
+        atomic_write_bytes(job.dest, payload)
         logger.info(
             "models_avatar saved | backend=%s avatar=%s preset=%s seed=%s file=%s",
             self.name,
@@ -159,7 +162,9 @@ class RunPodPodBackend:
         return response.body
 
     def _headers(self, *, json_body: bool) -> dict[str, str]:
-        headers: dict[str, str] = {}
+        # Browser UA on every pod call, including /history and /view.
+        # The Cloudflare proxy rejects the default Python-urllib agent.
+        headers: dict[str, str] = {"User-Agent": BROWSER_USER_AGENT}
         if json_body:
             headers["Content-Type"] = "application/json"
         if self.api_key:

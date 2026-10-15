@@ -60,4 +60,4 @@ Add an item under the set in `prompts/templates.yaml`. Then run the unit tests. 
 
 - Skin-texture LoRA at 0.25 or higher changes the face. Sophie stays at 0.10 for `skin_texture_XL_v4` and `skin_realism_imperfections_xl`.
 - `dpmpp_2m_sde` changes the composition. Both presets use `dpmpp_2m` / `karras`, 30 steps, cfg 5, 832×1216.
-- FaceDetailer deformed the face in the fast tests. It is off on `fast` (about 20–40 seconds, one pass). `ultra_detail` adds it as an optional second pass: face `bbox/face_yolov8m.pt` at denoise 0.48, hands `bbox/hand_yolov8s.pt` at denoise 0.38, identity LoRA at 0.85 only on that detailer branch.
+- FaceDetailer deformed the face in the fast tests. It is off on `fast` (about 20–40 seconds, one pass). `ultra_detail` adds it as an optional second pass: face `bbox/face_yolov8m.pt` at denoise 0.48, hands `bbox/hand_yolov8s.pt` at denoise 0.38, identity LoRA at 0.85 only on that detailer branch. The hand pass does not load a second LoRA. It reuses the face LoRA node, and therefore the face weight.

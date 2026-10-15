@@ -30,6 +30,12 @@ _REQUIRED_SAFETY = (
     "child",
     "teen",
     "underage",
+    "see-through",
+    "sheer",
+    "transparent fabric",
+    "visible nipples through clothing",
+    "nipple outline",
+    "wet t-shirt",
 )
 
 
@@ -97,6 +103,33 @@ def test_reference_workflow_file_keeps_the_lora_chain() -> None:
     assert workflow["7"]["inputs"]["scheduler"] == "karras"
     assert workflow["6"]["inputs"]["width"] == 832
     assert workflow["6"]["inputs"]["height"] == 1216
+
+
+def test_transparency_negatives_are_mandatory() -> None:
+    """A thin white tee rendered nipples. Those phrases stay in every negative."""
+    merged = merge_negatives("cartoon")
+    terms = _terms(merged)
+    for phrase in (
+        "see-through",
+        "sheer",
+        "transparent fabric",
+        "visible nipples through clothing",
+        "nipple outline",
+        "wet t-shirt",
+    ):
+        assert phrase in terms
+    avatar = load_avatar("sophie_bennet")
+    workflow = build_workflow(
+        avatar,
+        avatar.preset("fast"),
+        positive=compose_positive(avatar, _SCENE),
+        negative="blurry",
+        seed=3,
+        filename_prefix="safety",
+    )
+    negative_terms = _terms(workflow["5"]["inputs"]["text"])
+    assert "wet t-shirt" in negative_terms
+    assert "visible nipples through clothing" in negative_terms
 
 
 def test_mandatory_negatives_survive_an_empty_or_replacement_list() -> None:

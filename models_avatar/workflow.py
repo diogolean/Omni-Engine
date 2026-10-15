@@ -5,7 +5,9 @@
 single-pass graph). ``ultra_detail`` keeps that pass and appends an optional
 FaceDetailer and hand detailer. The detailer model is the checkpoint plus
 the identity LoRA only, at the preset weight (0.85 for Sophie), so the skin
-and style LoRAs stay on the base pass.
+and style LoRAs stay on the base pass. Face and hand share that one LoRA
+node: the hand detailer reuses the face LoRA weight whenever the face
+detailer is enabled.
 """
 from __future__ import annotations
 
@@ -192,6 +194,13 @@ def _append_detailers(
 
 
 def _detailer_weight(preset: PresetSpec) -> float:
+    """Weight for the one detailer LoRA node shared by face and hands.
+
+    Node 40 is loaded once. The hand FaceDetailer reads that same model, so
+    it reuses the face ``identity_lora_weight`` when the face detailer is
+    enabled. ``hand_detailer.identity_lora_weight`` applies only when the
+    face detailer is off.
+    """
     if preset.face_detailer.enabled:
         return preset.face_detailer.identity_lora_weight
     return preset.hand_detailer.identity_lora_weight

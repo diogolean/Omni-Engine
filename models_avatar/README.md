@@ -41,6 +41,10 @@ python -m models_avatar download-models --avatar sophie_bennet
 
 `batch` is resumable. The same `--batch-id` skips manifest rows with `"status": "ok"`. Transport errors retry (`--max-attempts`, default 3). `--interval` is the pause between jobs (`MODELS_AVATAR_MIN_INTERVAL_S` when omitted). The manifest records `prompt`, `negative`, `seed`, `preset`, and `file` for every image.
 
+A single `generate` writes `{timestamp}_{id}.png` and a sidecar `{timestamp}_{id}.json` with `prompt`, `negative`, `seed`, `preset`, and `workflow`. The name is not the seed, and an existing file is not overwritten. The pod publishes the image by writing `name.png.part` and `os.replace`, so Drive sync does not upload a partial file.
+
+On `ultra_detail`, the hand detailer reuses the face LoRA node. The weight in effect is the face `identity_lora_weight` (0.85 for Sophie). The hand weight is used only when the face detailer is turned off.
+
 ## Backends
 
 `MODELS_AVATAR_BACKEND` defaults to `runpod_pod`. That default is separate from `REMOTE_GPU_MODE`, which the video factory leaves on serverless. Avatar jobs use the live pod until the serverless image is rebuilt.

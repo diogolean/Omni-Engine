@@ -81,10 +81,9 @@ def request(
     }
     if headers:
         hdrs.update(dict(headers))
-    # Callers cannot put the blocked urllib UA back on the wire.
-    agent = hdrs.get("User-Agent") or ""
-    if not agent or "python-urllib" in agent.lower() or agent.lower().startswith("python/"):
-        hdrs["User-Agent"] = BROWSER_USER_AGENT
+    # Always the browser UA, including /view. A caller header must not put
+    # Python-urllib back on the wire; the Cloudflare proxy rejects it.
+    hdrs["User-Agent"] = BROWSER_USER_AGENT
 
     req = Request(url, data=body, headers=hdrs, method=method.upper())
     opener = transport or _default_transport

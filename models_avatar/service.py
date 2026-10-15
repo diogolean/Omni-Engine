@@ -2,6 +2,7 @@
 """Prepare one avatar job and, when asked, run it on a backend."""
 from __future__ import annotations
 
+import json
 import logging
 import random
 from pathlib import Path
@@ -9,7 +10,8 @@ from pathlib import Path
 from models_avatar.avatar_config import AvatarConfig, load_avatar
 from models_avatar.backends import GenerationJob, GenerationResult, get_backend
 from models_avatar.backends.base import GenerationBackend
-from models_avatar.paths import image_path, today_stamp
+from models_avatar.errors import GenerationError
+from models_avatar.paths import atomic_write_bytes, single_image_path, today_stamp
 from models_avatar.prompts import (
     TemplateLibrary,
     compose_negative,
@@ -75,12 +77,11 @@ def render(
     spec_name = preset or avatar.default_preset
     scene = _resolve_scene(avatar, prompt=prompt, set_name=set_name, template_id=template_id)
     chosen_seed = seed if seed is not None else random.randint(1, 2**31 - 1)
-    target = dest or image_path(
-        avatar.id,
-        spec_name,
-        f"{chosen_seed}.png",
-        day=day or today_stamp(),
-    )
+    if dest is not None:
+        _refuse_existing(dest)
+        target = dest
+    else:
+        target = single_image_path(avatar.id, spec_name, day=day or today_stamp())
     job = prepare_job(
         avatar,
         preset=spec_name,
@@ -90,13 +91,58 @@ def render(
     )
     engine = backend or get_backend(backend_name)
     logger.info(
-        "models_avatar render | avatar=%s preset=%s seed=%s backend=%s",
+        "models_avatar render | avatar=%s preset=%s seed=%s backend=%s file=%s",
         avatar.id,
         spec_name,
         chosen_seed,
         getattr(engine, "name", backend_name),
+        target.name,
     )
-    return engine.generate(job)
+    result = engine.generate(job)
+    write_sidecar(
+        result.path,
+        prompt=result.prompt,
+        negative=result.negative,
+        seed=result.seed,
+        preset=result.preset,
+        workflow=job.workflow,
+    )
+    return result
+
+
+def write_sidecar(
+    image: Path,
+    *,
+    prompt: str,
+    negative: str,
+    seed: int,
+    preset: str,
+    workflow: dict,
+) -> Path:
+    """JSON record beside a single image: prompt, negative, seed, preset, workflow."""
+    sidecar = image.with_suffix(".json")
+    _refuse_existing(sidecar)
+    payload = {
+        "prompt": prompt,
+        "negative": negative,
+        "seed": seed,
+        "preset": preset,
+        "workflow": workflow,
+    }
+    atomic_write_bytes(
+        sidecar,
+        (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+    )
+    return sidecar
+
+
+def _refuse_existing(path: Path) -> None:
+    if path.exists():
+        raise GenerationError(f"Refusing to overwrite {path}")
+    if path.suffix.lower() == ".png":
+        sidecar = path.with_suffix(".json")
+        if sidecar.exists():
+            raise GenerationError(f"Refusing to overwrite {sidecar}")
 
 
 def _resolve_scene(
