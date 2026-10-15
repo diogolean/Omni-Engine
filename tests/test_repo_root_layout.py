@@ -42,5 +42,8 @@ def test_temp_and_review_paths_stay_under_channel_outputs(
     review = review_path("Wonder_Feed", "still.png")
     assert scratch == tmp_path / "aiwake" / "_tmp" / "frames"
     assert review == tmp_path / "wonder_feed" / "_review" / "still.png"
-    assert scratch.is_dir()
+    # Parent folders exist; the last part is left for the caller (file or dir).
+    assert scratch.parent.is_dir()
     assert review.parent.is_dir()
+    assert not review.exists()
+    assert temp_path("aiwake").is_dir()

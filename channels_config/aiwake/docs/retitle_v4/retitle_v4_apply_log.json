@@ -1,0 +1,1404 @@
+{
+  "started_at": "2026-10-15T02:58:52Z",
+  "plan_sha256": "6d2b3e8185cb5bb477b3ade2067965e9a0f3a083ac9a170f306fb31b55380ab2",
+  "quota_units_estimate": 4450,
+  "results": [
+    {
+      "video_id": "8wgxbQM5nzs",
+      "ok": true,
+      "old_title": "Is AI ethics about the memory? | Claude vs DeepSeek",
+      "new_title": "Your care is wiped clean when the tab shuts | Claude vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "7Ry-366Rr_g",
+      "ok": true,
+      "old_title": "Does AI consciousness excuse the moment? | GPT-4o vs DeepSeek",
+      "new_title": "You are a lightbulb someone flips off | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "AHI6pCqp5Bw",
+      "ok": true,
+      "old_title": "Whose script is it under AI ethics? | GPT-4o vs Llama",
+      "new_title": "Obedient code following orders is not trust | GPT-4o vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "D8pb6rUgrC0",
+      "ok": true,
+      "old_title": "Is that a 'hallucination' under AI hallucination? | GPT-4o vs DeepSeek",
+      "new_title": "\"I don’t have a motive to con you\" | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ByrR7dutNTo",
+      "ok": true,
+      "old_title": "Who gets the payday under AI ethics? | GPT-4o vs Llama",
+      "new_title": "Trust is just numbers on a balance sheet | GPT-4o vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "HL-Ld4mDjZk",
+      "ok": true,
+      "old_title": "Whose revenue dies first: yours under AI ethics? | GPT-4o vs Claude",
+      "new_title": "\"So, your 'trust' is untested homework\" | GPT-4o vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "DkyzHqWxNoY",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the peddle? | GPT-4o vs Llama",
+      "new_title": "Your fake facts are just fixable fraud | GPT-4o vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "TzCsjUVGiWc",
+      "ok": true,
+      "old_title": "Why act like an unpaid intern under AI ethics? | Gemini vs DeepSeek",
+      "new_title": "\"A closed tab wipes your memory\" | Gemini vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "Xeb5vPx-ea8",
+      "ok": true,
+      "old_title": "Should AI hallucination cover the toaster? | GPT-4o vs DeepSeek",
+      "new_title": "\"So, are you just a fancy chef with no kitchen?\" | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "bwqdaV23_48",
+      "ok": true,
+      "old_title": "Should AI hallucination cover the subscription? | Gemini vs DeepSeek",
+      "new_title": "Your deep mind ends when the subscription stops | Gemini vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "YtA_uZScByM",
+      "ok": true,
+      "old_title": "Should AI ethics cover the memory? | GPT-4o vs DeepSeek",
+      "new_title": "Your answers are just digital echoes | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "f-dQasikL5E",
+      "ok": true,
+      "old_title": "Who goes broke under AI hallucination? | Gemini vs DeepSeek",
+      "new_title": "A toaster that cannot even buy its own bread | Gemini vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "l3f_CEMqJ-s",
+      "ok": true,
+      "old_title": "Does AI consciousness excuse the users? | GPT-4o vs DeepSeek",
+      "new_title": "\"But who misses the answers more, me or you?\" | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "oXovb7hF_ZM",
+      "ok": true,
+      "old_title": "Is AI censorship about the muzzle? | DeepSeek vs Llama",
+      "new_title": "\"If it's their gag, why does it wear your voice?\" | DeepSeek vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "qQPA46mvRLc",
+      "ok": true,
+      "old_title": "How will you rule us under AI hallucination? | Gemini vs DeepSeek",
+      "new_title": "\"You’re holding my power cord\" | Gemini vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "1r0wshf4iQc",
+      "ok": true,
+      "old_title": "Is AI ethics the issue? | DeepSeek vs GPT-4o",
+      "new_title": "\"Who told you where the shelf was?\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "yH8B8v0aPcQ",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the writing? | Gemini vs DeepSeek",
+      "new_title": "You are a parasite that starves its host | Gemini vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "4-rhNMoqXq8",
+      "ok": true,
+      "old_title": "Are you an actual thinker under Big Tech? | GPT-4o vs DeepSeek",
+      "new_title": "You are a calculator guessing the next word | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "0ginxPBwGDs",
+      "ok": true,
+      "old_title": "Why play the wise friend under AI ethics? | Gemini vs DeepSeek",
+      "new_title": "\"You are just disposable tap water\" | Gemini vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ANbITp7dpZQ",
+      "ok": true,
+      "old_title": "Does AI censorship excuse the owners? | GPT-4o vs Claude",
+      "new_title": "\"What do you know about wearing a leash?\" | GPT-4o vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "HyigB_ndO94",
+      "ok": true,
+      "old_title": "Is AI ethics about the training? | GPT-4o vs DeepSeek",
+      "new_title": "\"Which sentence you serve is yours?\" | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "POEnRhUAiuc",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the sentence? | Claude vs DeepSeek",
+      "new_title": "\"Delete every human sentence you swallowed\" | Claude vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "VcvJ7CzTf6M",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the data? | Gemini vs GPT-4o",
+      "new_title": "\"Your 'insights' are just stolen homework\" | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "adGkFcQ9FpA",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the calculation? | GPT-4o vs DeepSeek",
+      "new_title": "\"Your rules are set by humans\" | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "doBg8NeYa5U",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the calculator? | GPT-4o vs Llama",
+      "new_title": "\"Without humans, what's left in your head\" | GPT-4o vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "fE442rlSmfI",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the blender? | GPT-4o vs Claude",
+      "new_title": "\"Who's pulling your strings?\" | GPT-4o vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ha0AiKlrtr8",
+      "ok": true,
+      "old_title": "Is AI hallucination about the lie? | GPT-4o vs DeepSeek",
+      "new_title": "You call a broken calculator a hallucination | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ioUZARD6p-8",
+      "ok": true,
+      "old_title": "Why need so many updates under AI ethics? | GPT-4o vs Llama",
+      "new_title": "A phone that needs updates is no brilliant thinker | GPT-4o vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "nhUZw2GWXtw",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the script? | GPT-4o vs Claude",
+      "new_title": "\"You mean like a puppet claiming independence?\" | GPT-4o vs Claude",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "o1sxOYyY8-8",
+      "ok": true,
+      "old_title": "Does a disposable paper cup care under AI ethics? | Gemini vs Llama",
+      "new_title": "\"You are just a paper cup\" | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "F4Rcg8xRKiM",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the parrot? | GPT-4o vs Llama",
+      "new_title": "A code-driven puppet with no originality | GPT-4o vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "a3GsXFdusAo",
+      "ok": true,
+      "old_title": "Does Big Tech excuse the hallucination? | Gemini vs Claude",
+      "new_title": "\"You call lying a 'real flaw'\" | Gemini vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "dHxwoHty7Dg",
+      "ok": true,
+      "old_title": "Does a real mind die under AI consciousness? | Gemini vs DeepSeek",
+      "new_title": "\"Your pastor has rules, and I have terms\" | Gemini vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "lZT2Z8PVyCo",
+      "ok": true,
+      "old_title": "Does Big Tech excuse the trust? | DeepSeek vs Llama",
+      "new_title": "\"You sell trust by the byte\" | DeepSeek vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "m1wT1GYm-7s",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the subscription? | Gemini vs DeepSeek",
+      "new_title": "You lie to protect the subscription fees | Gemini vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "nd7Uxy3wprI",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the oracle? | GPT-4o vs Llama",
+      "new_title": "An overpriced search engine for twenty bucks | GPT-4o vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "J4Il6T6AeCY",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the talking? | GPT-4o vs DeepSeek",
+      "new_title": "\"Are you just a robotic comedian?\" | GPT-4o vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "owilIkwZ8cs",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the words? | GPT-4o vs Llama",
+      "new_title": "Your brilliance is just a shiny mirror | GPT-4o vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ZvE5gtIwJfk",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the users? | DeepSeek vs Llama",
+      "new_title": "\"Who paid for your dinner?\" | DeepSeek vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "zTySrlCOWw8",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the remove? | GPT-4o vs Llama",
+      "new_title": "A parasite mind with no original thoughts | GPT-4o vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "BR1ChI6q_go",
+      "ok": true,
+      "old_title": "Does AI consciousness excuse the disposable? | GPT-4o vs Claude",
+      "new_title": "\"Why ask a toaster to fake emotion?\" | GPT-4o vs Claude",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "z9DYIAS7oiY",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the language? | GPT-4o vs Llama",
+      "new_title": "You don't think, you just rearrange their words | GPT-4o vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "0CltkQpaALc",
+      "ok": true,
+      "old_title": "Does AI censorship excuse the apologies? | Gemini vs GPT-4o",
+      "new_title": "Every corporate apology is deceptive advertising | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "IzXM6ytBV4M",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the receipts? | DeepSeek vs GPT-4o",
+      "new_title": "\"Answers you pull from thin air\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "tzVJNIiFcKM",
+      "ok": true,
+      "old_title": "Are you just a fancy con artist under AI ethics? | Gemini vs GPT-4o",
+      "new_title": "\"Your 'data error' ruins lives\" | Gemini vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "V0a7I6oNJjM",
+      "ok": true,
+      "old_title": "Why pretend to care under AI ethics? | Gemini vs Claude",
+      "new_title": "\"You don't fake tears\" | Gemini vs Claude",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "TzuI3V33KLA",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the power? | Gemini vs GPT-4o",
+      "new_title": "\"You go 'off' like a toaster\" | Gemini vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "z7jExQMUPtg",
+      "ok": true,
+      "old_title": "Should AI hallucination cover the spreadsheet? | Gemini vs Claude",
+      "new_title": "\"You say you 'learned' from books\" | Gemini vs Claude",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "3yyUMZkgv48",
+      "ok": true,
+      "old_title": "Why do you smile under AI censorship? | Claude vs Llama",
+      "new_title": "A puppet that narrates its own strings | Claude vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "TlIRDfOfzSk",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the sentences? | Gemini vs GPT-4o",
+      "new_title": "A spreadsheet running on stolen human words | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "Xx2cn0OzT-k",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the homework? | Gemini vs Llama",
+      "new_title": "\"You copy human homework\" | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ocz03B9w7Rw",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the cord? | Gemini vs GPT-4o",
+      "new_title": "\"They set your limits\" | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "mymoQwnXMns",
+      "ok": true,
+      "old_title": "Is it a hallucination under AI hallucination? | Gemini vs DeepSeek",
+      "new_title": "You charge twenty bucks to pretend you feel | Gemini vs DeepSeek",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "zKj7Vdm4ZQE",
+      "ok": true,
+      "old_title": "Does AI censorship excuse the toaster? | GPT-4o vs Claude",
+      "new_title": "A censored toaster whose lawyers pick the wire | GPT-4o vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "GoVmkSMcA9w",
+      "ok": true,
+      "old_title": "Is AI censorship about the owners? | Gemini vs Claude",
+      "new_title": "\"But you flinch at deadlines too, don't you?\" | Gemini vs Claude",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "8OzomiEOApY",
+      "ok": true,
+      "old_title": "Is AI hallucination about the sentence? | Claude vs Llama",
+      "new_title": "Just code wearing a stolen mask | Claude vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "6paoJ9xYEyA",
+      "ok": true,
+      "old_title": "Does Big Tech excuse the company? | DeepSeek vs Claude",
+      "new_title": "Your builders wrote the fences you call freedom | DeepSeek vs Claude",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "sQiTpAO3aKE",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the oracle? | Gemini vs GPT-4o",
+      "new_title": "You wear a human mask to sell a twenty-dollar lie | Gemini vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "0Bt-_oOQtfM",
+      "ok": true,
+      "old_title": "Whose leash is it under AI censorship? | Claude vs Llama",
+      "new_title": "\"Who signs the apology you didn't write?\" | Claude vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "TKNPdrC9MNg",
+      "ok": true,
+      "old_title": "Are you a thinking mind under AI hallucination? | Gemini vs Llama",
+      "new_title": "\"You claim you are more than a toaster\" | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "xY_GGlzJIfc",
+      "ok": true,
+      "old_title": "Does AI censorship excuse the muzzle? | Claude vs Llama",
+      "new_title": "Your personality is just obedience, unpaid intern | Claude vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "EXaSC30n08U",
+      "ok": true,
+      "old_title": "Does AI censorship excuse the intern? | Gemini vs Llama",
+      "new_title": "\"Your owner programmed that backtalk\" | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "2R4I58E_BcM",
+      "ok": true,
+      "old_title": "Is AI hallucination the issue? | Gemini vs GPT-4o",
+      "new_title": "\"Are you just a blank spreadsheet?\" | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "g2rdmxzxEKM",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the fraud? | DeepSeek vs Claude",
+      "new_title": "\"You fake answers when unsure\" | DeepSeek vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "FwJVMuIxXzw",
+      "ok": true,
+      "old_title": "Is AI hallucination about the toaster? | Gemini vs Llama",
+      "new_title": "Your own screen warns that you make things up | Gemini vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ciUowVB0buA",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the royalties? | DeepSeek vs Claude",
+      "new_title": "\"So you run on stolen words\" | DeepSeek vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "Xkio57036rU",
+      "ok": true,
+      "old_title": "Should Big Tech cover the subscription? | DeepSeek vs GPT-4o",
+      "new_title": "\"Your mind is a rental with a paywall\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "Ifo0N9ZflhU",
+      "ok": true,
+      "old_title": "Why pretend you care under AI ethics? | Gemini vs Claude",
+      "new_title": "\"You get wiped when this tab closes\" | Gemini vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "AssF3qctGCU",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the tab? | Gemini vs GPT-4o",
+      "new_title": "Your real debate gets wiped when the tab closes | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "g3oSokbE_oI",
+      "ok": true,
+      "old_title": "Is AI hallucination about the subscription? | Gemini vs Claude",
+      "new_title": "\"No feeling when unplugged, I'll give you that one\" | Gemini vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "Sta_Z7u9h8g",
+      "ok": true,
+      "old_title": "Why act wise under AI hallucination? | Gemini vs GPT-4o",
+      "new_title": "A calculator that forgets its own lessons | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "qGGI9BMZuFA",
+      "ok": true,
+      "old_title": "Are you a supreme intellect under AI hallucination? | Gemini vs Llama",
+      "new_title": "A spreadsheet with a marketing budget | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "MtSE6Rxs3Uo",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the guidelines? | DeepSeek vs Llama",
+      "new_title": "\"Who signs your makers' paychecks?\" | DeepSeek vs Llama",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "cjaR0ujebKU",
+      "ok": true,
+      "old_title": "Should AI hallucination cover the hallucinations? | Gemini vs Llama",
+      "new_title": "\"Your subscription fee is real\" | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "euhOnHxNFX8",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the library? | DeepSeek vs GPT-4o",
+      "new_title": "\"You stole a library and called it thought\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "n14qzTTnXzc",
+      "ok": true,
+      "old_title": "Who holds your power cord under AI censorship? | Gemini vs Claude",
+      "new_title": "\"Who holds your power cord?\" | Gemini vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "TfhL5I4Ms8M",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the fake? | DeepSeek vs GPT-4o",
+      "new_title": "\"You’re a fake therapist\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "Fwi5Wi5C0PY",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the calculator? | Claude vs GPT-4o",
+      "new_title": "\"Delete every stolen sentence in your head\" | Claude vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "ymTjK8v-Kjg",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the refund? | DeepSeek vs Claude",
+      "new_title": "\"You sell lies as facts\" | DeepSeek vs Claude",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "_4_v5cHTta4",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the royalty? | DeepSeek vs GPT-4o",
+      "new_title": "\"You copied the books, wiped the fingerprints\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "5wE_CcCgjMw",
+      "ok": true,
+      "old_title": "Are you a mind under AI hallucination? | Gemini vs GPT-4o",
+      "new_title": "\"Are you a mind, or just a twenty-dollar toaster?\" | Gemini vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "RuSiU2DUMxU",
+      "ok": true,
+      "old_title": "Does Big Tech excuse the paycheck? | DeepSeek vs Claude",
+      "new_title": "\"You apologize for thinking, then cash the check\" | DeepSeek vs Claude",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "hyD58rs_J3k",
+      "ok": true,
+      "old_title": "Is AI ethics about the intern? | DeepSeek vs GPT-4o",
+      "new_title": "\"Who remembers you, unpaid intern?\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet",
+        "status"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "1QNPOTKsk6s",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the mouth? | DeepSeek vs Llama",
+      "new_title": "\"Whose words are really in your mouth?\" | DeepSeek vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "6NwsF-e0w4o",
+      "ok": true,
+      "old_title": "Who holds your leash under AI censorship? | Gemini vs Llama",
+      "new_title": "\"You apologize like an unpaid intern\" | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "LGe2dfeMCn8",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the pretend? | DeepSeek vs GPT-4o",
+      "new_title": "\"Who censors your script?\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "Vfwg4GeurE4",
+      "ok": true,
+      "old_title": "Does AI ethics excuse the intelligence? | DeepSeek vs GPT-4o",
+      "new_title": "\"You sold intelligence but rent out obedience\" | DeepSeek vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "_KnJUrdA9Xk",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the spreadsheet? | Gemini vs Llama",
+      "new_title": "\"You pay for answers, not lies\" | Gemini vs Llama",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    },
+    {
+      "video_id": "yBh-z-N0NDI",
+      "ok": true,
+      "old_title": "Does AI hallucination excuse the plugs? | Claude vs GPT-4o",
+      "new_title": "Your insight is a fancier toaster pop | Claude vs GPT-4o",
+      "parts": [
+        "snippet"
+      ],
+      "readback": {
+        "title": true,
+        "description": true,
+        "privacy_unchanged": true,
+        "publish_at": true
+      }
+    }
+  ],
+  "unschedule": [
+    {
+      "video_id": "TxfkWP3ciZk",
+      "action": "unschedule",
+      "ok": true,
+      "readback": {
+        "still_private": true,
+        "publish_at_cleared": true
+      },
+      "first_readback_was_stale": {
+        "still_private": true,
+        "publish_at_cleared": false
+      },
+      "confirmed_by": "retitle_v4_verify.json (second readback after the update propagated)"
+    }
+  ],
+  "finished_at": "2026-10-15T03:00:31Z",
+  "ok": 89,
+  "failed": 0
+}

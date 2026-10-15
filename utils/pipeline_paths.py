@@ -232,24 +232,31 @@ def _channel_slug(channel: str) -> str:
     return (channel or "unknown").strip().lower() or "unknown"
 
 
+def _scratch_path(channel: str, folder: str, parts: tuple[str, ...]) -> Path:
+    """Join ``parts`` under ``<channel>/<folder>`` and create the parent folders.
+
+    The last part is not created, so it can be a file name. Callers that want
+    a directory call ``mkdir(exist_ok=True)`` on the result.
+    """
+    path = page_outputs_dir(_channel_slug(channel)).joinpath(folder, *parts)
+    (path.parent if parts else path).mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def temp_path(channel: str, *parts: str) -> Path:
-    """Scratch files for one project: ``{outputs}/<channel>/_tmp``.
+    """Scratch files for one project: ``{outputs}/<channel>/_tmp/<parts>``.
 
     Never create a ``_tmp*`` directory at the repository root.
     """
-    path = page_outputs_dir(_channel_slug(channel)).joinpath("_tmp", *parts)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return _scratch_path(channel, "_tmp", parts)
 
 
 def review_path(channel: str, *parts: str) -> Path:
-    """Preview and review dumps for one project: ``{outputs}/<channel>/_review``.
+    """Preview and review dumps for one project: ``{outputs}/<channel>/_review/<parts>``.
 
     Never create a ``_review`` or ``_cp_preview`` directory at the repository root.
     """
-    path = page_outputs_dir(_channel_slug(channel)).joinpath("_review", *parts)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return _scratch_path(channel, "_review", parts)
 
 
 def moviepy_temp_audio_dir() -> str:
