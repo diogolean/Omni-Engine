@@ -5,7 +5,7 @@ The repository root holds entry points, configuration, and top-level packages. S
 ## What stays at the root
 
 - Entry points and config: `main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `.gitignore`, `README.md`, `.env`.
-- Top-level packages: `agents/`, `channels_config/`, `core/`, `utils/`, `quality/`, `scripts/`, `tests/`, `tools/`, `docs/`.
+- Top-level packages: `agents/`, `channels_config/`, `core/`, `models_avatar/`, `utils/`, `quality/`, `scripts/`, `tests/`, `tools/`, `docs/`.
 
 `.env`, `credentials/`, and `.supermemory/` stay on disk and stay out of git.
 

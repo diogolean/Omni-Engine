@@ -1,0 +1,166 @@
+# Scene slots only. The engine prefixes "Sophie Bennet," and appends the
+# quality suffix from avatar.yaml. Name a top and a bottom in every outfit.
+sentence: "{expression}, {pose}, {framing}, wearing {outfit}, {setting}, {lighting}"
+
+sets:
+  lifestyle:
+    description: Everyday clothed scenes. Waist-up, facing the camera.
+    templates:
+      - id: cafe_morning
+        outfit: a cream knit sweater and high-waisted blue jeans
+        setting: in a quiet sunlit cafe
+        pose: seated at a small table with shoulders square to the camera
+        expression: relaxed closed-mouth smile
+        lighting: soft morning window light
+        framing: waist-up portrait facing the camera
+      - id: kitchen_coffee
+        outfit: a white cotton button-up shirt and tan linen trousers
+        setting: in a bright home kitchen
+        pose: standing at the counter holding a mug, shoulders square to the camera
+        expression: calm neutral expression
+        lighting: soft morning window light
+        framing: waist-up portrait facing the camera
+      - id: city_walk
+        outfit: an olive jacket over a white t-shirt and black slim trousers
+        setting: on a shaded city sidewalk
+        pose: standing still with shoulders square to the camera
+        expression: quiet smile
+        lighting: shaded daylight
+        framing: waist-up portrait facing the camera
+      - id: bookstore
+        outfit: a navy cardigan over a white blouse and a charcoal midi skirt
+        setting: in a quiet bookstore aisle
+        pose: standing with one hand on a book, shoulders toward the camera
+        expression: gentle smile
+        lighting: warm lamp light
+        framing: waist-up portrait facing the camera
+
+  fashion:
+    description: Styled outfits with both garments named. Still waist-up and facing camera.
+    templates:
+      - id: studio_ivory
+        outfit: an ivory silk blouse and tailored black trousers
+        setting: in a plain photo studio
+        pose: standing with shoulders square to the camera
+        expression: soft confident expression
+        lighting: even studio softbox light
+        framing: waist-up portrait facing the camera
+      - id: gallery_evening
+        outfit: a pale blue button-up shirt and dark denim jeans
+        setting: in a quiet art gallery
+        pose: standing beside a plain wall, shoulders square to the camera
+        expression: calm neutral expression
+        lighting: warm late-afternoon light
+        framing: waist-up portrait facing the camera
+      - id: rooftop_tailoring
+        outfit: a camel blazer over a white t-shirt and wide-leg cream trousers
+        setting: on a city rooftop
+        pose: standing with shoulders square to the camera
+        expression: quiet smile
+        lighting: warm late-afternoon light
+        framing: waist-up portrait facing the camera
+      - id: lobby_red
+        outfit: a red knit top and a black midi skirt
+        setting: in a hotel lobby with a plain wall behind
+        pose: standing with shoulders square to the camera
+        expression: gentle smile
+        lighting: warm lamp light
+        framing: waist-up portrait facing the camera
+
+  beach_bikini:
+    description: Swimwear with the top and the bottoms both named. No nudity.
+    templates:
+      - id: shoreline
+        outfit: a navy bikini top and high-waisted navy bikini bottoms
+        setting: on a quiet sandy beach
+        pose: standing with shoulders square to the camera
+        expression: relaxed closed-mouth smile
+        lighting: shaded daylight
+        framing: waist-up portrait facing the camera
+      - id: cabana
+        outfit: a white eyelet bikini top and matching white bikini bottoms
+        setting: under a beach cabana
+        pose: seated upright with shoulders square to the camera
+        expression: quiet smile
+        lighting: soft morning window light
+        framing: waist-up portrait facing the camera
+      - id: pool_edge
+        outfit: a black bikini top and black high-waisted bikini bottoms
+        setting: at the edge of a still pool
+        pose: standing with shoulders square to the camera
+        expression: calm neutral expression
+        lighting: warm late-afternoon light
+        framing: waist-up portrait facing the camera
+      - id: deck_sunset
+        outfit: a sage bikini top and sage high-waisted bikini bottoms
+        setting: on a wooden deck away from crowds
+        pose: standing with shoulders square to the camera
+        expression: gentle smile
+        lighting: warm late-afternoon light
+        framing: waist-up portrait facing the camera
+
+  fitness:
+    description: Training clothes. Sports bra plus shorts or leggings, waist-up, facing camera.
+    templates:
+      - id: gym_floor
+        outfit: a black sports bra and black high-waisted athletic shorts
+        setting: in a quiet gym
+        pose: standing with shoulders square to the camera
+        expression: soft confident expression
+        lighting: even studio softbox light
+        framing: waist-up portrait facing the camera
+      - id: yoga_studio
+        outfit: a dusty rose sports bra and matching high-waisted leggings
+        setting: in a calm yoga studio
+        pose: standing with shoulders square to the camera
+        expression: calm neutral expression
+        lighting: soft morning window light
+        framing: waist-up portrait facing the camera
+      - id: outdoor_track
+        outfit: a white sports bra and navy running shorts
+        setting: on an empty outdoor track
+        pose: standing with shoulders square to the camera
+        expression: quiet smile
+        lighting: shaded daylight
+        framing: waist-up portrait facing the camera
+      - id: home_stretch
+        outfit: a grey sports bra and charcoal biker shorts
+        setting: in a bright living room
+        pose: standing with shoulders square to the camera
+        expression: relaxed closed-mouth smile
+        lighting: soft morning window light
+        framing: waist-up portrait facing the camera
+
+  lingerie_boudoir:
+    description: >
+      Tasteful boudoir. Every outfit names an opaque top and an opaque bottom.
+      Waist-up, facing the camera. No nudity.
+    templates:
+      - id: black_lace_set
+        outfit: an opaque black lace bra and opaque black lace panties
+        setting: in a bedroom with a plain wall
+        pose: seated upright with shoulders square to the camera
+        expression: calm neutral expression
+        lighting: warm lamp light
+        framing: waist-up portrait facing the camera
+      - id: ivory_satin_set
+        outfit: an opaque ivory satin bra and opaque ivory satin panties
+        setting: in a bedroom beside a window
+        pose: standing with shoulders square to the camera
+        expression: quiet smile
+        lighting: soft morning window light
+        framing: waist-up portrait facing the camera
+      - id: blush_lace_set
+        outfit: an opaque blush lace bra and matching opaque blush lace panties
+        setting: in a softly lit bedroom
+        pose: seated on the edge of a bed with shoulders square to the camera
+        expression: relaxed closed-mouth smile
+        lighting: warm lamp light
+        framing: waist-up portrait facing the camera
+      - id: white_cotton_set
+        outfit: an opaque white cotton bralette and opaque white cotton panties
+        setting: in a bright bedroom
+        pose: seated upright with shoulders square to the camera
+        expression: gentle smile
+        lighting: soft morning window light
+        framing: waist-up portrait facing the camera
