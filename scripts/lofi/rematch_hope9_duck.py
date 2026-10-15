@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 from agents.media.audio_engine import _audio_file_duration_s  # noqa: E402
 from core.economic_reel_lofi.assembler import list_library_bgm_tracks  # noqa: E402
-from core.economic_reel_lofi._tools.vo_pace_probe import silencedetect  # noqa: E402
+from tests.lofi.vo_pace_probe import silencedetect  # noqa: E402
 from core.economic_reel_lofi._tools.vo_pause_probe import (  # noqa: E402
     OUT_DIR,
     _expand_duck_windows,

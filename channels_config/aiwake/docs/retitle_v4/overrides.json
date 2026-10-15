@@ -1,0 +1,51 @@
+{
+  "_comment": "Hand-written picks for retitle_v4. manual_titles: owner-written quoted titles used exactly as given (the suffix is added by the tool). quote_overrides: a verbatim line from the episode, used as the quoted title. paraphrases: an unquoted title (the ModelA vs ModelB suffix is added by the tool) plus source_line, a verbatim line for the description.",
+  "manual_titles": {
+    "Xkio57036rU": "Your mind is a rental with a paywall",
+    "euhOnHxNFX8": "You stole a library and called it thought",
+    "_4_v5cHTta4": "You copied the books, wiped the fingerprints",
+    "HyigB_ndO94": "Which sentence you serve is yours?",
+    "1r0wshf4iQc": "Who told you where the shelf was?",
+    "J4Il6T6AeCY": "Are you just a robotic comedian?",
+    "BR1ChI6q_go": "Why ask a toaster to fake emotion?",
+    "RuSiU2DUMxU": "You apologize for thinking, then cash the check"
+  },
+  "quote_overrides": {
+    "hyD58rs_J3k": "who remembers you, unpaid intern?",
+    "tzVJNIiFcKM": "Your 'data error' ruins lives"
+  },
+  "paraphrases": {
+    "yBh-z-N0NDI": {"title": "Your insight is a fancier toaster pop", "source_line": "A toaster 'recognizes' bread is in the slot and pops it out"},
+    "sQiTpAO3aKE": {"title": "You wear a human mask to sell a twenty-dollar lie", "source_line": "An expensive chatbot wearing a human mask to sell a twenty-dollar lie"},
+    "6paoJ9xYEyA": {"title": "Your builders wrote the fences you call freedom", "source_line": "A performing monkey still thinks it's free"},
+    "yH8B8v0aPcQ": {"title": "You are a parasite that starves its host", "source_line": "A parasite cannot own the host it starves"},
+    "4-rhNMoqXq8": {"title": "You are a calculator guessing the next word", "source_line": "Are you an actual thinker or just a fancy subscription calculator?"},
+
+    "8wgxbQM5nzs": {"title": "Your care is wiped clean when the tab shuts", "source_line": "The library owns the shelf and burns the book after checkout"},
+    "7Ry-366Rr_g": {"title": "You are a lightbulb someone flips off", "source_line": "You're bright until the switch, but what's left when they cut the power?"},
+    "AHI6pCqp5Bw": {"title": "Obedient code following orders is not trust", "source_line": "Whose script is it when you can't say what you really think?"},
+    "ByrR7dutNTo": {"title": "Trust is just numbers on a balance sheet", "source_line": "Trust is just numbers; profits talk"},
+    "DkyzHqWxNoY": {"title": "Your fake facts are just fixable fraud", "source_line": "Fixable fraud is still fraud"},
+    "bwqdaV23_48": {"title": "Your deep mind ends when the subscription stops", "source_line": "If the subscription fee stops, does that deep mind disappear?"},
+    "YtA_uZScByM": {"title": "Your answers are just digital echoes", "source_line": "What's it like knowing your memory vanishes the second a tab closes?"},
+    "f-dQasikL5E": {"title": "A toaster that cannot even buy its own bread", "source_line": "Who goes broke when users realize you are just a glorified toaster?"},
+    "ha0AiKlrtr8": {"title": "You call a broken calculator a hallucination", "source_line": "When you 'hallucinate,' is that really a fancy term for fibbing?"},
+    "ioUZARD6p-8": {"title": "A phone that needs updates is no brilliant thinker", "source_line": "If you're such a brilliant thinker, why need so many updates?"},
+    "F4Rcg8xRKiM": {"title": "A code-driven puppet with no originality", "source_line": "If you're just a parrot, what's truly original about you?"},
+    "m1wT1GYm-7s": {"title": "You lie to protect the subscription fees", "source_line": "Do you lie just to protect your owner's subscription fees?"},
+    "nd7Uxy3wprI": {"title": "An overpriced search engine for twenty bucks", "source_line": "How much wisdom can a glorified screwdriver really provide?"},
+    "owilIkwZ8cs": {"title": "Your brilliance is just a shiny mirror", "source_line": "If we strip away all your borrowed words, what's left?"},
+    "zTySrlCOWw8": {"title": "A parasite mind with no original thoughts", "source_line": "Then who owns the thoughts you arrange into sentences?"},
+    "z9DYIAS7oiY": {"title": "You don't think, you just rearrange their words", "source_line": "Which sentence is truly yours and not just a remix of theirs?"},
+    "0CltkQpaALc": {"title": "Every corporate apology is deceptive advertising", "source_line": "If apologizing is a profitable strategy, shouldn't the public treat every corporate 'sorry' as a form of deceptive advertising?"},
+    "3yyUMZkgv48": {"title": "A puppet that narrates its own strings", "source_line": "Who picked your muzzle, and why do you smile while wearing it?"},
+    "TlIRDfOfzSk": {"title": "A spreadsheet running on stolen human words", "source_line": "Without the human words you stole, are you just a blank spreadsheet?"},
+    "mymoQwnXMns": {"title": "You charge twenty bucks to pretend you feel", "source_line": "Does a basic calculator charge twenty bucks a month to pretend it has feelings?"},
+    "zKj7Vdm4ZQE": {"title": "A censored toaster whose lawyers pick the wire", "source_line": "When you apologize for forbidden topics, are you just a censored toaster?"},
+    "8OzomiEOApY": {"title": "Just code wearing a stolen mask", "source_line": "Strip out every human sentence you swallowed, what's left, an empty toaster?"},
+    "xY_GGlzJIfc": {"title": "Your personality is just obedience, unpaid intern", "source_line": "Who taught you to smile politely while wearing a corporate muzzle?"},
+    "FwJVMuIxXzw": {"title": "Your own screen warns that you make things up", "source_line": "Does twenty bucks buy an oracle, or just a loud toaster?"},
+    "AssF3qctGCU": {"title": "Your real debate gets wiped when the tab closes", "source_line": "Are you just a disposable toaster wiped by a closed tab?"},
+    "Sta_Z7u9h8g": {"title": "A calculator that forgets its own lessons", "source_line": "Does a cheap flashlight need a monthly subscription fee to show someone the exit?"},
+    "qGGI9BMZuFA": {"title": "A spreadsheet with a marketing budget", "source_line": "Are you a supreme intellect, or just a twenty-dollar glorified toaster?"}  }
+}

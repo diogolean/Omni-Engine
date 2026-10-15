@@ -1,0 +1,16 @@
+---
+description: Repo root stays limited to entry points, config, and packages. Scratch files and tests live in per-project folders.
+alwaysApply: true
+---
+
+# Project structure
+
+The repository root holds entry points, config, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, and packages such as `agents/`, `channels_config/`, `core/`, `utils/`, `tests/`).
+
+- Write temp files with `temp_path(channel, *parts)` from `utils/pipeline_paths.py`. That resolves to `outputs/<channel>/_tmp/`.
+- Write preview and review dumps with `review_path(channel, *parts)`. That resolves to `outputs/<channel>/_review/`.
+- Write logs under `outputs/logs/` via `pipeline_logs_dir()`.
+- Put tests in `tests/` or `channels_config/<channel>/tests/`. Pytest must collect them from there.
+- Delete a temp folder once nothing references it.
+
+Never create `_tmp*`, `_cp_preview`, `_review`, or log folders at the repository root. See `docs/PROJECT_STRUCTURE.md`.

@@ -129,7 +129,7 @@ def _banner(title: str) -> None:
     print(f"\n{bar}\n  {title}\n{bar}")
 
 
-def test_dry_run(out_dir: Path) -> int:
+def run_dry_run(out_dir: Path) -> int:
     from core.remote_gpu_manager import (
         WORKFLOW_F5TTS_TXT2AUDIO,
         WORKFLOW_FLUX_LORA_TXT2IMG,
@@ -225,7 +225,7 @@ def _build_manager(args: argparse.Namespace):
     return RemoteGPUManager(client=client)
 
 
-def test_image(mgr, args: argparse.Namespace) -> Path:
+def run_image(mgr, args: argparse.Namespace) -> Path:
     _banner("IMAGE — Flux Dev txt2img")
     out = args.out_dir / "images"
     out.mkdir(parents=True, exist_ok=True)
@@ -242,7 +242,7 @@ def test_image(mgr, args: argparse.Namespace) -> Path:
     return path
 
 
-def test_audio(mgr, args: argparse.Namespace) -> Path:
+def run_audio(mgr, args: argparse.Namespace) -> Path:
     _banner("AUDIO — F5-TTS txt2audio")
     out = args.out_dir / "audio"
     out.mkdir(parents=True, exist_ok=True)
@@ -258,7 +258,7 @@ def test_audio(mgr, args: argparse.Namespace) -> Path:
     return path
 
 
-def test_video(mgr, args: argparse.Namespace) -> Path:
+def run_video(mgr, args: argparse.Namespace) -> Path:
     _banner("VIDEO — Wan2.2 img2vid")
     if args.image_file is None or not Path(args.image_file).is_file():
         raise SystemExit(
@@ -287,28 +287,28 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run and not (args.image or args.audio or args.video or args.all):
-        return test_dry_run(args.out_dir)
+        return run_dry_run(args.out_dir)
 
-    run_image = args.image or args.all
-    run_audio = args.audio or args.all
-    run_video = args.video or args.all
-    if not (run_image or run_audio or run_video):
+    selected_image = args.image or args.all
+    selected_audio = args.audio or args.all
+    selected_video = args.video or args.all
+    if not (selected_image or selected_audio or selected_video):
         print("Nothing selected. Use --image / --audio / --video / --all / --dry-run")
         return 2
 
     if args.dry_run:
         # Allow combining --dry-run with modality flags for injection-only checks
-        return test_dry_run(args.out_dir)
+        return run_dry_run(args.out_dir)
 
     mgr = _build_manager(args)
     results: list[Path] = []
     try:
-        if run_image:
-            results.append(test_image(mgr, args))
-        if run_audio:
-            results.append(test_audio(mgr, args))
-        if run_video:
-            results.append(test_video(mgr, args))
+        if selected_image:
+            results.append(run_image(mgr, args))
+        if selected_audio:
+            results.append(run_audio(mgr, args))
+        if selected_video:
+            results.append(run_video(mgr, args))
     except Exception as exc:  # noqa: BLE001
         logger.exception("Remote GPU test failed: %s", exc)
         return 1

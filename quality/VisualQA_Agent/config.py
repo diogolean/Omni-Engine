@@ -192,7 +192,8 @@ COST_GEMINI_FLASH_LITE_USD: float = float(
 # agents.media.providers.together_image.estimate_deepinfra_schnell_cost_usd,
 # the single source of truth). Still read by estimate_flux_cost() below /
 # image_generator.py:359 — left in place rather than removed since that call
-# site wasn't part of this pass. See _agent_log/20260820_cost-audit.md.
+# site wasn't part of this pass. Audit notes belong under
+# outputs/<channel>/_review/ (see docs/PROJECT_STRUCTURE.md).
 COST_FLUX_SCHNELL_USD: float = 0.003
 COST_FLUX_DEV_USD: float = 0.025
 
