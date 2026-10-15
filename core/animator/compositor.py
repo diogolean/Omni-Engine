@@ -778,8 +778,9 @@ class _HeroCamera:
         self.body_scale_x = self.scale
         self.body_scale_y = self.scale
         self.pixel_aspect_error = abs(self.scale_x - self.scale_y) / self.scale_x
+        self._mirror = -1 if self.facing == "left" else 1
         self.roll_deg = (
-            DEEPSEEK_ROLL_CCW_DEG
+            DEEPSEEK_ROLL_CCW_DEG * self._mirror
             if rig.skin.character_id in DEEPSEEK_LOCKED_IDS
             else 0.0
         )
@@ -787,7 +788,9 @@ class _HeroCamera:
             self.offset_x = int(round((target_width - self.out_w) / 2.0))
             self.offset_y = int(round((target_height - self.out_h) / 2.0))
             if rig.skin.character_id in DEEPSEEK_LOCKED_IDS:
-                self.offset_x += DEEPSEEK_SHIFT_X
+                # The shift and tilt were tuned for the left seat (facing right).
+                # The right seat is the mirror image.
+                self.offset_x += DEEPSEEK_SHIFT_X * self._mirror
                 self.offset_y += DEEPSEEK_SHIFT_Y
             self.lead_anchor_x = int(round(self.offset_x + native_eye_x * self.scale))
         elif legacy_artist_v2:

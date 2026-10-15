@@ -169,3 +169,33 @@ def test_guard_reads_the_stored_first_seat(tmp_path: Path) -> None:
     assert read_first_seat("s1", tmp_path) == "right"
     assert read_first_seat("s2", tmp_path) == "left"
     assert read_first_seat("missing", tmp_path) == "left"
+
+
+def test_deepseek_plate_tuning_mirrors_for_the_right_seat(tmp_path: Path) -> None:
+    from core.animator.animator_types import SpeakerStyle
+    from core.animator.pipeline import build_render_skin
+    from core.animator.compositor import (
+        DEEPSEEK_ROLL_CCW_DEG,
+        DEEPSEEK_SHIFT_X,
+        _HeroCamera,
+    )
+    from core.animator.puppet import PuppetRig, PuppetSkin
+
+    def camera(facing: str) -> _HeroCamera:
+        view = "facing_right" if facing == "right" else "facing_left"
+        skins = tmp_path / facing
+        build_render_skin("deepseek_cyborg_v3", skins, view_name=view, contraplano=True)
+        rig = PuppetRig(PuppetSkin.load(skins / "deepseek_cyborg_v3"))
+        return _HeroCamera(
+            rig,
+            SpeakerStyle("deepseek_cyborg_v3", "DeepSeek", facing=facing),
+            target_width=1080,
+            target_height=1920,
+        )
+
+    left_seat, right_seat = camera("right"), camera("left")
+    assert left_seat.roll_deg == DEEPSEEK_ROLL_CCW_DEG
+    assert right_seat.roll_deg == -DEEPSEEK_ROLL_CCW_DEG
+    for cam, sign in ((left_seat, 1), (right_seat, -1)):
+        centered = int(round((1080 - cam.out_w) / 2.0))
+        assert cam.offset_x == centered + sign * DEEPSEEK_SHIFT_X
