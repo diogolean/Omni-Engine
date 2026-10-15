@@ -1556,7 +1556,12 @@ def generate_caption_pack(
         reasons = failures[:12]
         _LOG.info("caption re-prompt %s: %s", session, "; ".join(reasons[:4]))
         paraphrase = any(
-            item.split(":", 1)[0] in {"closer_paraphrase", "closer_pasted_debate_line", "closer_equals_quote"}
+            item.split(":", 1)[0] in {
+                "closer_paraphrase",
+                "closer_pasted_debate_line",
+                "closer_equals_quote",
+                "quote_verbatim",
+            }
             for item in reasons
         )
         while paraphrase and quote_at + 1 < len(quotes):
@@ -1573,7 +1578,12 @@ def generate_caption_pack(
                 return pack
             reasons = failures[:12]
             paraphrase = any(
-                item.split(":", 1)[0] in {"closer_paraphrase", "closer_pasted_debate_line", "closer_equals_quote"}
+                item.split(":", 1)[0] in {
+                    "closer_paraphrase",
+                    "closer_pasted_debate_line",
+                    "closer_equals_quote",
+                    "quote_verbatim",
+                }
                 for item in reasons
             )
         try:
