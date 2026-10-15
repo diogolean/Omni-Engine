@@ -69,7 +69,13 @@ def _aura(sprite: Image.Image, color: tuple[int, int, int]) -> Image.Image:
     return plate
 
 
-def _wrap_title(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, width: int) -> list[str]:
+def _wrap_title(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    width: int,
+    max_lines: int | None = 2,
+) -> list[str]:
     words = text.upper().split()
     lines: list[str] = []
     current = ""
@@ -83,7 +89,9 @@ def _wrap_title(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont,
             current = word
     if current:
         lines.append(current)
-    return lines[:2] or ["AI VS AI"]
+    if max_lines is not None:
+        lines = lines[:max_lines]
+    return lines or ["AI VS AI"]
 
 
 def generate_vs_thumbnail(
@@ -140,9 +148,15 @@ def generate_vs_thumbnail(
         y = 500 + int(math.sin(angle) * radius * 0.55)
         draw.line((x, y, x + rng.randint(-24, 24), y + rng.randint(-24, 24)), fill=(255, 197, 65, 190), width=4)
 
-    title_font = _font(112)
-    lines = _wrap_title(draw, title or "AI VS AI", title_font, 1640)
-    line_height = 126
+    # Shrink the type until the whole title fits on two lines. Cutting the
+    # third line would end a question mid-sentence.
+    title_text = title or "AI VS AI"
+    for title_size in (112, 98, 86, 76, 68):
+        title_font = _font(title_size)
+        if len(_wrap_title(draw, title_text, title_font, 1640, max_lines=None)) <= 2:
+            break
+    lines = _wrap_title(draw, title_text, title_font, 1640)
+    line_height = round(126 * title_size / 112)
     banner_h = 48 + line_height * len(lines)
     draw.rounded_rectangle(
         (90, 54, size[0] - 90, 54 + banner_h),
