@@ -339,6 +339,7 @@ of being silently ignored.
 | `--quantity`, `--count`, `-n` | Produce N original videos. Each item gets a unique script; prior scripts are never reused |
 | `-o`, `--orchestrator` | Override the interrogator's brain (alias or slug) |
 | `-t`, `--target` | Override the interrogated brain (alias or slug) |
+| `--first-seat` | Screen side of the first speaker in dynamic animation: `random` (default, about half open on the right), `left` or `right`. Gemini stays left and Llama stays right, so any pair that includes either keeps its fixed side; only Claude/GPT-4o/DeepSeek pairs vary. Stored as `first_seat` in the transcript metadata and in `render_manifest` |
 | `--list-models` | Print the alias table + resolved seats, then exit (honours `-o`/`-t`) |
 | `-s`, `--sync-models` | Fetch the live OpenRouter catalog, cache it, repair broken aliases, then exit |
 | `--list-providers` | Print registered `LLMProvider` strategies |

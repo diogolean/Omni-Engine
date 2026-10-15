@@ -521,8 +521,17 @@ def debate_lines(
     voice_left: str,
     voice_right: str = "male_british",
     contraplano: bool,
+    first_seat: str = "left",
 ) -> list[dict]:
-    """Left speaker looks right and talks first. Right speaker looks left."""
+    """The first speaker (``left_id``) talks first and sits on ``first_seat``.
+
+    A hero on the left looks right; a hero on the right looks left.
+    ``right_id`` answers from the other side.
+    """
+    if first_seat not in {"left", "right"}:
+        raise ValueError(f"unknown seat {first_seat!r}")
+    opener_facing = "right" if first_seat == "left" else "left"
+    answerer_facing = "left" if opener_facing == "right" else "right"
     left = _CAST[left_id]
     right = _CAST[right_id]
     view_for_facing = {"right": "facing_right", "left": "facing_left"}
@@ -531,17 +540,18 @@ def debate_lines(
         requested={left_id: _alias_voice(left_id, voice_left), right_id: _alias_voice(right_id, voice_right)},
     )
     rows = (
-        (left_id, left, "right", voices[left_id]),
-        (right_id, right, "left", voices[right_id]),
+        (left_id, left, opener_facing, voices[left_id]),
+        (right_id, right, answerer_facing, voices[right_id]),
     )
     lines = []
-    for character_id, card, facing, voice in rows:
+    for position, (character_id, card, facing, voice) in enumerate(rows):
         lines.append(
             {
                 "character_id": character_id,
                 "label": card["label"],
                 "accent": card["accent"],
                 "facing": facing,
+                "opens": position == 0,
                 "voice": voice,
                 "text": card["text"],
                 "view": view_for_facing[facing] if contraplano else "facing_front",
@@ -590,6 +600,7 @@ def render_test_dialogue(
             label=line["label"],
             accent_hex=line["accent"],
             facing=line["facing"],
+            opens=bool(line.get("opens", False)),
         )
         for line in lines
     ]
@@ -847,6 +858,7 @@ def render_v6_contraplano(output_path: Path, scene: str = "random") -> Path:
             label=line["label"],
             accent_hex=line["accent"],
             facing=line["facing"],
+            opens=bool(line.get("opens", False)),
         )
         for line in lines
     ]

@@ -328,7 +328,11 @@ class ShotReverseShotCompositor:
             brow_thresholds[speaker_id] = (
                 float(np.percentile(levels, 80)) if levels else 1.0
             )
-        current = next((s for s in camera_speakers if s in self.rigs), None) or next(iter(self.rigs))
+        current = next((s for s in camera_speakers if s in self.rigs), None) or _opening_id(
+            self.styles,
+            self.rigs,
+            default=next(iter(self.rigs)),
+        )
         last_turn_end_frame = max(
             (
                 index + 1
@@ -555,7 +559,8 @@ class DualPresenceCompositor:
     def iter_frames(self, analyzed: AnalyzedAudio) -> Iterator[np.ndarray]:
         speech = analyzed.speaking_speaker or analyzed.active_speaker
         camera = analyzed.active_speaker
-        focus = self.left_id
+        # Open on whoever speaks first; that is the right-hand hero in right-first episodes.
+        focus = _opening_id(self.styles, self.rigs, default=self.left_id)
         for index in range(analyzed.n_frames):
             t = analyzed.frame_time(index)
             speaking = _sequence_at(speech, index, None)
@@ -1177,6 +1182,14 @@ def emphasis_head_target(rms: float, threshold: float, *, direction: float) -> f
     span = max(1e-6, 1.0 - threshold)
     strength = float(np.clip((rms - threshold) / span, 0.0, 1.0))
     return float(np.clip(direction, -1.0, 1.0)) * (0.45 + 0.75 * strength)
+
+
+def _opening_id(styles, rigs, *, default: str) -> str:
+    """The hero who speaks first, or ``default`` when no style is marked."""
+    for character_id, style in styles.items():
+        if getattr(style, "opens", False) and character_id in rigs:
+            return character_id
+    return default
 
 
 def _sequence_at(seq, index: int, default):

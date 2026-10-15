@@ -100,8 +100,12 @@ def resolve_character_map(
     left_puppet: str | None = None,
     right_puppet: str | None = None,
     character_map: dict[str, str] | None = None,
+    first_seat: str = "left",
 ) -> dict[str, str]:
-    """Puppets come from the model registry. A mismatched override raises."""
+    """Puppets come from the model registry. A mismatched override raises.
+
+    ``orchestrator_model`` speaks first and sits on ``first_seat``.
+    """
     from .avatars import character_map_for
 
     preset = (skin or DEFAULT_SKIN_PRESET).strip().lower()
@@ -114,6 +118,7 @@ def resolve_character_map(
         target_model,
         left_puppet=left_puppet,
         right_puppet=right_puppet,
+        first_seat=first_seat,
     )
     if character_map:
         for seat, puppet in character_map.items():
@@ -137,11 +142,11 @@ def ensure_skin_registry_file(puppets_dir: Path) -> Path:
     return registry
 
 
-def _facing_for_puppet(character_id: str, seat: str) -> str:
+def _facing_for_puppet(character_id: str, seat: str, first_seat: str = "left") -> str:
     """Screen facing comes from the registry. A puppet on a forbidden side raises."""
-    from .avatars import AVATAR_BY_MODEL_FAMILY, facing_for
+    from .avatars import AVATAR_BY_MODEL_FAMILY, facing_for, seat_of_role
 
-    screen_seat = {"orchestrator": "left", "target": "right"}.get(seat, seat)
+    screen_seat = seat_of_role(seat, first_seat)
     for avatar in AVATAR_BY_MODEL_FAMILY.values():
         if avatar.puppet == character_id:
             return facing_for(avatar.family, screen_seat)
@@ -152,8 +157,12 @@ def build_speaker_styles(
     character_map: dict[str, str] | None = None,
     *,
     labels: dict[str, str] | None = None,
+    first_seat: str = "left",
 ) -> list[SpeakerStyle]:
     """Presentation contract handed to the generic shot-reverse-shot director.
+
+    The orchestrator speaks first: its style sits on ``first_seat`` and is
+    marked ``opens``. The target takes the other side.
 
     ``labels`` overrides the HUD nameplate per seat (e.g. to show the model
     actually routed for this session instead of the configured default).
@@ -162,14 +171,20 @@ def build_speaker_styles(
     styles: list[SpeakerStyle] = []
     for seat, character_id in seats.items():
         label, accent, _default_facing = DEFAULT_SEAT_STYLE.get(seat, (seat.upper(), "#00F0FF", "right"))
-        facing = _facing_for_puppet(character_id, seat)
+        facing = _facing_for_puppet(character_id, seat, first_seat)
         puppet_hud = _PUPPET_HUD.get(character_id)
         if puppet_hud is not None:
             label, accent = puppet_hud
         if labels and seat in labels and labels[seat].strip():
             label = labels[seat].strip()
         styles.append(
-            SpeakerStyle(character_id=character_id, label=label, accent_hex=accent, facing=facing)
+            SpeakerStyle(
+                character_id=character_id,
+                label=label,
+                accent_hex=accent,
+                facing=facing,
+                opens=seat == "orchestrator",
+            )
         )
     return styles
 
@@ -1002,8 +1017,12 @@ def render_debate_animation(
     generate_thumbnail: bool = False,
     thumbnail_name: str | None = None,
     metadata_name: str | None = None,
+    first_seat: str | None = None,
 ) -> Path:
     """Render a debate transcript through the shot-reverse-shot engine.
+
+    ``first_seat`` is the screen side of the first speaker. It defaults to the
+    ``first_seat`` stored on the transcript, then to ``left``.
 
     Drop-in sibling to
     :func:`channels_config.aiwake.media.renderer.render_transcript`: same
@@ -1036,20 +1055,23 @@ def render_debate_animation(
     ]
     for turn in turns:
         assert_speaker_matches_model(turn["speaker_name"], turn["model_slug"])
-    manifest = render_manifest(turns)
-    left_model = next(item["model_slug"] for item in manifest["turns"] if item["seat"] == "left")
-    right_model = next(item["model_slug"] for item in manifest["turns"] if item["seat"] == "right")
+    seat = str(first_seat or transcript.metadata.get("first_seat") or "left")
+    manifest = render_manifest(turns, first_seat=seat)
+    opener_model = next(item["model_slug"] for item in manifest["turns"] if item["seat"] == seat)
+    answerer_model = next(item["model_slug"] for item in manifest["turns"] if item["seat"] != seat)
     seats = resolve_character_map(
-        orchestrator_model=left_model,
-        target_model=right_model,
+        orchestrator_model=opener_model,
+        target_model=answerer_model,
         skin=skin,
         left_puppet=left_puppet,
         right_puppet=right_puppet,
         character_map=character_map,
+        first_seat=seat,
     )
     transcript.metadata["render_manifest"] = manifest
+    transcript.metadata["first_seat"] = seat
     ensure_skin_registry_file(DEFAULT_PUPPETS_DIR)
-    styles = build_speaker_styles(seats, labels=hud_labels)
+    styles = build_speaker_styles(seats, labels=hud_labels, first_seat=seat)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

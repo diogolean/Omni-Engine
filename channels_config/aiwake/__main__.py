@@ -220,6 +220,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the orchestrator puppet ID from {ASSETS_PATH}/puppets/.",
     )
     parser.add_argument(
+        "--first-seat",
+        choices=("random", "left", "right"),
+        default="random",
+        help=(
+            "Screen side of the first speaker in dynamic animation. Random (default) puts about "
+            "half of the episodes on the right. Gemini stays left and Llama stays right, so "
+            "pairs that include either keep their fixed side."
+        ),
+    )
+    parser.add_argument(
         "--right-puppet",
         metavar="ID",
         help="Override the target puppet ID from {ASSETS_PATH}/puppets/.",
@@ -415,12 +425,27 @@ def main(argv: list[str] | None = None) -> int:
         if not args.orchestrator or not args.target:
             parser.error("dynamic animation requires --orchestrator and --target; there is no default model")
         from .avatars import character_map_for
+        from .seating import choose_first_seat, legal_first_seats
 
+        try:
+            if args.quantity == 1:
+                # One episode: fix the seat now so the check and the render agree.
+                args.first_seat = choose_first_seat(
+                    args.orchestrator, args.target, requested=args.first_seat
+                )
+                check_seat = args.first_seat
+            elif args.first_seat in ("left", "right"):
+                check_seat = choose_first_seat(args.orchestrator, args.target, requested=args.first_seat)
+            else:
+                check_seat = legal_first_seats(args.orchestrator, args.target)[0]
+        except (ValueError, IndexError) as exc:
+            parser.error(str(exc))
         seated = character_map_for(
             args.orchestrator,
             args.target,
             left_puppet=args.left_puppet,
             right_puppet=args.right_puppet,
+            first_seat=check_seat,
         )
         args.left_puppet = seated["orchestrator"]
         args.right_puppet = seated["target"]
@@ -453,6 +478,7 @@ def main(argv: list[str] | None = None) -> int:
         "resolution": args.resolution,
         "target_duration_s": args.target_duration,
         "generate_thumbnail": args.generate_thumbnail,
+        "first_seat": args.first_seat,
     }
 
     if args.quantity > 1:

@@ -150,17 +150,52 @@ def screen_placement(model: str | None, seat: str, *, frame_width: int = 1080) -
     return {"facing": facing, "center_x": center_x, "side": side, "frame_width": frame_width}
 
 
-def require_pairing(orchestrator: str | None, target: str | None) -> tuple[Avatar, Avatar]:
-    """LEFT is the asker. RIGHT is the answerer. Illegal seats raise."""
-    left = avatar_for(orchestrator)
-    right = avatar_for(target)
-    if left.family == right.family:
-        raise ValueError(f"mirror match is not allowed: {left.family}")
-    if "left" not in left.allowed_seats:
-        raise ValueError(f"{left.family} cannot sit on the left")
-    if "right" not in right.allowed_seats:
-        raise ValueError(f"{right.family} cannot sit on the right")
-    return left, right
+SEATS = ("left", "right")
+
+
+def other_seat(seat: str) -> str:
+    if seat == "left":
+        return "right"
+    if seat == "right":
+        return "left"
+    raise ValueError(f"unknown seat {seat!r}")
+
+
+def seat_of_role(role: str | None, first_seat: str = "left") -> str:
+    """Screen seat of a turn.
+
+    The orchestrator asks first and sits on ``first_seat``. The target sits on
+    the other side. ``left`` and ``right`` as roles are literal seats.
+    """
+    if first_seat not in SEATS:
+        raise ValueError(f"unknown seat {first_seat!r}")
+    name = str(role or "")
+    if name in SEATS:
+        return name
+    if name == "orchestrator":
+        return first_seat
+    return other_seat(first_seat)
+
+
+def require_pairing(
+    orchestrator: str | None,
+    target: str | None,
+    *,
+    first_seat: str = "left",
+) -> tuple[Avatar, Avatar]:
+    """Return (asker, answerer). The asker sits on ``first_seat``. Illegal seats raise."""
+    if first_seat not in SEATS:
+        raise ValueError(f"unknown seat {first_seat!r}")
+    asker = avatar_for(orchestrator)
+    answerer = avatar_for(target)
+    if asker.family == answerer.family:
+        raise ValueError(f"mirror match is not allowed: {asker.family}")
+    if first_seat not in asker.allowed_seats:
+        raise ValueError(f"{asker.family} cannot sit on the {first_seat}")
+    answer_seat = other_seat(first_seat)
+    if answer_seat not in answerer.allowed_seats:
+        raise ValueError(f"{answerer.family} cannot sit on the {answer_seat}")
+    return asker, answerer
 
 
 def character_map_for(
@@ -169,13 +204,18 @@ def character_map_for(
     *,
     left_puppet: str | None = None,
     right_puppet: str | None = None,
+    first_seat: str = "left",
 ) -> dict[str, str]:
-    left, right = require_pairing(orchestrator, target)
-    if left_puppet and left_puppet.strip() != left.puppet:
-        raise ValueError(f"puppet {left_puppet!r} is not the {left.family} avatar")
-    if right_puppet and right_puppet.strip() != right.puppet:
-        raise ValueError(f"puppet {right_puppet!r} is not the {right.family} avatar")
-    return {"orchestrator": left.puppet, "target": right.puppet}
+    """Puppet per role. ``left_puppet`` and ``right_puppet`` are the orchestrator's and
+    the target's puppet ids: the names predate seats moving, so they follow the role,
+    not the screen side.
+    """
+    asker, answerer = require_pairing(orchestrator, target, first_seat=first_seat)
+    if left_puppet and left_puppet.strip() != asker.puppet:
+        raise ValueError(f"puppet {left_puppet!r} is not the {asker.family} avatar")
+    if right_puppet and right_puppet.strip() != answerer.puppet:
+        raise ValueError(f"puppet {right_puppet!r} is not the {answerer.family} avatar")
+    return {"orchestrator": asker.puppet, "target": answerer.puppet}
 
 
 def require_asset(puppet: str, puppets_dir: Path) -> Path:
@@ -196,28 +236,31 @@ def assert_speaker_matches_model(speaker_name: str | None, model_slug: str | Non
         )
 
 
-def render_manifest(turns: list[dict[str, Any]]) -> dict[str, Any]:
-    """Per-turn identity. The first orchestrator and target models fix the seats."""
-    left_model = ""
-    right_model = ""
+def render_manifest(turns: list[dict[str, Any]], *, first_seat: str = "left") -> dict[str, Any]:
+    """Per-turn identity. The first orchestrator and target models fix the seats.
+
+    The orchestrator is the first speaker and sits on ``first_seat``.
+    """
+    first_model = ""
+    second_model = ""
     for turn in turns:
-        role = str(turn.get("role") or "")
-        if role in {"orchestrator", "left"} and not left_model:
-            left_model = str(turn.get("model_slug") or turn.get("model") or "")
-        if role in {"target", "right"} and not right_model:
-            right_model = str(turn.get("model_slug") or turn.get("model") or "")
-    left, right = require_pairing(left_model, right_model)
+        seat = seat_of_role(str(turn.get("role") or ""), first_seat)
+        model = str(turn.get("model_slug") or turn.get("model") or "")
+        if seat == first_seat and not first_model:
+            first_model = model
+        if seat == other_seat(first_seat) and not second_model:
+            second_model = model
+    asker, answerer = require_pairing(first_model, second_model, first_seat=first_seat)
+    seat_family = {first_seat: asker.family, other_seat(first_seat): answerer.family}
     rows = []
     for index, turn in enumerate(turns):
         role = str(turn.get("role") or "")
-        seat = "left" if role in {"orchestrator", "left"} else "right"
+        seat = seat_of_role(role, first_seat)
         model = str(turn.get("model_slug") or turn.get("model") or "")
         assert_speaker_matches_model(str(turn.get("speaker_name") or turn.get("speaker") or ""), model)
         avatar = avatar_for(model)
-        if seat == "left" and avatar.family != left.family:
-            raise ValueError(f"turn {index} model {avatar.family} is not the left seat")
-        if seat == "right" and avatar.family != right.family:
-            raise ValueError(f"turn {index} model {avatar.family} is not the right seat")
+        if avatar.family != seat_family[seat]:
+            raise ValueError(f"turn {index} model {avatar.family} is not the {seat} seat")
         rows.append(
             {
                 "turn": int(turn.get("turn_index") if turn.get("turn_index") is not None else index),
@@ -229,4 +272,4 @@ def render_manifest(turns: list[dict[str, Any]]) -> dict[str, Any]:
                 "voice": avatar.voice,
             }
         )
-    return {"turns": rows}
+    return {"first_seat": first_seat, "turns": rows}

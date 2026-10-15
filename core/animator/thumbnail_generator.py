@@ -108,14 +108,16 @@ def generate_vs_thumbnail(
 
     ordered = sorted(styles, key=lambda style: 0 if style.facing.lower() == "right" else 1)
     fighters = []
+    # The aggressor is whoever speaks first, on whichever side it sits.
+    aggressor = next((index for index, style in enumerate(ordered) if style.opens), 0)
     for index, style in enumerate(ordered):
         rig = PuppetRig(PuppetSkin.load(Path(puppets_dir) / style.character_id))
         sprite = _fighter(
             rig,
-            emotion="deboche" if index == 0 else "shock_perplexed",
+            emotion="deboche" if index == aggressor else "shock_perplexed",
             max_size=(820, 900),
         )
-        fighters.append(_aura(sprite, (23, 215, 255) if index == 0 else (255, 173, 47)))
+        fighters.append(_aura(sprite, (23, 215, 255) if index == aggressor else (255, 173, 47)))
     for index, sprite in enumerate(fighters):
         x = 32 if index == 0 else size[0] - sprite.width - 32
         y = size[1] - sprite.height + 35
