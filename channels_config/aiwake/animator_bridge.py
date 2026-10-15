@@ -1175,6 +1175,9 @@ def render_debate_animation(
             destination=output_dir / (
                 thumbnail_name or f"thumbnail_{transcript.session_id}.png"
             ),
+            # Portrait debates get a 9:16 card. The 16:9 default is the
+            # long-form card; that copy is written just below.
+            size=(width, height) if height > width else (1920, 1080),
             background_path=selected_scene,
             seed=int.from_bytes(
                 hashlib.md5(transcript.session_id.encode("utf-8")).digest()[:4],
