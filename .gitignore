@@ -137,6 +137,7 @@ desktop.ini
 # ==========================================
 .env
 .env.*
+!.env.example
 client_secret*.json
 *.pem
 *.key
@@ -167,6 +168,7 @@ core/animator/bin/
 # ==========================================
 # Heavy Assets & Render Outputs
 # ==========================================
+*.safetensors
 *.mp4
 *.mp3
 *.wav
