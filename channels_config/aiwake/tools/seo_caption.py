@@ -79,7 +79,7 @@ def _salt(key: str) -> int:
     return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16)
 
 
-def _hook_candidates(opening: str, keyword: str) -> list[str]:
+def _hook_candidates(opening: str, keyword: str, *, append_keyword: bool = True) -> list[str]:
     """Whole spoken clauses, then the same clause cut only at a boundary word."""
     text = re.sub(r"\s+", " ", (opening or "").replace("\u2026", " ").replace("...", " ")).strip()
     parts = re.split(r"(?<=[.!?])\s+|,\s+|;\s+", text)
@@ -111,7 +111,7 @@ def _hook_candidates(opening: str, keyword: str) -> list[str]:
             question = chunk[0].upper() + chunk[1:]
             if not question.endswith("?"):
                 question += "?"
-            if keyword.lower() in question.lower():
+            if keyword.lower() in question.lower() or not append_keyword:
                 found.append(re.sub(r"\s+", " ", question))
             else:
                 found.append(re.sub(r"\s+", " ", question[:-1] + f" under {keyword}?"))
@@ -145,6 +145,18 @@ def seo_title(asker: str, answerer: str, opening: str, quote: str, *, used: set[
         if hook_is_mid_cut(question, opening):
             continue
         if usable(question):
+            return f"{question}{suffix}"
+    # No keyword fits the spoken clause: keep the spoken question, the keyword stays in the description.
+    for question in _hook_candidates(opening, keyword, append_keyword=False):
+        lead = re.findall(r"[A-Za-z']+", question)
+        if not lead or lead[0].lower() not in _QUESTION_LEAD:
+            continue
+        if (
+            question not in used
+            and len(question) <= limit
+            and is_complete_question(question)
+            and not hook_is_mid_cut(question, opening)
+        ):
             return f"{question}{suffix}"
     extras = [
         item
