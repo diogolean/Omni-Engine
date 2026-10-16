@@ -241,6 +241,11 @@ Unified Multi-Page Factory/
 ├── main.py                     # Primary CLI orchestrator
 ├── config.py                   # Credentials, model IDs, ACTIVE_PAGE paths
 ├── channel_loader.py           # Channel-config bootstrap (PageContext; CLI `--page`)
+├── omni/                       # Publisher interface, brand adapters, drip worker
+├── config/brandings.yaml       # N brandings × N platforms (active flag)
+├── Dockerfile                  # linux/arm64 runtime (Oracle VM)
+├── docker-compose.yml          # engine + scheduler
+├── .github/workflows/          # PR validation, GHCR build, SSH deploy
 ├── utils/run_ledger.py         # Per-run model/banner registry → outputs/logs/
 ├── requirements.txt
 ├── .env                        # Factory secrets — NOT committed, stays at root
@@ -314,6 +319,7 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-ci.txt   # pytest + ruff, for the PR checks
 ```
 
 ### Environment Variables
@@ -443,6 +449,103 @@ The Pinterest sub-engine operates independently via `agents/posting/pinterest_ma
 | `status` | Reports inventory readiness and scheduling queue |
 
 OAuth tokens are obtained once via `agents/posting/pinterest_oauth.py`. Channel tokens for Ancient Knowledge land in `channels_config/ancient_knowledge/.env.ancient_knowledge`; other channels use `channels_config/<id>/.env` or the factory-root `.env`.
+
+`config/brandings.yaml` lists every branding and platform. The scheduler publishes only where `active: true`. Ancient Knowledge and Anna's Protocol each have their own token and board (`PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE`, `PINTEREST_ACCESS_TOKEN_ANNA_PROTOCOL`, and the matching `PINTEREST_BOARD_ID_*` vars). The CLI is unchanged:
+
+```bash
+python agents/posting/pinterest_main.py schedule --channel ancient_knowledge --quantity 1
+python agents/posting/pinterest_main.py status --channel anna_protocol
+```
+
+YouTube uploads from `main.py --publish-youtube` still call `upload_short_from_envelope` through `omni.adapters.youtube.publish_envelope`. Facebook stays on the Playwright / Post Planner path.
+
+---
+
+## Deploy
+
+Target: Oracle Cloud VM, Ubuntu 24.04, aarch64, checkout path `/opt/omni-engine`. Docker and the Compose plugin are already installed. The published image is `linux/arm64` at `ghcr.io/diogolean/omni-engine`, tagged with the git SHA and `latest`.
+
+### Local setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-ci.txt
+cp .env.example .env
+# fill tokens, then:
+pytest -q tests/test_omni_config.py tests/test_omni_publisher.py
+
+# Optional: run the same process the VM runs.
+docker compose up -d --build
+docker compose exec engine python main.py --channel wonder_feed --post-type ECONOMIC_REEL --qty 1
+docker compose logs -f scheduler
+```
+
+One scheduler wake posts `PINTEREST_PINS_PER_RUN` pins (default 1) for each active Pinterest branding, then sleeps a random gap between `MIN_INTERVAL_HOURS` and `MAX_INTERVAL_HOURS` (default 3–6). That replaces the manual PowerShell drip loop. `python -m omni.worker --role scheduler --once` runs a single wake.
+
+### GitHub Secrets
+
+Repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `VM_HOST` | VM public IP or DNS |
+| `VM_USER` | SSH user that is in the `docker` group |
+| `VM_SSH_KEY` | Private key for that user (full PEM, newlines included) |
+
+`GITHUB_TOKEN` is provided by Actions and is what pushes the image. No extra registry secret.
+
+### What a push to `main` does
+
+1. Builds `linux/arm64` with buildx and pushes `ghcr.io/diogolean/omni-engine:<git-sha>` and `:latest`.
+2. Copies `docker-compose.yml` to `/opt/omni-engine/docker-compose.yml`.
+3. Sets `OMNI_IMAGE_TAG` in the VM `.env` to that SHA, appends the SHA to `/opt/omni-engine/releases.log`, then runs:
+
+```bash
+cd /opt/omni-engine && docker compose pull && docker compose up -d
+```
+
+Pull requests do not deploy. They run Ruff and the omni pytest modules (`validate.yml`).
+
+### One-time VM setup
+
+```bash
+sudo mkdir -p /opt/omni-engine/outputs /opt/omni-engine/credentials/tokens
+sudo chown -R "$USER":"$USER" /opt/omni-engine
+# secrets file — never commit it
+nano /opt/omni-engine/.env
+# YouTube OAuth tokens the factory already uses
+# credentials/tokens/youtube_token_<page>.json
+```
+
+Copy an existing outputs tree to `/opt/omni-engine/outputs` if the drip should continue an inventory you already have. The scheduler reads `outputs/<channel>/master_inventory.json` from that directory.
+
+### GHCR login on the VM
+
+The first push creates a **private** package. The VM cannot `docker compose pull` until it has logged in, or until you make the package public (GitHub → Packages → omni-engine → Package settings → Change visibility).
+
+Create a GitHub PAT with `read:packages` and, on the VM as `VM_USER`:
+
+```bash
+echo '<PAT>' | docker login ghcr.io -u diogolean --password-stdin
+```
+
+Docker stores the credential in that user's `~/.docker/config.json`. Later deploys reuse it. `VM_USER` must be able to run `docker` without sudo.
+
+### Rollback
+
+Every deploy records the image tag (the full git SHA) in `/opt/omni-engine/.env` (`OMNI_IMAGE_TAG`) and in `/opt/omni-engine/releases.log`. Images stay in GHCR under that SHA.
+
+From GitHub: Actions → Deploy → Run workflow → set **image tag** to the SHA you want (from `releases.log` or the GHCR package). The workflow skips the build and runs the same pull and `up -d` against that tag.
+
+On the VM, the same steps by hand:
+
+```bash
+cd /opt/omni-engine
+# edit OMNI_IMAGE_TAG=<previous git sha> in .env
+docker compose pull
+docker compose up -d
+```
 
 ---
 

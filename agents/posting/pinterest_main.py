@@ -12,6 +12,10 @@ Channel context (``--channel <channel_id>``) is the primary driver for:
 Without ``--channel``, pass explicit ``--env`` / ``--inventory-dir`` for a
 fully generic run against any directory.
 
+Multi-account tokens (one token and board per branding) live in
+``config/brandings.yaml`` plus ``PINTEREST_ACCESS_TOKEN_<BRANDING>``. This CLI
+is unchanged: ``--channel`` still selects a single account and its ``.env``.
+
 QUICK START:
     python agents/posting/pinterest_main.py status --channel anna_protocol
     python agents/posting/pinterest_main.py schedule --channel anna_protocol --quantity 5

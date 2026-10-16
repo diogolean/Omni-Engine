@@ -1,0 +1,30 @@
+# Runtime image for linux/arm64.
+# Same pins as requirements.txt, minus packages with no aarch64 wheel or no
+# headless use on the Oracle VM:
+#   mediapipe  — no manylinux aarch64 wheel; imported only by the puppet factory
+#   pyautogui  — needs a desktop; Facebook file dialogs stay off the VM
+google-genai>=1.0.0
+anthropic>=0.39.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0,<12.0
+openpyxl>=3.1.0
+pypdf>=5.0.0
+requests>=2.31.0
+boto3>=1.34.0
+openai>=1.0.0
+together>=1.3.0
+pydantic>=2.0.0
+tqdm>=4.66.0
+moviepy>=1.0.3
+elevenlabs>=1.0.0
+scikit-learn>=1.4.0
+rembg==2.0.68
+onnxruntime>=1.24.0
+opencv-python-headless>=4.10.0
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+gspread>=6.0.0
+pyperclip>=1.8.2
+edge-tts>=6.1.9
+PyYAML>=6.0
