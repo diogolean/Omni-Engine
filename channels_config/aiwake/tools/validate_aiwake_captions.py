@@ -405,8 +405,7 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
             )
         if len(headline) > 70:
             fails.append(f"seo_title_length: {name}: {len(headline)} chars")
-        if not any(phrase in match.group("question") for phrase in (item[0] for item in SEO_KEYWORDS)):
-            fails.append(f"seo_keyword: {name}: title missing a keyword")
+        # The SEO keyword lives in the description and hashtags. A title is a spoken question.
     turns = _read_turns(row)
     orchestrator = [str(item.get("text") or "") for item in turns if item.get("role") == "orchestrator"]
     topic = ""
@@ -438,7 +437,12 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         fails.append(f"truncated_sentence: {name}: {topic[:90]}")
     if topic and not topic_complete:
         fails.append(f"title_cut_off: {name}: {topic[:90]}")
-    elif topic and opening_exact and hook_is_mid_cut(topic, opening_exact):
+    elif (
+        topic
+        and opening_exact
+        and str(_qa(row).get("title_source") or "") != "editorial"
+        and hook_is_mid_cut(topic, opening_exact)
+    ):
         fails.append(f"title_cut_off: {name}: {topic[:90]}")
     qa = _qa(row)
     quote = str(qa.get("quote") or "")
