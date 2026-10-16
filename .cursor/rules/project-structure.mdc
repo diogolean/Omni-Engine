@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Project structure
 
-The repository root holds entry points, config, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, and packages such as `agents/`, `channels_config/`, `core/`, `utils/`, `tests/`).
+The repository root holds entry points, config, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, and packages such as `agents/`, `channels_config/`, `config/`, `core/`, `omni/`, `utils/`, `tests/`).
 
 - Write temp files with `temp_path(channel, *parts)` from `utils/pipeline_paths.py`. That resolves to `outputs/<channel>/_tmp/`.
 - Write preview and review dumps with `review_path(channel, *parts)`. That resolves to `outputs/<channel>/_review/`.

@@ -1,0 +1,53 @@
+# Omni-Engine on the Oracle VM (/opt/omni-engine).
+#
+# Secrets stay in the host .env (not in git). Compose reads OMNI_IMAGE_TAG
+# from that file for the image pin. GitHub Actions sets it to the git SHA.
+# Rollback: set OMNI_IMAGE_TAG to an older SHA and run
+#   docker compose pull && docker compose up -d
+#
+# Local build (any arch): docker compose up -d --build
+# VM deploy uses the image already pushed to GHCR and does not need the Dockerfile.
+
+name: omni-engine
+
+services:
+  engine:
+    image: ghcr.io/diogolean/omni-engine:${OMNI_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      OMNI_ROLE: engine
+    volumes:
+      - ./outputs:/opt/omni-engine/outputs
+      - ./credentials:/opt/omni-engine/credentials
+      - ./.env:/opt/omni-engine/.env
+    working_dir: /opt/omni-engine
+    command: ["python", "-m", "omni.worker", "--role", "engine"]
+    restart: unless-stopped
+
+  scheduler:
+    image: ghcr.io/diogolean/omni-engine:${OMNI_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      OMNI_ROLE: scheduler
+      MIN_INTERVAL_HOURS: ${MIN_INTERVAL_HOURS:-3}
+      MAX_INTERVAL_HOURS: ${MAX_INTERVAL_HOURS:-6}
+      PINTEREST_PINS_PER_RUN: ${PINTEREST_PINS_PER_RUN:-1}
+    volumes:
+      - ./outputs:/opt/omni-engine/outputs
+      - ./credentials:/opt/omni-engine/credentials
+      - ./.env:/opt/omni-engine/.env
+    working_dir: /opt/omni-engine
+    command: ["python", "-m", "omni.worker", "--role", "scheduler"]
+    restart: unless-stopped
+    depends_on:
+      - engine

@@ -1,0 +1,98 @@
+# N brandings × N platforms.
+#
+# A publish runs only where `active` is true. The scheduler container drips
+# Pinterest for every active Pinterest row (one wake every 3–6 hours).
+# YouTube uploads still go through `main.py --publish-youtube`; the active
+# flag gates `YouTubeAccountPublisher.publish`, not that existing CLI.
+# Facebook stays on Playwright / Post Planner until an API publisher exists.
+#
+# Tokens are not stored in this file. Each Pinterest row reads
+# PINTEREST_ACCESS_TOKEN_<BRANDING> (and the matching board vars), then the
+# channel .env, then the legacy PINTEREST_ACCESS_TOKEN / PINTEREST_BOARD_ID.
+
+brandings:
+  ancient_knowledge:
+    display_name: Ancient Knowledge
+    platforms:
+      pinterest:
+        active: true
+        account_id: ancient_knowledge
+        token_env: PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE
+        board_id_env: PINTEREST_BOARD_ID_ANCIENT_KNOWLEDGE
+        board_name_env: PINTEREST_BOARD_NAME_ANCIENT_KNOWLEDGE
+        refresh_token_env: PINTEREST_REFRESH_TOKEN_ANCIENT_KNOWLEDGE
+        board_name: Ancient Knowledge
+      youtube:
+        active: true
+        account_id: ancient_knowledge
+        token_file: credentials/tokens/youtube_token_ancient_knowledge.json
+      facebook:
+        active: false
+        account_id: ancient_knowledge
+
+  anna_protocol:
+    display_name: "The Holistic Legacy — Anna's Protocol"
+    platforms:
+      pinterest:
+        active: true
+        account_id: anna_protocol
+        token_env: PINTEREST_ACCESS_TOKEN_ANNA_PROTOCOL
+        board_id_env: PINTEREST_BOARD_ID_ANNA_PROTOCOL
+        board_name_env: PINTEREST_BOARD_NAME_ANNA_PROTOCOL
+        refresh_token_env: PINTEREST_REFRESH_TOKEN_ANNA_PROTOCOL
+        board_name: "Anna's Protocol"
+      youtube:
+        active: false
+        account_id: anna_protocol
+      facebook:
+        active: false
+        account_id: anna_protocol
+
+  wonder_feed:
+    display_name: Wonder Feed
+    platforms:
+      pinterest: {active: false}
+      youtube: {active: true}
+      facebook: {active: false}
+
+  master_mei:
+    display_name: Master Mei
+    platforms:
+      pinterest: {active: false}
+      youtube: {active: true}
+      facebook: {active: false}
+
+  aiwake:
+    display_name: Aiwake
+    platforms:
+      pinterest: {active: false}
+      youtube: {active: true}
+      facebook: {active: false}
+
+  endless_summer_paradise:
+    display_name: Endless Summer Paradise
+    platforms:
+      pinterest: {active: false}
+      youtube: {active: true}
+      facebook: {active: false}
+
+  down_dirty:
+    display_name: Down & Dirty
+    platforms:
+      pinterest: {active: false}
+      youtube: {active: false}
+      facebook: {active: false}
+
+  momma_circle:
+    display_name: Momma Circle
+    platforms:
+      pinterest: {active: false}
+      youtube: {active: false}
+      facebook: {active: false}
+
+  principles_of_wealth_finance_economics:
+    display_name: Principles of Wealth
+    platforms:
+      pinterest: {active: false}
+      youtube: {active: false}
+      facebook: {active: false}

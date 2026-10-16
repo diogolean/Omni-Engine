@@ -1,0 +1,6 @@
+# Pull-request validation only. The media stack stays in requirements.txt.
+pytest>=8.0.0
+PyYAML>=6.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+ruff>=0.6.0

@@ -4,8 +4,8 @@ The repository root holds entry points, configuration, and top-level packages. S
 
 ## What stays at the root
 
-- Entry points and config: `main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `.gitignore`, `README.md`, `.env`.
-- Top-level packages: `agents/`, `channels_config/`, `core/`, `models_avatar/`, `utils/`, `quality/`, `scripts/`, `tests/`, `tools/`, `docs/`.
+- Entry points and config: `main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `requirements-docker.txt`, `requirements-ci.txt`, `Dockerfile`, `docker-compose.yml`, `.gitignore`, `README.md`, `.env`.
+- Top-level packages: `agents/`, `channels_config/`, `config/` (`brandings.yaml`), `core/`, `models_avatar/`, `omni/`, `utils/`, `quality/`, `scripts/`, `tests/`, `tools/`, `docs/`, `.github/`.
 
 `.env`, `credentials/`, and `.supermemory/` stay on disk and stay out of git.
 
