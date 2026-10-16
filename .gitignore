@@ -176,3 +176,6 @@ core/animator/bin/
 *.mov
 *.zip
 *.tar.gz
+# Local-only Cursor rules (not shared)
+.cursor/rules/aiwake-copy.mdc
+.cursor/rules/video-pipeline.mdc
