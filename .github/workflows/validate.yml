@@ -32,3 +32,4 @@ jobs:
           tests/test_omni_publisher.py
           tests/test_pinterest_vm.py
           tests/test_repo_root_layout.py
+          tests/test_video_providers.py
