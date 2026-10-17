@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Gemini Vision QA for ECONOMIC_REEL stills.
+Reel still QA.
 
-Same bar as static ancient_knowledge posts: ancient_mystery profile,
-threshold 5.5, max_retries=1 (r01 + r02), then best-score commit so
-video compile is never blocked.
+Spoken-line relevance (Qwen, then Gemini Flash) lives in ``modules.reel_qa``
+and fails closed: a down judge, a missing key, or an unparseable reply does
+not count as a match. ``generate_and_gate`` retries with the narration
+sentence and its named entity or site. It does not borrow an unrelated
+cached still or write a black placeholder.
+
+The aesthetic critic helpers below (``critique_still``, ``apply_act_vision_qa``)
+are unchanged and are not the publish gate.
 """
 from __future__ import annotations
 
@@ -277,21 +282,6 @@ def rebuild_prompt_after_reject(
     ).strip()
 
 
-_QWEN_GATE_PROMPT = """You are a visual relevance judge. Compare the image to the spoken beat.
-Return STRICT JSON only — no markdown, no commentary:
-{{
-  "is_relevant": boolean,
-  "relevance_score": float,
-  "detected_subjects": [string],
-  "rejection_reason": string
-}}
-relevance_score is 0.0–1.0. rejection_reason must be null when relevance_score >= 0.70.
-Spoken beat: {chunk_text}
-Image prompt: {prompt}
-Does the picture show the subject/object/action named in the spoken beat?
-"""
-
-
 def _strip_json(text: str) -> dict[str, Any]:
     import json
     import re
@@ -316,101 +306,14 @@ def evaluate_chunk_relevance(
     image_generation_prompt: str = "",
     banned_subjects: list[str] | None = None,
 ) -> dict[str, Any]:
-    """
-    Qwen Vision relevance verdict.
+    """Fail-closed spoken relevance. See ``modules.reel_qa.relevance``."""
+    from modules.reel_qa.relevance import evaluate_chunk_relevance as _eval
 
-    Schema: is_relevant, relevance_score (0–1), detected_subjects, rejection_reason.
-    Never raises — fail-soft to a conservative reject so the retry path runs.
-    """
-    path = Path(image_path)
-    empty = {
-        "is_relevant": False,
-        "relevance_score": 0.0,
-        "detected_subjects": [],
-        "rejection_reason": "missing_image" if not path.is_file() else "eval_failed",
-    }
-    if not path.is_file():
-        return empty
-    try:
-        from agents.media.providers.visual_eval import resolve_visual_eval_provider
-
-        provider = resolve_visual_eval_provider(provider="qwen")
-        if provider is None:
-            _LOG.warning(
-                "VisualQA Qwen unavailable — fail-open, keeping generated still"
-            )
-            return {
-                "is_relevant": True,
-                "relevance_score": RELEVANCE_THRESHOLD,
-                "detected_subjects": [],
-                "rejection_reason": None,
-            }
-        prompt = _QWEN_GATE_PROMPT.format(
-            chunk_text=(current_chunk_text or "").strip()[:400],
-            prompt=(image_generation_prompt or "").strip()[:400],
-        )
-        result = provider.evaluate(prompt, [path], labels=["candidate"])
-        data = _strip_json(getattr(result, "text", "") or "")
-        score = float(data.get("relevance_score") or 0.0)
-        score = max(0.0, min(1.0, score))
-        relevant = bool(data.get("is_relevant")) and score >= RELEVANCE_THRESHOLD
-        reason = data.get("rejection_reason")
-        if score >= RELEVANCE_THRESHOLD:
-            reason = None
-        elif not reason:
-            reason = "below_relevance_threshold"
-        subjects = data.get("detected_subjects") or []
-        if not isinstance(subjects, list):
-            subjects = [str(subjects)]
-        verdict = apply_banned_subject_gate(
-            {
-                "is_relevant": relevant,
-                "relevance_score": score,
-                "detected_subjects": [str(s) for s in subjects][:12],
-                "rejection_reason": reason,
-            },
-            spoken_text=current_chunk_text,
-            banned_subjects=banned_subjects,
-        )
-        if verdict.get("hard_reject"):
-            relevant = False
-            reason = verdict.get("rejection_reason")
-        _LOG.info(
-            "VisualQA Qwen | file=%s relevant=%s score=%.2f reason=%s",
-            path.name, verdict.get("is_relevant"), score, verdict.get("rejection_reason"),
-        )
-        print(
-            f"[VisualQA] {path.name} | relevant={verdict.get('is_relevant')} "
-            f"score={score:.2f} reason={verdict.get('rejection_reason')} "
-            f"subjects={verdict['detected_subjects']}",
-            flush=True,
-        )
-        return verdict
-    except Exception as exc:  # noqa: BLE001
-        _LOG.warning(
-            "VisualQA Qwen parse/eval failed on %s (%s) — fail-open",
-            path.name, exc,
-        )
-        return {
-            "is_relevant": True,
-            "relevance_score": RELEVANCE_THRESHOLD,
-            "detected_subjects": [],
-            "rejection_reason": None,
-        }
-
-
-def _simplify_prompt(prompt: str) -> str:
-    spoken = (prompt or "").strip()
-    marker = "Visualise ONLY this spoken beat:"
-    if marker in spoken:
-        tail = spoken.split(marker, 1)[1].strip()
-        return (
-            f"Photoreal documentary still. Visualise ONLY this spoken beat:{tail} "
-            "Single clear subject, no extra landmarks, no text."
-        )
-    return (
-        f"Photoreal documentary still of: {spoken[:280]}. "
-        "Single clear subject named in the text. No extra landmarks. No text."
+    return _eval(
+        image_path,
+        current_chunk_text,
+        image_generation_prompt,
+        banned_subjects=banned_subjects,
     )
 
 
@@ -421,10 +324,11 @@ def resolve_cached_channel_background(
     search_dirs: list[Path] | None = None,
     prefer_stem: str = "",
 ) -> Path:
-    """Copy a prior *same-topic* still, or write a solid cinematic placeholder.
+    """Copy a prior same-topic still, or write a solid placeholder.
 
-    Never reuse another subject's still from a shared episode folder — that
-    is how a Nazca reel inherited a Dwarka underwater frame.
+    The production gate does not call this. ``generate_and_gate`` fails closed
+    instead of substituting an unrelated still or a black frame. Kept so older
+    tests can still describe the historical helper.
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -486,99 +390,27 @@ def generate_and_gate(
     banned_subjects: list[str] | None = None,
     domain_anchors: str = "",
     prefer_stem: str = "",
-) -> tuple[Path, int]:
+    max_attempts_n: int | None = None,
+    evaluate_fn: Any | None = None,
+):
+    """Retry a still against its spoken line. Fail closed. See ``modules.reel_qa.retry``.
+
+    Iterates as ``(path, extra_generations)``. ``publishable`` is on the result.
     """
-    Generate → VLM relevance + banned-subject gate → one re-anchored retry
-    → cached fallback.
+    from modules.reel_qa.retry import generate_and_gate as _gate
 
-    Returns ``(path, extra_generations)``. Never raises.
-    """
-    kwargs = dict(generate_kwargs or {})
-    kwargs.setdefault("output_stem", output_stem)
-    kwargs.setdefault("avatar_mode", "OFF")
-    if output_directory is not None:
-        kwargs["output_directory"] = output_directory
-    extra = 0
-    path: Path | None = None
-    try:
-        result = generate_fn(prompt, **kwargs)
-        path = Path(result) if result else None
-    except Exception as exc:  # noqa: BLE001
-        _LOG.warning("VisualQA generate r01 failed (%s)", exc)
-        path = None
-
-    def _passed(verdict: dict[str, Any]) -> bool:
-        if verdict.get("hard_reject"):
-            return False
-        return bool(verdict.get("is_relevant")) and float(
-            verdict.get("relevance_score") or 0
-        ) >= RELEVANCE_THRESHOLD
-
-    if path is not None and path.is_file():
-        verdict = evaluate_chunk_relevance(
-            path, chunk_text, prompt, banned_subjects=banned_subjects,
-        )
-        if _passed(verdict):
-            return path, extra
-        _LOG.warning(
-            "VisualQA REJECT r01 | stem=%s score=%s reason=%s — retrying re-anchored",
-            output_stem,
-            verdict.get("relevance_score"),
-            verdict.get("rejection_reason"),
-        )
-        print(
-            f"[VisualQA] RETRY re-anchored | stem={output_stem} "
-            f"score={verdict.get('relevance_score')} reason={verdict.get('rejection_reason')}",
-            flush=True,
-        )
-
-    retry_prompt = rebuild_prompt_after_reject(
-        prompt or chunk_text,
-        chunk_text,
-        domain_anchors=domain_anchors,
-        banned_subjects=banned_subjects,
-    )
-    retry_kwargs = dict(kwargs)
-    retry_kwargs["output_stem"] = f"{output_stem}_r02"
-    if banned_subjects:
-        prior_neg = str(retry_kwargs.get("negative_prompt") or "")
-        extra_neg = ", ".join(banned_subjects[:12])
-        retry_kwargs["negative_prompt"] = (
-            f"{prior_neg}, {extra_neg}" if prior_neg else extra_neg
-        )
-    try:
-        result = generate_fn(retry_prompt, **retry_kwargs)
-        extra += 1
-        retry_path = Path(result) if result else None
-    except Exception as exc:  # noqa: BLE001
-        _LOG.warning("VisualQA generate r02 failed (%s)", exc)
-        retry_path = None
-    if retry_path is not None and retry_path.is_file():
-        verdict = evaluate_chunk_relevance(
-            retry_path, chunk_text, retry_prompt, banned_subjects=banned_subjects,
-        )
-        if _passed(verdict):
-            return retry_path, extra
-        _LOG.warning(
-            "VisualQA REJECT r02 | stem=%s score=%s — cached background fallback",
-            output_stem,
-            verdict.get("relevance_score"),
-        )
-        print(
-            f"[VisualQA] FALLBACK cached background | stem={output_stem} "
-            f"score={verdict.get('relevance_score')}",
-            flush=True,
-        )
-
-    dest = Path(output_directory or ".") / f"{output_stem}_fallback.png"
-    stem_lock = (prefer_stem or output_stem or "").strip()
-    if "_act" in stem_lock:
-        stem_lock = stem_lock.split("_act", 1)[0]
-    if re.search(r"_v\d+$", stem_lock):
-        stem_lock = re.sub(r"_v\d+$", "", stem_lock)
-    return resolve_cached_channel_background(
+    return _gate(
+        generate_fn,
+        prompt=prompt,
+        chunk_text=chunk_text,
+        output_stem=output_stem,
+        output_directory=output_directory,
         channel=channel,
-        dest=dest,
         search_dirs=search_dirs,
-        prefer_stem=stem_lock,
-    ), extra
+        generate_kwargs=generate_kwargs,
+        banned_subjects=banned_subjects,
+        domain_anchors=domain_anchors,
+        prefer_stem=prefer_stem,
+        max_attempts_n=max_attempts_n,
+        evaluate_fn=evaluate_fn,
+    )

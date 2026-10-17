@@ -3173,6 +3173,9 @@ def _produce_variant_worker(
     _narr_dur = 0.0
     _narr_word_timings: list = []
     _ak_act_durs: "list[float] | None" = None
+    _beat_qa_rows: list = []
+    _reel_qa_block_compile = False
+    _qa_report: dict | None = None
     # Episode assets: outputs/<page>/assets/<episode_id>/
     # Clips always:   outputs/<page>/clips/
     _episode_id = f"ep_{datetime.now().strftime('%Y%m%d_%H%M')}"
@@ -3644,6 +3647,29 @@ def _produce_variant_worker(
                     ),
                 )
 
+        if _is_sequence_video_post(post_type):
+            from modules.reel_qa.beats import refine_reel_beats
+
+            _beat_plan = refine_reel_beats(
+                snippets=list(_spoken_snippets or []),
+                durations=list(_ak_act_durs or []),
+                word_timings=list(_narr_word_timings or []),
+                narration_s=float(_narr_dur or 0.0),
+                scenes=list(_audio_first_scenes or []),
+                topic=str(resolved_subject or ""),
+            )
+            if _beat_plan.changed:
+                _spoken_snippets = list(_beat_plan.snippets)
+                _ak_act_durs = list(_beat_plan.durations)
+                _seq_n = len(_spoken_snippets)
+                _audio_first_scenes = list(_beat_plan.scenes)
+                _LOG.info(
+                    "REEL BEATS | n=%d max_s=%.1f durs=%s",
+                    _seq_n,
+                    max(_beat_plan.durations or [0.0]),
+                    ",".join(f"{d:.2f}" for d in (_beat_plan.durations or [])[:8]),
+                )
+
         # Act 1: timestamp-bound generation for AK; cover reuse only as fallback.
         # Master Mei regenerates Scene 1 via FLUX (never graphite raw_bg).
         if not _is_mm and not _ak_voice_ready:
@@ -4069,46 +4095,38 @@ def _produce_variant_worker(
                 except Exception:
                     pass
                 _fallback_dest = _reel_img_dir / f"{stem}_act{_act_i + 1:02d}_fallback.png"
-                _act_stem = f"{stem}_act{_act_i + 1:02d}"
-                if post_type == "ECONOMIC_REEL":
-                    _act_stem = f"{_act_stem}_r01"
+                _act_stem = f"{stem}_act{_act_i + 1:02d}_r01"
                 _sr_act_meta[_act_i] = {
                     "snippet": _snippet,
                     "fallback_dest": _fallback_dest,
                     "prompt": _act_prompt,
                     "stem": f"{stem}_act{_act_i + 1:02d}",
+                    "banned_subjects": list(_act_banned or []),
+                    "domain_anchors": str(_act_anchors or ""),
+                    "negative_prompt": _act_neg,
                 }
-                if post_type == "ECONOMIC_REEL":
-                    from modules.reel_visual_qa import generate_and_gate as _qwen_gate
+                from modules.reel_visual_qa import generate_and_gate as _qwen_gate
 
-                    _sr_act_jobs[_act_i] = functools.partial(
-                        _qwen_gate,
-                        adapter.generate,
-                        prompt=_act_prompt,
-                        chunk_text=_snippet,
-                        output_stem=_act_stem,
-                        output_directory=_reel_img_dir,
-                        channel=(page_ctx.page_id or "ancient_knowledge"),
-                        search_dirs=[
-                            _reel_img_dir,
-                            *([subject_assets] if subject_assets else []),
-                        ],
-                        generate_kwargs={
-                            "avatar_mode": "OFF",
-                            "negative_prompt": locals().get("_act_neg") or None,
-                        },
-                        banned_subjects=locals().get("_act_banned") or None,
-                        domain_anchors=str(locals().get("_act_anchors") or ""),
-                        prefer_stem=stem,
-                    )
-                else:
-                    _sr_act_jobs[_act_i] = functools.partial(
-                        adapter.generate,
-                        _act_prompt,
-                        output_stem=_act_stem,
-                        output_directory=_reel_img_dir,
-                        avatar_mode="OFF",
-                    )
+                _sr_act_jobs[_act_i] = functools.partial(
+                    _qwen_gate,
+                    adapter.generate,
+                    prompt=_act_prompt,
+                    chunk_text=_snippet,
+                    output_stem=_act_stem,
+                    output_directory=_reel_img_dir,
+                    channel=(page_ctx.page_id or "ancient_knowledge"),
+                    search_dirs=[
+                        _reel_img_dir,
+                        *([subject_assets] if subject_assets else []),
+                    ],
+                    generate_kwargs={
+                        "avatar_mode": "OFF",
+                        "negative_prompt": _act_neg,
+                    },
+                    banned_subjects=list(_act_banned or []) or None,
+                    domain_anchors=str(_act_anchors or ""),
+                    prefer_stem=stem,
+                )
 
             _gpu_baseline = 0.0
             try:
@@ -4137,46 +4155,127 @@ def _produce_variant_worker(
             _sr_act_results = _run_acts_parallel(_sr_act_jobs)
 
             _ok_acts = 0
+            from modules.reel_qa.models import StillGateResult
+            from modules.reel_visual_qa import generate_and_gate as _qwen_gate
+
+            def _accept_gate(_gate: StillGateResult, _idx: int, _text: str) -> None:
+                nonlocal _ok_acts, _reel_qa_block_compile, _images_generated_this_variant
+                _beat_qa_rows.append(_gate.beat_row(index=_idx, text=_text))
+                if _gate.extra_generations:
+                    _images_generated_this_variant += int(_gate.extra_generations)
+                if _gate.publishable and _gate.path is not None and Path(_gate.path).is_file():
+                    _sequence_image_paths.append(Path(_gate.path))
+                    _ok_acts += 1
+                    _LOG.info(
+                        "Sequence reel | act %d/%d QA pass | beat=%.48s…",
+                        _idx + 1, _seq_n, _text,
+                    )
+                    return
+                _reel_qa_block_compile = True
+                _LOG.error(
+                    "REEL QA BLOCK | act %d/%d reason=%s — no substitute still",
+                    _idx + 1, _seq_n, _gate.blocked_reason or "rejected",
+                )
+
             for _act_i in range(_sr_act_start, _seq_n):
                 _meta = _sr_act_meta[_act_i]
                 _snippet = _meta["snippet"]
-                _fallback_dest = _meta["fallback_dest"]
                 _cached_still = _meta.get("cached_path")
                 if _cached_still is not None:
-                    _act_img = _ensure_sequence_image(
-                        _cached_still, fallback=_cached_still, target_path=_fallback_dest,
+                    from modules.reel_qa.relevance import evaluate_chunk_relevance as _score_still
+
+                    _cached_verdict = _score_still(
+                        _cached_still,
+                        _snippet,
+                        str(_meta.get("prompt") or ""),
+                        banned_subjects=list(_meta.get("banned_subjects") or []) or None,
                     )
-                    _sequence_image_paths.append(_act_img)
-                    _LOG.info(
-                        "Sequence reel | act %d/%d CACHED | beat=%.48s…",
-                        _act_i + 1, _seq_n, _snippet,
+                    from modules.reel_qa.relevance import verdict_passed as _verdict_passed
+
+                    if (
+                        _verdict_passed(_cached_verdict)
+                        and _cached_verdict.get("qa_status") != "unavailable"
+                        and Path(_cached_still).is_file()
+                    ):
+                        _accept_gate(
+                            StillGateResult(
+                                path=Path(_cached_still),
+                                extra_generations=0,
+                                publishable=True,
+                                attempts=[_cached_verdict],
+                                verdict=_cached_verdict,
+                            ),
+                            _act_i,
+                            _snippet,
+                        )
+                        continue
+                    if _cached_verdict.get("qa_status") == "unavailable":
+                        _accept_gate(
+                            StillGateResult(
+                                path=None,
+                                extra_generations=0,
+                                publishable=False,
+                                blocked_reason=str(
+                                    _cached_verdict.get("rejection_reason") or "qa_unavailable"
+                                ),
+                                attempts=[_cached_verdict],
+                                verdict=_cached_verdict,
+                            ),
+                            _act_i,
+                            _snippet,
+                        )
+                        continue
+                    _regen = _qwen_gate(
+                        adapter.generate,
+                        prompt=str(_meta.get("prompt") or _snippet),
+                        chunk_text=_snippet,
+                        output_stem=f"{_meta.get('stem') or 'act'}_r01",
+                        output_directory=_reel_img_dir,
+                        channel=(page_ctx.page_id or "ancient_knowledge"),
+                        generate_kwargs={
+                            "avatar_mode": "OFF",
+                            "negative_prompt": _meta.get("negative_prompt"),
+                        },
+                        banned_subjects=list(_meta.get("banned_subjects") or []) or None,
+                        domain_anchors=str(_meta.get("domain_anchors") or ""),
                     )
+                    _accept_gate(_regen, _act_i, _snippet)
                     continue
                 _result = _sr_act_results.get(_act_i)
                 if isinstance(_result, Exception):
-                    _LOG.warning(
-                        "Sequence image act %d failed (%s) — blinded fallback to Act 1.",
-                        _act_i + 1, _result,
+                    _reel_qa_block_compile = True
+                    _beat_qa_rows.append(
+                        {
+                            "index": _act_i,
+                            "text": _snippet,
+                            "image_path": "",
+                            "score": 0.0,
+                            "passed": False,
+                            "reason": f"generate_failed:{type(_result).__name__}",
+                        }
                     )
-                    _sequence_image_paths.append(
-                        _ensure_sequence_image(
-                            _fallback_dest, fallback=_act1_base, target_path=_fallback_dest,
-                        )
+                    _LOG.error(
+                        "REEL QA BLOCK | act %d/%d generate raised %s — no substitute still",
+                        _act_i + 1, _seq_n, _result,
                     )
                     continue
-                if isinstance(_result, tuple) and _result:
-                    _qa_extra = int(_result[1] or 0) if len(_result) > 1 else 0
-                    if _qa_extra:
-                        _images_generated_this_variant += _qa_extra
-                    _result = _result[0]
-                _act_img = _ensure_sequence_image(
-                    _result, fallback=_act1_base, target_path=_fallback_dest,
+                if isinstance(_result, StillGateResult):
+                    _accept_gate(_result, _act_i, _snippet)
+                    continue
+                _reel_qa_block_compile = True
+                _beat_qa_rows.append(
+                    {
+                        "index": _act_i,
+                        "text": _snippet,
+                        "image_path": "",
+                        "score": 0.0,
+                        "passed": False,
+                        "reason": "qa_result_missing",
+                    }
                 )
-                _sequence_image_paths.append(_act_img)
-                _ok_acts += 1
-                _LOG.info(
-                    "Sequence reel | act %d/%d generated | beat=%.48s…",
-                    _act_i + 1, _seq_n, _snippet,
+                _LOG.error(
+                    "REEL QA BLOCK | act %d/%d missing gate result — no substitute still",
+                    _act_i + 1, _seq_n,
                 )
             # One GPU bill for the parallel batch (sum of per-job seconds).
             _gpu_delta = _track_remote_gpu_batch(
@@ -4187,10 +4286,12 @@ def _produce_variant_worker(
                     cost_tracker.track_image(model_key="image_flux_schnell", count=_ok_acts)
                 _images_generated_this_variant += _ok_acts
 
-            if post_type == "ECONOMIC_REEL" and _sequence_image_paths:
-                _LOG.info(
-                    "REEL VisualQA | per-still Qwen gate already applied during generate"
-                )
+            _LOG.info(
+                "REEL VisualQA | still gate applied | blocked=%s beats=%d frames=%d",
+                _reel_qa_block_compile,
+                len(_beat_qa_rows),
+                len(_sequence_image_paths),
+            )
 
         if _sequence_image_paths:
             if not img_path_display:
@@ -4589,7 +4690,12 @@ def _produce_variant_worker(
                         variant + 1, _episode_id,
                     )
 
-    if _is_economic_reel and (
+    if _reel_qa_block_compile:
+        _LOG.error(
+            "REEL QA | skipping compile — one or more beats failed closed"
+        )
+        print("[VisualQA] compile skipped — beat QA failed closed")
+    if _is_economic_reel and not _reel_qa_block_compile and (
         (img_path_display and Path(img_path_display).is_file())
         or bool(_sequence_image_paths)
     ):
@@ -5557,6 +5663,33 @@ def _produce_variant_worker(
             )
             reel_path = None
 
+    if _is_economic_reel:
+        from modules.reel_qa.pipeline import seal_compiled_reel
+
+        _qa_beats = list(_beat_qa_rows)
+        if not _qa_beats:
+            _qa_beats = [
+                {
+                    "index": 0,
+                    "text": str(overlay_text or resolved_subject or ""),
+                    "image_path": str(img_path_display or ""),
+                    "passed": None,
+                }
+            ]
+        _qa_dir = Path(app_config.PAGE_OUTPUTS_DIR) / "qa"
+        _qa_report = seal_compiled_reel(
+            video_path=reel_path,
+            post_type=post_type,
+            beats=_qa_beats,
+            word_timings=list(
+                locals().get("_word_timings") or locals().get("_narr_word_timings") or []
+            ),
+            output_dir=_qa_dir,
+            stem=f"{stem}_v{variant + 1:02d}",
+            channel=(page_ctx.page_id if page_ctx else "") or "",
+            blocked_reason="beat_qa_failed" if _reel_qa_block_compile else "",
+        )
+
     # ====================================================================
     # PHASE E: ImgBB upload — always uploads the final composited asset
     # ====================================================================
@@ -5634,6 +5767,9 @@ def _produce_variant_worker(
                 "humanized_caption": caption,
                 "caption_status": caption_mode_tag,
                 "created_utc": created_iso,
+                "qa_verdict": (_qa_report or {}).get("verdict") or "",
+                "qa_report_path": (_qa_report or {}).get("report_path") or "",
+                "publishable": bool((_qa_report or {}).get("publishable")),
             }
             if (page_ctx.page_id if page_ctx else "").lower() == "master_mei":
                 from agents.media.mei_narrative import (
@@ -5656,15 +5792,28 @@ def _produce_variant_worker(
                         _planner_media = _b2_video_url or str(reel_path)
                     else:
                         _planner_media = imgbb_url
-                    planner_row_ix = append_planner_row(
-                        app_config.POST_PLANNER_XLSX,
-                        posting_time=posting_slot_display,
-                        caption=caption,
-                        url_link="",
-                        media_url=_planner_media,
-                        post_type_value=_planner_type,
-                        template_path=app_config.BULK_POSTS_TEMPLATE_XLSX,
-                    )
+                    from modules.reel_qa.publish import planner_row_allowed
+
+                    if not planner_row_allowed(post_type=post_type, report=_qa_report):
+                        _LOG.error(
+                            "REEL QA blocked Post Planner | post_type=%s verdict=%s",
+                            post_type,
+                            (_qa_report or {}).get("verdict"),
+                        )
+                        print(
+                            f"[VisualQA] Post Planner skipped | verdict="
+                            f"{(_qa_report or {}).get('verdict') or 'missing'}"
+                        )
+                    else:
+                        planner_row_ix = append_planner_row(
+                            app_config.POST_PLANNER_XLSX,
+                            posting_time=posting_slot_display,
+                            caption=caption,
+                            url_link="",
+                            media_url=_planner_media,
+                            post_type_value=_planner_type,
+                            template_path=app_config.BULK_POSTS_TEMPLATE_XLSX,
+                        )
             except Exception as fin_exc:  # noqa: BLE001
                 _LOG.warning("Smart bait / reel planner write failed (variant %s): %s", variant + 1, fin_exc)
 
@@ -5837,7 +5986,10 @@ def _produce_variant_worker(
         "hook_style": (_batch_angle.hook_style if _batch_angle else ""),
         "variant_index": variant + 1,
         "local_image_path": img_ref_engine,
+        "post_type": post_type,
         "video_path": video_path_str,
+        "qa_verdict": (_qa_report or {}).get("verdict") or "",
+        "qa_report_path": (_qa_report or {}).get("report_path") or "",
         "imgbb_url": imgbb_url,
         "caption": caption_str,
         "description": _seo_description,
@@ -8388,10 +8540,23 @@ def cli() -> None:
         if _rand_max_m < 0:
             _rand_max_m = 0
 
-        _yt_rows = [
+        from modules.reel_qa.publish import row_publishable
+
+        _yt_candidates = [
             row for row in (envelope.get("items") or [])
             if row.get("video_path")
         ]
+        _yt_rows = [row for row in _yt_candidates if row_publishable(row)]
+        _yt_blocked = [row for row in _yt_candidates if not row_publishable(row)]
+        if _yt_blocked:
+            print(
+                f"[VisualQA] YouTube skipped {len(_yt_blocked)} reel(s) "
+                "without verdict=pass"
+            )
+            _LOG.error(
+                "REEL QA blocked YouTube | n=%d",
+                len(_yt_blocked),
+            )
         if not _yt_rows:
             print("[YouTube] No compiled video found in this run — skipping upload.")
         else:
