@@ -67,7 +67,40 @@ _BAD_TITLE = (
     "airbus",
     "airport",
     "squadron",
+    "rocket",
+    "dvids",
+    "missile",
+    "brigade",
+    "humvee",
+    "helmet",
+    "gourd",
+    "poporo",
+    "mural",
+    "paisaje",
+    "cafe ",
+    "container",
+    "mapa",
+    " map",
+    "museo",
+    "popor",
+    "quindio",
 )
+_GENERIC_TOKEN = {
+    "golden",
+    "ornaments",
+    "ornament",
+    "gold",
+    "ancient",
+    "small",
+    "figure",
+    "planes",
+    "plane",
+    "jets",
+    "jet",
+    "airplanes",
+    "airplane",
+    "aircraft",
+}
 _VECTOR = (".svg", ".djvu", ".pdf")
 _MAX_PHOTOS = 6
 
@@ -518,9 +551,15 @@ def _accept(candidate: Candidate, entity: Entity, *, title_lock: bool) -> bool:
         return False
     if title_lock:
         return True
-    tokens = _tokens(entity.name + " " + " ".join(entity.commons_search))
-    blob = title + " " + (candidate.description or "").lower()
-    return any(token in blob for token in tokens)
+    distinctive = _distinctive_tokens(entity)
+    # The title has to name the artefact. Descriptions on museum photos say
+    # "Quimbaya" for helmets, gourds, and human pendants that are not this object.
+    return any(token in title for token in distinctive)
+
+
+def _distinctive_tokens(entity: Entity) -> list[str]:
+    blob = " ".join((entity.name, *entity.aliases))
+    return [token for token in _tokens(blob) if token not in _GENERIC_TOKEN]
 
 
 def _tokens(text: str) -> list[str]:

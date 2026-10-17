@@ -1,13 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Pick a still for one beat. Reference-edit first, then a Commons still."""
+"""Pick a still for one beat. A real photo first, then a cheap edit."""
 from __future__ import annotations
 
 import logging
 import re
+import threading
 from pathlib import Path
 
-from modules.reel_artefact.fetch import FetchedArtefact, fetch_artefact
-from modules.reel_artefact.motion import write_motion_sidecar
+from PIL import Image
+
+from modules.reel_artefact.budget import take_nano_slot
+from modules.reel_artefact.crop import anchor_for, prepare_reel_frame
+from modules.reel_artefact.fetch import FetchedArtefact, fetch_gallery
+from modules.reel_artefact.logbook import note_source
+from modules.reel_artefact.motion import profile_for, write_motion_sidecar
 from modules.reel_artefact.policy import artefact_mode
 from modules.reel_artefact.source import write_source_sidecar
 from modules.shot_planner.entities import Entity
@@ -15,6 +21,8 @@ from modules.shot_planner.entities import Entity
 logger = logging.getLogger(__name__)
 
 _RETRY = re.compile(r"_r\d+")
+_VARIATION_GUARD = threading.Lock()
+_VARIATION_LOCKS: dict[str, threading.Lock] = {}
 
 _GENERIC_PROMPT = (
     "EXPECTED SUBJECT: a photoreal documentary scene. "
@@ -53,64 +61,174 @@ def acquire_photo(
     client=None,
     cache_dir: Path | None = None,
     generate_image=None,
+    beat_index: int = 0,
+    allow_nano: bool = True,
+    text_only: bool = False,
 ) -> Path | None:
     """Write the artefact still to ``dest``.
 
-    ``chain`` asks Nano Banana to edit the Commons reference. A large Commons
-    still is used when that edit cannot run. Text-only generation runs only
-    when ``entity.text_only_safe`` is set. ``commons`` never calls the
-    generator. ``flux`` returns None so the caller keeps Flux.
+    ``chain`` publishes a real photograph when one is large enough. Nano
+    Banana runs only when no usable still exists, and only inside the reel
+    cap: a reference edit, or text-only when the entity marks that safe and
+    no reference exists. ``commons`` never calls the generator. ``flux``
+    returns None. ``nanobanana`` is the inspection path and still edits.
     """
     chosen = mode or artefact_mode()
     if chosen in {None, "flux"}:
         return None
-    fetched = fetch_artefact(
+    slot = int(beat_index) + (1 if variation else 0)
+    gallery = fetch_gallery(
         entity,
         channel=channel,
         cache_dir=cache_dir,
         client=client,
     )
-    if chosen == "commons":
-        if variation:
+    stills = [
+        photo for photo in gallery
+        if photo.usable_as_still and photo.reference_path.is_file()
+    ]
+    reference_photo = next((photo for photo in gallery if photo.reference_path.is_file()), None)
+    folder = cache_dir or _cache_parent(reference_photo) or _fallback_cache(channel, entity.id)
+
+    if text_only:
+        if not allow_nano or not bool(getattr(entity, "text_only_safe", False)):
             return None
-        return _publish_commons(fetched, dest, entity)
-    if chosen not in {"nanobanana", "chain"}:
+        return _variation(
+            entity,
+            dest,
+            reference=None,
+            channel=channel,
+            cache_dir=folder,
+            generate_image=generate_image,
+            license_name="",
+            credit="",
+            title=entity.name,
+            source_url="",
+            author="",
+            kind="nb-text",
+            beat_index=beat_index,
+            slot=slot,
+        )
+
+    if chosen == "commons":
+        if not stills:
+            return None
+        return _publish_real(stills[slot % len(stills)], dest, entity, slot, beat_index)
+
+    if chosen == "nanobanana":
+        reference = reference_photo.reference_path if reference_photo is not None else None
+        if reference is not None and Path(reference).is_file():
+            return _variation(
+                entity,
+                dest,
+                reference=reference,
+                channel=channel,
+                cache_dir=folder,
+                generate_image=generate_image,
+                license_name=reference_photo.license_name if reference_photo else "",
+                credit=reference_photo.credit_line if reference_photo else "",
+                title=reference_photo.title if reference_photo else entity.name,
+                source_url=reference_photo.source_url if reference_photo else "",
+                author=reference_photo.author if reference_photo else "",
+                kind="nb-ref",
+                beat_index=beat_index,
+                slot=slot,
+            )
+        if allow_nano and bool(getattr(entity, "text_only_safe", False)):
+            return _variation(
+                entity,
+                dest,
+                reference=None,
+                channel=channel,
+                cache_dir=folder,
+                generate_image=generate_image,
+                license_name="",
+                credit="",
+                title=entity.name,
+                source_url="",
+                author="",
+                kind="nb-text",
+                beat_index=beat_index,
+                slot=slot,
+            )
         return None
-    reference = fetched.reference_path if fetched is not None else None
-    has_reference = reference is not None and Path(reference).is_file()
-    allow_text = bool(getattr(entity, "text_only_safe", False))
-    edited: Path | None = None
-    if has_reference or allow_text:
+
+    if chosen != "chain":
+        return None
+    if stills:
+        return _publish_real(stills[slot % len(stills)], dest, entity, slot, beat_index)
+    if allow_nano and reference_photo is not None:
         edited = _variation(
             entity,
             dest,
-            reference=reference if has_reference else None,
+            reference=reference_photo.reference_path,
             channel=channel,
-            cache_dir=cache_dir or _cache_parent(fetched),
+            cache_dir=folder,
             generate_image=generate_image,
-            license_name=fetched.license_name if fetched else "",
-            credit=fetched.credit_line if fetched else "",
-            title=fetched.title if fetched else entity.name,
-            source_url=fetched.source_url if fetched else "",
-            author=fetched.author if fetched else "",
+            license_name=reference_photo.license_name,
+            credit=reference_photo.credit_line,
+            title=reference_photo.title,
+            source_url=reference_photo.source_url,
+            author=reference_photo.author,
+            kind="nb-ref",
+            beat_index=beat_index,
+            slot=slot,
         )
-    if edited is not None:
-        return edited
-    if chosen == "chain" and not variation:
-        return _publish_commons(fetched, dest, entity)
+        if edited is not None:
+            return edited
+    if (
+        allow_nano
+        and reference_photo is None
+        and bool(getattr(entity, "text_only_safe", False))
+    ):
+        return _variation(
+            entity,
+            dest,
+            reference=None,
+            channel=channel,
+            cache_dir=folder,
+            generate_image=generate_image,
+            license_name="",
+            credit="",
+            title=entity.name,
+            source_url="",
+            author="",
+            kind="nb-text",
+            beat_index=beat_index,
+            slot=slot,
+        )
     return None
 
 
-def _publish_commons(
-    fetched: FetchedArtefact | None,
+def cached_variation(entity: Entity, *, channel: str, cache_dir: Path | None = None) -> Path | None:
+    """A Nano Banana file already paid for, if this entity has one."""
+    folder = cache_dir or _fallback_cache(channel, entity.id)
+    for name in ("variation_ref.jpg", "variation_text.jpg", "variation.jpg"):
+        path = folder / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _publish_real(
+    fetched: FetchedArtefact,
     dest: Path,
     entity: Entity,
+    slot: int,
+    beat_index: int,
 ) -> Path | None:
-    if fetched is None or not fetched.usable_as_still or not fetched.still_path:
+    if not fetched.reference_path.is_file():
+        return None
+    try:
+        with Image.open(fetched.reference_path) as opened:
+            frame, _how = prepare_reel_frame(opened.convert("RGB"), anchor=anchor_for(slot))
+    except (OSError, ValueError):
         return None
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(Path(fetched.still_path).read_bytes())
-    _stamp(dest, fetched, entity, provider="commons", model_id="")
+    frame.save(dest, format="JPEG", quality=92)
+    write_motion_sidecar(dest, profile=profile_for(slot))
+    _stamp(dest, fetched, entity, provider=fetched.provider or "commons", model_id="")
+    note_source(f"real:{fetched.provider or 'commons'}", entity.id, int(beat_index) + 1)
     return dest
 
 
@@ -118,6 +236,16 @@ def _cache_parent(fetched: FetchedArtefact | None) -> Path | None:
     if fetched is None:
         return None
     return fetched.reference_path.parent
+
+
+def _variation_lock(folder: Path) -> threading.Lock:
+    key = str(folder)
+    with _VARIATION_GUARD:
+        lock = _VARIATION_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _VARIATION_LOCKS[key] = lock
+        return lock
 
 
 def _variation(
@@ -133,37 +261,58 @@ def _variation(
     title: str,
     source_url: str,
     author: str,
+    kind: str = "nb-ref",
+    beat_index: int = 0,
+    slot: int = 0,
 ) -> Path | None:
     folder = cache_dir or _fallback_cache(channel, entity.id)
     folder.mkdir(parents=True, exist_ok=True)
-    cached = folder / "variation.jpg"
-    model_id = ""
-    if not cached.is_file():
-        has_reference = reference is not None and Path(reference).is_file()
-        prompt = _edit_prompt(entity, has_reference=has_reference)
-        try:
-            if generate_image is not None:
-                model_id = str(generate_image(prompt, cached, reference) or "nanobanana")
-            else:
-                from modules.reel_artefact.nanobanana import generate_artefact_image
-
-                model_id = generate_artefact_image(prompt, cached, reference=reference)
-        except Exception as exc:  # noqa: BLE001
-            logger.info("Nano Banana variation failed (%s)", type(exc).__name__)
-            return None
+    cached = folder / ("variation_text.jpg" if kind == "nb-text" else "variation_ref.jpg")
+    with _variation_lock(folder):
+        model_id = ""
+        created = False
         if not cached.is_file():
-            return None
-        (folder / "variation.model").write_text(model_id, encoding="utf-8")
-    else:
-        note = folder / "variation.model"
-        model_id = note.read_text(encoding="utf-8").strip() if note.is_file() else ""
+            if not take_nano_slot():
+                logger.info(
+                    "Nano Banana cap reached | entity=%s | beat=%s",
+                    entity.id,
+                    int(beat_index) + 1,
+                )
+                return None
+            has_reference = reference is not None and Path(reference).is_file()
+            prompt = _edit_prompt(entity, has_reference=has_reference)
+            try:
+                if generate_image is not None:
+                    model_id = str(generate_image(prompt, cached, reference) or "nanobanana")
+                else:
+                    from modules.reel_artefact.nanobanana import generate_artefact_image
+
+                    model_id = generate_artefact_image(prompt, cached, reference=reference)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("Nano Banana variation failed (%s)", type(exc).__name__)
+                return None
+            if not cached.is_file():
+                return None
+            (folder / f"{cached.name}.model").write_text(model_id, encoding="utf-8")
+            created = True
+        else:
+            note = folder / f"{cached.name}.model"
+            model_id = note.read_text(encoding="utf-8").strip() if note.is_file() else ""
+        marker = folder / f"{cached.name}.published"
+        first_publish = created or not marker.is_file()
+        marker.write_text("1", encoding="utf-8")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(cached.read_bytes())
-    write_motion_sidecar(dest)
+    write_motion_sidecar(dest, profile=profile_for(slot))
+    provider = "nanobanana" if first_publish else "reuse"
+    if first_publish:
+        note_source(f"{kind}:{model_id or 'nanobanana'}", entity.id, int(beat_index) + 1)
+    else:
+        note_source("reuse:approved", entity.id, int(beat_index) + 1)
     write_source_sidecar(
         dest,
         {
-            "provider": "nanobanana",
+            "provider": provider,
             "origin": "nanobanana",
             "license": license_name,
             "credit_line": credit,
@@ -173,7 +322,7 @@ def _variation(
             "title": title,
             "source_url": source_url,
             "author": author,
-            "model_id": model_id,
+            "model_id": model_id if provider == "nanobanana" else "",
         },
     )
     if credit:
@@ -193,7 +342,7 @@ def _variation(
                 author=author or "Unknown",
                 license=license_name or "see source",
                 source_url=source_url,
-                provider="nanobanana",
+                provider=provider,
             ),
             credit=line,
         )
@@ -250,7 +399,6 @@ def _stamp(
     from agents.media.free_images.attribution import write_sidecar
     from agents.media.free_images.models import Attribution
 
-    write_motion_sidecar(dest)
     write_sidecar(
         dest,
         Attribution(

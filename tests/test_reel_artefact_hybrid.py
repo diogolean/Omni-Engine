@@ -85,6 +85,9 @@ def _entity() -> Entity:
 
 
 def test_chain_edits_the_reference_when_the_photo_is_too_small(tmp_path: Path) -> None:
+    from modules.reel_artefact.budget import reset_nano_budget
+
+    reset_nano_budget()
     url = "https://example.test/small.jpg"
     client = _Client(
         pages={
@@ -96,13 +99,15 @@ def test_chain_edits_the_reference_when_the_photo_is_too_small(tmp_path: Path) -
 
     def _generate(prompt: str, dest: Path, reference) -> str:
         assert reference is not None and Path(reference).is_file()
-        assert "distinct shape" in prompt
+        assert "delta wings" in prompt
+        assert "no propeller" in prompt
+        assert "no cockpit" in prompt
         Image.new("RGB", (1080, 1920), (30, 30, 30)).save(dest, format="JPEG")
-        return "gemini-2.5-flash-image"
+        return "gemini-3.1-flash-lite-image"
 
     dest = tmp_path / "out.jpg"
     path = acquire_photo(
-        _entity(),
+        _quimbaya(),
         dest,
         channel="ancient_knowledge",
         mode="chain",
@@ -113,6 +118,7 @@ def test_chain_edits_the_reference_when_the_photo_is_too_small(tmp_path: Path) -
     assert path == dest and dest.is_file()
     side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
     assert side["provider"] == "nanobanana"
+    assert side["model_id"] == "gemini-3.1-flash-lite-image"
     assert side["reference_image"]
 
 
@@ -270,7 +276,7 @@ def _quimbaya() -> Entity:
     )
 
 
-def test_chain_edits_a_large_reference_and_forbids_a_propeller(tmp_path: Path) -> None:
+def test_chain_publishes_a_large_photo_without_calling_nano(tmp_path: Path) -> None:
     url = "https://example.test/pendant.jpg"
     client = _Client(
         pages={
@@ -279,13 +285,12 @@ def test_chain_edits_a_large_reference_and_forbids_a_propeller(tmp_path: Path) -
         },
         files={url: _jpeg(2000, 1400)},
     )
+    calls = {"n": 0}
 
     def _generate(prompt: str, dest: Path, reference) -> str:
-        assert reference is not None and Path(reference).is_file()
-        assert "no propeller" in prompt
-        assert "no cockpit" in prompt
-        Image.new("RGB", (768, 1344), (20, 20, 20)).save(dest, format="JPEG")
-        return "gemini-2.5-flash-image"
+        del prompt, dest, reference
+        calls["n"] += 1
+        return "gemini-3.1-flash-lite-image"
 
     dest = tmp_path / "out.jpg"
     path = acquire_photo(
@@ -297,10 +302,10 @@ def test_chain_edits_a_large_reference_and_forbids_a_propeller(tmp_path: Path) -
         cache_dir=tmp_path / "cache",
         generate_image=_generate,
     )
-    assert path == dest
+    assert path == dest and calls["n"] == 0
     side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
-    assert side["provider"] == "nanobanana"
-    assert side["model_id"] == "gemini-2.5-flash-image"
+    assert side["provider"] == "commons"
+    assert side["model_id"] == ""
 
 
 def test_a_failed_edit_can_still_use_the_commons_frame(tmp_path: Path) -> None:
@@ -477,3 +482,216 @@ def test_google_image_cost_stays_on_the_reel_channel(monkeypatch: pytest.MonkeyP
     finally:
         bind_run_channel(None)
         bind_cost_channel(None)
+
+
+def test_a_second_beat_reuses_the_cached_edit(tmp_path: Path) -> None:
+    from modules.reel_artefact.budget import reset_nano_budget
+    from modules.reel_artefact.motion import motion_override
+
+    reset_nano_budget()
+    url = "https://example.test/small.jpg"
+    client = _Client(
+        pages={
+            "titles": {"1": _page("File:Small.jpg", 400, 300, "Public domain", url)},
+            "search": {},
+        },
+        files={url: _jpeg(400, 300)},
+    )
+    calls = {"n": 0}
+
+    def _generate(prompt: str, dest: Path, reference) -> str:
+        del prompt, reference
+        calls["n"] += 1
+        Image.new("RGB", (768, 1344), (12, 12, 12)).save(dest, format="JPEG")
+        return "gemini-3.1-flash-lite-image"
+
+    first = acquire_photo(
+        _quimbaya(),
+        tmp_path / "beat1.jpg",
+        channel="ancient_knowledge",
+        mode="chain",
+        client=client,
+        cache_dir=tmp_path / "cache",
+        generate_image=_generate,
+        beat_index=0,
+    )
+    second = acquire_photo(
+        _quimbaya(),
+        tmp_path / "beat2.jpg",
+        channel="ancient_knowledge",
+        mode="chain",
+        client=client,
+        cache_dir=tmp_path / "cache",
+        generate_image=_generate,
+        beat_index=1,
+    )
+    assert first is not None and second is not None
+    assert calls["n"] == 1
+    second_side = json.loads(Path(str(second) + ".source.json").read_text(encoding="utf-8"))
+    assert second_side["provider"] == "reuse"
+    assert motion_override(first)["profile"] != motion_override(second)["profile"]
+
+
+def test_nano_cap_stops_a_fifth_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from modules.reel_artefact.budget import reset_nano_budget
+
+    monkeypatch.setenv("REEL_NANOBANANA_MAX_PER_REEL", "1")
+    reset_nano_budget()
+    calls = {"n": 0}
+
+    def _generate(prompt: str, dest: Path, reference) -> str:
+        del prompt, reference
+        calls["n"] += 1
+        Image.new("RGB", (768, 1344), (3, 3, 3)).save(dest, format="JPEG")
+        return "gemini-3.1-flash-lite-image"
+
+    class _Miss:
+        def get(self, url, params=None, headers=None):
+            del url, params, headers
+            return HttpResponse(404, b"")
+
+    safe = Entity(
+        id="baghdad_battery",
+        name="Baghdad Battery",
+        aliases=("baghdad battery",),
+        kind="artifact",
+        canonical_visual="a clay jar",
+        era="Parthian",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        canonical_shape="a clay jar with a copper cylinder and an iron rod",
+        text_only_safe=True,
+    )
+    other = Entity(
+        id="sample_two",
+        name="Second jar",
+        aliases=("second",),
+        kind="artifact",
+        canonical_visual="a clay jar",
+        era="Parthian",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        canonical_shape="a clay jar",
+        text_only_safe=True,
+    )
+    first = acquire_photo(
+        safe,
+        tmp_path / "one.jpg",
+        channel="ancient_knowledge",
+        mode="chain",
+        client=_Miss(),
+        cache_dir=tmp_path / "one",
+        generate_image=_generate,
+    )
+    second = acquire_photo(
+        other,
+        tmp_path / "two.jpg",
+        channel="ancient_knowledge",
+        mode="chain",
+        client=_Miss(),
+        cache_dir=tmp_path / "two",
+        generate_image=_generate,
+    )
+    assert first is not None and second is None
+    assert calls["n"] == 1
+
+
+def test_commentary_reuses_an_approved_still(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.reel_artefact.reuse import remember_approved, reset_approved
+
+    monkeypatch.setenv("REEL_ARTIFACT_IMAGES", "1")
+    monkeypatch.delenv("REEL_ARTIFACT_IMAGE_PROVIDER", raising=False)
+    monkeypatch.setattr("modules.reel_artefact.route.fetch_gallery", lambda *_a, **_k: [])
+    reset_approved()
+    approved = tmp_path / "approved.jpg"
+    Image.new("RGB", (1080, 1920), (40, 30, 20)).save(approved, format="JPEG")
+    remember_approved(approved)
+    shot = Shot(
+        id="s8",
+        narration="Some researchers believe these legends imply lost knowledge.",
+        entity_id="quimbaya_ornaments",
+        subject="Quimbaya golden ornaments",
+        canonical_visual="small gold pendants",
+        shot_type="wide",
+        camera="wide documentary view",
+        setting="a quiet museum hall",
+        era="ancient",
+        mood="quiet",
+        lighting="soft",
+        image_role="flux",
+        canonical_shape="a small gold pendant with delta wings, a tail fin, and a stylised head",
+    )
+    calls = {"n": 0}
+
+    def _generate(*_args, **_kwargs):
+        calls["n"] += 1
+        return None
+
+    wrapped, _extra = wrap_reel_generate(
+        _generate, channel="ancient_knowledge", shot=shot,
+    )
+    dest = wrapped(
+        "A documentary scene.",
+        output_stem="reel_act08_r01",
+        output_directory=tmp_path,
+    )
+    assert calls["n"] == 0
+    assert dest is not None and Path(dest).is_file()
+    side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
+    assert side["provider"] == "reuse"
+
+
+def test_cheapest_nanobanana_model_is_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modules.reel_artefact.nanobanana import model_chain
+
+    monkeypatch.delenv("REEL_NANOBANANA_MODEL", raising=False)
+    monkeypatch.delenv("REEL_NANOBANANA_MODELS", raising=False)
+    assert model_chain()[0] == "gemini-3.1-flash-lite-image"
+    monkeypatch.setenv(
+        "REEL_NANOBANANA_MODELS",
+        "gemini-2.5-flash-image, gemini-3.1-flash-lite-image",
+    )
+    assert model_chain()[0] == "gemini-2.5-flash-image"
+    monkeypatch.setenv("REEL_NANOBANANA_MODEL", "gemini-nano-banana-2.1")
+    assert model_chain()[0] == "gemini-nano-banana-2.1"
+
+
+def test_cost_lines_split_nano_flux_retries_real_and_tts() -> None:
+    from core.cost_tracker import CostTracker
+
+    tracker = CostTracker(page_id="ancient_knowledge")
+    tracker.track_image("image_nanobanana_lite", count=1)
+    tracker.track_image("image_flux_schnell", count=3)
+    tracker.track_image("image_commons", count=12)
+    tracker.track_audio(char_count=1200)
+    cats = tracker.category_totals()
+    assert cats["image_nano_count"] == 1
+    assert cats["image_nano_cost"] == pytest.approx(0.0336)
+    assert cats["image_flux_count"] == 3
+    assert cats["image_flux_cost"] == pytest.approx(0.009)
+    assert cats["image_real_count"] == 12
+    assert cats["image_cost"] == pytest.approx(0.0426)
+    assert cats["tts_chars"] == 1200
+    assert cats["audio_cost"] == pytest.approx(1200 * 0.00003)
+
+
+def test_flux_retries_bill_and_a_real_photo_does_not(tmp_path: Path) -> None:
+    from modules.reel_artefact.pricing import generation_bill
+    from modules.reel_artefact.source import write_source_sidecar
+
+    flux = tmp_path / "flux.jpg"
+    real = tmp_path / "real.jpg"
+    nano = tmp_path / "nano.jpg"
+    for path in (flux, real, nano):
+        Image.new("RGB", (8, 8), (1, 1, 1)).save(path, format="JPEG")
+    write_source_sidecar(real, {"provider": "commons", "model_id": ""})
+    write_source_sidecar(
+        nano, {"provider": "nanobanana", "model_id": "gemini-3.1-flash-lite-image"},
+    )
+    assert generation_bill(flux, extra_generations=2) == ("image_flux_schnell", 3)
+    assert generation_bill(real, extra_generations=2) == ("image_commons", 1)
+    assert generation_bill(nano, extra_generations=2) == ("image_nanobanana_lite", 1)

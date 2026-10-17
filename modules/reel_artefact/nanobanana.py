@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Gemini image generation for one artefact still.
 
-The call tries ``gemini-2.5-flash-image`` (Nano Banana) first. Google's
-docs mark that id for shutdown on 2 October 2026, so a failure falls
-through to ``gemini-nano-banana-2.1`` and then the Flash Lite image model.
+The call tries the cheapest id in ``NANOBANANA_MODELS`` first.
+``REEL_NANOBANANA_MODELS`` is a comma-separated override.
+``REEL_NANOBANANA_MODEL`` forces one id to the front of that list.
 A reference photograph is sent when one exists.
 """
 from __future__ import annotations
@@ -19,11 +19,15 @@ logger = logging.getLogger(__name__)
 
 
 def model_chain() -> list[str]:
+    listed = (os.getenv("REEL_NANOBANANA_MODELS") or "").strip()
+    if listed:
+        models = [item.strip() for item in listed.split(",") if item.strip()]
+    else:
+        models = list(NANOBANANA_MODELS)
     override = (os.getenv("REEL_NANOBANANA_MODEL") or "").strip()
     if override:
-        rest = [item for item in NANOBANANA_MODELS if item != override]
-        return [override, *rest]
-    return list(NANOBANANA_MODELS)
+        models = [override, *[item for item in models if item != override]]
+    return models or list(NANOBANANA_MODELS)
 
 
 def generate_artefact_image(

@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
+from modules.reel_artefact.logbook import note_source
 from modules.reel_artefact.policy import artefact_mode
-from modules.reel_artefact.route import acquire_photo, generic_flux_prompt, is_retry_stem
+from modules.reel_artefact.reuse import reuse_into
+from modules.reel_artefact.route import (
+    acquire_photo,
+    cached_variation,
+    generic_flux_prompt,
+    is_retry_stem,
+)
 from modules.shot_planner.entities import Entity, load_entities
 from modules.shot_planner.schema import Shot
+
+_ACT = re.compile(r"_act(\d+)")
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +47,30 @@ def wrap_reel_generate(generate_fn, *, channel: str, shot: Shot | None):
         dest_dir = Path(output_directory) if output_directory else Path(".")
         stem = str(output_stem or "artefact")
         dest = dest_dir / f"{stem}.jpg"
+        beat = _beat_index(stem)
+        retry = is_retry_stem(stem)
         if role == "flux" or mode == "flux":
-            text = generic_flux_prompt(str(prompt or "")) if role == "flux" else prompt
-            return generate_fn(
-                text,
+            return _flux_or_photoreal(
+                generate_fn,
+                prompt,
+                dest,
                 output_stem=output_stem,
                 output_directory=output_directory,
-                **kwargs,
+                kwargs=kwargs,
+                entity=entity,
+                channel=channel,
+                mode=mode,
+                role=role,
+                beat=beat,
+                retry=retry,
             )
         photo = acquire_photo(
             entity,
             dest,
             channel=channel,
             mode=mode,
-            variation=is_retry_stem(stem),
+            variation=retry,
+            beat_index=beat,
         )
         if photo is not None and Path(photo).is_file():
             logger.info(
@@ -60,8 +80,17 @@ def wrap_reel_generate(generate_fn, *, channel: str, shot: Shot | None):
                 Path(photo).name,
             )
             return photo
+        reused = _reuse_or_cached(dest, entity, channel, beat)
+        if reused is not None:
+            return reused
         logger.info("Artefact still missing | entity=%s mode=%s", entity.id, mode)
-        return None
+        note_source("flux", entity.id, beat + 1)
+        return generate_fn(
+            generic_flux_prompt(str(prompt or "")),
+            output_stem=output_stem,
+            output_directory=output_directory,
+            **kwargs,
+        )
 
     extra = {
         "artefact_role": role,
@@ -69,6 +98,79 @@ def wrap_reel_generate(generate_fn, *, channel: str, shot: Shot | None):
         "canonical_shape": shot.canonical_shape,
     }
     return _wrapped, extra
+
+
+def _beat_index(stem: str) -> int:
+    match = _ACT.search(stem or "")
+    if not match:
+        return 0
+    return max(0, int(match.group(1)) - 1)
+
+
+def _reuse_or_cached(dest: Path, entity: Entity | None, channel: str, beat: int) -> Path | None:
+    if entity is not None:
+        cached = cached_variation(entity, channel=channel)
+        if cached is not None:
+            copied = reuse_into(dest, beat, entity_id=entity.id, source=cached)
+            if copied is not None:
+                return copied
+    return reuse_into(dest, beat, entity_id=entity.id if entity is not None else "")
+
+
+def _flux_or_photoreal(
+    generate_fn,
+    prompt,
+    dest: Path,
+    *,
+    output_stem,
+    output_directory,
+    kwargs: dict,
+    entity: Entity | None,
+    channel: str,
+    mode: str,
+    role: str,
+    beat: int,
+    retry: bool,
+):
+    """Commentary stays photoreal: a real photo, a reuse, then text-only if safe."""
+    if mode != "flux" and entity is not None:
+        photo = acquire_photo(
+            entity,
+            dest,
+            channel=channel,
+            mode="chain" if mode != "commons" else "commons",
+            variation=retry,
+            beat_index=beat,
+            allow_nano=False,
+        )
+        if photo is not None and Path(photo).is_file():
+            return photo
+        reused = _reuse_or_cached(dest, entity, channel, beat)
+        if reused is not None:
+            return reused
+        if bool(getattr(entity, "text_only_safe", False)):
+            text = acquire_photo(
+                entity,
+                dest,
+                channel=channel,
+                mode="chain",
+                beat_index=beat,
+                text_only=True,
+            )
+            if text is not None and Path(text).is_file():
+                return text
+    elif entity is None:
+        reused = reuse_into(dest, beat)
+        if reused is not None:
+            return reused
+    note_source("flux", entity.id if entity is not None else "", beat + 1)
+    text = generic_flux_prompt(str(prompt or "")) if role == "flux" or mode == "flux" else prompt
+    return generate_fn(
+        text,
+        output_stem=output_stem,
+        output_directory=output_directory,
+        **kwargs,
+    )
 
 
 def _entity(channel: str, entity_id: str) -> Entity | None:

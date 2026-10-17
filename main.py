@@ -756,6 +756,10 @@ def _format_cost_block(
         music_api = bool(cats["music_api"])
 
         billed_imgs = image_count
+        nano_n = int(cats.get("image_nano_count") or 0)
+        real_n = int(cats.get("image_real_count") or 0)
+        flux_n = int(cats.get("image_flux_count") or 0)
+        split_images = nano_n > 0 or real_n > 0
         compiled_hint = max(int(total_images or 0), billed_imgs)
         if billed_imgs <= 0 and compiled_hint > 0:
             # Compiled stills with no API hits this run (reused) — keep $0 but label it.
@@ -763,7 +767,7 @@ def _format_cost_block(
             img_note = "reused stills, no API this run"
         else:
             display_img = billed_imgs
-            if image_cost <= 0 and billed_imgs > 0:
+            if image_cost <= 0 and billed_imgs > 0 and not split_images:
                 image_cost = billed_imgs * 0.003
             img_note = f"{billed_imgs} generation{'s' if billed_imgs != 1 else ''}"
 
@@ -850,9 +854,30 @@ def _format_cost_block(
             "",
             f"  - Research & Script (Gemini 2.5 Flash):".ljust(42)
             + f"${research_cost:.4f}  ({research_tokens:,} tokens)",
-            f"  - Image Gen (FLUX Schnell):".ljust(42)
-            + f"${image_cost:.4f}  ({img_note})",
         ]
+        if split_images:
+            if nano_n:
+                lines.append(
+                    f"  - Image Gen (Nano Banana):".ljust(42)
+                    + f"${float(cats.get('image_nano_cost') or 0):.4f}  "
+                    f"({nano_n} generation{'s' if nano_n != 1 else ''})"
+                )
+            if flux_n:
+                lines.append(
+                    f"  - Image Gen (FLUX Schnell):".ljust(42)
+                    + f"${float(cats.get('image_flux_cost') or 0):.4f}  "
+                    f"({flux_n} generation{'s' if flux_n != 1 else ''}, including retries)"
+                )
+            if real_n:
+                lines.append(
+                    f"  - Image Gen (Commons/real):".ljust(42)
+                    + f"$0.0000  ({real_n} still{'s' if real_n != 1 else ''})"
+                )
+        else:
+            lines.append(
+                f"  - Image Gen (FLUX Schnell):".ljust(42)
+                + f"${image_cost:.4f}  ({img_note})"
+            )
         if not omit_audio:
             _voice_label = (
                 f"  - Voice ({_audio_engine}):"
@@ -3223,6 +3248,17 @@ def _produce_variant_worker(
     _ak_act_durs: "list[float] | None" = None
     _beat_qa_rows: list = []
     _reel_qa_block_compile = False
+    _image_bill: dict[str, int] = {}
+    try:
+        from modules.reel_artefact.budget import reset_nano_budget as _reset_nano
+        from modules.reel_artefact.logbook import reset as _reset_sources
+        from modules.reel_artefact.reuse import reset_approved as _reset_approved
+
+        _reset_nano()
+        _reset_sources()
+        _reset_approved()
+    except Exception:  # noqa: BLE001
+        pass
     _qa_report: dict | None = None
     # Episode assets: outputs/<page>/assets/<episode_id>/
     # Clips always:   outputs/<page>/clips/
@@ -3538,6 +3574,12 @@ def _produce_variant_worker(
             )
             if _voice_path is not None and _narr_dur > 0.5:
                 _ak_voice_ready = True
+                if cost_tracker is not None:
+                    _early_tts_chars = len(_early_seq_script or "")
+                    _early_cta = (page_ctx.reel_cta_text if page_ctx else "") or ""
+                    _early_tts_chars += len(_early_cta)
+                    if _early_tts_chars > 0:
+                        cost_tracker.track_audio(char_count=_early_tts_chars, sfx=False)
                 # Round-4 fix: hook/body-bucket/CTA planner runs AFTER measured
                 # audio (narration + silence + CTA) is known. Never estimates.
                 from core.reel_sequence_engine import (
@@ -4311,6 +4353,18 @@ def _produce_variant_worker(
                 nonlocal _ok_acts, _reel_qa_block_compile, _images_generated_this_variant
                 if _gate.extra_generations:
                     _images_generated_this_variant += int(_gate.extra_generations)
+                try:
+                    from modules.reel_artefact.pricing import generation_bill as _generation_bill
+
+                    _bill_key, _bill_n = _generation_bill(
+                        _gate.path,
+                        int(_gate.extra_generations or 0),
+                        attempts=len(_gate.attempts or []),
+                    )
+                    if _bill_key and _bill_n > 0:
+                        _image_bill[_bill_key] = _image_bill.get(_bill_key, 0) + int(_bill_n)
+                except Exception:  # noqa: BLE001
+                    pass
                 _row = _gate.beat_row(index=_idx, text=_text)
                 _meta_row = _sr_act_meta.get(_idx) or {}
                 _row["prompt"] = str(_meta_row.get("prompt") or "")
@@ -4339,9 +4393,42 @@ def _produce_variant_worker(
                         pass
                     _sequence_image_paths.append(Path(_gate.path))
                     _ok_acts += 1
+                    try:
+                        from modules.reel_artefact.policy import artefact_images_enabled
+                        from modules.reel_artefact.reuse import remember_approved
+
+                        if artefact_images_enabled():
+                            remember_approved(_gate.path)
+                    except Exception:  # noqa: BLE001
+                        pass
                     _LOG.info(
                         "Sequence reel | act %d/%d QA pass | beat=%.48s…",
                         _idx + 1, _seq_n, _text,
+                    )
+                    return
+                _reused = None
+                try:
+                    from modules.reel_artefact.policy import artefact_images_enabled
+                    from modules.reel_artefact.reuse import reuse_into
+
+                    if artefact_images_enabled():
+                        _meta_row_reuse = _sr_act_meta.get(_idx) or {}
+                        _entity_id = str(_meta_row_reuse.get("artefact_kwargs", {}).get(
+                            "artefact_entity_id", ""
+                        ) or "")
+                        _reuse_dest = (_reel_img_dir / f"{stem}_act{_idx + 1:02d}_reuse.jpg")
+                        _reused = reuse_into(_reuse_dest, _idx, entity_id=_entity_id)
+                except Exception:  # noqa: BLE001
+                    _reused = None
+                if _reused is not None and Path(_reused).is_file():
+                    _row["image_path"] = str(_reused)
+                    _row["passed"] = True
+                    _row["reuse"] = "approved"
+                    _sequence_image_paths.append(Path(_reused))
+                    _ok_acts += 1
+                    _LOG.warning(
+                        "REEL QA REUSE | act %d/%d reason=%s — approved still kept the reel",
+                        _idx + 1, _seq_n, _gate.blocked_reason or "rejected",
                     )
                     return
                 _reel_qa_block_compile = True
@@ -4430,70 +4517,55 @@ def _produce_variant_worker(
                     continue
                 _result = _sr_act_results.get(_act_i)
                 if isinstance(_result, Exception):
-                    _reel_qa_block_compile = True
-                    _beat_qa_rows.append(
-                        {
-                            "index": _act_i,
-                            "text": _snippet,
-                            "image_path": "",
-                            "score": 0.0,
-                            "passed": False,
-                            "reason": f"generate_failed:{type(_result).__name__}",
-                        }
-                    )
-                    _LOG.error(
-                        "REEL QA BLOCK | act %d/%d generate raised %s — no substitute still",
-                        _act_i + 1, _seq_n, _result,
+                    _accept_gate(
+                        StillGateResult(
+                            path=None,
+                            extra_generations=0,
+                            publishable=False,
+                            blocked_reason=f"generate_failed:{type(_result).__name__}",
+                        ),
+                        _act_i,
+                        _snippet,
                     )
                     continue
                 if isinstance(_result, StillGateResult):
                     _accept_gate(_result, _act_i, _snippet)
                     continue
-                _reel_qa_block_compile = True
-                _beat_qa_rows.append(
-                    {
-                        "index": _act_i,
-                        "text": _snippet,
-                        "image_path": "",
-                        "score": 0.0,
-                        "passed": False,
-                        "reason": "qa_result_missing",
-                    }
-                )
-                _LOG.error(
-                    "REEL QA BLOCK | act %d/%d missing gate result — no substitute still",
-                    _act_i + 1, _seq_n,
+                _accept_gate(
+                    StillGateResult(
+                        path=None,
+                        extra_generations=0,
+                        publishable=False,
+                        blocked_reason="qa_result_missing",
+                    ),
+                    _act_i,
+                    _snippet,
                 )
             # One GPU bill for the parallel batch (sum of per-job seconds).
             _gpu_delta = _track_remote_gpu_batch(
                 cost_tracker, seconds_before=_gpu_baseline, jobs=_ok_acts,
             )
-            if _ok_acts:
-                if cost_tracker is not None:
-                    try:
-                        from modules.reel_artefact.policy import artefact_images_enabled
-                        from modules.reel_artefact.pricing import tally_paths
+            if cost_tracker is not None:
+                try:
+                    from modules.reel_artefact.policy import artefact_images_enabled
 
-                        if artefact_images_enabled():
-                            _tally = tally_paths(_sequence_image_paths)
-                            if int(_tally["flux"]):
+                    if artefact_images_enabled() and _image_bill:
+                        for _bill_key, _bill_n in _image_bill.items():
+                            if int(_bill_n) > 0:
                                 cost_tracker.track_image(
-                                    model_key="image_flux_schnell",
-                                    count=int(_tally["flux"]),
+                                    model_key=_bill_key,
+                                    count=int(_bill_n),
                                 )
-                            if int(_tally["nanobanana"]):
-                                cost_tracker.track_image(
-                                    model_key="image_nanobanana",
-                                    count=int(_tally["nanobanana"]),
-                                )
-                        else:
-                            cost_tracker.track_image(
-                                model_key="image_flux_schnell", count=_ok_acts,
-                            )
-                    except Exception:  # noqa: BLE001
+                    elif _ok_acts:
                         cost_tracker.track_image(
                             model_key="image_flux_schnell", count=_ok_acts,
                         )
+                except Exception:  # noqa: BLE001
+                    if _ok_acts:
+                        cost_tracker.track_image(
+                            model_key="image_flux_schnell", count=_ok_acts,
+                        )
+            if _ok_acts:
                 _images_generated_this_variant += _ok_acts
 
             _LOG.info(
@@ -4502,6 +4574,14 @@ def _produce_variant_worker(
                 len(_beat_qa_rows),
                 len(_sequence_image_paths),
             )
+            try:
+                from modules.reel_artefact.logbook import summary_line as _artefact_summary
+                from modules.reel_artefact.policy import artefact_images_enabled as _art_on
+
+                if _art_on():
+                    _LOG.info(_artefact_summary())
+            except Exception:  # noqa: BLE001
+                pass
 
         if _sequence_image_paths:
             if not img_path_display:
@@ -5259,11 +5339,14 @@ def _produce_variant_worker(
         # ── COST TRACKING: audio/TTS ─────────────────────────────────────────
         if cost_tracker is not None and _voiceover_script:
             # Include CTA characters in TTS cost if a separate CTA was generated.
-            _cta_chars = len(locals().get("_cta_text", ""))
-            cost_tracker.track_audio(
-                char_count=len(_voiceover_script) + _cta_chars,
-                sfx=False,
-            )
+            # Early voice already billed this reel; a second track would double it.
+            _already_tts = int(cost_tracker.category_totals().get("tts_chars") or 0)
+            if _already_tts <= 0:
+                _cta_chars = len(locals().get("_cta_text", ""))
+                cost_tracker.track_audio(
+                    char_count=len(_voiceover_script) + _cta_chars,
+                    sfx=False,
+                )
 
         # -- Three-channel mix: VO + atmosphere SFX loop + music_v2 BGM --------
         # Topology ported from master_mei; enabled via page USE_MUSIC_V2_BED.

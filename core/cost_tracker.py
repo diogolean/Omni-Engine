@@ -100,6 +100,8 @@ _PRICE: dict[str, float] = {
     # at 1K is $0.0336. Flux stays $0.003.
     "image_nanobanana":    0.039,
     "image_nanobanana_lite": 0.0336,
+    # A real free-licence photograph. $0 is intentional, not a missing price.
+    "image_commons":       0.0,
     "image_economic":      FLUX_SCHNELL_USD_PER_IMAGE,
     "image_premium":       FLUX_SCHNELL_USD_PER_IMAGE,
     "image_gemini_flash":  FLUX_SCHNELL_USD_PER_IMAGE,
@@ -218,12 +220,9 @@ class CostTracker:
         try:
             n = max(1, _safe_int(count, 1))
             key = model_key or _TIER_IMAGE_KEY.get(self.cost_tier, "image_flux_schnell")
-            price_per = _safe_float(
-                _PRICE.get(key, _PRICE["image_flux_schnell"]),
-                _PRICE["image_flux_schnell"],
-            )
-            if price_per <= 0:
-                price_per = _PRICE["image_flux_schnell"]
+            if key not in _PRICE:
+                key = "image_flux_schnell"
+            price_per = _safe_float(_PRICE[key], 0.0)
             total = price_per * n
             return self._add("image_generation", key, float(n), total)
         except Exception as exc:  # noqa: BLE001
@@ -447,6 +446,9 @@ class CostTracker:
                 src = list(self._entries)
         research_cost = research_tokens = 0.0
         image_cost = image_count = 0.0
+        flux_count = flux_cost = 0.0
+        nano_count = nano_cost = 0.0
+        real_count = 0.0
         tts_cost = tts_chars = 0.0
         sfx_cost = sfx_calls = 0.0
         music_cost = music_beds = 0.0
@@ -464,6 +466,14 @@ class CostTracker:
             elif op == "image_generation":
                 image_cost += cost
                 image_count += units
+                if mk in {"image_nanobanana", "image_nanobanana_lite"}:
+                    nano_count += units
+                    nano_cost += cost
+                elif mk == "image_commons":
+                    real_count += units
+                else:
+                    flux_count += units
+                    flux_cost += cost
             elif op == "audio_generation":
                 tts_cost += cost
                 tts_chars += units
@@ -475,8 +485,10 @@ class CostTracker:
                 music_beds += units
                 if "api" in mk:
                     music_api = True
-        if image_count > 0 and image_cost <= 0:
-            image_cost = image_count * FLUX_SCHNELL_USD_PER_IMAGE
+        if flux_count > 0 and flux_cost <= 0 and nano_cost <= 0:
+            invented = flux_count * FLUX_SCHNELL_USD_PER_IMAGE
+            image_cost += invented
+            flux_cost += invented
         if tts_chars > 0 and tts_cost <= 0:
             tts_cost = tts_chars * (ELEVENLABS_USD_PER_1K_CHARS / 1000.0)
         if research_tokens > 0 and research_cost <= 0:
@@ -488,6 +500,12 @@ class CostTracker:
             "research_tokens": int(research_tokens),
             "image_cost": image_cost,
             "image_count": int(image_count),
+            "image_flux_count": int(flux_count),
+            "image_flux_cost": flux_cost,
+            "image_nano_count": int(nano_count),
+            "image_nano_cost": nano_cost,
+            "image_real_count": int(real_count),
+            "image_real_cost": 0.0,
             "tts_cost": tts_cost,
             "tts_chars": int(tts_chars),
             "sfx_cost": sfx_cost,

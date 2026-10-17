@@ -478,6 +478,82 @@ def test_met_410_is_skipped_without_a_second_try(
     assert "status=410" in caplog.text
 
 
+def test_a_figure_pendant_title_is_not_the_quimbaya_object() -> None:
+    from agents.media.free_images.models import Candidate
+    from modules.reel_artefact.fetch import _accept
+
+    entity = _entity(
+        name="Quimbaya golden ornaments",
+        aliases=("quimbaya", "golden jet"),
+        canonical_shape="a small gold pendant with delta wings, a tail fin, and a stylised head",
+    )
+    figure = Candidate(
+        provider="wikimedia",
+        title="Gold Figure Pendant",
+        description="Quimbaya culture, Museo del Oro",
+        license_raw="CC0",
+        download_url="https://example.test/figure.jpg",
+        width=2000,
+        height=2000,
+    )
+    airplane = Candidate(
+        provider="wikimedia",
+        title="Quimbaya airplanes pendant",
+        description="",
+        license_raw="CC0",
+        download_url="https://example.test/plane.jpg",
+        width=1600,
+        height=1200,
+    )
+    assert _accept(figure, entity, title_lock=False) is False
+    assert _accept(airplane, entity, title_lock=False) is True
+
+
+def test_a_modern_golden_jet_is_not_kept_as_the_artefact(monkeypatch: pytest.MonkeyPatch) -> None:
+    del monkeypatch
+    jet = "https://images.example/rose-jet.jpg"
+    pendant = "https://images.example/quimbaya-plane.jpg"
+
+    class _Mixed:
+        def get(self, url, params=None, headers=None):
+            del headers
+            params = params or {}
+            if "openverse.org" in url and "golden jets" in str(params.get("q") or ""):
+                payload = {
+                    "results": [
+                        {
+                            "title": "Rose Golden Jet 20070601",
+                            "license": "cc0",
+                            "url": jet,
+                            "width": 3456,
+                            "height": 2304,
+                        },
+                        {
+                            "title": "Quimbaya airplanes pendant",
+                            "license": "cc0",
+                            "url": pendant,
+                            "width": 1600,
+                            "height": 1200,
+                        },
+                    ]
+                }
+                return HttpResponse(200, json.dumps(payload).encode())
+            return HttpResponse(404, b"")
+
+    found = list_candidates(
+        _entity(
+            name="Quimbaya golden ornaments",
+            aliases=("quimbaya", "golden jet", "jet planes"),
+            commons_titles=(),
+            commons_search=("golden jets",),
+        ),
+        client=_Mixed(),
+    )
+    urls = {item.download_url for item in found}
+    assert pendant in urls
+    assert jet not in urls
+
+
 def test_europeana_public_domain_zero_is_a_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     image_url = "https://images.example/fragment.jpg"
     monkeypatch.setenv("EUROPEANA_API_KEY", "test-key")

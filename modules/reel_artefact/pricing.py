@@ -3,9 +3,9 @@
 
 Source: https://ai.google.dev/gemini-api/docs/pricing and the image
 generation model list. Flux Dev/Schnell stays $0.003 in the cost tracker.
-``gemini-2.5-flash-image`` (Nano Banana) is listed at $0.039 and was
-scheduled to shut down on 2 October 2026. The live call tries it first,
-then the current cheap successors.
+``gemini-3.1-flash-lite-image`` and ``gemini-nano-banana-2.1`` are
+$0.0336. ``gemini-2.5-flash-image`` is $0.039. The live call tries the
+cheap ids first. ``REEL_NANOBANANA_MODELS`` replaces the list.
 """
 from __future__ import annotations
 
@@ -25,12 +25,22 @@ NANOBANANA_USD: dict[str, float] = {
     "models/gemini-nano-banana-2.1": 0.0336,
 }
 
-# Tried in order. The first id is the one Diogo asked to evaluate.
+# Cheapest first. A single REEL_NANOBANANA_MODEL override is prepended.
 NANOBANANA_MODELS: tuple[str, ...] = (
-    "gemini-2.5-flash-image",
-    "gemini-nano-banana-2.1",
     "gemini-3.1-flash-lite-image",
+    "gemini-nano-banana-2.1",
+    "gemini-2.5-flash-image",
 )
+
+_FREE_PROVIDERS = {
+    "commons",
+    "met",
+    "smithsonian",
+    "openverse",
+    "europeana",
+    "wikimedia",
+    "reuse",
+}
 
 
 def price_for_model(model_id: str) -> float:
@@ -86,7 +96,7 @@ def tally_paths(paths: list | tuple) -> dict[str, float | int]:
             if isinstance(payload, dict):
                 provider = str(payload.get("provider") or "")
                 model = str(payload.get("model_id") or "")
-        if provider in {"commons", "met", "smithsonian"}:
+        if provider in _FREE_PROVIDERS:
             commons += 1
         elif provider == "nanobanana":
             nano += 1
@@ -101,3 +111,29 @@ def tally_paths(paths: list | tuple) -> dict[str, float | int]:
         "flux_usd": round(flux * FLUX_USD, 4),
         "image_usd": round(nano_usd + flux * FLUX_USD, 4),
     }
+
+
+def generation_bill(path, extra_generations: int = 0, *, attempts: int = 0) -> tuple[str, int]:
+    """Cost-tracker key and call count for one beat, retries included.
+
+    A real photograph or a reused still is ``image_commons`` at $0. Nano
+    Banana is one call even when a later beat copies the cached file. Flux
+    counts the first call plus each retry.
+    """
+    from modules.reel_artefact.source import source_meta
+
+    extras = max(0, int(extra_generations or 0))
+    meta = source_meta(path)
+    provider = str(meta.get("provider") or "")
+    if not provider:
+        calls = max(int(attempts or 0), extras + (1 if path else 0))
+        if calls <= 0:
+            return "", 0
+        return "image_flux_schnell", calls
+    if provider == "nanobanana":
+        model = str(meta.get("model_id") or "")
+        key = "image_nanobanana_lite" if price_for_model(model) <= 0.034 else "image_nanobanana"
+        return key, 1
+    if provider in _FREE_PROVIDERS:
+        return "image_commons", 1
+    return "image_flux_schnell", 1 + extras
