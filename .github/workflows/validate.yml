@@ -42,3 +42,5 @@ jobs:
           tests/test_memory_client.py
           tests/test_supermemory_service.py
           tests/test_repo_root_layout.py
+          tests/test_reel_grounding.py
+          tests/test_ffmpeg_kill_posix.py

@@ -35,8 +35,10 @@ CONTENT_NICHE: str = (
 DEFAULT_AVATAR_MODE: str = "OFF"
 DEFAULT_FORMAT: str = "IMAGE_BACKGROUND"
 IMAGE_ASPECT_RATIO: str = "4:5"
-# Search public-domain and CC libraries before Flux. See
+# Search public-domain and CC libraries before Flux for cards. See
 # docs/architecture/ADR-free-images-first.md.
+# Reel beats stay on Flux unless REEL_FREE_IMAGES=1. A Commons hit on the
+# place name does not illustrate an artefact beat.
 IMAGE_SOURCE_POLICY: str = "free_first"
 USES_AVATAR_REFERENCE: bool = False
 

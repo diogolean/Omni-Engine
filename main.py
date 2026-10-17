@@ -655,8 +655,14 @@ def _apply_still_cache_to_jobs(
     work_dir: Path,
     stem: str,
     extra_dirs: "list[Path] | None" = None,
+    spoken_by_act: "dict[int, str] | None" = None,
 ) -> int:
-    """Drop cached acts from *jobs* and stash materialized paths on *meta*."""
+    """Drop cached acts from *jobs* and stash materialized paths on *meta*.
+
+    When *spoken_by_act* is set, a file is reused only if a sidecar says it
+    already passed QA for that exact spoken line. Older topic-slug stills
+    have no sidecar and are generated again.
+    """
     cached = _collect_cached_act_stills(
         n_acts,
         start=start,
@@ -666,6 +672,11 @@ def _apply_still_cache_to_jobs(
     )
     reused = 0
     for act_i, src in cached.items():
+        if spoken_by_act is not None:
+            from modules.reel_grounding.still_cache import cache_matches_spoken
+
+            if not cache_matches_spoken(src, spoken_by_act.get(act_i, "")):
+                continue
         dest = Path(work_dir) / f"{stem}_act{act_i + 1:02d}.png"
         materialized = _materialize_cached_still(src, dest)
         meta.setdefault(act_i, {})["cached_path"] = materialized
@@ -4096,6 +4107,29 @@ def _produce_variant_worker(
                         f"{_lighting_tail}"
                         f"{_rag_tail}"
                     )
+                try:
+                    from modules.reel_grounding.prompt import (
+                        ground_image_prompt as _ground_prompt,
+                    )
+
+                    _shot_name = _shot_pair[0] if _shot_pair else ""
+                    _shot_text = _shot_pair[1] if _shot_pair else ""
+                    _light_name = _light_pair[0] if _light_pair else ""
+                    _light_text = _light_pair[1] if _light_pair else ""
+                    _act_prompt = _ground_prompt(
+                        topic=str(resolved_subject or ""),
+                        script=str(_early_seq_script or ""),
+                        spoken=str(_snippet or ""),
+                        draft=_act_prompt,
+                        shot_name=str(_shot_name or ""),
+                        shot_text=str(_shot_text or ""),
+                        lighting_name=str(_light_name or ""),
+                        lighting_text=str(_light_text or ""),
+                        channel=str((page_ctx.page_id if page_ctx else "") or ""),
+                        domain_anchors=str(_act_anchors or ""),
+                    )
+                except Exception as _ground_exc:  # noqa: BLE001
+                    _LOG.warning("visual grounding skipped (%s)", _ground_exc)
                 # Log per-act plan for verifiability — this is the anti-monotony
                 # signal that ends up in the compiled prompt.
                 try:
@@ -4137,10 +4171,13 @@ def _produce_variant_worker(
                     generate_kwargs={
                         "avatar_mode": "OFF",
                         "negative_prompt": _act_neg,
+                        "free_image_sentence": _snippet,
+                        "free_image_entity": str(resolved_subject or ""),
                     },
                     banned_subjects=list(_act_banned or []) or None,
                     domain_anchors=str(_act_anchors or ""),
                     prefer_stem=stem,
+                    episode_subject=str(resolved_subject or ""),
                 )
 
             _gpu_baseline = 0.0
@@ -4165,6 +4202,10 @@ def _produce_variant_worker(
                 work_dir=_reel_img_dir,
                 stem=stem,
                 extra_dirs=[subject_assets] if subject_assets else None,
+                spoken_by_act={
+                    i: str(_sr_act_meta[i].get("snippet") or "")
+                    for i in _sr_act_meta
+                },
             )
 
             _sr_act_results = _run_acts_parallel(_sr_act_jobs)
@@ -4179,6 +4220,18 @@ def _produce_variant_worker(
                 if _gate.extra_generations:
                     _images_generated_this_variant += int(_gate.extra_generations)
                 if _gate.publishable and _gate.path is not None and Path(_gate.path).is_file():
+                    try:
+                        from modules.reel_grounding.still_cache import write_spoken_sidecar
+
+                        _score = (_gate.verdict or {}).get("relevance_score")
+                        write_spoken_sidecar(
+                            _gate.path,
+                            _text,
+                            passed=True,
+                            score=float(_score) if _score is not None else None,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     _sequence_image_paths.append(Path(_gate.path))
                     _ok_acts += 1
                     _LOG.info(
@@ -4197,9 +4250,15 @@ def _produce_variant_worker(
                 _snippet = _meta["snippet"]
                 _cached_still = _meta.get("cached_path")
                 if _cached_still is not None:
-                    from modules.reel_qa.relevance import evaluate_chunk_relevance as _score_still
+                    from modules.reel_qa.relevance import (
+                        evaluate_chunk_relevance as _score_still,
+                    )
+                    from modules.reel_qa.relevance import (
+                        evaluate_with_technical_retry as _score_retry,
+                    )
 
-                    _cached_verdict = _score_still(
+                    _cached_verdict = _score_retry(
+                        _score_still,
                         _cached_still,
                         _snippet,
                         str(_meta.get("prompt") or ""),
@@ -4250,9 +4309,12 @@ def _produce_variant_worker(
                         generate_kwargs={
                             "avatar_mode": "OFF",
                             "negative_prompt": _meta.get("negative_prompt"),
+                            "free_image_sentence": _snippet,
+                            "free_image_entity": str(resolved_subject or ""),
                         },
                         banned_subjects=list(_meta.get("banned_subjects") or []) or None,
                         domain_anchors=str(_meta.get("domain_anchors") or ""),
+                        episode_subject=str(resolved_subject or ""),
                     )
                     _accept_gate(_regen, _act_i, _snippet)
                     continue

@@ -9,6 +9,7 @@ the channel on its current generator or owned assets.
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,22 @@ def default_policy(channel: str | None) -> str:
     if alias and alias in _DEFAULTS:
         return _DEFAULTS[alias]
     return "ai_only"
+
+
+def reel_free_images_enabled(page_cfg: dict | None = None) -> bool:
+    """Real photographs for reel beats. Off unless the flag is set.
+
+    Cards keep ``IMAGE_SOURCE_POLICY``. A reel beat stays on Flux until
+    ``REEL_FREE_IMAGES=1`` (or ``REEL_IMAGE_SOURCE=free``), because a Commons
+    hit on the place name is often the wrong picture.
+    """
+    env = (os.getenv("REEL_FREE_IMAGES") or os.getenv("REEL_IMAGE_SOURCE") or "").strip()
+    raw = env
+    if not raw and isinstance(page_cfg, dict):
+        raw = str(
+            page_cfg.get("REEL_FREE_IMAGES") or page_cfg.get("REEL_IMAGE_SOURCE") or ""
+        )
+    return raw.strip().lower() in {"1", "true", "yes", "on", "free", "free_first"}
 
 
 def resolve_policy(channel: str | None, page_cfg: dict | None = None) -> str:

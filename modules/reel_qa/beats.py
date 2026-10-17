@@ -109,15 +109,26 @@ def _scene_for(
     inherited: dict[str, Any] | None,
 ) -> dict[str, Any]:
     base = inherited or {}
-    entities = named_entities(text, str(base.get("domain_anchors") or ""))
-    site = extract_site(text, str(base.get("domain_anchors") or ""))
+    anchors = str(base.get("domain_anchors") or "")
+    entities = named_entities(text, anchors)
+    site = extract_site(text, anchors)
     entity_bit = (", ".join(entities[:4])) if entities else ""
-    site_bit = f" Site: {site}." if site else ""
-    name_bit = f" Named entity: {entity_bit}." if entity_bit else ""
-    prompt = (
-        f"Photoreal documentary still of this spoken beat: {text}. "
-        f"{name_bit}{site_bit} No extra landmarks. No text."
-    ).strip()
+    try:
+        from modules.reel_grounding.prompt import ground_image_prompt
+
+        prompt = ground_image_prompt(
+            topic=anchors or text,
+            script=anchors,
+            spoken=text,
+            domain_anchors=anchors,
+        )
+    except Exception:  # noqa: BLE001
+        site_bit = f" The place is context only: {site}." if site else ""
+        name_bit = f" Named entity: {entity_bit}." if entity_bit else ""
+        prompt = (
+            f"PRIMARY SUBJECT: {text}. "
+            f"Narration sentence: {text}.{name_bit}{site_bit} No extra landmarks. No text."
+        ).strip()
     return {
         "scene_index": index,
         "spoken_text": text,

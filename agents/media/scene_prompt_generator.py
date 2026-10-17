@@ -523,6 +523,19 @@ def generate_scene_prompts(
         scene["image_generation_prompt"] = front_load_domain_anchors(
             scene["image_generation_prompt"], anchors,
         )
+        try:
+            from modules.reel_grounding.prompt import ground_image_prompt
+
+            scene["image_generation_prompt"] = ground_image_prompt(
+                topic=str(dna.get("topic") or ""),
+                script=script,
+                spoken=chunk.text,
+                draft=str(scene.get("image_generation_prompt") or ""),
+                channel=cid,
+                domain_anchors=anchors,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("ground beat prompt skipped (%s)", exc)
         scene["domain_id"] = domain_id
         scene["domain_anchors"] = anchors
         scene["banned_subjects"] = banned

@@ -9,11 +9,47 @@ from typing import Any, Callable
 from modules.reel_qa.config import max_attempts
 from modules.reel_qa.models import StillGateResult
 from modules.reel_qa.prompts import extract_site, named_entities, refine_prompt
-from modules.reel_qa.relevance import evaluate_chunk_relevance, verdict_passed
+from modules.reel_qa.relevance import (
+    evaluate_chunk_relevance,
+    evaluate_with_technical_retry,
+    verdict_passed,
+)
 
 _LOG = logging.getLogger(__name__)
 
 GenerateFn = Callable[..., Path | str | None]
+
+
+def _remember(
+    channel: str,
+    topic: str,
+    spoken: str,
+    prompt: str,
+    passed: bool,
+    verdict: dict[str, Any],
+    first_pass: bool | None,
+) -> None:
+    try:
+        from modules.reel_grounding.memory import remember
+        from modules.reel_grounding.prompt import primary_subject
+
+        score = verdict.get("relevance_score")
+        try:
+            score_f = float(score) if score is not None else None
+        except (TypeError, ValueError):
+            score_f = None
+        remember(
+            channel=channel or "ancient_knowledge",
+            topic=topic or spoken,
+            spoken=spoken,
+            visual_subject=primary_subject(prompt) or prompt[:240],
+            passed=passed,
+            score=score_f,
+            rejection=str(verdict.get("rejection_reason") or ""),
+            first_pass=first_pass,
+        )
+    except Exception:  # noqa: BLE001
+        return
 
 
 def _blocked(
@@ -23,6 +59,7 @@ def _blocked(
     reason: str,
     attempts: list[dict[str, Any]],
     verdict: dict[str, Any] | None = None,
+    first_pass: bool | None = None,
 ) -> StillGateResult:
     _LOG.error(
         "REEL QA BLOCK | reason=%s attempts=%d path=%s",
@@ -41,6 +78,7 @@ def _blocked(
         blocked_reason=reason,
         attempts=attempts,
         verdict=dict(verdict or {}),
+        first_pass=first_pass,
     )
 
 
@@ -59,6 +97,7 @@ def generate_and_gate(
     prefer_stem: str = "",
     max_attempts_n: int | None = None,
     evaluate_fn: Callable[..., dict[str, Any]] | None = None,
+    episode_subject: str = "",
 ) -> StillGateResult:
     """Generate a still, score it, and retry up to N times.
 
@@ -66,7 +105,7 @@ def generate_and_gate(
     Unrelated cached stills and black placeholders are not used. If the
     judge cannot run, or every attempt misses, the result is not publishable.
     """
-    del channel, search_dirs, prefer_stem  # kept so existing callers stay valid
+    del search_dirs, prefer_stem  # kept so existing callers stay valid
     limit = max(1, int(max_attempts_n or max_attempts()))
     judge = evaluate_fn or evaluate_chunk_relevance
     kwargs = dict(generate_kwargs or {})
@@ -82,6 +121,8 @@ def generate_and_gate(
     last_verdict: dict[str, Any] = {}
     reason = "not_generated"
     current_prompt = prompt or chunk_text
+    first_pass: bool | None = None
+    scored_seen = False
 
     for attempt in range(limit):
         if attempt:
@@ -92,6 +133,7 @@ def generate_and_gate(
                 site=site,
                 rejection_reason=str(last_verdict.get("rejection_reason") or reason),
                 attempt=attempt,
+                episode_subject=episode_subject,
             )
         stem = output_stem if attempt == 0 else f"{output_stem}_r{attempt + 1:02d}"
         call_kwargs = dict(kwargs)
@@ -136,33 +178,38 @@ def generate_and_gate(
             )
             continue
         last_path = path
-        try:
-            verdict = judge(
-                path,
-                chunk_text,
-                current_prompt,
-                banned_subjects=banned_subjects,
-            )
-        except Exception as exc:  # noqa: BLE001
-            verdict = {
-                "is_relevant": False,
-                "relevance_score": 0.0,
-                "rejection_reason": f"qa_unavailable:{type(exc).__name__}",
-                "qa_status": "unavailable",
-                "publishable": False,
-            }
+        verdict = evaluate_with_technical_retry(
+            judge,
+            path,
+            chunk_text,
+            current_prompt,
+            banned_subjects=banned_subjects,
+        )
         verdict = dict(verdict or {})
         verdict["attempt"] = attempt + 1
         verdict["prompt"] = current_prompt
         last_verdict = verdict
         attempts.append(verdict)
+        if verdict.get("qa_status") == "scored" and not scored_seen:
+            first_pass = verdict_passed(verdict)
+            scored_seen = True
+            _LOG.info(
+                "REEL QA FIRST PASS | stem=%s hit=%s score=%s",
+                output_stem,
+                first_pass,
+                verdict.get("relevance_score"),
+            )
         if verdict.get("qa_status") == "unavailable":
+            _remember(
+                channel, episode_subject, chunk_text, current_prompt, False, verdict, None,
+            )
             return _blocked(
                 path=last_path,
                 extra=extra,
                 reason=str(verdict.get("rejection_reason") or "qa_unavailable"),
                 attempts=attempts,
                 verdict=verdict,
+                first_pass=first_pass,
             )
         if verdict_passed(verdict):
             _LOG.info(
@@ -171,6 +218,9 @@ def generate_and_gate(
                 attempt + 1,
                 verdict.get("relevance_score"),
             )
+            _remember(
+                channel, episode_subject, chunk_text, current_prompt, True, verdict, first_pass,
+            )
             return StillGateResult(
                 path=path,
                 extra_generations=extra,
@@ -178,6 +228,7 @@ def generate_and_gate(
                 blocked_reason="",
                 attempts=attempts,
                 verdict=verdict,
+                first_pass=first_pass,
             )
         reason = str(verdict.get("rejection_reason") or "below_relevance_threshold")
         _LOG.warning(
@@ -189,10 +240,14 @@ def generate_and_gate(
             reason,
         )
 
+    _remember(
+        channel, episode_subject, chunk_text, current_prompt, False, last_verdict, first_pass,
+    )
     return _blocked(
         path=last_path,
         extra=extra,
         reason=reason,
         attempts=attempts,
         verdict=last_verdict,
+        first_pass=first_pass,
     )

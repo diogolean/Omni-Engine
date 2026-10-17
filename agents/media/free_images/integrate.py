@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image
 
 from agents.media.free_images.attribution import credit_for_image
-from agents.media.free_images.policy import resolve_policy
+from agents.media.free_images.policy import reel_free_images_enabled, resolve_policy
 from agents.media.free_images.sourcer import resolve_image_source
 
 logger = logging.getLogger(__name__)
@@ -38,11 +38,27 @@ def wrap_image_generate(
     calls the original generator (Flux). ``free_only`` does not call it.
     """
     policy = resolve_policy(channel, page_cfg)
+    reel = str(producer or "").startswith("reel")
     if policy == "ai_only":
         return generate_fn
+    if reel and not reel_free_images_enabled(page_cfg):
+        def _passthrough(prompt, output_stem=None, output_directory=None, **kwargs):
+            kwargs.pop("free_image_sentence", None)
+            kwargs.pop("free_image_entity", None)
+            return generate_fn(
+                prompt,
+                output_stem=output_stem,
+                output_directory=output_directory,
+                **kwargs,
+            )
+
+        return _passthrough
 
     def _wrapped(prompt, output_stem=None, output_directory=None, **kwargs):
-        sentence = str(kwargs.pop("free_image_sentence", "") or prompt or "")
+        sentence = str(kwargs.pop("free_image_sentence", "") or "")
+        entity = str(kwargs.pop("free_image_entity", "") or "")
+        # A full Flux prompt is a poor search query. Prefer the beat sentence.
+        search_sentence = sentence or ("" if entity else str(prompt or ""))
         dest_dir = Path(output_directory) if output_directory else Path(".")
         stem = str(output_stem or "free_image")
         dest = dest_dir / f"{stem}.jpg"
@@ -50,7 +66,8 @@ def wrap_image_generate(
             channel=channel,
             dest=dest,
             topic=query,
-            sentence=sentence,
+            entity=entity,
+            sentence=search_sentence,
             policy=policy,
             page_cfg=page_cfg,
             producer=producer,

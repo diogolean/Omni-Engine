@@ -15,6 +15,9 @@ MIN_DURATION_S: float = 15.0
 MIN_MEAN_VOLUME_DB: float = -45.0
 FRAME_SAMPLES: int = 4
 WORDS_PER_SECOND: float = 2.4
+# Extra judge calls after a timeout or an unparseable reply. The still is
+# not regenerated for that, and a real low score still fails closed.
+JUDGE_RETRIES: int = 2
 
 
 def _raw(name: str) -> str:
@@ -107,3 +110,8 @@ def min_mean_volume_db() -> float:
 
 def frame_samples() -> int:
     return _int("REEL_QA_FRAME_SAMPLES", FRAME_SAMPLES, low=1, high=12)
+
+
+def judge_retries() -> int:
+    """How many extra judge calls to spend on a technical failure."""
+    return _int("REEL_QA_JUDGE_RETRIES", JUDGE_RETRIES, low=0, high=4)

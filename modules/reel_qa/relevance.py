@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from modules.reel_qa.config import gemini_model, model_chain, relevance_threshold
 
@@ -154,6 +154,47 @@ def evaluate_chunk_relevance(
     reason = "qa_unavailable:" + ",".join(errors or ["no_provider"])
     _LOG.error("VisualQA fail-closed | file=%s | %s", path.name, reason)
     return _unavailable(reason)
+
+
+def evaluate_with_technical_retry(
+    judge: Callable[..., dict[str, Any]],
+    image: Path | str,
+    text: str,
+    prompt: str,
+    banned_subjects: list[str] | None = None,
+) -> dict[str, Any]:
+    """Score one still. Retry the judge on timeout or an invalid reply.
+
+    A scored rejection is returned immediately. Only ``qa_status=unavailable``
+    spends the extra judge calls. The image is not regenerated here.
+    """
+    from modules.reel_qa.config import judge_retries
+
+    extra = judge_retries()
+    verdict: dict[str, Any] = {}
+    for i in range(extra + 1):
+        try:
+            verdict = dict(
+                judge(image, text, prompt, banned_subjects=banned_subjects) or {}
+            )
+        except Exception as exc:  # noqa: BLE001
+            verdict = {
+                "is_relevant": False,
+                "relevance_score": 0.0,
+                "rejection_reason": f"qa_unavailable:{type(exc).__name__}",
+                "qa_status": "unavailable",
+                "publishable": False,
+            }
+        if verdict.get("qa_status") != "unavailable":
+            return verdict
+        if i < extra:
+            _LOG.warning(
+                "VisualQA technical failure (%s) — judge retry %d/%d",
+                verdict.get("rejection_reason"),
+                i + 1,
+                extra,
+            )
+    return verdict
 
 
 def verdict_passed(verdict: dict[str, Any] | None) -> bool:
