@@ -8,7 +8,16 @@ from modules.reel_grounding.brief import EpisodeBrief, build_episode_brief, visu
 from modules.reel_grounding.config import grounding_enabled
 from modules.reel_grounding.memory import recall
 
-_PRIMARY = re.compile(r"PRIMARY SUBJECT:\s*(.+?)(?:\.\s|EPISODE OBJECT:)", re.DOTALL)
+_PRIMARY = re.compile(
+    r"PRIMARY SUBJECT:\s*(.+?)\.\s*"
+    r"(?:THIS BEAT'S OBJECT:|EPISODE OBJECT:|SPOKEN BEAT:)",
+    re.DOTALL,
+)
+# Clauses that pull a small-object beat toward a landmark or a city.
+_ARCH_CLAUSE = (
+    "architecture", "monument", "marble", "temple", "ruins", "megalith",
+    "pyramid", "ziggurat", "skyline",
+)
 
 
 def primary_subject(prompt: str) -> str:
@@ -53,6 +62,24 @@ def _lighting(kind: str, lighting_text: str, suppress_fire: bool) -> str:
     return ""
 
 
+def _setting_context(anchors: str, *, small_object: bool) -> str:
+    """Drop landmark clauses when this beat's picture is a small object."""
+    text = (anchors or "").strip().strip(".")
+    if not text:
+        return ""
+    if not small_object:
+        return text
+    kept: list[str] = []
+    for clause in text.split(","):
+        low = clause.lower()
+        if any(word in low for word in _ARCH_CLAUSE):
+            continue
+        bit = clause.strip()
+        if bit:
+            kept.append(bit)
+    return ", ".join(kept)
+
+
 def ground_image_prompt(
     *,
     topic: str,
@@ -66,6 +93,9 @@ def ground_image_prompt(
     channel: str = "",
     domain_anchors: str = "",
     memory_root=None,
+    previous_spoken: str = "",
+    next_spoken: str = "",
+    locked_object: str = "",
 ) -> str:
     """Lead with the physical subject of this beat.
 
@@ -78,23 +108,41 @@ def ground_image_prompt(
     if not grounding_enabled():
         return draft or spoken
     brief: EpisodeBrief = build_episode_brief(topic, script)
-    visual = visual_for_beat(brief, spoken or topic)
+    visual = visual_for_beat(
+        brief,
+        spoken or topic,
+        script=script,
+        previous_spoken=previous_spoken,
+        next_spoken=next_spoken,
+        locked_object=locked_object,
+    )
     hints = recall(
         channel=channel,
         topic=brief.topic or topic,
         spoken=spoken,
         root=memory_root,
     )
-    lines = [
-        f"PRIMARY SUBJECT: {visual.subject}.",
-        (
+    lines = [f"PRIMARY SUBJECT: {visual.subject}."]
+    if visual.object_label:
+        lines.append(
+            f"THIS BEAT'S OBJECT: {visual.object_label}. "
+            "This frame shows this object."
+        )
+        if visual.other_objects:
+            kept_out = ", ".join(visual.other_objects)
+            lines.append(
+                f"OTHER EPISODE OBJECTS STAY OUT OF FRAME: {kept_out}."
+            )
+    elif brief.hero_short:
+        lines.append(
             f"EPISODE OBJECT: {brief.hero_short}. "
             "Every frame shows this same subject, not a substitute landmark."
-        ),
-    ]
+        )
     if (spoken or "").strip():
         lines.append(f'SPOKEN BEAT: "{spoken.strip()}".')
-    anchors = (domain_anchors or "").strip()
+    anchors = _setting_context(
+        domain_anchors, small_object=bool(visual.object_label),
+    )
     if anchors and anchors.lower() not in " ".join(lines).lower():
         lines.append(f"SETTING CONTEXT: {anchors}.")
     if visual.place_clause:

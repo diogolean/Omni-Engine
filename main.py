@@ -4041,6 +4041,11 @@ def _produce_variant_worker(
                     if _act_i > 0 and (_act_i - 1) < len(_spoken_snippets)
                     else ""
                 )
+                _next_snip = (
+                    _spoken_snippets[_act_i + 1]
+                    if (_act_i + 1) < len(_spoken_snippets)
+                    else ""
+                )
                 # Pull this act's (subject, shot, lighting) from the plan;
                 # subject-pool text now drives the scene concept itself, so
                 # the legacy _act_descriptors[_act_i] is only kept as a
@@ -4144,6 +4149,8 @@ def _produce_variant_worker(
                         lighting_text=str(_light_text or ""),
                         channel=str((page_ctx.page_id if page_ctx else "") or ""),
                         domain_anchors=str(_act_anchors or ""),
+                        previous_spoken=str(_prev_snip or ""),
+                        next_spoken=str(_next_snip or ""),
                     )
                 except Exception as _ground_exc:  # noqa: BLE001
                     _LOG.warning("visual grounding skipped (%s)", _ground_exc)

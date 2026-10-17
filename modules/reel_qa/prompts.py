@@ -14,6 +14,10 @@ _STOP = {
     "The", "This", "That", "When", "What", "Inside", "After", "Before",
     "There", "Here", "Then", "And", "But", "Photoreal",
 }
+_BEAT_OBJECT = re.compile(
+    r"THIS BEAT'S OBJECT:\s*(.+?)\.(?:\s|$)",
+    re.IGNORECASE,
+)
 
 
 def named_entities(*parts: str) -> list[str]:
@@ -60,17 +64,26 @@ def refine_prompt(
     spoken = (sentence or "").strip() or (base_prompt or "").strip()[:240]
     names = [e for e in (entities or []) if e][:4]
     subject = spoken
+    object_label = ""
+    locked = ""
+    found = _BEAT_OBJECT.search(base_prompt or "")
+    if found:
+        locked = found.group(1).strip()
     try:
         from modules.reel_grounding.brief import build_episode_brief, visual_for_beat
 
         brief = build_episode_brief(episode_subject or spoken, spoken)
-        subject = visual_for_beat(brief, spoken).subject
+        visual = visual_for_beat(brief, spoken, locked_object=locked)
+        subject = visual.subject
+        object_label = visual.object_label
     except Exception:  # noqa: BLE001
         subject = spoken
     bits = [
         f"PRIMARY SUBJECT: {subject}.",
         f"Narration sentence: {spoken}.",
     ]
+    if object_label:
+        bits.append(f"THIS BEAT'S OBJECT: {object_label}.")
     if names:
         bits.append("Named entity: " + ", ".join(names) + ".")
     if (site or "").strip():

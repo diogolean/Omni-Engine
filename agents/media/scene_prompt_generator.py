@@ -473,7 +473,7 @@ def generate_scene_prompts(
         if isinstance(r, dict)
     }
 
-    for chunk in chunks:
+    for _chunk_i, chunk in enumerate(chunks):
         topic = str(dna.get("topic") or "")
         banned = domain_banned_subjects(
             domain_id, channel_id=cid, dna=dna,
@@ -526,6 +526,10 @@ def generate_scene_prompts(
         try:
             from modules.reel_grounding.prompt import ground_image_prompt
 
+            _prev_spoken = chunks[_chunk_i - 1].text if _chunk_i else ""
+            _next_spoken = (
+                chunks[_chunk_i + 1].text if _chunk_i + 1 < len(chunks) else ""
+            )
             scene["image_generation_prompt"] = ground_image_prompt(
                 topic=str(dna.get("topic") or ""),
                 script=script,
@@ -533,6 +537,8 @@ def generate_scene_prompts(
                 draft=str(scene.get("image_generation_prompt") or ""),
                 channel=cid,
                 domain_anchors=anchors,
+                previous_spoken=_prev_spoken,
+                next_spoken=_next_spoken,
             )
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("ground beat prompt skipped (%s)", exc)
