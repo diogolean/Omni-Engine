@@ -107,6 +107,16 @@ def test_quimbaya_shape_is_the_pendant_not_a_jet() -> None:
     assert "tail fin" in quimbaya.canonical_shape
     assert "jet" not in quimbaya.canonical_visual.lower()
     assert quimbaya.commons_titles
+    negatives = " ".join(quimbaya.edit_negatives).lower()
+    assert "propeller" in negatives
+    assert "straight wings" in negatives
+    assert "cockpit" in negatives
+    assert quimbaya.text_only_safe is False
+    baghdad = next(item for item in entities if item.id == "baghdad_battery")
+    assert baghdad.text_only_safe is True
+    antikythera = next(item for item in entities if item.id == "antikythera_mechanism")
+    assert antikythera.text_only_safe is False
+    assert "intact gears" in " ".join(antikythera.edit_negatives).lower()
 
 
 def test_year_range_is_spoken_with_to_and_the_subtitle_keeps_digits() -> None:
@@ -219,6 +229,118 @@ def test_motion_sidecar_selects_a_slow_push(tmp_path: Path) -> None:
     write_motion_sidecar(src)
     assert motion_override(src)["zoom_end"] == 1.10
     assert motion_override(src)["zoom_start"] == 1.00
+
+
+def test_thumbnail_is_downloaded_and_the_original_is_not(tmp_path: Path) -> None:
+    from agents.media.free_images.http import USER_AGENT
+
+    original = "https://upload.example/original.jpg"
+    thumb = "https://upload.example/thumb-1280.jpg"
+    seen: list[tuple] = []
+
+    class _ThumbClient:
+        def get(self, url, params=None, headers=None):
+            seen.append((url, params or {}, headers or {}))
+            params = params or {}
+            if params.get("titles"):
+                page = _page("File:Antikythera.jpg", 4000, 3000, "CC0", original)
+                page["imageinfo"][0]["thumburl"] = thumb
+                payload = {"query": {"pages": {"1": page}}}
+                return HttpResponse(200, json.dumps(payload).encode())
+            if url == thumb:
+                return HttpResponse(200, _jpeg(1280, 720))
+            return HttpResponse(404, b"missing")
+
+    fetched = fetch_artefact(
+        _entity(
+            id="antikythera_mechanism",
+            name="Antikythera Mechanism",
+            commons_titles=("File:Antikythera.jpg",),
+        ),
+        channel="ancient_knowledge",
+        cache_dir=tmp_path / "cache",
+        client=_ThumbClient(),
+    )
+    assert fetched is not None and fetched.reference_path.is_file()
+    assert any(url == thumb for url, _, _ in seen)
+    assert all(url != original for url, _, _ in seen)
+    assert any(params.get("iiurlwidth") == "1280" for _, params, _ in seen)
+    assert USER_AGENT.startswith("OmniEngine/1.0")
+    assert "https://github.com/diogolean/Omni-Engine" in USER_AGENT
+    assert any(
+        "https://github.com/diogolean/Omni-Engine" in (headers.get("User-Agent") or "")
+        for _, _, headers in seen
+    )
+
+
+def test_commons_429_retries_then_logs_the_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    monkeypatch.setattr("modules.reel_artefact.fetch._pause", lambda _seconds: None)
+    url = "https://example.test/gears.jpg"
+    hits = {"n": 0}
+
+    class _RetryClient:
+        def get(self, request_url, params=None, headers=None):
+            del headers
+            params = params or {}
+            if params.get("titles"):
+                payload = {"query": {"pages": {"1": _page("File:Gears.jpg", 900, 700, "CC0", url)}}}
+                return HttpResponse(200, json.dumps(payload).encode())
+            assert request_url == url
+            hits["n"] += 1
+            if hits["n"] < 3:
+                return HttpResponse(429, b"<html>slow</html>", {"Retry-After": "0"})
+            return HttpResponse(200, _jpeg(900, 700))
+
+    with caplog.at_level(logging.WARNING):
+        fetched = fetch_artefact(
+            _entity(commons_titles=("File:Gears.jpg",)),
+            channel="ancient_knowledge",
+            cache_dir=tmp_path / "cache",
+            client=_RetryClient(),
+        )
+    assert fetched is not None
+    assert hits["n"] == 3
+    assert "status=429" in caplog.text
+
+
+def test_a_cached_reference_is_not_downloaded_again(tmp_path: Path) -> None:
+    url = "https://example.test/jar.jpg"
+    hits = {"n": 0}
+
+    class _Once:
+        def get(self, request_url, params=None, headers=None):
+            del headers
+            hits["n"] += 1
+            params = params or {}
+            if params.get("titles"):
+                payload = {"query": {"pages": {"1": _page("File:Jar.jpg", 500, 400, "CC0", url)}}}
+                return HttpResponse(200, json.dumps(payload).encode())
+            assert request_url == url
+            return HttpResponse(200, _jpeg(500, 400))
+
+    entity = _entity(commons_titles=("File:Jar.jpg",))
+    cache = tmp_path / "cache"
+    first = fetch_artefact(entity, channel="ancient_knowledge", cache_dir=cache, client=_Once())
+    after = hits["n"]
+    second = fetch_artefact(entity, channel="ancient_knowledge", cache_dir=cache, client=_Once())
+    assert first is not None and second is not None
+    assert second.reference_path == first.reference_path
+    assert hits["n"] == after
+
+
+def test_default_cache_lives_in_the_channel_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.reel_artefact.fetch import artefact_cache_dir
+
+    monkeypatch.setenv("CHANNEL_STORE_ROOT", str(tmp_path))
+    path = artefact_cache_dir("ancient_knowledge", "quimbaya_ornaments")
+    assert path.parts[-3:] == ("store", "artefact_cache", "quimbaya_ornaments")
+    assert "_tmp" not in path.parts
 
 
 def test_hybrid_cost_uses_commons_at_zero_and_nanobanana_above_flux() -> None:
