@@ -95,6 +95,11 @@ _PRICE: dict[str, float] = {
     "image_deepinfra_flux2dev":  0.008_8,
     "image_sdxl":          0.008_0,
     "image_nano":          FLUX_SCHNELL_USD_PER_IMAGE,
+    # Gemini image output, standard paid tier, October 2026 docs.
+    # Nano Banana (gemini-2.5-flash-image) is $0.039. The 2.1 successor
+    # at 1K is $0.0336. Flux stays $0.003.
+    "image_nanobanana":    0.039,
+    "image_nanobanana_lite": 0.0336,
     "image_economic":      FLUX_SCHNELL_USD_PER_IMAGE,
     "image_premium":       FLUX_SCHNELL_USD_PER_IMAGE,
     "image_gemini_flash":  FLUX_SCHNELL_USD_PER_IMAGE,

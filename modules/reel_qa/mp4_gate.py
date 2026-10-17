@@ -361,6 +361,30 @@ def decide_mp4_gate(
     }
 
 
+def beat_for_cue(cue: SubtitleCue, beats: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The still's beat for this subtitle, so the frame uses the still's rubric."""
+    text = " ".join((cue.text or "").lower().split())
+    if not text or not beats:
+        return None
+    hyphen = text.replace(" to ", "-")
+    best: dict[str, Any] | None = None
+    best_score = 0
+    for beat in beats:
+        spoken = " ".join(str(beat.get("text") or beat.get("spoken_text") or "").lower().split())
+        if not spoken:
+            continue
+        if text in spoken or (hyphen and hyphen in spoken):
+            return beat
+        tokens = [token for token in text.split() if len(token) > 2]
+        score = sum(1 for token in tokens if token in spoken)
+        if score > best_score:
+            best_score = score
+            best = beat
+    if best_score >= 2:
+        return best
+    return None
+
+
 def gate_final_mp4(
     video_path: Path | str,
     cues: list[SubtitleCue] | None,
@@ -369,8 +393,14 @@ def gate_final_mp4(
     evaluate_fn: Callable[..., dict[str, Any]] | None = None,
     frame_fn: Callable[[Path, float, Path], Path | None] | None = None,
     work_dir: Path | str | None = None,
+    beats: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Sample frames at subtitle midpoints and score them against the subtitle."""
+    """Sample frames at subtitle midpoints and score them with the still rubric.
+
+    The frame is cropped above the subtitle band, and the prompt is the beat's
+    image prompt rather than the four-word subtitle. An artefact beat also
+    receives the reference photograph.
+    """
     video = Path(video_path)
     probe = (probe_fn or probe_media)(video)
     chosen = select_cues(list(cues or []))
@@ -400,7 +430,29 @@ def gate_final_mp4(
                 }
             )
             continue
-        verdict = judge(shot, text, text) or {}
+        clean = shot
+        try:
+            from modules.reel_qa.frames import strip_subtitle_band
+
+            stripped = strip_subtitle_band(shot, dest.with_name(dest.stem + "_clean.jpg"))
+            if stripped is not None:
+                clean = stripped
+        except Exception:  # noqa: BLE001
+            clean = shot
+        beat = beat_for_cue(cue, beats)
+        spoken = str((beat or {}).get("text") or text)
+        image_prompt = str((beat or {}).get("prompt") or spoken)
+        from modules.reel_qa.relevance import call_judge
+
+        verdict = call_judge(
+            judge,
+            clean,
+            spoken,
+            image_prompt,
+            banned_subjects=(beat or {}).get("banned_subjects"),
+            reference_image=str((beat or {}).get("reference_image") or ""),
+            canonical_shape=str((beat or {}).get("canonical_shape") or ""),
+        ) or {}
         passed = verdict_passed(verdict) and verdict.get("qa_status") != "unavailable"
         frames.append(
             {

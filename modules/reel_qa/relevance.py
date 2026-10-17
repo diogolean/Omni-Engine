@@ -132,6 +132,14 @@ def _verdict_from_payload(
         spoken_text=chunk_text,
         banned_subjects=banned_subjects,
     )
+    if _as_bool(data.get("shape_mismatch")) and "shape_mismatch" not in defects:
+        defects.append("shape_mismatch")
+        relevant = False
+        score = min(score, 0.35)
+        reason = "documentary_fail:" + ",".join(defects)
+        verdict["is_relevant"] = False
+        verdict["relevance_score"] = score
+        verdict["rejection_reason"] = reason
     if defects:
         verdict["is_relevant"] = False
         verdict["hard_reject"] = True
@@ -154,6 +162,29 @@ def _verdict_from_payload(
     return verdict
 
 
+def call_judge(judge: Callable[..., dict[str, Any]], image, text: str, prompt: str, **extra):
+    """Call a judge with the kwargs it accepts.
+
+    Stills and final frames share this so a test double that only takes
+    ``banned_subjects`` still runs, and the real judge can receive the
+    reference photograph.
+    """
+    import inspect
+
+    kwargs = {key: value for key, value in extra.items() if value is not None}
+    try:
+        signature = inspect.signature(judge)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        if not any(
+            item.kind == inspect.Parameter.VAR_KEYWORD
+            for item in signature.parameters.values()
+        ):
+            kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
+    return judge(image, text, prompt, **kwargs)
+
+
 def evaluate_chunk_relevance(
     image_path: Path | str,
     current_chunk_text: str,
@@ -161,6 +192,8 @@ def evaluate_chunk_relevance(
     banned_subjects: list[str] | None = None,
     *,
     providers: list[str] | None = None,
+    reference_image: str | Path | None = None,
+    canonical_shape: str = "",
 ) -> dict[str, Any]:
     """Score one still against one spoken beat.
 
@@ -180,6 +213,19 @@ def evaluate_chunk_relevance(
         chunk_text=(current_chunk_text or "").strip()[:400],
         prompt=(image_generation_prompt or "").strip()[:400],
     )
+    images: list[Path] = [path]
+    labels = ["candidate"]
+    reference = Path(reference_image) if reference_image else None
+    if reference is not None and reference.is_file():
+        shape = (canonical_shape or "the object in the reference photograph").strip()
+        prompt += (
+            "\nA second image labeled REFERENCE is a photograph of the real artefact. "
+            f"Canonical shape: {shape}. "
+            'Add "shape_mismatch": boolean. Set it true when the candidate does not '
+            "show that shape. relevance_score is shape fidelity against the reference.\n"
+        )
+        images.append(reference)
+        labels.append("reference")
     errors: list[str] = []
     for name in chain:
         provider = _provider(name)
@@ -188,7 +234,7 @@ def evaluate_chunk_relevance(
             _LOG.warning("VisualQA provider %s unavailable — trying next", name)
             continue
         try:
-            result = provider.evaluate(prompt, [path], labels=["candidate"])
+            result = provider.evaluate(prompt, images, labels=labels)
             data = _strip_json(getattr(result, "text", "") or "")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{name}:{type(exc).__name__}")
@@ -216,6 +262,9 @@ def evaluate_with_technical_retry(
     text: str,
     prompt: str,
     banned_subjects: list[str] | None = None,
+    *,
+    reference_image: str | Path | None = None,
+    canonical_shape: str = "",
 ) -> dict[str, Any]:
     """Score one still. Retry the judge on timeout or an invalid reply.
 
@@ -229,7 +278,16 @@ def evaluate_with_technical_retry(
     for i in range(extra + 1):
         try:
             verdict = dict(
-                judge(image, text, prompt, banned_subjects=banned_subjects) or {}
+                call_judge(
+                    judge,
+                    image,
+                    text,
+                    prompt,
+                    banned_subjects=banned_subjects,
+                    reference_image=reference_image or "",
+                    canonical_shape=canonical_shape,
+                )
+                or {}
             )
         except Exception as exc:  # noqa: BLE001
             verdict = {

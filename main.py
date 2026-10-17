@@ -1421,6 +1421,10 @@ def _synthesize_sequence_voice_track(
         cleaned = _trim_script_to_word_limit(text or "", max_words=words_max)
         if page_ctx is None or page_ctx.strip_audio_tags_before_tts:
             cleaned = _strip_audio_behavior_tags(cleaned)
+        if is_ak:
+            from modules.reel_artefact.speech import spoken_numbers
+
+            cleaned = spoken_numbers(cleaned)
         narr_out = reel_dir / f"{stem}_v{variant + 1:02d}_narration.mp3"
         try:
             _vp, _wts = generate_voiceover_with_timestamps(
@@ -4219,11 +4223,26 @@ def _produce_variant_worker(
                     "negative_prompt": _act_neg,
                     "episode_subject": str(resolved_subject_for_beat or ""),
                 }
+                _gen = adapter.generate
+                _art_kwargs: dict = {}
+                if _plan_shot is not None:
+                    try:
+                        from modules.reel_artefact.hook import wrap_reel_generate
+
+                        _gen, _art_kwargs = wrap_reel_generate(
+                            adapter.generate,
+                            channel=str((page_ctx.page_id if page_ctx else "") or ""),
+                            shot=_plan_shot,
+                        )
+                    except Exception as _art_exc:  # noqa: BLE001
+                        _LOG.warning("artefact still hook skipped (%s)", _art_exc)
+                _sr_act_meta[_act_i]["generate_fn"] = _gen
+                _sr_act_meta[_act_i]["artefact_kwargs"] = dict(_art_kwargs)
                 from modules.reel_visual_qa import generate_and_gate as _qwen_gate
 
                 _sr_act_jobs[_act_i] = functools.partial(
                     _qwen_gate,
-                    adapter.generate,
+                    _gen,
                     prompt=_act_prompt,
                     chunk_text=_snippet,
                     output_stem=_act_stem,
@@ -4240,6 +4259,7 @@ def _produce_variant_worker(
                         "free_image_entity": str(
                             resolved_subject_for_beat or resolved_subject or ""
                         ),
+                        **_art_kwargs,
                     },
                     banned_subjects=list(_act_banned or []) or None,
                     domain_anchors=str(_act_anchors or ""),
@@ -4285,9 +4305,21 @@ def _produce_variant_worker(
 
             def _accept_gate(_gate: StillGateResult, _idx: int, _text: str) -> None:
                 nonlocal _ok_acts, _reel_qa_block_compile, _images_generated_this_variant
-                _beat_qa_rows.append(_gate.beat_row(index=_idx, text=_text))
                 if _gate.extra_generations:
                     _images_generated_this_variant += int(_gate.extra_generations)
+                _row = _gate.beat_row(index=_idx, text=_text)
+                _meta_row = _sr_act_meta.get(_idx) or {}
+                _row["prompt"] = str(_meta_row.get("prompt") or "")
+                try:
+                    from modules.reel_artefact.source import source_meta as _source_meta
+
+                    _src = _source_meta(_row.get("image_path"))
+                    _row["reference_image"] = str(_src.get("reference_image") or "")
+                    _row["canonical_shape"] = str(_src.get("canonical_shape") or "")
+                    _row["image_provider"] = str(_src.get("provider") or "")
+                except Exception:  # noqa: BLE001
+                    pass
+                _beat_qa_rows.append(_row)
                 if _gate.publishable and _gate.path is not None and Path(_gate.path).is_file():
                     try:
                         from modules.reel_grounding.still_cache import write_spoken_sidecar
@@ -4369,7 +4401,7 @@ def _produce_variant_worker(
                         )
                         continue
                     _regen = _qwen_gate(
-                        adapter.generate,
+                        _meta.get("generate_fn") or adapter.generate,
                         prompt=str(_meta.get("prompt") or _snippet),
                         chunk_text=_snippet,
                         output_stem=f"{_meta.get('stem') or 'act'}_r01",
@@ -4382,6 +4414,7 @@ def _produce_variant_worker(
                             "free_image_entity": str(
                                 _meta.get("episode_subject") or resolved_subject or ""
                             ),
+                            **dict(_meta.get("artefact_kwargs") or {}),
                         },
                         banned_subjects=list(_meta.get("banned_subjects") or []) or None,
                         domain_anchors=str(_meta.get("domain_anchors") or ""),
@@ -4433,7 +4466,30 @@ def _produce_variant_worker(
             )
             if _ok_acts:
                 if cost_tracker is not None:
-                    cost_tracker.track_image(model_key="image_flux_schnell", count=_ok_acts)
+                    try:
+                        from modules.reel_artefact.policy import artefact_images_enabled
+                        from modules.reel_artefact.pricing import tally_paths
+
+                        if artefact_images_enabled():
+                            _tally = tally_paths(_sequence_image_paths)
+                            if int(_tally["flux"]):
+                                cost_tracker.track_image(
+                                    model_key="image_flux_schnell",
+                                    count=int(_tally["flux"]),
+                                )
+                            if int(_tally["nanobanana"]):
+                                cost_tracker.track_image(
+                                    model_key="image_nanobanana",
+                                    count=int(_tally["nanobanana"]),
+                                )
+                        else:
+                            cost_tracker.track_image(
+                                model_key="image_flux_schnell", count=_ok_acts,
+                            )
+                    except Exception:  # noqa: BLE001
+                        cost_tracker.track_image(
+                            model_key="image_flux_schnell", count=_ok_acts,
+                        )
                 _images_generated_this_variant += _ok_acts
 
             _LOG.info(
@@ -5008,9 +5064,14 @@ def _produce_variant_worker(
                 if page_ctx and hasattr(page_ctx, "tts_expressive_mode")
                 else ((page_ctx.page_id or "").lower() == "master_mei" if page_ctx else False)
             )
+            _tts_script = _voiceover_script
+            if (page_ctx.page_id if page_ctx else "").lower() == "ancient_knowledge":
+                from modules.reel_artefact.speech import spoken_numbers as _spoken_numbers
+
+                _tts_script = _spoken_numbers(_voiceover_script)
             try:
                 _voice_path, _word_timings = generate_voiceover_with_timestamps(
-                    _voiceover_script,
+                    _tts_script,
                     _narration_out,
                     voice_id=_voice_id or None,
                     model_id=page_ctx.elevenlabs_model if page_ctx else "eleven_v3",
