@@ -82,6 +82,7 @@ class SpeakerStyle:
     label: str
     accent_hex: str = "#00F0FF"
     facing: str = "right"  # "right" | "left" — direction the hero is angled toward
+    opens: bool = False  # True for the character who speaks first; camera and cards start on it
 
     @property
     def accent_rgb(self) -> tuple[int, int, int]:

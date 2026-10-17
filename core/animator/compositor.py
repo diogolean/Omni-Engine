@@ -328,7 +328,11 @@ class ShotReverseShotCompositor:
             brow_thresholds[speaker_id] = (
                 float(np.percentile(levels, 80)) if levels else 1.0
             )
-        current = next((s for s in camera_speakers if s in self.rigs), None) or next(iter(self.rigs))
+        current = next((s for s in camera_speakers if s in self.rigs), None) or _opening_id(
+            self.styles,
+            self.rigs,
+            default=next(iter(self.rigs)),
+        )
         last_turn_end_frame = max(
             (
                 index + 1
@@ -555,7 +559,8 @@ class DualPresenceCompositor:
     def iter_frames(self, analyzed: AnalyzedAudio) -> Iterator[np.ndarray]:
         speech = analyzed.speaking_speaker or analyzed.active_speaker
         camera = analyzed.active_speaker
-        focus = self.left_id
+        # Open on whoever speaks first; that is the right-hand hero in right-first episodes.
+        focus = _opening_id(self.styles, self.rigs, default=self.left_id)
         for index in range(analyzed.n_frames):
             t = analyzed.frame_time(index)
             speaking = _sequence_at(speech, index, None)
@@ -773,8 +778,9 @@ class _HeroCamera:
         self.body_scale_x = self.scale
         self.body_scale_y = self.scale
         self.pixel_aspect_error = abs(self.scale_x - self.scale_y) / self.scale_x
+        self._mirror = -1 if self.facing == "left" else 1
         self.roll_deg = (
-            DEEPSEEK_ROLL_CCW_DEG
+            DEEPSEEK_ROLL_CCW_DEG * self._mirror
             if rig.skin.character_id in DEEPSEEK_LOCKED_IDS
             else 0.0
         )
@@ -782,7 +788,9 @@ class _HeroCamera:
             self.offset_x = int(round((target_width - self.out_w) / 2.0))
             self.offset_y = int(round((target_height - self.out_h) / 2.0))
             if rig.skin.character_id in DEEPSEEK_LOCKED_IDS:
-                self.offset_x += DEEPSEEK_SHIFT_X
+                # The shift and tilt were tuned for the left seat (facing right).
+                # The right seat is the mirror image.
+                self.offset_x += DEEPSEEK_SHIFT_X * self._mirror
                 self.offset_y += DEEPSEEK_SHIFT_Y
             self.lead_anchor_x = int(round(self.offset_x + native_eye_x * self.scale))
         elif legacy_artist_v2:
@@ -1177,6 +1185,14 @@ def emphasis_head_target(rms: float, threshold: float, *, direction: float) -> f
     span = max(1e-6, 1.0 - threshold)
     strength = float(np.clip((rms - threshold) / span, 0.0, 1.0))
     return float(np.clip(direction, -1.0, 1.0)) * (0.45 + 0.75 * strength)
+
+
+def _opening_id(styles, rigs, *, default: str) -> str:
+    """The hero who speaks first, or ``default`` when no style is marked."""
+    for character_id, style in styles.items():
+        if getattr(style, "opens", False) and character_id in rigs:
+            return character_id
+    return default
 
 
 def _sequence_at(seq, index: int, default):
