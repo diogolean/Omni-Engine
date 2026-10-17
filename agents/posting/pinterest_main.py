@@ -420,8 +420,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_channel_args(p_tf)
     p_tf.add_argument("--post-id", default=None,
                       help="Specific post_id from master_inventory.")
-    p_tf.add_argument("--method", choices=["blurred_padding", "center_crop"],
-                      default="blurred_padding")
+    p_tf.add_argument(
+        "--method",
+        choices=["cover", "blurred_padding", "center_crop"],
+        default="blurred_padding",
+    )
     p_tf.add_argument("--open", action="store_true",
                       help="Open the output file in Windows Explorer.")
 

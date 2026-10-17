@@ -521,7 +521,7 @@ nano /opt/omni-engine/.env
 
 The published-pin ledger is `outputs/pinterest/published_pins.json` on the mounted outputs volume (account, B2 object, and article). Channel env files the operator maintains live at `/opt/omni-engine/channels_config/<channel>/.env` and `.env.<channel>`. Compose mounts that directory read-write at `channels_env/` inside the container so a token refresh survives the next container, without hiding the image's channel package. Root `/opt/omni-engine/.env` is mounted read-write for the same reason.
 
-Ancient Knowledge reads cards from B2 prefix `fbcards/` whose filenames match `^(ancient_|ancientknowl_)` (for example `fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg`). Each card is matched to a WordPress post slug on `https://ancientknowledge.eokviral.com`. Images with no slug match are skipped. The article host currently serves a shared `*.web-hosting.com` certificate, so `article_tls_verify: false` in `config/pinterest_accounts.yaml` applies to those article lookups only. Pinterest API calls stay TLS-verified. A deploy of this image installs Liberation and DejaVu fonts (and the repo Montserrat/Poppins files) so the card uses the source photo and a real point size. Rebuild or redeploy before the next dry run or the old image will still render tiny text.
+Ancient Knowledge reads cards from B2 prefix `fbcards/` whose filenames match `^(ancient_|ancientknowl_)` (for example `fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg`). A filename matches a WordPress post only when the distinctive words agree. Generic words such as `tomb`, `ancient`, and `lines` are ignored, so `giants-tomb-sardinia` does not attach to the `giants` article. Optional overrides live in `config/pinterest_image_map.yaml` (`skip` or a slug). Images with no match are logged and skipped. The card cover-crops the B2 photo to 2:3 and lays the hook on a gradient. If that file is missing, the first real photo in the article body is used. Title-card featured images (flat dark field, gold marks) are not pinned. The article host currently serves a shared `*.web-hosting.com` certificate, so `article_tls_verify: false` in `config/pinterest_accounts.yaml` applies to those article lookups only. Pinterest API calls stay TLS-verified.
 
 Start the scheduler only when you mean to publish:
 
@@ -532,12 +532,13 @@ cd /opt/omni-engine
 docker compose --profile scheduler up -d scheduler
 ```
 
-Dry run (no Pinterest call, no ledger write, no multi-hour wait):
+Dry run (no Pinterest call, no ledger write, no multi-hour wait). Generated cards are written to `outputs/pinterest/dryrun/` so you can open them before anything publishes:
 
 ```bash
 cd /opt/omni-engine
 docker compose --profile scheduler run --rm --no-deps scheduler \
   python -m omni.worker --role scheduler --once --dry-run
+ls outputs/pinterest/dryrun
 ```
 
 ### GHCR login on the VM

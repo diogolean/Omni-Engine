@@ -1,0 +1,9 @@
+# Optional image -> article overrides for the Pinterest drip.
+#
+# Keyed by channel id. Each entry maps a B2 filename stem, basename, or full
+# object key to a WordPress slug. Use skip when that image must not publish.
+# Distinctive-word matching still runs for images that are not listed here.
+#
+# ancient_knowledge:
+#   giants-tomb-sardinia: skip
+#   ancientknowl_10-04_2130_baalbek: baalbek

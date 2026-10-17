@@ -9,6 +9,7 @@ Nothing in B2 is deleted.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -21,6 +22,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import requests
+import yaml
 
 from omni.accounts import is_unset, pinterest_account_env, remember_rotated_token
 from omni.models import Account, Content
@@ -45,6 +47,7 @@ class Article:
     visual_hook: str = ""
     featured_image_url: str = ""
     featured_media_id: str = ""
+    content_image_urls: tuple[str, ...] = ()
 
 
 @dataclass
@@ -218,7 +221,7 @@ def publish_account(
 
     store = FileIdempotencyStore(ledger.path.with_name("publish_ledger.json"))
     publisher = PinterestAccountPublisher(store=store, max_retries=1)
-    transformer = PinTransformer(outputs_dir=cfg.OUTPUTS_DIR)
+    transformer = PinTransformer(outputs_dir=cfg.OUTPUTS_DIR, method="cover")
     site = account.extra.get("site_url", "")
     verify_tls = _article_tls_enabled(account)
     catalog_rows: list[Article] | None = None
@@ -248,11 +251,31 @@ def publish_account(
             read_text=read_object_text,
         )
         if article is None:
-            article = _match_catalog_article(key, _catalog())
+            mapped = _mapped_slug(account.account_id, key)
+            if mapped == "skip":
+                log.info(
+                    "Skipping %s — pinterest_image_map.yaml says skip",
+                    key,
+                )
+                stats["skipped"] += 1
+                continue
+            if mapped:
+                article = _article_for_slug(mapped, _catalog())
+                if article is None:
+                    log.info(
+                        "Skipping %s — mapped slug %s is not on the site",
+                        key,
+                        mapped,
+                    )
+                    stats["skipped"] += 1
+                    continue
+            else:
+                article = _match_catalog_article(key, _catalog())
         if article is None:
             log.info(
-                "Skipping %s — no matching article (titles are not taken from filenames)",
+                "Skipping %s — %s",
                 key,
+                _no_match_reason(key),
             )
             stats["skipped"] += 1
             continue
@@ -280,8 +303,11 @@ def publish_account(
                 verify=verify_tls,
                 account_id=account.account_id,
             ):
-                log.warning("No usable source image for %s", key)
-                stats["errors"] += 1
+                log.info(
+                    "Skipping %s — no real photo (title graphics are not pinned)",
+                    key,
+                )
+                stats["skipped"] += 1
                 continue
             record = _record(account, key, article, fields, dest)
             cfg.TARGET_URL = article.url
@@ -296,13 +322,15 @@ def publish_account(
 
             idem = _idempotency_key(account.account_id, key, article.url)
             if dry_run:
+                card_path = _write_dry_run_card(account.account_id, key, pin_bytes)
                 log.info(
-                    "[DRY RUN] account=%s b2=%s article=%s title=%s bytes=%d",
+                    "[DRY RUN] account=%s b2=%s article=%s title=%s bytes=%d card=%s",
                     account.account_id,
                     key,
                     article.url,
                     fields["pinterest_title"],
                     len(pin_bytes),
+                    card_path,
                 )
                 stats["published"] += 1
                 continue
@@ -596,6 +624,50 @@ def _article_from_library(channel: str, object_key: str, site: str) -> Article |
 _NOISE_TOKEN = re.compile(r"^(ancient|ancientknowl|ancientknowledge|reel)$", re.IGNORECASE)
 _DATE_TOKEN = re.compile(r"^\d{1,4}$")
 _SLUG_MATCH_FLOOR = 0.84
+_COMPACT_LENGTH_FLOOR = 0.72
+_GENERIC_TOKENS = {
+    "tomb",
+    "tombs",
+    "line",
+    "lines",
+    "mystery",
+    "mysteries",
+    "lost",
+    "secret",
+    "secrets",
+    "hidden",
+    "old",
+    "the",
+    "and",
+    "of",
+    "a",
+    "an",
+    "in",
+    "on",
+    "for",
+    "with",
+    "from",
+    "its",
+    "temple",
+    "ruins",
+    "ruin",
+    "stone",
+    "stones",
+    "site",
+    "sites",
+    "hoax",
+    "truth",
+    "real",
+    "history",
+    "historical",
+    "legend",
+    "legends",
+    "myth",
+    "myths",
+    "fact",
+    "facts",
+}
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
 _tls_off_logged: set[str] = set()
 
 
@@ -679,7 +751,8 @@ def _article_from_wp_post(post: dict, site_url: str) -> Article | None:
         return None
     title = _plain(str((post.get("title") or {}).get("rendered") or ""))
     excerpt = _plain(str((post.get("excerpt") or {}).get("rendered") or ""))
-    content = _plain(str((post.get("content") or {}).get("rendered") or ""))
+    raw_content = str((post.get("content") or {}).get("rendered") or "")
+    content = _plain(raw_content)
     body = excerpt or content
     post_slug = str(post.get("slug") or "").strip()
     if not post_slug or (not title and not body):
@@ -696,6 +769,7 @@ def _article_from_wp_post(post: dict, site_url: str) -> Article | None:
         slug=post_slug,
         featured_image_url=featured_url,
         featured_media_id=media_id,
+        content_image_urls=tuple(_content_image_urls(raw_content, site_url)),
     )
 
 
@@ -756,43 +830,126 @@ def _filename_tokens(filename: str) -> list[str]:
     return tokens
 
 
-def match_article_slug(filename: str, slugs: list[str]) -> str:
-    """Best site slug for a card filename. Empty when nothing is close enough.
+def _distinctive_tokens(tokens: list[str]) -> list[str]:
+    """Drop dates and generic words so one shared word cannot pick an article."""
+    out: list[str] = []
+    for token in tokens:
+        if not token or token in _GENERIC_TOKENS or _DATE_TOKEN.match(token):
+            continue
+        if len(token) <= 2:
+            continue
+        out.append(token)
+    return out
 
-    Exact token and full-slug matches win. Dates and the ``ancient`` /
-    ``ancientknowl`` prefixes are ignored so they cannot fuzzy-match a slug.
+
+def _slug_tokens(slug: str) -> list[str]:
+    return _distinctive_tokens(
+        [part for part in re.split(r"[-_]+", slug.strip().lower()) if part]
+    )
+
+
+def match_article_slug(filename: str, slugs: list[str]) -> str:
+    """Best site slug for a card filename. Empty when the overlap is weak.
+
+    A match needs the same distinctive words as the slug. Generic words
+    (``tomb``, ``ancient``, ``lines``) do not count, so ``giants-tomb-sardinia``
+    does not attach to the ``giants`` article. A one-token typo such as
+    ``baalbec`` can still reach ``baalbek``.
     """
-    tokens = _filename_tokens(filename)
-    if not tokens:
+    distinctive = _distinctive_tokens(_filename_tokens(filename))
+    if not distinctive:
         return ""
-    compact = "".join(tokens)
-    joined = "-".join(tokens)
-    underscored = "_".join(tokens)
+    file_set = set(distinctive)
+    file_compact = "".join(distinctive)
     best = ""
     best_score = 0.0
-    for slug in sorted({s.strip() for s in slugs if s and s.strip()}, key=len, reverse=True):
-        slug_l = slug.lower()
-        slug_tokens = [part for part in re.split(r"[-_]+", slug_l) if part]
+    ordered = sorted(
+        {slug.strip() for slug in slugs if slug and slug.strip()},
+        key=lambda slug: (len(_slug_tokens(slug)), len(slug)),
+        reverse=True,
+    )
+    for slug in ordered:
+        slug_tokens = _slug_tokens(slug)
+        if not slug_tokens:
+            continue
+        if set(slug_tokens) == file_set:
+            return slug
         slug_compact = "".join(slug_tokens)
-        if slug_l in {joined, underscored, compact} or slug_l in tokens:
-            return slug
-        if slug_compact and slug_compact in tokens:
-            return slug
-        if slug_tokens and all(part in tokens for part in slug_tokens):
-            return slug
-        if len(slug_compact) >= 8 and slug_compact in compact:
-            return slug
-        # Fuzzy the whole name, not a single short token, so "skull" cannot
-        # land on "crystal-skulls" while "baalbec" still reaches "baalbek".
-        score = 0.0
-        if len(compact) >= 5 and len(slug_compact) >= 5:
-            score = SequenceMatcher(None, compact, slug_compact).ratio()
+        shorter = min(len(file_compact), len(slug_compact))
+        longer = max(len(file_compact), len(slug_compact))
+        if shorter < 5 or longer == 0 or shorter / longer < _COMPACT_LENGTH_FLOOR:
+            continue
+        score = SequenceMatcher(None, file_compact, slug_compact).ratio()
         if score > best_score:
             best_score = score
             best = slug
     if best_score >= _SLUG_MATCH_FLOOR:
         return best
     return ""
+
+
+def _no_match_reason(object_key: str) -> str:
+    tokens = _distinctive_tokens(_filename_tokens(object_key))
+    shown = ", ".join(tokens) if tokens else "(none)"
+    return f"no strong article match (distinctive tokens: {shown})"
+
+
+def image_map_path() -> Path:
+    override = (os.getenv("PINTEREST_IMAGE_MAP") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    from omni.config import repo_root  # noqa: PLC0415
+
+    return repo_root() / "config" / "pinterest_image_map.yaml"
+
+
+def load_image_map(path: Path | None = None) -> dict[str, dict[str, str]]:
+    """Account id -> {filename stem or key -> slug or ``skip``}."""
+    source = path or image_map_path()
+    if not source.is_file():
+        return {}
+    try:
+        loaded = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        log.warning("Ignoring image map %s: %s", source, type(exc).__name__)
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    parsed: dict[str, dict[str, str]] = {}
+    for account_id, rows in loaded.items():
+        if not isinstance(rows, dict):
+            continue
+        account_rows: dict[str, str] = {}
+        for raw_key, raw_slug in rows.items():
+            key = str(raw_key or "").strip().lower()
+            if not key:
+                continue
+            slug = str(raw_slug or "").strip().lower()
+            account_rows[key] = "skip" if slug in {"", "skip", "-", "none"} else slug
+        if account_rows:
+            parsed[str(account_id).strip()] = account_rows
+    return parsed
+
+
+def _mapped_slug(account_id: str, object_key: str) -> str | None:
+    """``skip``, a slug, or None when this image has no map entry."""
+    rows = load_image_map().get(account_id) or {}
+    if not rows:
+        return None
+    stem = Path(object_key).stem.lower()
+    name = Path(object_key).name.lower()
+    for candidate in (object_key.lower(), name, stem):
+        if candidate in rows:
+            return rows[candidate]
+    return None
+
+
+def _article_for_slug(slug: str, catalog: list[Article]) -> Article | None:
+    wanted = slug.strip().lower()
+    for article in catalog:
+        if article.slug.lower() == wanted:
+            return article
+    return None
 
 
 def _match_catalog_article(object_key: str, catalog: list[Article]) -> Article | None:
@@ -803,6 +960,101 @@ def _match_catalog_article(object_key: str, catalog: list[Article]) -> Article |
         if article.slug.lower() == slug.lower():
             return article
     return None
+
+
+def _img_source(tag: str) -> str:
+    attrs: dict[str, str] = {}
+    for key, value in re.findall(r"""([A-Za-z0-9:-]+)\s*=\s*["']([^"']+)["']""", tag):
+        attrs[key.lower()] = html.unescape(value)
+    for name in ("data-orig-file", "data-large-file", "data-src", "data-lazy-src", "src"):
+        if attrs.get(name):
+            return attrs[name]
+    return ""
+
+
+def _content_image_urls(raw_html: str, site_url: str) -> list[str]:
+    """Image URLs in post HTML, in order, skipping data URIs and svg icons."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for tag in _IMG_TAG_RE.findall(raw_html or ""):
+        url = _absolute_url(_img_source(tag), site_url)
+        if not url or url in seen:
+            continue
+        path = urlsplit(url).path.lower()
+        if path.endswith(".svg") or "spacer" in path or "pixel.gif" in path:
+            continue
+        seen.add(url)
+        found.append(url)
+    return found
+
+
+def _absolute_url(url: str, site_url: str) -> str:
+    text = (url or "").strip()
+    if not text or text.startswith("data:"):
+        return ""
+    if text.startswith("//"):
+        return "https:" + text
+    if text.startswith("/"):
+        parts = urlsplit(site_url)
+        if not parts.scheme or not parts.netloc:
+            return ""
+        return f"{parts.scheme}://{parts.netloc}{text}"
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    return ""
+
+
+def _same_image(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    return urlsplit(left).path.rstrip("/").lower() == urlsplit(right).path.rstrip("/").lower()
+
+
+def _image_is_text_graphic(img) -> bool:
+    """True for flat title cards (dark field, few colors), false for photographs."""
+    from PIL import Image  # noqa: PLC0415
+
+    small = img.convert("RGB").resize((48, 72), Image.Resampling.BOX)
+    pixels = list(small.getdata())
+    count = len(pixels)
+    if count == 0:
+        return True
+    mean = [sum(pixel[channel] for pixel in pixels) / count for channel in range(3)]
+    variance = sum(
+        (pixel[0] - mean[0]) ** 2
+        + (pixel[1] - mean[1]) ** 2
+        + (pixel[2] - mean[2]) ** 2
+        for pixel in pixels
+    ) / count
+    spread = variance ** 0.5
+    buckets: dict[tuple[int, int, int], int] = {}
+    for pixel in pixels:
+        key = (pixel[0] // 16, pixel[1] // 16, pixel[2] // 16)
+        buckets[key] = buckets.get(key, 0) + 1
+    dominant = max(buckets.values()) / count
+    if spread < 26 and dominant >= 0.34:
+        return True
+    if dominant >= 0.48:
+        return True
+    # This site's title template: a dark teal field with a few gold marks.
+    teal_field = (
+        mean[0] < 55
+        and 35 <= mean[1] <= 125
+        and 45 <= mean[2] <= 145
+        and dominant >= 0.36
+    )
+    return teal_field
+
+
+def is_text_graphic(path: Path) -> bool:
+    """True when the file is a title graphic rather than a photograph."""
+    from PIL import Image  # noqa: PLC0415
+
+    try:
+        with Image.open(path) as img:
+            return _image_is_text_graphic(img)
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _image_readable(path: Path) -> bool:
@@ -873,6 +1125,31 @@ def _lookup_featured_url(
     return str(payload.get("source_url") or "").strip()
 
 
+def _write_dry_run_card(account_id: str, object_key: str, pin_bytes: bytes) -> Path:
+    """Save a dry-run card under outputs/pinterest/dryrun/ for inspection."""
+    from utils.pipeline_paths import outputs_root  # noqa: PLC0415
+
+    name = Path(object_key).name
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{account_id}_{name}")
+    if not safe.lower().endswith((".jpg", ".jpeg")):
+        safe += ".jpg"
+    dest = outputs_root() / "pinterest" / "dryrun" / safe
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(pin_bytes)
+    return dest
+
+
+def _accept_photo(path: Path, *, label: str) -> bool:
+    if not _image_readable(path):
+        log.info("%s is not a readable image", label)
+        return False
+    if is_text_graphic(path):
+        log.info("%s looks like a title graphic, not a photo", label)
+        path.unlink(missing_ok=True)
+        return False
+    return True
+
+
 def _ensure_source_image(
     object_key: str,
     dest: Path,
@@ -885,30 +1162,52 @@ def _ensure_source_image(
     verify: bool,
     account_id: str,
 ) -> bool:
-    """Use the B2 object. If it is not a readable image, use the featured image."""
+    """Prefer the B2 photo, then a body photo, then a real featured photo.
+
+    Title-card graphics are skipped. If nothing left is a photograph, the
+    caller does not publish.
+    """
     try:
         download_object(object_key, dest, client=client, bucket=bucket)
     except Exception as exc:  # noqa: BLE001
         log.info("B2 download failed for %s: %s", object_key, type(exc).__name__)
         dest.unlink(missing_ok=True)
     else:
-        if _image_readable(dest):
+        if _accept_photo(dest, label=f"B2 object {object_key}"):
             return True
-        log.info("B2 object %s is not a readable image", object_key)
         dest.unlink(missing_ok=True)
+
     featured = _lookup_featured_url(
         article,
         site=site,
         verify=verify,
         account_id=account_id,
     )
+    for url in article.content_image_urls:
+        if featured and _same_image(url, featured):
+            continue
+        log.info("Trying article photo %s for %s", url, object_key)
+        if _download_featured(
+            url,
+            dest,
+            site=site,
+            verify=verify,
+            account_id=account_id,
+        ) and _accept_photo(dest, label=f"article photo {url}"):
+            return True
+        dest.unlink(missing_ok=True)
     if not featured:
         return False
-    log.info("Falling back to the article featured image for %s", object_key)
-    return _download_featured(
+    log.info("Trying featured image for %s", object_key)
+    if not _download_featured(
         featured,
         dest,
         site=site,
         verify=verify,
         account_id=account_id,
-    )
+    ):
+        return False
+    if _accept_photo(dest, label=f"featured image {featured}"):
+        return True
+    dest.unlink(missing_ok=True)
+    return False
