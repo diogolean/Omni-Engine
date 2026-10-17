@@ -655,8 +655,14 @@ def _apply_still_cache_to_jobs(
     work_dir: Path,
     stem: str,
     extra_dirs: "list[Path] | None" = None,
+    spoken_by_act: "dict[int, str] | None" = None,
 ) -> int:
-    """Drop cached acts from *jobs* and stash materialized paths on *meta*."""
+    """Drop cached acts from *jobs* and stash materialized paths on *meta*.
+
+    When *spoken_by_act* is set, a file is reused only if a sidecar says it
+    already passed QA for that exact spoken line. Older topic-slug stills
+    have no sidecar and are generated again.
+    """
     cached = _collect_cached_act_stills(
         n_acts,
         start=start,
@@ -666,6 +672,11 @@ def _apply_still_cache_to_jobs(
     )
     reused = 0
     for act_i, src in cached.items():
+        if spoken_by_act is not None:
+            from modules.reel_grounding.still_cache import cache_matches_spoken
+
+            if not cache_matches_spoken(src, spoken_by_act.get(act_i, "")):
+                continue
         dest = Path(work_dir) / f"{stem}_act{act_i + 1:02d}.png"
         materialized = _materialize_cached_still(src, dest)
         meta.setdefault(act_i, {})["cached_path"] = materialized
@@ -1235,25 +1246,14 @@ def _trim_script_to_word_limit(script: str, max_words: int = 140) -> str:
 def _filter_audio_tag_timings(
     word_timings: list[tuple[str, float, float]],
 ) -> list[tuple[str, float, float]]:
-    """Drop ElevenLabs behavior-tag / SSML tokens from subtitle timings."""
-    if not word_timings:
-        return word_timings
-    _tag_re = _re.compile(
-        r'^\[?(?:cackles?|chuckles?|cold\s*chuckle|arrogant\s*scoff|'
-        r'deep\s*subtle\s*laugh|dry\s*laugh|laughs?|sighs?|whispers?|'
-        r'pause|beat|silence)\]?$',
-        _re.IGNORECASE,
-    )
-    _break_re = _re.compile(r'break|time=|^\d+(\.\d+)?s?$', _re.IGNORECASE)
-    out: list[tuple[str, float, float]] = []
-    for w, s, e in word_timings:
-        if not w:
-            continue
-        tok = w.strip(" .,;:!?<>/\"'")
-        if _tag_re.match(tok) or _break_re.match(tok) or tok.lower() in {"<", ">", "/", "s"}:
-            continue
-        out.append((w, s, e))
-    return out
+    """Drop ElevenLabs behavior-tag / SSML tokens from subtitle timings.
+
+    Years and quantities stay. Only a duration fragment such as ``1.5s``
+    (leaked from a break tag) is removed.
+    """
+    from modules.reel_qa.timings import filter_spoken_timings
+
+    return filter_spoken_timings(word_timings)
 
 
 # ---------------------------------------------------------------------------
@@ -1326,6 +1326,31 @@ _VOICE_MIN_OBSERVED_WPS: float = 0.8      # sanity floor for WPS math
 _VOICE_MAX_OBSERVED_WPS: float = 4.0      # sanity ceiling for WPS math
 # Retained for one-off backwards-compat imports; unused by the new flow.
 _MAX_AUDIO_DURATION_RETRIES: int = 1
+
+
+def _commit_reel_angle(caption_engine, page_ctx, topic: str, script: str) -> None:
+    """Record the angle locked for an accepted Ancient Knowledge script.
+
+    The script call already happened. This only appends one ledger row.
+    """
+    page_id = (getattr(page_ctx, "page_id", "") or "") if page_ctx is not None else ""
+    mode = (getattr(page_ctx, "narrative_mode", "") or "") if page_ctx is not None else ""
+    from modules.reel_grounding.config import angle_memory_for
+    from modules.reel_grounding.memory import opening_hook, remember_angle
+
+    if not angle_memory_for(page_id, mode):
+        return
+    if len((script or "").split()) < 40:
+        return
+    angle = ""
+    if caption_engine is not None:
+        angle = str(getattr(caption_engine, "last_reel_angle", "") or "")
+    remember_angle(
+        channel=page_id,
+        topic=topic,
+        angle=angle,
+        hook=opening_hook(script),
+    )
 
 
 def _synthesize_sequence_voice_track(
@@ -3500,6 +3525,9 @@ def _produce_variant_worker(
                 generated_hooks_cache=generated_hooks_cache,
                 cost_tracker=cost_tracker,
             )
+            _commit_reel_angle(
+                caption_engine, page_ctx, resolved_subject, _early_seq_script,
+            )
             if _voice_path is not None and _narr_dur > 0.5:
                 _ak_voice_ready = True
                 # Round-4 fix: hook/body-bucket/CTA planner runs AFTER measured
@@ -4013,6 +4041,11 @@ def _produce_variant_worker(
                     if _act_i > 0 and (_act_i - 1) < len(_spoken_snippets)
                     else ""
                 )
+                _next_snip = (
+                    _spoken_snippets[_act_i + 1]
+                    if (_act_i + 1) < len(_spoken_snippets)
+                    else ""
+                )
                 # Pull this act's (subject, shot, lighting) from the plan;
                 # subject-pool text now drives the scene concept itself, so
                 # the legacy _act_descriptors[_act_i] is only kept as a
@@ -4096,6 +4129,39 @@ def _produce_variant_worker(
                         f"{_lighting_tail}"
                         f"{_rag_tail}"
                     )
+                try:
+                    from modules.reel_grounding.prompt import assemble_beat
+
+                    _shot_name = _shot_pair[0] if _shot_pair else ""
+                    _shot_text = _shot_pair[1] if _shot_pair else ""
+                    _light_name = _light_pair[0] if _light_pair else ""
+                    _light_text = _light_pair[1] if _light_pair else ""
+                    _beat_plan = assemble_beat(
+                        topic=str(resolved_subject or ""),
+                        script=str(_early_seq_script or ""),
+                        spoken=str(_snippet or ""),
+                        draft=_act_prompt,
+                        shot_name=str(_shot_name or ""),
+                        shot_text=str(_shot_text or ""),
+                        lighting_name=str(_light_name or ""),
+                        lighting_text=str(_light_text or ""),
+                        channel=str((page_ctx.page_id if page_ctx else "") or ""),
+                        domain_anchors=str(_act_anchors or ""),
+                        previous_spoken=str(_prev_snip or ""),
+                        next_spoken=str(_next_snip or ""),
+                        banned=list(_act_banned or []),
+                        negative=str(_act_neg or ""),
+                    )
+                    _act_prompt = _beat_plan.positive
+                    _act_neg = _beat_plan.negative or _act_neg
+                    _act_banned = list(_beat_plan.banned)
+                    if _beat_plan.object_label:
+                        resolved_subject_for_beat = _beat_plan.object_label
+                    else:
+                        resolved_subject_for_beat = str(resolved_subject or "")
+                except Exception as _ground_exc:  # noqa: BLE001
+                    _LOG.warning("visual grounding skipped (%s)", _ground_exc)
+                    resolved_subject_for_beat = str(resolved_subject or "")
                 # Log per-act plan for verifiability — this is the anti-monotony
                 # signal that ends up in the compiled prompt.
                 try:
@@ -4103,8 +4169,9 @@ def _produce_variant_worker(
                     _shot_name_log = _shot_pair[0] if _shot_pair else "(fallback-cycle)"
                     _light_name_log = _light_pair[0] if _light_pair else "(none)"
                     _LOG.info(
-                        "VISUAL PLAN | act %d/%d | subject=%s | shot=%s | lighting=%s",
+                        "VISUAL PLAN | act %d/%d | object=%s | subject=%s | shot=%s | lighting=%s",
                         _act_i + 1, _seq_n,
+                        resolved_subject_for_beat,
                         _subj_name_log, _shot_name_log, _light_name_log,
                     )
                 except Exception:
@@ -4119,6 +4186,7 @@ def _produce_variant_worker(
                     "banned_subjects": list(_act_banned or []),
                     "domain_anchors": str(_act_anchors or ""),
                     "negative_prompt": _act_neg,
+                    "episode_subject": str(resolved_subject_for_beat or ""),
                 }
                 from modules.reel_visual_qa import generate_and_gate as _qwen_gate
 
@@ -4137,10 +4205,17 @@ def _produce_variant_worker(
                     generate_kwargs={
                         "avatar_mode": "OFF",
                         "negative_prompt": _act_neg,
+                        "free_image_sentence": _snippet,
+                        "free_image_entity": str(
+                            resolved_subject_for_beat or resolved_subject or ""
+                        ),
                     },
                     banned_subjects=list(_act_banned or []) or None,
                     domain_anchors=str(_act_anchors or ""),
                     prefer_stem=stem,
+                    episode_subject=str(
+                        resolved_subject_for_beat or resolved_subject or ""
+                    ),
                 )
 
             _gpu_baseline = 0.0
@@ -4165,6 +4240,10 @@ def _produce_variant_worker(
                 work_dir=_reel_img_dir,
                 stem=stem,
                 extra_dirs=[subject_assets] if subject_assets else None,
+                spoken_by_act={
+                    i: str(_sr_act_meta[i].get("snippet") or "")
+                    for i in _sr_act_meta
+                },
             )
 
             _sr_act_results = _run_acts_parallel(_sr_act_jobs)
@@ -4179,6 +4258,18 @@ def _produce_variant_worker(
                 if _gate.extra_generations:
                     _images_generated_this_variant += int(_gate.extra_generations)
                 if _gate.publishable and _gate.path is not None and Path(_gate.path).is_file():
+                    try:
+                        from modules.reel_grounding.still_cache import write_spoken_sidecar
+
+                        _score = (_gate.verdict or {}).get("relevance_score")
+                        write_spoken_sidecar(
+                            _gate.path,
+                            _text,
+                            passed=True,
+                            score=float(_score) if _score is not None else None,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                     _sequence_image_paths.append(Path(_gate.path))
                     _ok_acts += 1
                     _LOG.info(
@@ -4197,9 +4288,15 @@ def _produce_variant_worker(
                 _snippet = _meta["snippet"]
                 _cached_still = _meta.get("cached_path")
                 if _cached_still is not None:
-                    from modules.reel_qa.relevance import evaluate_chunk_relevance as _score_still
+                    from modules.reel_qa.relevance import (
+                        evaluate_chunk_relevance as _score_still,
+                    )
+                    from modules.reel_qa.relevance import (
+                        evaluate_with_technical_retry as _score_retry,
+                    )
 
-                    _cached_verdict = _score_still(
+                    _cached_verdict = _score_retry(
+                        _score_still,
                         _cached_still,
                         _snippet,
                         str(_meta.get("prompt") or ""),
@@ -4250,9 +4347,16 @@ def _produce_variant_worker(
                         generate_kwargs={
                             "avatar_mode": "OFF",
                             "negative_prompt": _meta.get("negative_prompt"),
+                            "free_image_sentence": _snippet,
+                            "free_image_entity": str(
+                                _meta.get("episode_subject") or resolved_subject or ""
+                            ),
                         },
                         banned_subjects=list(_meta.get("banned_subjects") or []) or None,
                         domain_anchors=str(_meta.get("domain_anchors") or ""),
+                        episode_subject=str(
+                            _meta.get("episode_subject") or resolved_subject or ""
+                        ),
                     )
                     _accept_gate(_regen, _act_i, _snippet)
                     continue
@@ -4760,6 +4864,9 @@ def _produce_variant_worker(
                 elif _early_seq_script and len(_early_seq_script.split()) >= 40:
                     _seq_script = _early_seq_script
                     _voiceover_script = _seq_script
+                    _commit_reel_angle(
+                        caption_engine, page_ctx, resolved_subject, _seq_script,
+                    )
                     _LOG.info(
                         "SEQUENCE_REEL | reusing early narrative script "
                         "(%d words) — no regen needed.",
@@ -4798,6 +4905,9 @@ def _produce_variant_worker(
                         cost_tracker.track_text(char_count=len(_seq_script))
                     if _seq_script and len(_seq_script.split()) >= 40:
                         _voiceover_script = _seq_script
+                        _commit_reel_angle(
+                            caption_engine, page_ctx, resolved_subject, _seq_script,
+                        )
                         _LOG.info(
                             "SEQUENCE_REEL | fallback voiceover generated: %d words",
                             len(_seq_script.split()),

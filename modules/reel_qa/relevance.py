@@ -4,24 +4,45 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from modules.reel_qa.config import gemini_model, model_chain, relevance_threshold
 
 _LOG = logging.getLogger(__name__)
 
-_GATE_PROMPT = """You are a visual relevance judge. Compare the image to the spoken beat.
+_GATE_PROMPT = """You are a strict documentary still judge. You are shown the IMAGE.
+Judge the picture. The prompt is context and is not evidence that the picture is correct.
 Return STRICT JSON only — no markdown, no commentary:
 {{
+  "image_description": string,
+  "shows_expected_subject": boolean,
+  "anachronism": boolean,
+  "non_photoreal": boolean,
+  "anatomy_defect": boolean,
+  "setting_contradicts_beat": boolean,
   "is_relevant": boolean,
   "relevance_score": float,
   "detected_subjects": [string],
   "rejection_reason": string
 }}
-relevance_score is 0.0–1.0. rejection_reason must be null when relevance_score >= {threshold:.2f}.
+image_description is a literal caption of the picture: place, objects, whether it is a
+photograph or CGI or a miniature or an illustration, and any anatomy you can see.
+Set anachronism true for a modern, sci-fi, steampunk, or futuristic object in an ancient
+or museum documentary beat, unless the spoken beat itself asks for that object.
+Set non_photoreal true for CGI, a 3D render, an illustration, a cartoon, or a miniature
+or clay-model look.
+Set anatomy_defect true for a mangled, fused, or extra limb.
+Set setting_contradicts_beat true when the place contradicts the spoken beat.
+A visible expected subject is not enough. The wrong place, a non-photoreal look, or a
+broken body still fails.
+is_relevant is true only when every flag above is false and the picture shows the subject.
+relevance_score is 0.0–1.0. rejection_reason is null only when is_relevant is true
+and relevance_score >= {threshold:.2f}.
 Spoken beat: {chunk_text}
 Image prompt: {prompt}
-Does the picture show the subject, object, or action named in the spoken beat?
+The image prompt's EXPECTED SUBJECT or THIS BEAT'S OBJECT is the object this still must show.
+When the spoken beat is abstract and names no object, the picture must still show that
+subject, as a photoreal documentary photograph, in a setting the beat allows.
 """
 
 
@@ -51,6 +72,12 @@ def _provider(name: str):
     return resolve_visual_eval_provider(provider=key)
 
 
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return value is True
+
+
 def _verdict_from_payload(
     data: dict[str, Any],
     *,
@@ -60,20 +87,41 @@ def _verdict_from_payload(
     provider: str,
     model_id: str,
 ) -> dict[str, Any]:
+    from modules.reel_qa.documentary import documentary_failures
     from modules.reel_visual_qa import apply_banned_subject_gate
 
     threshold = relevance_threshold()
     score = float(data.get("relevance_score") or 0.0)
     score = max(0.0, min(1.0, score))
-    relevant = bool(data.get("is_relevant")) and score >= threshold
-    reason = data.get("rejection_reason")
-    if score >= threshold and relevant:
-        reason = None
-    elif not reason:
-        reason = "below_relevance_threshold"
     subjects = data.get("detected_subjects") or []
     if not isinstance(subjects, list):
         subjects = [str(subjects)]
+    subjects = [str(item) for item in subjects][:12]
+    described = " ".join(
+        part for part in (
+            str(data.get("image_description") or ""),
+            " ".join(subjects),
+        ) if part
+    )
+    defects = documentary_failures(described, spoken=chunk_text)
+    for key, label in (
+        ("anachronism", "anachronism"),
+        ("non_photoreal", "non_photoreal"),
+        ("anatomy_defect", "anatomy"),
+        ("setting_contradicts_beat", "setting_contradicts_beat"),
+    ):
+        if _as_bool(data.get(key)) and label not in defects:
+            defects.append(label)
+    relevant = bool(data.get("is_relevant")) and score >= threshold and not defects
+    reason = data.get("rejection_reason")
+    if defects:
+        relevant = False
+        score = min(score, 0.35)
+        reason = "documentary_fail:" + ",".join(defects)
+    elif score >= threshold and relevant:
+        reason = None
+    elif not reason:
+        reason = "below_relevance_threshold"
     verdict = apply_banned_subject_gate(
         {
             "is_relevant": relevant,
@@ -84,6 +132,12 @@ def _verdict_from_payload(
         spoken_text=chunk_text,
         banned_subjects=banned_subjects,
     )
+    if defects:
+        verdict["is_relevant"] = False
+        verdict["hard_reject"] = True
+        verdict["publishable"] = False
+        verdict["documentary_defects"] = list(defects)
+        verdict["rejection_reason"] = "documentary_fail:" + ",".join(defects)
     verdict["qa_status"] = "scored"
     verdict["publishable"] = bool(verdict.get("is_relevant")) and not verdict.get("hard_reject")
     verdict["provider"] = provider
@@ -154,6 +208,47 @@ def evaluate_chunk_relevance(
     reason = "qa_unavailable:" + ",".join(errors or ["no_provider"])
     _LOG.error("VisualQA fail-closed | file=%s | %s", path.name, reason)
     return _unavailable(reason)
+
+
+def evaluate_with_technical_retry(
+    judge: Callable[..., dict[str, Any]],
+    image: Path | str,
+    text: str,
+    prompt: str,
+    banned_subjects: list[str] | None = None,
+) -> dict[str, Any]:
+    """Score one still. Retry the judge on timeout or an invalid reply.
+
+    A scored rejection is returned immediately. Only ``qa_status=unavailable``
+    spends the extra judge calls. The image is not regenerated here.
+    """
+    from modules.reel_qa.config import judge_retries
+
+    extra = judge_retries()
+    verdict: dict[str, Any] = {}
+    for i in range(extra + 1):
+        try:
+            verdict = dict(
+                judge(image, text, prompt, banned_subjects=banned_subjects) or {}
+            )
+        except Exception as exc:  # noqa: BLE001
+            verdict = {
+                "is_relevant": False,
+                "relevance_score": 0.0,
+                "rejection_reason": f"qa_unavailable:{type(exc).__name__}",
+                "qa_status": "unavailable",
+                "publishable": False,
+            }
+        if verdict.get("qa_status") != "unavailable":
+            return verdict
+        if i < extra:
+            _LOG.warning(
+                "VisualQA technical failure (%s) — judge retry %d/%d",
+                verdict.get("rejection_reason"),
+                i + 1,
+                extra,
+            )
+    return verdict
 
 
 def verdict_passed(verdict: dict[str, Any] | None) -> bool:

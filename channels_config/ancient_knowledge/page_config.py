@@ -35,8 +35,10 @@ CONTENT_NICHE: str = (
 DEFAULT_AVATAR_MODE: str = "OFF"
 DEFAULT_FORMAT: str = "IMAGE_BACKGROUND"
 IMAGE_ASPECT_RATIO: str = "4:5"
-# Search public-domain and CC libraries before Flux. See
+# Search public-domain and CC libraries before Flux for cards. See
 # docs/architecture/ADR-free-images-first.md.
+# Reel beats stay on Flux unless REEL_FREE_IMAGES=1. A Commons hit on the
+# place name does not illustrate an artefact beat.
 IMAGE_SOURCE_POLICY: str = "free_first"
 USES_AVATAR_REFERENCE: bool = False
 
@@ -193,6 +195,9 @@ REEL_TIER2_SECONDS_PER_ACT: float = 10.0  # slower body, ~8-12 s / still clamped
 # constants pinned to REEL_DURATION_TARGET_MIN was the Round-6 root cause
 # of the silent under-delivery bug at long durations.
 CONTENT_LIBRARY_LOOKBACK: int = 40   # reject repeating a monument/theme in last N posts
+# A deliberate revisit of the same theme (CLI topic, or the pool running dry)
+# is kept. REEL_ANGLE_MEMORY records the lens used and asks the next script
+# for a different hook, sub-question, evidence focus, or narrative frame.
 
 # WAN_REEL duration window — separate from ECONOMIC_REEL (do not merge).
 # Animated blocks use FIXED clip length (never progressive image pacing).

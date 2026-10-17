@@ -80,47 +80,9 @@ def _ffmpeg_subprocess_timeout_s() -> float:
 
 def kill_descendant_ffmpeg() -> int:
     """Kill ffmpeg processes descended from this Python PID (timeout abort)."""
-    n = 0
-    try:
-        import psutil
+    from utils.process_tools import kill_descendant_ffmpeg as _kill
 
-        me = psutil.Process(os.getpid())
-        for child in me.children(recursive=True):
-            name = (child.name() or "").lower()
-            if "ffmpeg" in name:
-                try:
-                    child.kill()
-                    n += 1
-                except Exception:  # noqa: BLE001
-                    pass
-        return n
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        pid = os.getpid()
-        ps = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                (
-                    "$seen=@(); $frontier=@(" + str(pid) + "); "
-                    "while($frontier.Count -gt 0){ $p=$frontier[0]; "
-                    "if($frontier.Count -gt 1){$frontier=$frontier[1..($frontier.Count-1)]}else{$frontier=@()}; "
-                    "Get-CimInstance Win32_Process -Filter \"ParentProcessId=$p\" | ForEach-Object { "
-                    "$seen+=$_; $frontier+=$_.ProcessId } }; "
-                    "$seen | Where-Object { $_.Name -match 'ffmpeg' } | "
-                    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-                ),
-            ],
-            timeout=20,
-            check=False,
-            capture_output=True,
-        )
-        del ps
-    except Exception:  # noqa: BLE001
-        pass
-    return n
+    return _kill()
 
 
 def _caption_words(text: str) -> list[str]:

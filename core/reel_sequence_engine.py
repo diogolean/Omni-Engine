@@ -1173,6 +1173,7 @@ def build_sequence_script_prompt(
     batch_angle_block: str = "",
     uniqueness_rejection: str = "",
     channel_name: str = "",
+    angle_block: str = "",
 ) -> str:
     """
     Build an LLM prompt that produces an N-act spoken script.
@@ -1265,6 +1266,9 @@ def build_sequence_script_prompt(
         f"\nUNIQUENESS REJECTION (REGENERATE):\n{uniqueness_rejection}\n"
         if uniqueness_rejection else ""
     )
+    _angle_section = (
+        f"\n{angle_block.strip()}\n" if (angle_block or "").strip() else ""
+    )
     # RAG-driven per-channel script/voice guidance (see docstring in
     # core/channel_rag_bridge.py). Falls back to empty string when
     # the channel has no script_rules section in the RAG yet -- the
@@ -1335,6 +1339,7 @@ NARRATOR VOICE: {persona_voice}
 {_rag_script_block}
 {_batch_block}
 {_reject_block}
+{_angle_section}
 STRICT RULES:
 1. Divide the script into exactly {n_acts} acts using markers: [ACT 1], [ACT 2], ... [ACT {n_acts}].
 2. {pacing_note}

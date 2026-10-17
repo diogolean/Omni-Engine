@@ -32,6 +32,7 @@ jobs:
           tests/test_memory_client.py
           tests/test_supermemory_service.py
           tests/test_repo_root_layout.py
+          tests/test_reel_judge_documentary.py
 
       - name: Test
         run: >
@@ -42,3 +43,9 @@ jobs:
           tests/test_memory_client.py
           tests/test_supermemory_service.py
           tests/test_repo_root_layout.py
+          tests/test_reel_grounding.py
+          tests/test_reel_ooparts_grounding.py
+          tests/test_reel_angle_memory.py
+          tests/test_reel_followup_fixes.py
+          tests/test_ffmpeg_kill_posix.py
+          tests/test_reel_judge_documentary.py

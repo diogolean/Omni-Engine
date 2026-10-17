@@ -806,6 +806,37 @@ def build_reel_narration_prompt(
     else:
         _angle = _rnd_angle.choice(_REEL_PSYCH_ANGLES)
 
+    _prior_angles = ""
+    if _mode == "investigative":
+        _cid = ""
+        try:
+            _cid = str(getattr(_active_channel(channel), "channel_id", "") or "")
+        except Exception:  # noqa: BLE001
+            _cid = ""
+        from modules.reel_grounding.config import angle_memory_for
+
+        if angle_memory_for(_cid, _mode):
+            _pool: list[str] = []
+            try:
+                if _is_isolated_channel(channel):
+                    _pool = [
+                        str(item).strip()
+                        for item in (
+                            _active_channel(channel).get_narrative_angles("investigative") or []
+                        )
+                        if str(item).strip()
+                    ]
+            except Exception:  # noqa: BLE001
+                _pool = []
+            if not _pool:
+                _pool = list(_REEL_INVESTIGATION_ANGLES)
+            from modules.reel_grounding.memory import plan_episode_angle
+
+            _plan = plan_episode_angle(channel=_cid, topic=topic, pool=_pool)
+            if _plan.angle:
+                _angle = _plan.angle
+            _prior_angles = _plan.prior_block
+
     _bait_block = ""
     if engagement_bait_examples:
         _bait_block = dedent(f"""
@@ -948,6 +979,7 @@ def build_reel_narration_prompt(
             ── MANDATORY INVESTIGATION ANGLE (use this as your narrative lens) ──
             Explore this specific concept: {_angle}
             Weave it naturally into the narration without naming it directly.
+            {_prior_angles}
 
             ─── YOUR TASK ───
             Produce a JSON object with exactly three fields:
@@ -1843,6 +1875,32 @@ class CaptionEngine:
             _rag_channel_name = str(getattr(self._channel, "channel_id", "") or "")
         except Exception:  # noqa: BLE001
             _rag_channel_name = ""
+        _angle_block = ""
+        _chosen_angle = ""
+        from modules.reel_grounding.config import angle_memory_for
+
+        if angle_memory_for(_rag_channel_name, narrative_mode):
+            _pool: list[str] = []
+            try:
+                _pool = [
+                    str(item).strip()
+                    for item in (self._channel.get_narrative_angles("investigative") or [])
+                    if str(item).strip()
+                ]
+            except Exception:  # noqa: BLE001
+                _pool = []
+            if not _pool:
+                _pool = list(_REEL_INVESTIGATION_ANGLES)
+            from modules.reel_grounding.memory import plan_episode_angle
+
+            _plan = plan_episode_angle(
+                channel=_rag_channel_name,
+                topic=topic,
+                pool=_pool,
+            )
+            _chosen_angle = _plan.angle
+            _angle_block = _plan.prompt_block
+        self.last_reel_angle = _chosen_angle
         prompt = build_sequence_script_prompt(
             topic=topic,
             niche=page_niche or topic,
@@ -1856,6 +1914,7 @@ class CaptionEngine:
             batch_angle_block=batch_angle_block,
             uniqueness_rejection=uniqueness_rejection,
             channel_name=_rag_channel_name,
+            angle_block=_angle_block,
         )
 
         # Append CTA instruction so the single voice script ends with the follow call.

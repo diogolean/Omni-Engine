@@ -15,6 +15,8 @@ from modules.reel_qa.prompts import extract_site, named_entities
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _CLAUSE = re.compile(r"(?<=[,;:])\s+")
+# "perfectly. The Coso..." — the tail of the previous sentence.
+_LEAD_FRAGMENT = re.compile(r"^([a-z][^.]{0,40}\.)\s+(\S.+)$")
 
 
 @dataclass
@@ -57,6 +59,32 @@ def _split_long_sentence(sentence: str, duration: float, max_s: float) -> list[t
     return [(c, span) for c in chunks if c]
 
 
+def _attach_leading_fragments(
+    groups: list[tuple[str, float]],
+    *,
+    max_s: float,
+) -> list[tuple[str, float]]:
+    """Move a lowercase sentence tail back onto the previous beat."""
+    if len(groups) < 2:
+        return groups
+    out: list[tuple[str, float]] = [groups[0]]
+    for text, dur in groups[1:]:
+        match = _LEAD_FRAGMENT.match((text or "").strip())
+        if not match:
+            out.append((text, dur))
+            continue
+        lead, rest = match.group(1), match.group(2)
+        prev_text, prev_dur = out[-1]
+        words = max(1, len(text.split()))
+        lead_dur = dur * max(1, len(lead.split())) / words
+        if prev_dur + lead_dur > max_s + 0.55:
+            out.append((text, dur))
+            continue
+        out[-1] = (f"{prev_text} {lead}".strip(), prev_dur + lead_dur)
+        out.append((rest, max(0.1, dur - lead_dur)))
+    return out
+
+
 def pack_sentences(
     text: str,
     duration_s: float,
@@ -91,6 +119,7 @@ def pack_sentences(
             buf_d += dur
     if buf:
         groups.append((" ".join(buf), buf_d))
+    groups = _attach_leading_fragments(groups, max_s=max_s)
     if len(groups) >= 2 and groups[-1][1] < min_s * 0.55:
         prev_t, prev_d = groups[-2]
         tail_t, tail_d = groups[-1]
@@ -107,17 +136,32 @@ def _scene_for(
     *,
     index: int,
     inherited: dict[str, Any] | None,
+    previous_spoken: str = "",
+    next_spoken: str = "",
 ) -> dict[str, Any]:
     base = inherited or {}
-    entities = named_entities(text, str(base.get("domain_anchors") or ""))
-    site = extract_site(text, str(base.get("domain_anchors") or ""))
+    anchors = str(base.get("domain_anchors") or "")
+    entities = named_entities(text, anchors)
+    site = extract_site(text, anchors)
     entity_bit = (", ".join(entities[:4])) if entities else ""
-    site_bit = f" Site: {site}." if site else ""
-    name_bit = f" Named entity: {entity_bit}." if entity_bit else ""
-    prompt = (
-        f"Photoreal documentary still of this spoken beat: {text}. "
-        f"{name_bit}{site_bit} No extra landmarks. No text."
-    ).strip()
+    try:
+        from modules.reel_grounding.prompt import ground_image_prompt
+
+        prompt = ground_image_prompt(
+            topic=anchors or text,
+            script=anchors,
+            spoken=text,
+            domain_anchors=anchors,
+            previous_spoken=previous_spoken,
+            next_spoken=next_spoken,
+        )
+    except Exception:  # noqa: BLE001
+        site_bit = f" The place is context only: {site}." if site else ""
+        name_bit = f" Named entity: {entity_bit}." if entity_bit else ""
+        prompt = (
+            f"PRIMARY SUBJECT: {text}. "
+            f"Narration sentence: {text}.{name_bit}{site_bit} No extra landmarks. No text."
+        ).strip()
     return {
         "scene_index": index,
         "spoken_text": text,
@@ -189,8 +233,18 @@ def refine_reel_beats(
             for i, chunk in enumerate(chunks):
                 end = cursor + scaled[i]
                 parent = inherited if isinstance(inherited, dict) else {}
+                previous = chunks[i - 1].text if i else ""
+                following = chunks[i + 1].text if i + 1 < len(chunks) else ""
                 built.append(
-                    _scene_for(chunk.text, cursor, end, index=i, inherited=parent)
+                    _scene_for(
+                        chunk.text,
+                        cursor,
+                        end,
+                        index=i,
+                        inherited=parent,
+                        previous_spoken=previous,
+                        next_spoken=following,
+                    )
                 )
                 cursor = end
             return BeatPlan(
@@ -223,6 +277,8 @@ def refine_reel_beats(
     cursor = 0.0
     for i, (text, dur) in enumerate(zip(packed_text, packed_dur)):
         parent = scenes[i] if scenes and i < len(scenes) else inherited
+        previous = packed_text[i - 1] if i else ""
+        following = packed_text[i + 1] if i + 1 < len(packed_text) else ""
         built_scenes.append(
             _scene_for(
                 text,
@@ -230,6 +286,8 @@ def refine_reel_beats(
                 cursor + dur,
                 index=i,
                 inherited=parent if isinstance(parent, dict) else {},
+                previous_spoken=previous,
+                next_spoken=following,
             )
         )
         cursor += dur

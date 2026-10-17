@@ -487,7 +487,7 @@ def test_wrap_falls_back_to_flux_and_free_only_does_not() -> None:
     wrapped = wrap_image_generate(
         generate,
         channel="ancient_knowledge",
-        page_cfg={"IMAGE_SOURCE_POLICY": "free_first"},
+        page_cfg={"IMAGE_SOURCE_POLICY": "free_first", "REEL_FREE_IMAGES": "1"},
         producer="reel_image",
     )
     # Patch the name the wrapper closes over.
