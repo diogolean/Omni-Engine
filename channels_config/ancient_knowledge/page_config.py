@@ -35,6 +35,9 @@ CONTENT_NICHE: str = (
 DEFAULT_AVATAR_MODE: str = "OFF"
 DEFAULT_FORMAT: str = "IMAGE_BACKGROUND"
 IMAGE_ASPECT_RATIO: str = "4:5"
+# Search public-domain and CC libraries before Flux. See
+# docs/architecture/ADR-free-images-first.md.
+IMAGE_SOURCE_POLICY: str = "free_first"
 USES_AVATAR_REFERENCE: bool = False
 
 # ---------------------------------------------------------------------------

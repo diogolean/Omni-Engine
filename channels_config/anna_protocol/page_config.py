@@ -26,6 +26,8 @@ DEFAULT_FORMAT = "IMAGE_AVATAR"
 
 # Gemini aspect ratio used by VisualArchitect when page is active.
 IMAGE_ASPECT_RATIO = "3:4"
+# Anna's Garden posts can use a licensed photograph before a generated still.
+IMAGE_SOURCE_POLICY = "free_first"
 
 # Whether this page supports a human likeness reference image.
 USES_AVATAR_REFERENCE = True

@@ -395,7 +395,12 @@ class PinTransformer:
         subject_slug = record.get("subject_slug", "pin")
         variant = record.get("variant_index", 0)
 
-        source = self._load_source(img_path, imgbb_url, record.get("local_video_path", ""))
+        source = self._resolve_source(
+            record,
+            img_path,
+            imgbb_url,
+            record.get("local_video_path", ""),
+        )
         if source is None:
             log.warning("No source image for: %s v%s", topic, variant)
             return None
@@ -435,7 +440,12 @@ class PinTransformer:
             or cfg.DEFAULT_TOPIC
         )
 
-        source = self._load_source(img_path, imgbb_url, record.get("local_video_path", ""))
+        source = self._resolve_source(
+            record,
+            img_path,
+            imgbb_url,
+            record.get("local_video_path", ""),
+        )
         if source is None:
             return None
 
@@ -481,6 +491,29 @@ class PinTransformer:
                 log.warning("Cannot extract still from %s: %s", video_path, exc)
 
         return None
+
+    def _resolve_source(
+        self,
+        record: dict,
+        local_path: str,
+        imgbb_url: str,
+        video_path: str = "",
+    ) -> "Image.Image | None":
+        """Owned file first. Free-license search only when that file is missing.
+
+        Pin-sized Flux stays in the scheduler. The image returned here is
+        always composited by ``_compose``. The raw download is not the pin.
+        """
+        source = self._load_source(local_path, imgbb_url, video_path)
+        if source is not None:
+            return source
+        try:
+            from agents.media.free_images.integrate import load_card_source
+
+            return load_card_source(record, self.pins_dir, allow_flux=False)
+        except Exception as exc:  # noqa: BLE001
+            log.info("Free card source skipped (%s)", type(exc).__name__)
+            return None
 
     def _compose(self, source: Image.Image, visual_hook: str) -> Image.Image:
         """Assemble the final 1000x1500 canvas."""
