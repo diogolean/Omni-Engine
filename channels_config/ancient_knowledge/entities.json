@@ -48,10 +48,17 @@
     "name": "Quimbaya golden ornaments",
     "aliases": ["quimbaya", "golden jet", "jet planes", "colombian golden"],
     "kind": "artifact",
-    "canonical_visual": "small golden ornaments shaped like ancient jet aircraft",
+    "canonical_visual": "small pre-Columbian gold pendants and figurines resting in a museum case",
     "era": "pre-Columbian Colombia",
     "setting": "museum case",
-    "confusions": ["modern jet airliner", "cannon", "runway"],
+    "confusions": [
+      "fighter jet",
+      "modern aircraft",
+      "sci-fi hangar",
+      "spaceship",
+      "steampunk",
+      "runway"
+    ],
     "channels": ["ancient_knowledge"]
   },
   {

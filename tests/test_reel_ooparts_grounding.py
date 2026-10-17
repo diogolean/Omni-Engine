@@ -185,7 +185,7 @@ def test_four_object_episode_switches_subject_per_segment() -> None:
     assert all("Antikythera Mechanism" in rows[i] for i in (0, 1))
     assert all("Coso artifact" in rows[i] for i in range(2, 7))
     assert all("Serapeum granite boxes" in rows[i] for i in range(7, 10))
-    assert all("Colombian golden jet planes" in rows[i] for i in range(10, 13))
+    assert all("Quimbaya gold pendants" in rows[i] for i in range(10, 13))
     # Neighbour text about the Coso artifact must not override the new subject.
     switched = assemble_beat(
         topic=_TOPIC,

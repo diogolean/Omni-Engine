@@ -157,6 +157,78 @@ def test_a_pyramid_episode_keeps_the_pyramid() -> None:
     assert not re.search(r"\bpyramid\b", forced.negative.lower())
 
 
+def test_commentary_stays_a_documentary_still_and_quimbaya_is_a_pendant() -> None:
+    entities = load_entities("ancient_knowledge")
+    quimbaya = next(item for item in entities if item.id == "quimbaya_ornaments")
+    assert "pendant" in quimbaya.canonical_visual.lower()
+    assert "jet" not in quimbaya.canonical_visual.lower()
+    shots = normalize_shots(
+        [
+            _blank(
+                "Puma Punku's H-blocks are cut to a precision that still stands.",
+                id="s01",
+                entity_id="puma_punku",
+                subject="Puma Punku",
+                canonical_visual="andesite blocks",
+                setting="high Andean stone platform",
+                camera="wide documentary view",
+                shot_type="wide",
+            ),
+            _blank(
+                "Mainstream narratives struggle with these techniques.",
+                id="s02",
+                entity_id="library",
+                subject="a modern library",
+                canonical_visual="a modern library with bookshelves and a reading lamp",
+                setting="modern library",
+                camera="reading lamp over bookshelves",
+            ),
+            _blank(
+                "The Quimbaya ornaments are small gold works from Colombia.",
+                id="s03",
+                entity_id="quimbaya_ornaments",
+                subject="fighter jet",
+                canonical_visual="a futuristic gold fighter jet in a sci-fi hangar",
+                setting="sci-fi hangar",
+                camera="cinematic spaceship",
+            ),
+            _blank(
+                "Historians keep debating what experimental replicas imply.",
+                id="s04",
+                entity_id="spaceship",
+                subject="gold airplane",
+                canonical_visual="gold planes floating in a spaceship corridor",
+                setting="spaceship corridor",
+                camera="futuristic",
+            ),
+        ],
+        entities,
+    )
+    library = shots[1]
+    assert library.entity_id == "puma_punku"
+    assert "library" not in library.setting.lower()
+    assert "library" not in library.canonical_visual.lower()
+    assert "platform" in library.setting.lower() or "site" in library.camera.lower()
+    pendant = shots[2]
+    assert pendant.entity_id == "quimbaya_ornaments"
+    assert "pendant" in pendant.canonical_visual.lower()
+    assert "jet" not in pendant.canonical_visual.lower()
+    assert "hangar" not in pendant.setting.lower()
+    debate = shots[3]
+    assert debate.entity_id == "quimbaya_ornaments"
+    assert "spaceship" not in debate.setting.lower()
+    assert "museum" in debate.setting.lower() or "museum" in debate.camera.lower()
+    rendered = render_shot(debate)
+    positive = rendered.positive.lower()
+    assert "photoreal documentary photograph" in positive
+    assert "real camera" in positive
+    assert "fighter jet" not in positive
+    assert "spaceship" not in positive
+    assert "steampunk" in rendered.negative.lower()
+    for foreign in ("relationship", "attachment", "therapy", "couple", "wellness"):
+        assert foreign not in rendered.negative.lower()
+
+
 def test_schema_rejects_a_shot_with_no_visual() -> None:
     plan = build_shot_list("Lost OOPArts", _BCE)
     raw = plan.to_dict()

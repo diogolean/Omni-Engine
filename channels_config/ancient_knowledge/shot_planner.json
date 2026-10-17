@@ -15,16 +15,21 @@
     "3D render",
     "flat lighting",
     "smartphone",
-    "modern clothing"
-  ],
-  "identity_negatives": [
-    "relationship",
-    "attachment",
-    "therapy",
-    "couple",
+    "modern clothing",
     "graphite",
-    "wellness"
+    "miniature model",
+    "clay diorama",
+    "steampunk",
+    "science fiction",
+    "futuristic interior",
+    "spaceship",
+    "fighter jet",
+    "modern aircraft",
+    "hangar",
+    "modern library"
   ],
+  "identity_negatives": [],
+  "style_lock": "Photoreal documentary photograph from a real camera. Natural materials, dust, and stone or metal as they exist. 35mm film grain, full-bleed, no text, no watermark, no border.",
   "recency_tags": [
     "pyramid",
     "sphinx",

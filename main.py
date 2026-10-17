@@ -4041,7 +4041,7 @@ def _produce_variant_worker(
                     tracker=cost_tracker,
                 )
             except Exception as _plan_exc:  # noqa: BLE001
-                _LOG.warning("shot planner unavailable (%s)", _plan_exc)
+                _LOG.warning("[ShotPlanner] fell back to resolver: %s", _plan_exc)
                 _planned_shots = None
             for _act_i in range(_sr_act_start, _seq_n):
                 _snippet = (

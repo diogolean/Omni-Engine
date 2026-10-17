@@ -64,8 +64,11 @@ def render_shot(shot: Shot, config: dict | None = None, *, channel: str = "") ->
         f"Era: {shot.era}.",
         f"Mood: {shot.mood}.",
         f"Lighting: {shot.lighting}.",
-        "Photoreal documentary photograph, 35mm film grain, full-bleed,",
-        "no text, no watermark, no border.",
+        str(cfg.get("style_lock") or "").strip()
+        or (
+            "Photoreal documentary photograph from a real camera, "
+            "35mm film grain, full-bleed, no text, no watermark, no border."
+        ),
     ))
     negative = ", ".join(_negative_list(shot, cfg))
     return RenderedPrompt(positive=positive, negative=negative, subject=subject)

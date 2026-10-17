@@ -33,6 +33,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Planner and other reel calls attribute cost to the reel channel. The
+# process default (ACTIVE_PAGE) stays anna_protocol when a local .env says so.
+_COST_CHANNEL = threading.local()
+
+
+def bind_cost_channel(channel: str | None) -> None:
+    """Attribute Google cost lines on this thread to ``channel``."""
+    name = (channel or "").strip()
+    _COST_CHANNEL.name = name or None
+
 # Official Gemini 2.5 Flash list prices (USD / 1M tokens)
 FLASH_INPUT_USD_PER_1M: float = 0.075
 FLASH_OUTPUT_USD_PER_1M: float = 0.30
@@ -106,6 +116,9 @@ def max_google_attempts() -> int:
 
 
 def active_channel() -> str:
+    override = getattr(_COST_CHANNEL, "name", None)
+    if override:
+        return str(override)
     env = (os.getenv("ACTIVE_PAGE") or "").strip()
     if env:
         return env

@@ -31,6 +31,15 @@ _CLOSE_CUES = (
     "makes us wonder",
     "remains unexplained",
 )
+_COMMENTARY_CUES = (
+    "historian",
+    "debate",
+    "mainstream",
+    "experimental replica",
+    "technological perception",
+    "pre-columbian knowledge",
+    "scholars disagree",
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +84,19 @@ def is_abstract_close(text: str) -> bool:
     if not low:
         return False
     return any(cue in low for cue in _CLOSE_CUES)
+
+
+def is_commentary(text: str) -> bool:
+    """A line about interpretation, not a new physical scene.
+
+    Historians debating, mainstream narratives, and experimental replicas
+    stay on the real artefact or the real site. They are not a licence for
+    a library, a hangar, or a spaceship.
+    """
+    low = " ".join(_fold(text).split())
+    if not low:
+        return False
+    return any(cue in low for cue in _COMMENTARY_CUES)
 
 
 def load_entities(channel: str) -> list[Entity]:

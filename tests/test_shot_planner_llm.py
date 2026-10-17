@@ -84,6 +84,9 @@ def test_prompt_forbids_era_generic_entities_and_asks_for_a_hero_shot() -> None:
     assert "2nd century BCE device" in text
     assert "museum hero" in text
     assert "antikythera_mechanism" in text
+    assert "small gold pendants" in text
+    assert "never a modern jet" in text
+    assert "steampunk" in text
 
 
 def test_invalid_json_is_retried_once_then_accepted() -> None:
@@ -152,3 +155,71 @@ def test_cost_tracker_is_bound_for_the_call(monkeypatch) -> None:
 
 def test_relevance_threshold_stays_at_070() -> None:
     assert RELEVANCE_THRESHOLD == 0.70
+
+
+def test_visible_warning_says_whether_the_planner_was_used(monkeypatch, caplog) -> None:
+    import logging
+
+    monkeypatch.setenv("REEL_SHOT_PLANNER", "1")
+    with caplog.at_level(logging.WARNING):
+        plan = plan_for_reel(
+            channel="ancient_knowledge",
+            topic="Lost OOPArts",
+            script=_BCE,
+            complete=lambda prompt, system=None: _bad_model_json(),
+        )
+    assert plan is not None
+    assert "[ShotPlanner] used planner (" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        missed = plan_for_reel(
+            channel="ancient_knowledge",
+            topic="Lost OOPArts",
+            script=_BCE,
+            complete=lambda prompt, system=None: "still not json",
+        )
+    assert missed is None
+    assert "[ShotPlanner] fell back to resolver:" in caplog.text
+
+
+def test_planner_cost_line_uses_the_reel_channel(caplog) -> None:
+    import logging
+
+    from core.google_guardrail import GoogleCostTracker, bind_cost_channel
+
+    seen: list[str | None] = []
+
+    def _record(channel: str | None) -> None:
+        seen.append(channel)
+
+    # The planner binds the reel channel around the Gemini call, then clears it.
+    import core.google_guardrail as guard
+
+    original = guard.bind_cost_channel
+    guard.bind_cost_channel = _record  # type: ignore[method-assign]
+    try:
+        plan_episode(
+            "Lost OOPArts",
+            _BCE,
+            complete=lambda prompt, system=None: _bad_model_json(),
+        )
+    finally:
+        guard.bind_cost_channel = original
+    assert seen[0] == "ancient_knowledge"
+    assert seen[-1] is None
+
+    bind_cost_channel("ancient_knowledge")
+    try:
+        tracker = GoogleCostTracker()
+        with caplog.at_level(logging.INFO, logger="core.google_guardrail"):
+            tracker.record(
+                model="models/gemini-2.5-flash",
+                kind="text",
+                input_tokens=20,
+                output_tokens=20,
+                source="shot_planner",
+            )
+        assert any(entry.channel == "ancient_knowledge" for entry in tracker._entries)
+    finally:
+        bind_cost_channel(None)
+    assert "channel=ancient_knowledge" in caplog.text

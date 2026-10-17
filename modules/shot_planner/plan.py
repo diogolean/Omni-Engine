@@ -32,6 +32,12 @@ _SYSTEM = (
     "A closing line that names no object, such as profound questions about "
     "our world, uses the episode's main artefact, a cinematic museum hero "
     "shot, and that artefact's canonical visual. "
+    "A commentary line — historians debating, mainstream narratives, "
+    "experimental replicas, technological perception — is a grounded "
+    "documentary shot of the real artefact in a museum case, the real site, "
+    "or an archaeologist examining it. Never a library, sci-fi, steampunk, "
+    "or a futuristic hangar. "
+    "Quimbaya ornaments are small gold pendants, never a modern jet. "
     "Use entity_id and canonical_visual from the knowledge base when the "
     "sentence names that entity."
 )
@@ -62,6 +68,10 @@ def planner_prompt(topic: str, script: str, entities: list[Entity]) -> str:
         "Do not invent an entity from an era word plus a generic noun. "
         "A closing line with no object is a cinematic museum hero shot of "
         "the episode's main artefact. "
+        "Commentary lines stay documentary: the real artefact in a museum "
+        "case, the real site, or an archaeologist examining it. "
+        "Never sci-fi, steampunk, a futuristic hangar, or a modern library. "
+        "Quimbaya ornaments are small gold pendants, never a modern jet. "
         "Return JSON with channel, topic, narration, and shots. "
         "Each shot needs id, narration, entity_id, subject, canonical_visual, "
         "shot_type (macro, close, medium, wide, aerial, over_shoulder), "
@@ -145,24 +155,33 @@ def _unbind_tracker(tracker: Any | None) -> None:
     set_cost_tracker(None)
 
 
-def plan_episode(
+def _bind_channel(channel: str) -> None:
+    from core.google_guardrail import bind_cost_channel
+
+    bind_cost_channel(channel)
+
+
+def _unbind_channel() -> None:
+    from core.google_guardrail import bind_cost_channel
+
+    bind_cost_channel(None)
+
+
+def _run_planner(
     topic: str,
     script: str,
     *,
-    channel: str = "ancient_knowledge",
-    complete: CompleteFn | None = None,
-    tracker: Any | None = None,
-) -> ShotList | None:
-    """Call the model once, then once more if the JSON does not validate.
-
-    Returns None when both attempts fail. The caller uses the resolver.
-    """
+    channel: str,
+    complete: CompleteFn | None,
+    tracker: Any | None,
+) -> tuple[ShotList | None, str]:
+    """One structured call, then one repair. The reason is empty on success."""
     entities = load_entities(channel)
     user = planner_prompt(topic, script, entities)
     fn = complete or _default_complete
     errors = ["no response"]
-    raw = ""
     _bind_tracker(tracker)
+    _bind_channel(channel)
     try:
         for attempt in (1, 2):
             prompt = user if attempt == 1 else (
@@ -181,11 +200,35 @@ def plan_episode(
                 raw, topic=topic, script=script, channel=channel, entities=entities,
             )
             if plan is not None:
-                return plan
-            _LOG.warning("shot planner attempt %d invalid JSON: %s", attempt, "; ".join(errors))
+                return plan, ""
+            _LOG.warning(
+                "shot planner attempt %d invalid JSON: %s",
+                attempt,
+                "; ".join(errors),
+            )
     finally:
         _unbind_tracker(tracker)
-    return None
+        _unbind_channel()
+    reason = "; ".join(errors) if errors else "invalid shot list"
+    return None, reason
+
+
+def plan_episode(
+    topic: str,
+    script: str,
+    *,
+    channel: str = "ancient_knowledge",
+    complete: CompleteFn | None = None,
+    tracker: Any | None = None,
+) -> ShotList | None:
+    """Call the model once, then once more if the JSON does not validate.
+
+    Returns None when both attempts fail. The caller uses the resolver.
+    """
+    plan, _reason = _run_planner(
+        topic, script, channel=channel, complete=complete, tracker=tracker,
+    )
+    return plan
 
 
 def plan_for_reel(
@@ -199,15 +242,13 @@ def plan_for_reel(
     """The reel hook. Flag off, or a non-Ancient-Knowledge channel, skips the call."""
     if not planner_enabled(channel):
         return None
-    plan = plan_episode(
+    plan, reason = _run_planner(
         topic, script, channel=channel, complete=complete, tracker=tracker,
     )
     if plan is None:
-        _LOG.warning(
-            "shot planner returned no valid shot list; the resolver will build prompts",
-        )
+        _LOG.warning("[ShotPlanner] fell back to resolver: %s", reason)
         return None
-    _LOG.info("shot planner | shots=%d | topic=%s", len(plan.shots), (topic or "")[:80])
+    _LOG.warning("[ShotPlanner] used planner (%d shots)", len(plan.shots))
     return plan
 
 
