@@ -261,22 +261,15 @@ def _script_conflicts(script: str, seen_scripts: Sequence[str], seen_fps: set[st
 
 
 def _require_production_memory(topic: str | None) -> object:
+    from modules.memory.gate import require_production_memory
+
     from .tools.supermemory_bridge import HISTORY_CONTAINER, get_bridge
 
-    bridge = get_bridge()
-    if not bridge.is_active:
-        raise RuntimeError(
-            "production animation requires Supermemory at localhost:6767; "
-            "the self-healing startup hook could not make it ready"
-        )
-    _LOG.info(
-        "Supermemory production gate ready at %s (container_tag=%s)",
-        bridge.base_url,
-        HISTORY_CONTAINER,
+    return require_production_memory(
+        get_bridge(),
+        topic,
+        container_tag=HISTORY_CONTAINER,
     )
-    if topic and bridge.check_topic_similarity(topic):
-        raise ValueError(f"Supermemory rejected repetitive production topic: {topic}")
-    return bridge
 
 
 def _persist_production_package(

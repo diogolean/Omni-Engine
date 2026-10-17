@@ -14,7 +14,6 @@ from channels_config.aiwake.tools.supermemory_bridge import (
     ensure_supermemory_running,
     lexical_similarity,
 )
-from channels_config.aiwake.tools import supermemory_bridge as bridge_module
 from channels_config.aiwake.tests.test_dialogue_regression import (
     _response,
     _seat_required_roles,
@@ -33,14 +32,17 @@ class _RejectOnce:
 
 
 def test_ensure_supermemory_running_starts_wsl_silently(monkeypatch) -> None:
-    bridge_module._START_ATTEMPTED = False
+    from modules.memory import wsl as wsl_module
+
+    wsl_module.reset_start_attempt()
+    monkeypatch.setenv("SUPERMEMORY_AUTOSTART_WSL", "1")
     states = iter([False, True])
     launched: list[tuple[list[str], dict]] = []
 
-    monkeypatch.setattr(bridge_module, "_port_open", lambda *args, **kwargs: next(states))
-    monkeypatch.setattr(bridge_module.sys, "platform", "win32")
+    monkeypatch.setattr(wsl_module, "_port_open", lambda *args, **kwargs: next(states))
+    monkeypatch.setattr(wsl_module.sys, "platform", "win32")
     monkeypatch.setattr(
-        bridge_module.subprocess,
+        wsl_module.subprocess,
         "Popen",
         lambda command, **kwargs: launched.append((command, kwargs)),
     )
@@ -57,8 +59,8 @@ def test_ensure_supermemory_running_starts_wsl_silently(monkeypatch) -> None:
         "/home/freedom_or_death/.supermemory/bin/supermemory-server",
     ]
     assert kwargs["creationflags"] == 0x08000000
-    assert kwargs["stdout"] is bridge_module.subprocess.DEVNULL
-    assert kwargs["stderr"] is bridge_module.subprocess.DEVNULL
+    assert kwargs["stdout"] is wsl_module.subprocess.DEVNULL
+    assert kwargs["stderr"] is wsl_module.subprocess.DEVNULL
 
 
 def test_offline_bridge_never_raises_when_server_is_down(tmp_path: Path) -> None:
