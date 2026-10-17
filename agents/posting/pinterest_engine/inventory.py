@@ -340,12 +340,18 @@ def resolve_video_path(record: dict) -> str:
 
 
 def _title_from_clip_name(filename: str) -> str:
+    """Filename stem turned into words. Not a pin title — used only to reject that mistake."""
     stem = Path(filename).stem
     stem = re.sub(r"^reel_", "", stem, flags=re.IGNORECASE)
     stem = re.sub(r"_v\d+$", "", stem, flags=re.IGNORECASE)
     words = [w for w in re.split(r"[_\-]+", stem) if w]
     topic = " ".join(words).strip() or "Ancient Mysteries"
     return topic[:80]
+
+
+def is_video_filename(name: str) -> bool:
+    """True when *name* is a video clip. Those files are never published as pins."""
+    return Path(str(name or "")).suffix.lower() in _VIDEO_EXTS
 
 
 def extract_video_still(video_path: Path, dest: Path) -> str:
@@ -400,6 +406,108 @@ RULES:
 OUTPUT: Valid JSON only, no markdown:
 {{"pinterest_title": "...", "pinterest_caption": "...", "visual_hook": "..."}}
 """
+
+
+def generate_pin_copy(topic: str, source_text: str, *, variant_idx: int = 0) -> dict:
+    """
+    Build pin title, caption, and hook from article text.
+
+    DeepSeek (``DEEPSEEK_API_KEY`` in the environment) is used when it is
+    configured. Otherwise the same template builders as inventory sync fill
+    the fields from the article topic and body. The caller must not pass a
+    filename as *topic*.
+    """
+    topic = (topic or "").strip()
+    source = (source_text or "").strip()
+    if not topic and not source:
+        return {}
+    if not topic:
+        topic = source.split(".")[0].strip()[:80] or source[:80]
+    ai = _generate_deepseek(topic, source, source, variant_idx)
+    if ai.get("pinterest_title") and ai.get("pinterest_caption"):
+        if not ai.get("visual_hook"):
+            ai["visual_hook"] = build_visual_hook(topic)
+        return ai
+    return {
+        "pinterest_title": build_title_template(topic),
+        "pinterest_caption": build_caption_regex(source or topic, variant_idx),
+        "visual_hook": build_visual_hook(topic),
+    }
+
+
+def _generate_deepseek(
+    topic: str,
+    caption: str,
+    fact_sheet: str,
+    variant_idx: int,
+) -> dict:
+    """Same JSON contract as ``_generate_ai``, via the DeepSeek chat API."""
+
+    import requests  # noqa: PLC0415
+
+    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+
+    api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+    if not api_key:
+        return {}
+    if not cfg.AI_SYSTEM_PROMPT and not caption and not fact_sheet:
+        return {}
+
+    source = caption if caption not in ("PENDING_CAPTION", "") else fact_sheet[:500]
+    url = cfg.TARGET_URL
+    url_rule = (
+        f" pointing to: {url}\n   Example: \"Full details are linked in this pin.\""
+        if url else
+        " inviting the reader to learn more from the pin link"
+    )
+    user_msg = _AI_USER_TPL.format(topic=topic, caption=source or topic, url_rule=url_rule)
+    base = (os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1").rstrip("/")
+    model = (
+        os.getenv("DEEPSEEK_FLASH_MODEL")
+        or os.getenv("DEEPSEEK_MODEL")
+        or "deepseek-v4-flash"
+    ).strip()
+    if model.lower() in {"deepseek-chat", "deepseek-coder", "deepseek-chat-v3"}:
+        model = "deepseek-v4-flash"
+    system = cfg.AI_SYSTEM_PROMPT or (
+        "You write Pinterest pin copy from the article text. "
+        "Never use a filename as the title."
+    )
+    try:
+        resp = requests.post(
+            f"{base}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_msg},
+                ],
+                "max_tokens": 900,
+            },
+            timeout=60,
+        )
+    except requests.RequestException as exc:
+        log.warning("DeepSeek pin copy failed for '%s': %s", topic, type(exc).__name__)
+        return {}
+    if resp.status_code != 200:
+        log.warning("DeepSeek pin copy HTTP %s for '%s'", resp.status_code, topic)
+        return {}
+    try:
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
+        raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("```").strip()
+        data = json.loads(raw)
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError) as exc:
+        log.warning("DeepSeek pin copy parse failed for '%s': %s", topic, type(exc).__name__)
+        return {}
+    return {
+        "pinterest_title": str(data.get("pinterest_title", ""))[:100],
+        "pinterest_caption": str(data.get("pinterest_caption", "")),
+        "visual_hook": str(data.get("visual_hook", "")),
+    }
 
 
 def _generate_ai(
@@ -682,11 +790,8 @@ class MasterInventory:
         return [
             e for e in data.get("entries", [])
             if not e.get("publication_status", {}).get("posted_on_pinterest", False)
-            and (
-                e.get("local_image_path")
-                or e.get("imgbb_url")
-                or e.get("local_video_path")
-            )
+            and (e.get("local_image_path") or e.get("imgbb_url"))
+            and str(e.get("media_kind") or "image").lower() != "video"
             and e.get("pinterest_title")
             and e.get("pinterest_caption")
         ]
@@ -745,7 +850,6 @@ class MasterInventory:
         Returns a dict with individual check results and an overall 'ready' bool.
         Prints a formatted report to stdout.
         """
-        import os  # noqa: PLC0415
 
         checks: dict[str, object] = {}
 
@@ -841,6 +945,7 @@ class MasterInventory:
     def _load_ai_client(self) -> tuple:
         try:
             import anthropic  # noqa: PLC0415
+
             from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
 
             if not cfg.ANTHROPIC_API_KEY:
@@ -886,54 +991,10 @@ class MasterInventory:
         existing_map: dict[str, dict],
     ) -> int:
         """
-        Add inventory rows for clips/ videos not already linked to a library post.
-        Extracts a still so the image transformer / image-pin fallback still works.
+        Video clips are not pins.
+
+        ``clips/`` used to be turned into inventory rows titled from the
+        filename. Image cards come from library images or B2 image objects.
         """
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
-
-        clips_dir = self.outputs_dir / "clips"
-        if not clips_dir.is_dir():
-            return 0
-
-        linked = {
-            Path(e["local_video_path"]).name
-            for e in entries
-            if e.get("local_video_path")
-        }
-        added = 0
-
-        for clip in sorted(clips_dir.iterdir()):
-            if clip.suffix.lower() not in _VIDEO_EXTS:
-                continue
-            if clip.name in linked:
-                continue
-            post_id = f"recycle_{clip.stem}"[:80]
-            prev = existing_map.get(post_id, {})
-            topic = prev.get("topic") or _title_from_clip_name(clip.name)
-            entry = {
-                "post_id": post_id,
-                "channel_id": cfg.CHANNEL_ID or "",
-                "content_library_id": "",
-                "topic": topic,
-                "subject_slug": clip.stem,
-                "variant_index": 0,
-                "original_caption": prev.get("original_caption") or topic,
-                "raw_fact_sheet": "",
-                "imgbb_url": "",
-                "image_relative": "",
-                "local_image_path": prev.get("local_image_path", ""),
-                "local_video_path": str(clip.resolve()),
-                "media_kind": "video",
-                "created_utc": prev.get("created_utc", ""),
-                "target_url": _target_url(),
-                "pinterest_title": prev.get("pinterest_title", ""),
-                "pinterest_caption": prev.get("pinterest_caption", ""),
-                "visual_hook": prev.get("visual_hook", ""),
-                "publication_status": prev.get("publication_status")
-                or _empty_publication_status(),
-            }
-            if not entry["pinterest_title"] or not entry["pinterest_caption"]:
-                self._fill_templates(entry, topic, 0)
-            entries.append(entry)
-            added += 1
-        return added
+        del entries, existing_map
+        return 0

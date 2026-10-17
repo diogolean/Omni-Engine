@@ -150,7 +150,13 @@ def resolve_channel_env_path(channel_id: str) -> Path:
       4. workspace ``.env``
     """
     cid = _safe_channel_id(channel_id)
+    # channels_env/ is the read-write mount of the host channels_config tree.
+    # It is checked first so a refreshed token is written somewhere that
+    # survives a new container. The image's own channels_config package stays
+    # on the later candidates.
     candidates = [
+        ENGINE_ROOT / "channels_env" / cid / ".env",
+        ENGINE_ROOT / "channels_env" / cid / f".env.{cid}",
         CHANNELS_CONFIG_DIR / cid / ".env",
         CHANNELS_CONFIG_DIR / cid / f".env.{cid}",
         ENGINE_ROOT / f".env.{cid}",

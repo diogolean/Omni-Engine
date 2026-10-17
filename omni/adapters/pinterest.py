@@ -19,10 +19,19 @@ class PinterestAccountPublisher(Publisher):
 
     def publish_once(self, content: Content, account: Account) -> PublishResult:
         from agents.posting.pinterest_engine import config as cfg
+        from agents.posting.pinterest_engine.inventory import is_video_filename
         from agents.posting.pinterest_engine.publisher import (
             PinterestPublisher,
             PinterestTokenExpiredError,
         )
+
+        if _is_video_pin(content, is_video_filename):
+            return PublishResult(
+                ok=False,
+                platform=self.platform,
+                idempotency_key=content.idempotency_key,
+                error="video pins are disabled",
+            )
 
         cfg.configure(channel_id=account.branding)
         # When no dotenv file was loaded, PinterestPublisher.__init__ calls
@@ -67,6 +76,15 @@ class PinterestAccountPublisher(Publisher):
             external_id=external_id or None,
             error=None if external_id else "pinterest response missing id",
         )
+
+
+def _is_video_pin(content: Content, is_video_filename) -> bool:
+    if content.media_path and is_video_filename(content.media_path):
+        return True
+    if str(content.payload.get("media_kind") or "").strip().lower() == "video":
+        return True
+    video = str(content.payload.get("local_video_path") or "")
+    return bool(video and is_video_filename(video) and not content.media_bytes)
 
 
 def _record_from_content(content: Content) -> dict[str, Any]:

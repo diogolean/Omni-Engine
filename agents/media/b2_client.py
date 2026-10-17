@@ -45,8 +45,9 @@ def _reload_dotenv_if_needed() -> None:
     ).strip():
         return
     try:
-        from dotenv import load_dotenv
         from pathlib import Path
+
+        from dotenv import load_dotenv
 
         env_path = Path(__file__).resolve().parents[2] / ".env"
         if env_path.is_file():
@@ -65,6 +66,75 @@ def resolve_b2_bucket_name() -> str:
             "Check .env loading sequence."
         )
     return bucket_name
+
+
+def media_bucket_name() -> str:
+    """Bucket for Pinterest image listing.
+
+    Uploads still require an explicit ``B2_BUCKET_NAME`` via
+    :func:`resolve_b2_bucket_name`. Listing defaults to MediaupscaleStorage
+    when that variable is empty.
+    """
+    _reload_dotenv_if_needed()
+    bucket_name = (os.getenv("B2_BUCKET_NAME") or "").strip()
+    return bucket_name or _B2_BUCKET_FALLBACK
+
+
+def list_object_keys(prefix: str, *, client=None, bucket: str | None = None) -> list[str]:
+    """Return object keys under *prefix*. Does not download object bodies."""
+    s3 = client if client is not None else _get_b2_resource().meta.client
+    bucket_name = (bucket or "").strip() or media_bucket_name()
+    keys: list[str] = []
+    token: str | None = None
+    while True:
+        kwargs: dict = {"Bucket": bucket_name, "Prefix": prefix or ""}
+        if token:
+            kwargs["ContinuationToken"] = token
+        page = s3.list_objects_v2(**kwargs)
+        for item in page.get("Contents") or []:
+            key = str(item.get("Key") or "")
+            if key and not key.endswith("/"):
+                keys.append(key)
+        if not page.get("IsTruncated"):
+            break
+        token = page.get("NextContinuationToken")
+        if not token:
+            break
+    return keys
+
+
+def download_object(
+    key: str,
+    dest: Path,
+    *,
+    client=None,
+    bucket: str | None = None,
+) -> Path:
+    """Download one object to *dest*. Never deletes the B2 object."""
+    s3 = client if client is not None else _get_b2_resource().meta.client
+    bucket_name = (bucket or "").strip() or media_bucket_name()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        s3.download_file(bucket_name, key, str(dest))
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+    return dest
+
+
+def read_object_text(key: str, *, client=None, bucket: str | None = None) -> str | None:
+    """Read one small object (a sidecar JSON) as text. Missing keys return None."""
+    s3 = client if client is not None else _get_b2_resource().meta.client
+    bucket_name = (bucket or "").strip() or media_bucket_name()
+    try:
+        obj = s3.get_object(Bucket=bucket_name, Key=key)
+    except Exception as exc:  # noqa: BLE001 — missing sidecar, not a credential dump
+        logger.info("B2 object not read (%s): %s", type(exc).__name__, key)
+        return None
+    body = obj["Body"].read()
+    if isinstance(body, bytes):
+        return body.decode("utf-8")
+    return str(body)
 
 
 def _is_storage_cap_error(exc: BaseException) -> bool:
@@ -104,7 +174,7 @@ def _get_b2_resource():
     - endpoint_url hardcoded        : immune to .env whitespace/BOM issues
     """
     try:
-        import boto3                       # noqa: PLC0415
+        import boto3  # noqa: PLC0415
         from botocore.config import Config  # noqa: PLC0415
     except ImportError as exc:
         raise RuntimeError(

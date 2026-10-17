@@ -1,0 +1,36 @@
+# Pinterest accounts for the VM scheduler.
+#
+# Add an account by copying a block. No Python change is required.
+# Token values never go in this file — only the env var names.
+# The scheduler publishes image cards for every block with active: true
+# whose site and board are set (TODO means "not ready", and that account
+# is skipped).
+
+accounts:
+  - channel_id: ancient_knowledge
+    active: true
+    display_name: Ancient Knowledge
+    niche: ancient mysteries and lost civilizations
+    site_url: https://ancientknowledge.eokviral.com
+    b2_prefix: ancient_knowledge/
+    board_name: Ancient Knowledge
+    board_id_env: PINTEREST_BOARD_ID_ANCIENT_KNOWLEDGE
+    access_token_env: PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE
+    refresh_token_env: PINTEREST_REFRESH_TOKEN_ANCIENT_KNOWLEDGE
+    app_id_env: PINTEREST_APP_ID_ANCIENT_KNOWLEDGE
+    app_secret_env: PINTEREST_APP_SECRET_ANCIENT_KNOWLEDGE
+
+  - channel_id: anna_protocol
+    active: true
+    display_name: "Anna's Garden"
+    # Site and board are not known yet. Replace the TODOs before this
+    # account can publish. The B2 prefix and token env names are ready.
+    niche: TODO
+    site_url: TODO
+    b2_prefix: anna_protocol/
+    board_name: TODO
+    board_id_env: PINTEREST_BOARD_ID_ANNA_PROTOCOL
+    access_token_env: PINTEREST_ACCESS_TOKEN_ANNA_PROTOCOL
+    refresh_token_env: PINTEREST_REFRESH_TOKEN_ANNA_PROTOCOL
+    app_id_env: PINTEREST_APP_ID_ANNA_PROTOCOL
+    app_secret_env: PINTEREST_APP_SECRET_ANNA_PROTOCOL

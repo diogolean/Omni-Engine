@@ -91,7 +91,7 @@ jobs:
           chmod 600 ~/.ssh/vm_key
           known=(-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes)
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
-            "mkdir -p /opt/omni-engine/credentials /opt/omni-engine/outputs"
+            "mkdir -p /opt/omni-engine/credentials /opt/omni-engine/outputs /opt/omni-engine/channels_config/ancient_knowledge /opt/omni-engine/channels_config/anna_protocol"
           scp -i ~/.ssh/vm_key "${known[@]}" \
             docker-compose.yml "$VM_USER@$VM_HOST:/opt/omni-engine/docker-compose.yml"
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \

@@ -450,7 +450,7 @@ The Pinterest sub-engine operates independently via `agents/posting/pinterest_ma
 
 OAuth tokens are obtained once via `agents/posting/pinterest_oauth.py`. Channel tokens for Ancient Knowledge land in `channels_config/ancient_knowledge/.env.ancient_knowledge`; other channels use `channels_config/<id>/.env` or the factory-root `.env`.
 
-`config/brandings.yaml` lists every branding and platform. The scheduler publishes only where `active: true`. Ancient Knowledge and Anna's Protocol each have their own token and board (`PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE`, `PINTEREST_ACCESS_TOKEN_ANNA_PROTOCOL`, and the matching `PINTEREST_BOARD_ID_*` vars). The CLI is unchanged:
+`config/brandings.yaml` lists every branding and platform. The VM scheduler reads `config/pinterest_accounts.yaml` and publishes image cards only, one B2 object at a time. Ancient Knowledge links each pin to its article on `https://ancientknowledge.eokviral.com`. Anna's Garden (`anna_protocol`) keeps `TODO` for its site and board until those are known. Tokens stay in the env vars named in that file. Brandings still publish only where `active: true`. Ancient Knowledge and Anna's Protocol each have their own token and board (`PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE`, `PINTEREST_ACCESS_TOKEN_ANNA_PROTOCOL`, and the matching `PINTEREST_BOARD_ID_*` vars). The CLI is unchanged:
 
 ```bash
 python agents/posting/pinterest_main.py schedule --channel ancient_knowledge --quantity 1
@@ -481,7 +481,7 @@ docker compose exec engine python main.py --channel wonder_feed --post-type ECON
 docker compose logs -f scheduler
 ```
 
-One scheduler wake posts `PINTEREST_PINS_PER_RUN` pins (default 1) for each active Pinterest branding, then sleeps a random gap between `MIN_INTERVAL_HOURS` and `MAX_INTERVAL_HOURS` (default 3–6). That replaces the manual PowerShell drip loop. `python -m omni.worker --role scheduler --once` runs a single wake.
+One scheduler wake posts `PINTEREST_PINS_PER_RUN` image pins (default 1) for each ready account in `config/pinterest_accounts.yaml`, then sleeps a random gap between `MIN_INTERVAL_HOURS` and `MAX_INTERVAL_HOURS` (default 3–6). Video objects are skipped. Titles come from the article or DeepSeek, not from the filename. `python -m omni.worker --role scheduler --once` runs a single wake. Add `--dry-run` to build the cards without calling Pinterest.
 
 ### GitHub Secrets
 
@@ -518,7 +518,7 @@ nano /opt/omni-engine/.env
 # credentials/tokens/youtube_token_<page>.json
 ```
 
-Copy an existing outputs tree to `/opt/omni-engine/outputs` if the drip should continue an inventory you already have. The scheduler reads `outputs/<channel>/master_inventory.json` from that directory.
+The published-pin ledger is `outputs/pinterest/published_pins.json` on the mounted outputs volume (account, B2 object, and article). Channel env files the operator maintains live at `/opt/omni-engine/channels_config/<channel>/.env` and `.env.<channel>`. Compose mounts that directory read-write at `channels_env/` inside the container so a token refresh survives the next container, without hiding the image's channel package. Root `/opt/omni-engine/.env` is mounted read-write for the same reason.
 
 ### GHCR login on the VM
 

@@ -162,10 +162,11 @@ def test_pinterest_cli_still_accepts_channel(tmp_path: Path) -> None:
 def test_scheduler_cycle_publishes_only_active_pinterest(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
 
-    def _fake_drip(account: Account, *, pins: int | None = None) -> dict:
+    def _fake_drip(account: Account, *, pins: int | None = None, dry_run: bool = False) -> dict:
         seen.append(account.branding)
         assert account.active is True
         assert pins is None
+        assert dry_run is False
         return {"published": 0, "errors": 0}
 
     monkeypatch.setattr("omni.worker.run_pinterest_drip", _fake_drip)
