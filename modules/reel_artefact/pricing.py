@@ -39,7 +39,6 @@ _FREE_PROVIDERS = {
     "openverse",
     "europeana",
     "wikimedia",
-    "reuse",
 }
 
 
@@ -83,6 +82,7 @@ def tally_paths(paths: list | tuple) -> dict[str, float | int]:
     commons = 0
     flux = 0
     nano = 0
+    reuse = 0
     nano_usd = 0.0
     for raw in paths:
         side = Path(str(raw) + ".source.json")
@@ -96,7 +96,9 @@ def tally_paths(paths: list | tuple) -> dict[str, float | int]:
             if isinstance(payload, dict):
                 provider = str(payload.get("provider") or "")
                 model = str(payload.get("model_id") or "")
-        if provider in _FREE_PROVIDERS:
+        if provider == "reuse":
+            reuse += 1
+        elif provider in _FREE_PROVIDERS:
             commons += 1
         elif provider == "nanobanana":
             nano += 1
@@ -107,6 +109,7 @@ def tally_paths(paths: list | tuple) -> dict[str, float | int]:
         "commons": commons,
         "nanobanana": nano,
         "flux": flux,
+        "reuse": reuse,
         "nanobanana_usd": round(nano_usd, 4),
         "flux_usd": round(flux * FLUX_USD, 4),
         "image_usd": round(nano_usd + flux * FLUX_USD, 4),
@@ -134,6 +137,8 @@ def generation_bill(path, extra_generations: int = 0, *, attempts: int = 0) -> t
         model = str(meta.get("model_id") or "")
         key = "image_nanobanana_lite" if price_for_model(model) <= 0.034 else "image_nanobanana"
         return key, 1
+    if provider == "reuse":
+        return "image_reuse", 1
     if provider in _FREE_PROVIDERS:
         return "image_commons", 1
     return "image_flux_schnell", 1 + extras

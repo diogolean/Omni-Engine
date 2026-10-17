@@ -9,6 +9,7 @@ from pathlib import Path
 from modules.reel_artefact.logbook import note_source
 from modules.reel_artefact.policy import artefact_mode
 from modules.reel_artefact.reuse import reuse_into
+from modules.reel_artefact.role import beat_kind
 from modules.reel_artefact.route import (
     acquire_photo,
     cached_variation,
@@ -44,11 +45,31 @@ def wrap_reel_generate(generate_fn, *, channel: str, shot: Shot | None):
         kwargs.pop("artefact_entity_id", None)
         kwargs.pop("canonical_shape", None)
         kwargs.pop("reference_image", None)
+        kwargs.pop("visual_role", None)
         dest_dir = Path(output_directory) if output_directory else Path(".")
         stem = str(output_stem or "artefact")
         dest = dest_dir / f"{stem}.jpg"
         beat = _beat_index(stem)
         retry = is_retry_stem(stem)
+        kind = beat_kind(
+            entity,
+            narration=str(getattr(shot, "narration", "") or ""),
+            shot_type=str(getattr(shot, "shot_type", "") or ""),
+            camera=str(getattr(shot, "camera", "") or ""),
+            setting=str(getattr(shot, "setting", "") or ""),
+        )
+        if kind == "scene":
+            # A place, people, or commentary beat gets its own documentary
+            # frame. Reusing the artefact still is what made one edit fill
+            # an entire reel.
+            note_source("flux", entity.id if entity is not None else "", beat + 1)
+            return generate_fn(
+                generic_flux_prompt(str(prompt or "")),
+                output_stem=output_stem,
+                output_directory=output_directory,
+                visual_role="documentary",
+                **kwargs,
+            )
         if role == "flux" or mode == "flux":
             return _flux_or_photoreal(
                 generate_fn,

@@ -740,6 +740,7 @@ def _format_cost_block(
         if not isinstance(breakdown, dict):
             return fallback
         from core.cost_tracker import CostTracker as _CT
+        from core.cost_tracker import image_cost_lines
 
         tmp = _CT(page_id=str(breakdown.get("page_id") or "summary"))
         cats = tmp.category_totals(breakdown.get("breakdown") or [])
@@ -759,7 +760,10 @@ def _format_cost_block(
         nano_n = int(cats.get("image_nano_count") or 0)
         real_n = int(cats.get("image_real_count") or 0)
         flux_n = int(cats.get("image_flux_count") or 0)
-        split_images = nano_n > 0 or real_n > 0
+        reuse_n = int(cats.get("image_reuse_count") or 0)
+        split_images = nano_n > 0 or real_n > 0 or reuse_n > 0 or (
+            flux_n > 0 and (nano_n or real_n or reuse_n)
+        )
         compiled_hint = max(int(total_images or 0), billed_imgs)
         if billed_imgs <= 0 and compiled_hint > 0:
             # Compiled stills with no API hits this run (reused) — keep $0 but label it.
@@ -856,23 +860,7 @@ def _format_cost_block(
             + f"${research_cost:.4f}  ({research_tokens:,} tokens)",
         ]
         if split_images:
-            if nano_n:
-                lines.append(
-                    f"  - Image Gen (Nano Banana):".ljust(42)
-                    + f"${float(cats.get('image_nano_cost') or 0):.4f}  "
-                    f"({nano_n} generation{'s' if nano_n != 1 else ''})"
-                )
-            if flux_n:
-                lines.append(
-                    f"  - Image Gen (FLUX Schnell):".ljust(42)
-                    + f"${float(cats.get('image_flux_cost') or 0):.4f}  "
-                    f"({flux_n} generation{'s' if flux_n != 1 else ''}, including retries)"
-                )
-            if real_n:
-                lines.append(
-                    f"  - Image Gen (Commons/real):".ljust(42)
-                    + f"$0.0000  ({real_n} still{'s' if real_n != 1 else ''})"
-                )
+            lines.extend(image_cost_lines(cats))
         else:
             lines.append(
                 f"  - Image Gen (FLUX Schnell):".ljust(42)
@@ -1444,6 +1432,32 @@ def _synthesize_sequence_voice_track(
     cta_text = fix_cta_typos(cta_text or "")
 
     _cta_silence_s: float = 1.0
+    _tts_ckpt = None
+    try:
+        from modules.reel_artefact.checkpoint import ReelCheckpoint as _VoiceCkpt
+        from modules.reel_artefact.checkpoint import mark_tts_resumed as _mark_tts_resumed
+        from modules.reel_artefact.policy import artefact_images_enabled as _voice_flag
+
+        _mark_tts_resumed(False)
+        if _voice_flag() and is_ak:
+            _tts_ckpt = _VoiceCkpt.for_reel(page_id or "ancient_knowledge", stem)
+            _saved_voice = _tts_ckpt.load_tts(script or "")
+            if _saved_voice is not None:
+                _mark_tts_resumed(True)
+                _LOG.info("TTS resume | stem=%s", stem)
+                return (
+                    _saved_voice["voice_path"],
+                    _saved_voice["word_timings"],
+                    _saved_voice["narr_dur"],
+                    _saved_voice["total_s"],
+                    _saved_voice["script"] or (script or ""),
+                    _saved_voice["cta_path"],
+                    _saved_voice["cta_dur"],
+                    _saved_voice["silence_s"],
+                )
+    except Exception as _tts_ckpt_exc:  # noqa: BLE001
+        _LOG.info("TTS checkpoint skipped (%s)", type(_tts_ckpt_exc).__name__)
+        _tts_ckpt = None
 
     def _synth_narr(text: str, attempt_label: int) -> tuple["Path | None", list, float]:
         """Single narration TTS call. Returns (voice_path, word_timings, dur_s)."""
@@ -1510,6 +1524,29 @@ def _synthesize_sequence_voice_track(
             voice_only_path, cta_only_path, stitched_out, silence_s=_cta_silence_s,
         )
 
+    def _voice_return(voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur):
+        if _tts_ckpt is not None and voice_path is not None and Path(voice_path).is_file():
+            try:
+                _narr_file = reel_dir / f"{stem}_v{variant + 1:02d}_narration.mp3"
+                _tts_ckpt.save_tts(
+                    input_script=script or "",
+                    accepted_script=current or "",
+                    narration_path=_narr_file if _narr_file.is_file() else voice_path,
+                    cta_path=cta_path,
+                    voice_path=voice_path,
+                    word_timings=narr_wts,
+                    narr_dur=narr_dur,
+                    total_s=total_s,
+                    cta_dur=cta_dur,
+                    silence_s=_cta_silence_s,
+                )
+            except Exception as _save_exc:  # noqa: BLE001
+                _LOG.info("TTS checkpoint write skipped (%s)", type(_save_exc).__name__)
+        return (
+            voice_path, narr_wts, narr_dur, total_s, current,
+            cta_path, cta_dur, _cta_silence_s,
+        )
+
     # ── Attempt 1 — synthesize once, measure ─────────────────────────────
     current = script or ""
     voice_only_1, narr_wts, narr_dur = _synth_narr(current, attempt_label=1)
@@ -1541,9 +1578,8 @@ def _synthesize_sequence_voice_track(
             "VOICE ACCEPT | attempt=1 total=%.1fs (target %.1fs, tolerance ±%.0f%%)",
             total_s, _reel_dur, 100.0 * _VOICE_TOLERANCE_FRACTION,
         )
-        return (
-            voice_path, narr_wts, narr_dur, total_s, current,
-            cta_path, cta_dur, _cta_silence_s,
+        return _voice_return(
+            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
         )
 
     # Sanity-clamp observed WPS so a broken measurement can't drive the
@@ -1554,9 +1590,8 @@ def _synthesize_sequence_voice_track(
             "[%.2f, %.2f] — falling back to seed WPS and accepting attempt=1",
             observed_wps_1, _VOICE_MIN_OBSERVED_WPS, _VOICE_MAX_OBSERVED_WPS,
         )
-        return (
-            voice_path, narr_wts, narr_dur, total_s, current,
-            cta_path, cta_dur, _cta_silence_s,
+        return _voice_return(
+            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
         )
 
     desired_narr_s = max(5.0, _reel_dur - float(cta_dur or 0.0) - _cta_silence_s)
@@ -1607,9 +1642,8 @@ def _synthesize_sequence_voice_track(
             "accepting attempt=1",
             len(new_script.split()) if new_script else 0,
         )
-        return (
-            voice_path, narr_wts, narr_dur, total_s, current,
-            cta_path, cta_dur, _cta_silence_s,
+        return _voice_return(
+            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
         )
     if cost_tracker is not None:
         cost_tracker.track_text(char_count=len(new_script))
@@ -1620,9 +1654,8 @@ def _synthesize_sequence_voice_track(
         _LOG.warning(
             "VOICE CORRECT | attempt=2 TTS failed — falling back to attempt=1 audio"
         )
-        return (
-            voice_path, narr_wts, narr_dur, total_s, current,
-            cta_path, cta_dur, _cta_silence_s,
+        return _voice_return(
+            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
         )
     # Reuse CTA audio — the text hasn't changed
     voice_path = _stitch(voice_only_2, cta_path)
@@ -1639,9 +1672,8 @@ def _synthesize_sequence_voice_track(
         total_s - _reel_dur,
         100.0 * (total_s - _reel_dur) / _reel_dur if _reel_dur > 0 else 0.0,
     )
-    return (
-        voice_path, narr_wts, narr_dur, total_s, current,
-        cta_path, cta_dur, _cta_silence_s,
+    return _voice_return(
+        voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
     )
 
 
@@ -1945,12 +1977,11 @@ def _print_video_cost_summary(
     audio_label: str = "",
 ) -> None:
     """Print this-reel cost, then running batch total (never mix the two)."""
-    from core.cost_tracker import print_cost_summary
-    from agents.media.providers.model_router import format_video_cost_summary
+    from core.cost_tracker import image_cost_lines, print_cost_summary
 
     cats = cost_tracker.category_totals() if cost_tracker is not None else {}
     img_cost = float(cats.get("image_cost") or 0.0)
-    if img_cost <= 0 and image_count > 0:
+    if img_cost <= 0 and image_count > 0 and not image_cost_lines(cats):
         img_cost = 0.003 * max(0, image_count)
     reel_total = (
         float(reel_cost_usd)
@@ -1975,15 +2006,11 @@ def _print_video_cost_summary(
         post_type=str(post_type or "ECONOMIC_REEL"),
         tts_chars=int(cats.get("tts_chars") or 0),
         audio_label=str(audio_label or ""),
+        categories=cats,
     )
-    line = format_video_cost_summary(
-        image_count=image_count,
-        image_model_label=image_model_label,
-        image_cost_usd=img_cost,
-        pipeline_cost_usd=reel_total,
-    )
-    print(line, flush=True)
-    _LOG.info(line)
+    # The compact "FLUX Schnell N generations" line counted every compiled
+    # still, including reused frames, and contradicted the provider split.
+    del image_model_label
 
 
 def _split_script_into_act_chunks(script: str, n_acts: int) -> list[str]:
@@ -3251,12 +3278,18 @@ def _produce_variant_worker(
     _image_bill: dict[str, int] = {}
     try:
         from modules.reel_artefact.budget import reset_nano_budget as _reset_nano
+        from modules.reel_artefact.budget import reset_spend as _reset_spend
+        from modules.reel_artefact.budget import reset_uses as _reset_uses
+        from modules.reel_artefact.checkpoint import mark_tts_resumed as _mark_tts
         from modules.reel_artefact.logbook import reset as _reset_sources
         from modules.reel_artefact.reuse import reset_approved as _reset_approved
 
         _reset_nano()
+        _reset_spend()
+        _reset_uses()
         _reset_sources()
         _reset_approved()
+        _mark_tts(False)
     except Exception:  # noqa: BLE001
         pass
     _qa_report: dict | None = None
@@ -3579,7 +3612,10 @@ def _produce_variant_worker(
                     _early_cta = (page_ctx.reel_cta_text if page_ctx else "") or ""
                     _early_tts_chars += len(_early_cta)
                     if _early_tts_chars > 0:
-                        cost_tracker.track_audio(char_count=_early_tts_chars, sfx=False)
+                        from modules.reel_artefact.checkpoint import tts_was_resumed as _tts_resumed
+
+                        if not _tts_resumed():
+                            cost_tracker.track_audio(char_count=_early_tts_chars, sfx=False)
                 # Round-4 fix: hook/body-bucket/CTA planner runs AFTER measured
                 # audio (narration + silence + CTA) is known. Never estimates.
                 from core.reel_sequence_engine import (
@@ -3762,6 +3798,36 @@ def _produce_variant_worker(
                     max(_beat_plan.durations or [0.0]),
                     ",".join(f"{d:.2f}" for d in (_beat_plan.durations or [])[:8]),
                 )
+        _cta_beat_index = None
+        if (
+            page_ctx
+            and (page_ctx.page_id or "").lower() == "ancient_knowledge"
+            and _spoken_snippets
+            and _ak_act_durs
+        ):
+            try:
+                from modules.reel_qa.cta_beat import with_cta_beat as _with_cta
+
+                _cta_line = (page_ctx.reel_cta_text or "").strip()
+                _cta_hold = float(locals().get("_cta_audio_dur") or 0.0) + float(
+                    locals().get("_cta_silence_s") or 1.0
+                )
+                if _cta_line:
+                    _spoken_snippets, _ak_act_durs, _cta_beat_index = _with_cta(
+                        list(_spoken_snippets),
+                        list(_ak_act_durs),
+                        _cta_line,
+                        _cta_hold,
+                    )
+                    _seq_n = len(_spoken_snippets)
+                    _LOG.info(
+                        "CTA BEAT | index=%s hold=%.2fs line=%.60s",
+                        _cta_beat_index,
+                        _cta_hold,
+                        _cta_line,
+                    )
+            except Exception as _cta_beat_exc:  # noqa: BLE001
+                _LOG.warning("CTA beat skipped (%s)", _cta_beat_exc)
 
         # Act 1: timestamp-bound generation for AK; cover reuse only as fallback.
         # Master Mei regenerates Scene 1 via FLUX (never graphite raw_bg).
@@ -4093,6 +4159,35 @@ def _produce_variant_worker(
             except Exception as _plan_exc:  # noqa: BLE001
                 _LOG.warning("[ShotPlanner] fell back to resolver: %s", _plan_exc)
                 _planned_shots = None
+            _reel_checkpoint = None
+            _ladder_on = False
+            try:
+                from modules.reel_artefact.budget import beat_budget_usd as _beat_usd
+                from modules.reel_artefact.budget import nano_cap as _nano_cap
+                from modules.reel_artefact.budget import reel_budget_usd as _reel_usd
+                from modules.reel_artefact.checkpoint import ReelCheckpoint as _ReelCkpt
+                from modules.reel_artefact.ladder import rung_names as _rung_names
+                from modules.reel_artefact.policy import artefact_images_enabled as _ladder_flag
+
+                _ladder_on = bool(_ladder_flag())
+                if _ladder_on:
+                    _reel_checkpoint = _ReelCkpt.for_reel(
+                        str((page_ctx.page_id if page_ctx else "") or "ancient_knowledge"),
+                        stem,
+                    )
+                    _LOG.info(
+                        "LADDER | checkpoint=%s | rungs=%s | beat_usd=%.2f | "
+                        "reel_usd=%.2f | nano_cap=%s",
+                        _reel_checkpoint.path,
+                        ",".join(_rung_names()),
+                        _beat_usd(),
+                        _reel_usd(),
+                        _nano_cap(),
+                    )
+            except Exception as _ladder_exc:  # noqa: BLE001
+                _LOG.warning("LADDER setup skipped (%s)", _ladder_exc)
+                _ladder_on = False
+                _reel_checkpoint = None
             for _act_i in range(_sr_act_start, _seq_n):
                 _snippet = (
                     _spoken_snippets[_act_i]
@@ -4241,6 +4336,15 @@ def _produce_variant_worker(
                     except Exception as _ground_exc:  # noqa: BLE001
                         _LOG.warning("visual grounding skipped (%s)", _ground_exc)
                         resolved_subject_for_beat = str(resolved_subject or "")
+                if _cta_beat_index is not None and _act_i == _cta_beat_index:
+                    from modules.reel_artefact.route import generic_flux_prompt as _cta_flux
+
+                    _act_prompt = _cta_flux(
+                        "Setting: a quiet museum hall or an ancient landscape. "
+                        f"{_snippet}"
+                    )
+                    _plan_shot = None
+                    resolved_subject_for_beat = str(_snippet or "closing line")
                 # Log per-act plan for verifiability — this is the anti-monotony
                 # signal that ends up in the compiled prompt.
                 try:
@@ -4284,9 +4388,55 @@ def _produce_variant_worker(
                         _LOG.warning("artefact still hook skipped (%s)", _art_exc)
                 _sr_act_meta[_act_i]["generate_fn"] = _gen
                 _sr_act_meta[_act_i]["artefact_kwargs"] = dict(_art_kwargs)
+                _sr_act_meta[_act_i]["is_cta"] = bool(
+                    _cta_beat_index is not None and _act_i == _cta_beat_index
+                )
                 from modules.reel_visual_qa import generate_and_gate as _qwen_gate
 
-                _sr_act_jobs[_act_i] = functools.partial(
+                _doc_role = (
+                    "documentary"
+                    if (page_ctx.page_id or "").lower() != "master_mei"
+                    else None
+                )
+                if _ladder_on:
+                    from modules.reel_artefact.climb import climb_act as _climb_act
+
+                    _shot_type = str(getattr(_plan_shot, "shot_type", "") or "")
+                    _shot_camera = str(getattr(_plan_shot, "camera", "") or "")
+                    _shot_setting = str(getattr(_plan_shot, "setting", "") or "")
+                    _entity_for_climb = ""
+                    _shape_for_climb = ""
+                    if _plan_shot is not None and not getattr(_plan_shot, "kb_miss", False):
+                        _entity_for_climb = str(getattr(_plan_shot, "entity_id", "") or "")
+                        _shape_for_climb = str(getattr(_plan_shot, "canonical_shape", "") or "")
+                    _sr_act_jobs[_act_i] = functools.partial(
+                        _climb_act,
+                        beat_index=_act_i,
+                        narration=_snippet,
+                        prompt=_act_prompt,
+                        output_directory=_reel_img_dir,
+                        stem=f"{stem}_act{_act_i + 1:02d}",
+                        channel=str((page_ctx.page_id if page_ctx else "") or "ancient_knowledge"),
+                        flux_generate=adapter.generate,
+                        entity_id=_entity_for_climb,
+                        checkpoint=_reel_checkpoint,
+                        generate_kwargs={
+                            "negative_prompt": _act_neg,
+                            "visual_role": _doc_role,
+                        },
+                        episode_subject=str(
+                            resolved_subject_for_beat or resolved_subject or ""
+                        ),
+                        canonical_shape=_shape_for_climb,
+                        banned_subjects=list(_act_banned or []) or None,
+                        is_cta=bool(_sr_act_meta[_act_i]["is_cta"]),
+                        n_beats=int(_seq_n),
+                        shot_type=_shot_type,
+                        camera=_shot_camera,
+                        setting=_shot_setting,
+                    )
+                else:
+                    _sr_act_jobs[_act_i] = functools.partial(
                     _qwen_gate,
                     _gen,
                     prompt=_act_prompt,
@@ -4300,6 +4450,7 @@ def _produce_variant_worker(
                     ],
                     generate_kwargs={
                         "avatar_mode": "OFF",
+                        "visual_role": _doc_role,
                         "negative_prompt": _act_neg,
                         "free_image_sentence": _snippet,
                         "free_image_entity": str(
@@ -4353,16 +4504,26 @@ def _produce_variant_worker(
                 nonlocal _ok_acts, _reel_qa_block_compile, _images_generated_this_variant
                 if _gate.extra_generations:
                     _images_generated_this_variant += int(_gate.extra_generations)
+                _verdict_row = dict(_gate.verdict or {})
                 try:
-                    from modules.reel_artefact.pricing import generation_bill as _generation_bill
+                    if _verdict_row.get("resumed"):
+                        pass
+                    elif _verdict_row.get("ladder"):
+                        for _spend_key, _spend_n in dict(_verdict_row.get("spend") or {}).items():
+                            if int(_spend_n) > 0:
+                                _image_bill[_spend_key] = (
+                                    _image_bill.get(_spend_key, 0) + int(_spend_n)
+                                )
+                    else:
+                        from modules.reel_artefact.pricing import generation_bill as _generation_bill
 
-                    _bill_key, _bill_n = _generation_bill(
-                        _gate.path,
-                        int(_gate.extra_generations or 0),
-                        attempts=len(_gate.attempts or []),
-                    )
-                    if _bill_key and _bill_n > 0:
-                        _image_bill[_bill_key] = _image_bill.get(_bill_key, 0) + int(_bill_n)
+                        _bill_key, _bill_n = _generation_bill(
+                            _gate.path,
+                            int(_gate.extra_generations or 0),
+                            attempts=len(_gate.attempts or []),
+                        )
+                        if _bill_key and _bill_n > 0:
+                            _image_bill[_bill_key] = _image_bill.get(_bill_key, 0) + int(_bill_n)
                 except Exception:  # noqa: BLE001
                     pass
                 _row = _gate.beat_row(index=_idx, text=_text)
@@ -4397,8 +4558,27 @@ def _produce_variant_worker(
                         from modules.reel_artefact.policy import artefact_images_enabled
                         from modules.reel_artefact.reuse import remember_approved
 
-                        if artefact_images_enabled():
-                            remember_approved(_gate.path)
+                        _passed_judge = bool(_verdict_row.get("is_relevant"))
+                        if (
+                            artefact_images_enabled()
+                            and _passed_judge
+                            and not _verdict_row.get("kept")
+                        ):
+                            remember_approved(
+                                _gate.path,
+                                kind=str(_verdict_row.get("beat_kind") or "object"),
+                            )
+                            if _reel_checkpoint is not None and not _verdict_row.get("resumed"):
+                                _reel_checkpoint.save_beat(
+                                    _idx,
+                                    image=_gate.path,
+                                    score=_verdict_row.get("relevance_score"),
+                                    reason=str(_verdict_row.get("rejection_reason") or ""),
+                                    rung=str(_verdict_row.get("rung") or ""),
+                                    verdict=_verdict_row,
+                                    first_pass=_gate.first_pass,
+                                    kind=str(_verdict_row.get("beat_kind") or "object"),
+                                )
                     except Exception:  # noqa: BLE001
                         pass
                     _LOG.info(
@@ -4411,7 +4591,9 @@ def _produce_variant_worker(
                     from modules.reel_artefact.policy import artefact_images_enabled
                     from modules.reel_artefact.reuse import reuse_into
 
-                    if artefact_images_enabled():
+                    # The ladder already judged reuse. A second unjudged copy
+                    # is what filled a reel with one Nano Banana still.
+                    if artefact_images_enabled() and not _verdict_row.get("ladder"):
                         _meta_row_reuse = _sr_act_meta.get(_idx) or {}
                         _entity_id = str(_meta_row_reuse.get("artefact_kwargs", {}).get(
                             "artefact_entity_id", ""
@@ -4491,6 +4673,11 @@ def _produce_variant_worker(
                             _snippet,
                         )
                         continue
+                    if _ladder_on:
+                        _cached_miss = _sr_act_results.get(_act_i)
+                        if isinstance(_cached_miss, StillGateResult):
+                            _accept_gate(_cached_miss, _act_i, _snippet)
+                            continue
                     _regen = _qwen_gate(
                         _meta.get("generate_fn") or adapter.generate,
                         prompt=str(_meta.get("prompt") or _snippet),

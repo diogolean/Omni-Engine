@@ -598,7 +598,7 @@ def test_nano_cap_stops_a_fifth_call(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert calls["n"] == 1
 
 
-def test_commentary_reuses_an_approved_still(
+def test_commentary_uses_a_documentary_frame_not_the_artefact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from modules.reel_artefact.reuse import remember_approved, reset_approved
@@ -625,11 +625,14 @@ def test_commentary_reuses_an_approved_still(
         image_role="flux",
         canonical_shape="a small gold pendant with delta wings, a tail fin, and a stylised head",
     )
-    calls = {"n": 0}
+    calls = {"n": 0, "prompt": ""}
 
-    def _generate(*_args, **_kwargs):
+    def _generate(prompt, **kwargs):
         calls["n"] += 1
-        return None
+        calls["prompt"] = str(prompt or "")
+        dest_path = Path(kwargs["output_directory"]) / f"{kwargs['output_stem']}.jpg"
+        Image.new("RGB", (64, 96), (12, 12, 12)).save(dest_path, format="JPEG")
+        return dest_path
 
     wrapped, _extra = wrap_reel_generate(
         _generate, channel="ancient_knowledge", shot=shot,
@@ -639,10 +642,12 @@ def test_commentary_reuses_an_approved_still(
         output_stem="reel_act08_r01",
         output_directory=tmp_path,
     )
-    assert calls["n"] == 0
+    assert calls["n"] == 1
     assert dest is not None and Path(dest).is_file()
-    side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
-    assert side["provider"] == "reuse"
+    low = calls["prompt"].lower()
+    assert "film grain" in low
+    assert "cyberpunk" not in low
+    assert "dystopian" not in low
 
 
 def test_cheapest_nanobanana_model_is_first(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -666,15 +671,23 @@ def test_cost_lines_split_nano_flux_retries_real_and_tts() -> None:
     tracker = CostTracker(page_id="ancient_knowledge")
     tracker.track_image("image_nanobanana_lite", count=1)
     tracker.track_image("image_flux_schnell", count=3)
-    tracker.track_image("image_commons", count=12)
+    tracker.track_image("image_commons", count=2)
+    tracker.track_image("image_reuse", count=17)
     tracker.track_audio(char_count=1200)
     cats = tracker.category_totals()
     assert cats["image_nano_count"] == 1
     assert cats["image_nano_cost"] == pytest.approx(0.0336)
     assert cats["image_flux_count"] == 3
     assert cats["image_flux_cost"] == pytest.approx(0.009)
-    assert cats["image_real_count"] == 12
+    assert cats["image_real_count"] == 2
+    assert cats["image_reuse_count"] == 17
     assert cats["image_cost"] == pytest.approx(0.0426)
+    from core.cost_tracker import image_cost_lines
+
+    rendered = "\n".join(image_cost_lines(cats))
+    assert "Commons/real" in rendered and "(2 stills)" in rendered
+    assert "Image Gen (reuse)" in rendered and "(17 stills)" in rendered
+    assert "20 generation" not in rendered
     assert cats["tts_chars"] == 1200
     assert cats["audio_cost"] == pytest.approx(1200 * 0.00003)
 

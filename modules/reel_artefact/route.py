@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from modules.reel_artefact.budget import take_nano_slot
+from modules.reel_artefact.budget import note_real_use, real_allowed, take_nano_slot
 from modules.reel_artefact.crop import anchor_for, prepare_reel_frame
 from modules.reel_artefact.fetch import FetchedArtefact, fetch_gallery
 from modules.reel_artefact.logbook import note_source
@@ -26,7 +26,8 @@ _VARIATION_LOCKS: dict[str, threading.Lock] = {}
 
 _GENERIC_PROMPT = (
     "EXPECTED SUBJECT: a photoreal documentary scene. "
-    "Landscape, atmosphere, a museum hall, or an archaeologist at work. "
+    "35mm film grain, natural colour, real location. "
+    "Simple composition: a landscape, a museum hall, or people at a real site. "
     "No close-up of a specific named artefact. "
     "Photoreal documentary photograph from a real camera, full-bleed, "
     "no text, no watermark."
@@ -37,17 +38,43 @@ def is_retry_stem(stem: str) -> bool:
     return len(_RETRY.findall(stem or "")) >= 2
 
 
+def _setting_clause(prompt: str) -> str:
+    """The Setting sentence, keeping abbreviations and parentheticals intact.
+
+    Splitting the whole prompt on ``.`` turned ``(e.g. a plateau)`` into ``(e``.
+    """
+    match = re.search(r"(?i)\bsetting\s*:\s*", prompt or "")
+    if not match:
+        return ""
+    rest = prompt[match.end():]
+    depth = 0
+    out: list[str] = []
+    index = 0
+    while index < len(rest):
+        char = rest[index]
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth:
+            depth -= 1
+        elif char == "." and depth == 0:
+            prev = rest[index - 1] if index else ""
+            nxt = rest[index + 1] if index + 1 < len(rest) else ""
+            if not (prev.isalpha() and nxt.isalpha()):
+                break
+        out.append(char)
+        index += 1
+    clause = "".join(out).strip(" ,")
+    if not clause:
+        return ""
+    return "Setting: " + clause + "."
+
+
 def generic_flux_prompt(prompt: str) -> str:
     """Flux prompt for a beat that must not invent an artefact."""
-    setting = ""
-    for line in (prompt or "").split("."):
-        text = line.strip()
-        if text.lower().startswith("setting:"):
-            setting = text
-            break
     parts = [_GENERIC_PROMPT]
+    setting = _setting_clause(prompt)
     if setting:
-        parts.append(setting + ".")
+        parts.append(setting)
     return " ".join(parts)
 
 
@@ -64,6 +91,7 @@ def acquire_photo(
     beat_index: int = 0,
     allow_nano: bool = True,
     text_only: bool = False,
+    skip_real: bool = False,
 ) -> Path | None:
     """Write the artefact still to ``dest``.
 
@@ -111,9 +139,10 @@ def acquire_photo(
         )
 
     if chosen == "commons":
-        if not stills:
+        fresh = [photo for photo in stills if real_allowed(_photo_key(photo))]
+        if not fresh:
             return None
-        return _publish_real(stills[slot % len(stills)], dest, entity, slot, beat_index)
+        return _publish_real(fresh[slot % len(fresh)], dest, entity, slot, beat_index)
 
     if chosen == "nanobanana":
         reference = reference_photo.reference_path if reference_photo is not None else None
@@ -155,8 +184,10 @@ def acquire_photo(
 
     if chosen != "chain":
         return None
-    if stills:
-        return _publish_real(stills[slot % len(stills)], dest, entity, slot, beat_index)
+    if stills and not skip_real:
+        fresh = [photo for photo in stills if real_allowed(_photo_key(photo))]
+        if fresh:
+            return _publish_real(fresh[slot % len(fresh)], dest, entity, slot, beat_index)
     if allow_nano and reference_photo is not None:
         edited = _variation(
             entity,
@@ -210,6 +241,14 @@ def cached_variation(entity: Entity, *, channel: str, cache_dir: Path | None = N
     return None
 
 
+def _photo_key(fetched: FetchedArtefact) -> str:
+    path = fetched.reference_path
+    try:
+        return str(path.resolve()) if path else ""
+    except OSError:
+        return str(path or "")
+
+
 def _publish_real(
     fetched: FetchedArtefact,
     dest: Path,
@@ -228,6 +267,7 @@ def _publish_real(
     frame.save(dest, format="JPEG", quality=92)
     write_motion_sidecar(dest, profile=profile_for(slot))
     _stamp(dest, fetched, entity, provider=fetched.provider or "commons", model_id="")
+    note_real_use(_photo_key(fetched))
     note_source(f"real:{fetched.provider or 'commons'}", entity.id, int(beat_index) + 1)
     return dest
 
