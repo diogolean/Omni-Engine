@@ -2,7 +2,11 @@
 """Offline checks for the Lost OOPArts stills. No image API calls."""
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 from core.audio_chunker import chunk_word_timings
+from modules.reel_grounding.brief import named_objects
 from modules.reel_grounding.prompt import (
     assemble_beat,
     format_resolved_objects,
@@ -10,6 +14,8 @@ from modules.reel_grounding.prompt import (
 )
 from modules.reel_qa.beats import pack_sentences
 from modules.reel_qa.prompts import refine_prompt
+from modules.reel_qa.relevance import evaluate_chunk_relevance
+from modules.reel_qa.retry import _prompt_for_judge
 
 _TOPIC = "Lost OOPArts"
 _SCRIPT = (
@@ -242,6 +248,88 @@ def test_sentence_final_word_stays_on_its_beat() -> None:
     assert all(not chunk.text.startswith("perfectly.") for chunk in chunks)
     follow = [chunk.text for chunk in chunks if "Coso" in chunk.text]
     assert follow and follow[0].startswith("The Coso")
+
+
+_BCE_BEATS = [
+    "The Antikythera Mechanism came out of a shipwreck.",
+    "Divers found a complex 2nd century BCE device.",
+    "Corroded fragments sat in a museum drawer for decades.",
+    "The gears are cut with a precision that still surprises researchers.",
+    "OOPArts unlock profound questions about our world.",
+]
+_BCE_SCRIPT = " ".join(_BCE_BEATS)
+
+
+def test_era_and_a_generic_noun_do_not_become_an_entity() -> None:
+    assert named_objects("Divers found a complex 2nd century BCE device.") == []
+    assert "BCE device" not in named_objects(_BCE_SCRIPT)
+    for beat in _BCE_BEATS[1:4]:
+        plan = assemble_beat(
+            topic="Lost OOPArts",
+            script=_BCE_SCRIPT,
+            spoken=beat,
+            channel="ancient_knowledge",
+        )
+        label = plan.object_label.lower()
+        assert "antikythera" in label
+        assert "bce" not in label
+        assert "device" not in label
+        assert "corroded bronze gear fragments" in plan.positive.lower()
+
+
+def test_abstract_close_shows_the_main_artefact_and_tells_the_judge() -> None:
+    closing = _BCE_BEATS[-1]
+    plan = assemble_beat(
+        topic="Lost OOPArts",
+        script=_BCE_SCRIPT,
+        spoken=closing,
+        channel="ancient_knowledge",
+    )
+    positive = plan.positive.lower()
+    assert plan.object_label == "the Antikythera Mechanism"
+    assert "museum hero shot" in positive
+    assert "main artefact" in positive
+    assert "corroded bronze gear fragments" in positive
+    assert "bce" not in plan.object_label.lower()
+    judge_prompt = _prompt_for_judge(plan.positive, plan.object_label)
+    assert "antikythera mechanism" in judge_prompt.lower()
+    assert judge_prompt.lower().index("antikythera") < 400
+
+
+def test_judge_scores_an_abstract_line_against_the_expected_subject(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    img = tmp_path / "still.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 32)
+    captured: dict[str, str] = {}
+
+    class _Provider:
+        def evaluate(self, prompt, paths, labels=None):
+            del paths, labels
+            captured["prompt"] = prompt
+            return SimpleNamespace(
+                text=(
+                    '{"is_relevant": true, "relevance_score": 0.91, '
+                    '"detected_subjects": ["Antikythera Mechanism"], '
+                    '"rejection_reason": null}'
+                ),
+                provider="openrouter",
+                model_id="qwen",
+            )
+
+    monkeypatch.setattr("modules.reel_qa.relevance._provider", lambda name: _Provider())
+    spoken = "OOPArts unlock profound questions about our world."
+    prompt = _prompt_for_judge(
+        "a cinematic museum hero shot of corroded bronze gear fragments.",
+        "the Antikythera Mechanism",
+    )
+    verdict = evaluate_chunk_relevance(img, spoken, prompt)
+    assert verdict["is_relevant"] is True
+    assert verdict["relevance_score"] >= 0.70
+    shown = captured["prompt"].lower()
+    assert "expected subject: the antikythera mechanism" in shown
+    assert "0.70" in captured["prompt"]
+    assert spoken.lower() in shown
 
 
 def test_sentence_packer_does_not_leave_the_tail_on_the_next_beat() -> None:

@@ -224,12 +224,64 @@ _NAME_STOP = frozenset({
     "several", "another", "other", "they", "one", "into", "over",
 })
 
+# "2nd century BCE device" is a date plus a generic noun, not a new artefact.
+_ERA_WORDS = frozenset({
+    "bce", "ce", "bc", "ad", "century", "centuries", "ancient", "antiquity",
+    "medieval", "prehistoric", "classical", "hellenistic", "roman", "greek",
+    "egyptian", "sumerian", "early", "late", "mid", "first", "second",
+    "third", "fourth", "fifth", "1st", "2nd", "3rd", "4th", "5th", "circa",
+})
+_GENERIC_OBJECT_NOUNS = frozenset({
+    "device", "devices", "artifact", "artifacts", "artefact", "artefacts",
+    "object", "objects", "relic", "relics", "item", "items",
+    "mechanism", "mechanisms", "thing", "things", "plug", "plugs",
+})
+# A closing line with no named object still needs one concrete picture.
+_CLOSE_CUES = (
+    "profound",
+    "questions about",
+    "our world",
+    "about humanity",
+    "what it means",
+    "makes us wonder",
+    "remains unexplained",
+)
+
 
 def _bare_name(name: str) -> str:
     parts = (name or "").split()
     while parts and parts[0].lower() in _NAME_STOP:
         parts.pop(0)
     return " ".join(parts)
+
+
+def _era_generic_label(name: str, noun: str = "") -> bool:
+    """True when the phrase is only an era and a generic noun.
+
+    ``BCE device`` must not become an entity and displace the Antikythera
+    Mechanism. A real name (``Coso artifact``, ``London Hammer``) stays.
+    """
+    tokens = [tok.lower().strip(".,;:") for tok in f"{name} {noun}".split() if tok]
+    if not tokens:
+        return True
+    boring = _ERA_WORDS | _NAME_STOP | _GENERIC_OBJECT_NOUNS
+    return all(tok in boring or tok.isdigit() for tok in tokens)
+
+
+def _is_abstract_close(text: str) -> bool:
+    """A line that names no artefact and speaks in closing generalities."""
+    low = " ".join((text or "").lower().split())
+    if not low or named_objects(text):
+        return False
+    return any(cue in low for cue in _CLOSE_CUES)
+
+
+def _main_artefact(brief: EpisodeBrief) -> str:
+    """The first real object the episode introduced."""
+    for label in brief.objects:
+        if not _era_generic_label(label):
+            return label
+    return brief.objects[0] if brief.objects else ""
 
 
 def _plural(token: str) -> str:
@@ -288,10 +340,11 @@ def named_objects(text: str) -> list[str]:
         hits.append((min(positions), item.label))
     for match in _PROPER_OBJECT.finditer(blob):
         name = _bare_name(match.group(1))
-        if not name:
+        noun = match.group(2)
+        if not name or _era_generic_label(name, noun):
             continue
-        label = _canonical(f"{name} {match.group(2)}")
-        if label.lower() in seen_known:
+        label = _canonical(f"{name} {noun}")
+        if label.lower() in seen_known or _era_generic_label(label):
             continue
         hits.append((match.start(), label))
         seen_known.add(label.lower())
@@ -404,6 +457,12 @@ def resolve_beat_object(
     here = named_objects(spoken)
     if here:
         return here[-1] if _starts_as_fragment(spoken) else here[0]
+    # "OOPArts unlock profound questions…" names nothing. Show the episode's
+    # main artefact, not whatever generic noun the line happens to contain.
+    if _is_abstract_close(spoken):
+        main = _main_artefact(brief)
+        if main:
+            return main
     locked = _canonical(_bare(locked_object)) if _bare(locked_object) else ""
     if locked:
         return locked
@@ -490,6 +549,15 @@ def visual_for_beat(
             "Do not replace the subject with a city street."
         )
 
+    if label and _is_abstract_close(text):
+        look = known_look(label)
+        hero = look or shown
+        subject = (
+            f"a cinematic museum hero shot of {hero}. "
+            f"Recap still of {shown}, the episode's main artefact. "
+            "The object fills the frame"
+        )
+        return _beat_visual("recap", subject, "", avoid, True, True, label, others)
     if label and part and not monument:
         subject = (
             f"an extreme close-up of the material this sentence names on "

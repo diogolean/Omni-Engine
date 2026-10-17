@@ -21,7 +21,9 @@ Return STRICT JSON only — no markdown, no commentary:
 relevance_score is 0.0–1.0. rejection_reason must be null when relevance_score >= {threshold:.2f}.
 Spoken beat: {chunk_text}
 Image prompt: {prompt}
-Does the picture show the subject, object, or action named in the spoken beat?
+The image prompt's EXPECTED SUBJECT or THIS BEAT'S OBJECT is the object this still must show.
+When the spoken beat is abstract and names no object, score the picture against that subject.
+Does the picture show that subject, or the subject named in the spoken beat?
 """
 
 

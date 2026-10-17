@@ -82,6 +82,19 @@ def _blocked(
     )
 
 
+def _prompt_for_judge(prompt: str, episode_subject: str) -> str:
+    """Put the beat's object where the judge's 400-character window can see it.
+
+    An abstract closing line does not name the artefact. The judge still
+    needs that same subject the prompt was built for.
+    """
+    subject = " ".join((episode_subject or "").split())
+    body = prompt or ""
+    if not subject or subject.lower() in body[:500].lower():
+        return body
+    return f"EXPECTED SUBJECT: {subject}. {body}".strip()
+
+
 def generate_and_gate(
     generate_fn: GenerateFn,
     *,
@@ -182,7 +195,7 @@ def generate_and_gate(
             judge,
             path,
             chunk_text,
-            current_prompt,
+            _prompt_for_judge(current_prompt, episode_subject),
             banned_subjects=banned_subjects,
         )
         verdict = dict(verdict or {})
