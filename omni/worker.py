@@ -1,10 +1,10 @@
 """Scheduler service that replaces the manual Pinterest drip loop.
 
-One wake publishes ``PINTEREST_PINS_PER_RUN`` pins (default 1) on every
-branding whose Pinterest row is ``active: true``, using the existing
-safe-drip scheduler. The process then sleeps a random gap between
-``MIN_INTERVAL_HOURS`` and ``MAX_INTERVAL_HOURS`` (default 3–6). That gap
-used to be a PowerShell ``Start-Sleep`` around ``pinterest_main.py``.
+One wake publishes ``PINTEREST_PINS_PER_RUN`` image pins (default 1) for
+every active row in ``config/pinterest_accounts.yaml``. Media comes from
+B2 one object at a time. Video files are skipped. The process then sleeps
+a random gap between ``MIN_INTERVAL_HOURS`` and ``MAX_INTERVAL_HOURS``
+(default 3–6). ``--dry-run`` builds the cards and does not call Pinterest.
 
 YouTube scheduling stays on ``main.py --publish-youtube`` (``publishAt``).
 This worker does not upload videos on a timer.
@@ -28,8 +28,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from omni.config import active_accounts, load_brandings  # noqa: E402
 from omni.models import Account  # noqa: E402
+from omni.pinterest_accounts import active_pinterest_accounts  # noqa: E402
 
 log = logging.getLogger("omni.worker")
 
@@ -69,44 +69,35 @@ def pins_per_wake() -> int:
     return value if value > 0 else 1
 
 
-def run_pinterest_drip(account: Account, *, pins: int | None = None) -> dict:
-    """One no-wait session of the existing scheduler, scoped to ``account``."""
-    from agents.posting.pinterest_engine import config as cfg
-    from agents.posting.pinterest_engine.scheduler import PinterestScheduler
-    from omni.accounts import pinterest_account_env, remember_rotated_token
+def run_pinterest_drip(
+    account: Account,
+    *,
+    pins: int | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """One image-card wake for ``account``. Videos and filename titles are skipped."""
+    from omni.pinterest_drip import publish_account
 
-    cfg.configure(channel_id=account.branding)
-    if not cfg.DOTENV_LOADED_FROM_FILE:
-        cfg.DOTENV_LOADED_FROM_FILE = True
     quantity = pins if pins is not None else pins_per_wake()
-    with pinterest_account_env(account):
-        try:
-            scheduler = PinterestScheduler(
-                outputs_dir=cfg.OUTPUTS_DIR,
-                pins_per_run=quantity,
-                no_wait=True,
-            )
-            stats = scheduler.run()
-        finally:
-            remember_rotated_token(account, cfg.DOTENV_PATH)
-    return stats
+    return publish_account(account, pins=quantity, dry_run=dry_run)
 
 
-def run_cycle() -> list[dict]:
+def run_cycle(*, dry_run: bool = False) -> list[dict]:
     """Publish once for each active Pinterest account. Inactive rows are skipped."""
-    accounts = active_accounts(load_brandings(), platform="pinterest")
+    accounts = active_pinterest_accounts()
     if not accounts:
-        log.warning("No active Pinterest accounts in config/brandings.yaml")
+        log.warning("No active Pinterest accounts in config/pinterest_accounts.yaml")
         return []
     results: list[dict] = []
     for account in accounts:
         log.info(
-            "Pinterest drip | branding=%s account=%s",
+            "Pinterest drip | branding=%s account=%s dry_run=%s",
             account.branding,
             account.account_id,
+            dry_run,
         )
         try:
-            stats = run_pinterest_drip(account)
+            stats = run_pinterest_drip(account, dry_run=dry_run)
         except Exception as exc:  # noqa: BLE001 — one account must not kill the loop
             log.exception("Pinterest drip failed for %s", account.branding)
             stats = {"published": 0, "errors": 1, "error": str(exc)}
@@ -126,7 +117,7 @@ def _sleep_until(seconds: float, stop: dict) -> None:
         time.sleep(min(5.0, deadline - time.monotonic()))
 
 
-def run_scheduler(*, once: bool = False) -> None:
+def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
     stop = {"flag": False}
 
     def _stop(signum, _frame) -> None:
@@ -137,13 +128,14 @@ def run_scheduler(*, once: bool = False) -> None:
     signal.signal(signal.SIGINT, _stop)
 
     log.info(
-        "Scheduler up | pins_per_wake=%s interval=%s-%sh",
+        "Scheduler up | pins_per_wake=%s interval=%s-%sh dry_run=%s",
         pins_per_wake(),
         os.getenv("MIN_INTERVAL_HOURS", "3"),
         os.getenv("MAX_INTERVAL_HOURS", "6"),
+        dry_run,
     )
     while not stop["flag"]:
-        run_cycle()
+        run_cycle(dry_run=dry_run)
         if once or stop["flag"]:
             return
         pause = interval_seconds()
@@ -180,6 +172,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Run a single scheduler wake and exit (no sleep loop).",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build image cards and log the pins. Do not call Pinterest or record them.",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,
@@ -188,7 +185,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.role == "engine":
         run_engine()
         return
-    run_scheduler(once=args.once)
+    run_scheduler(once=args.once, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

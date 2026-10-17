@@ -21,7 +21,9 @@ else
   printf '\nOMNI_IMAGE_TAG=%s\n' "${IMAGE_TAG}" >> .env
 fi
 
-mkdir -p credentials outputs
+mkdir -p credentials outputs \
+  channels_config/ancient_knowledge \
+  channels_config/anna_protocol
 touch releases.log
 printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${IMAGE_TAG}" >> releases.log
 

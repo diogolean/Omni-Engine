@@ -148,6 +148,37 @@ class FilenameHistory:
         return seen
 
 
+def _entry_is_video_only(entry: dict) -> bool:
+    """True when the entry has no image card and would have been a video pin."""
+    from agents.posting.pinterest_engine.inventory import is_video_filename  # noqa: PLC0415
+
+    if entry.get("local_image_path") or entry.get("imgbb_url"):
+        return False
+    if str(entry.get("media_kind") or "").lower() == "video":
+        return True
+    video = entry.get("local_video_path") or ""
+    if video and is_video_filename(video):
+        return True
+    return is_video_filename(get_entry_filename(entry))
+
+
+def _title_is_filename(title: str, filename: str) -> bool:
+    """True when *title* is just the clip filename spelled out."""
+    from agents.posting.pinterest_engine.inventory import _title_from_clip_name  # noqa: PLC0415
+
+    text = (title or "").strip()
+    if not text or not filename:
+        return False
+    stem = Path(filename).stem
+    banned = {
+        stem.lower(),
+        Path(filename).name.lower(),
+        stem.replace("_", " ").replace("-", " ").lower(),
+        _title_from_clip_name(filename).lower(),
+    }
+    return text.lower() in banned
+
+
 def get_entry_filename(entry: dict) -> str:
     """
     Return the unique trackable filename for a master_inventory entry.
@@ -299,13 +330,13 @@ class PinterestScheduler:
         if not data.get("entries"):
             log.info(
                 "master_inventory.json is empty — auto-syncing library images "
-                "and clips for recycling (template metadata, no Claude)."
+                "(template metadata, no Claude)."
             )
             data = inv.build(use_ai=False)
             if not data.get("entries"):
                 log.warning(
                     "No recyclable assets found under %s. "
-                    "Add library/post_*.json or clips/*.mp4 first.",
+                    "Add library/post_*.json with images first.",
                     self.outputs_dir,
                 )
                 return {"published": 0, "skipped": 0, "skipped_by_history": 0,
@@ -379,6 +410,21 @@ class PinterestScheduler:
             title = entry.get("pinterest_title", topic)
             src_filename = get_entry_filename(entry)
 
+            if _entry_is_video_only(entry):
+                log.info(
+                    "  Skipping video %s — image cards only (file=%s).",
+                    post_id, src_filename,
+                )
+                stats["skipped"] += 1
+                continue
+            if _title_is_filename(entry.get("pinterest_title", ""), src_filename):
+                log.info(
+                    "  Skipping %s — title was derived from the filename.",
+                    post_id,
+                )
+                stats["skipped"] += 1
+                continue
+
             log.info(
                 "[%d/%d] Processing: '%s'  post_id=%s  file=%s",
                 i + 1, len(batch), topic, post_id, src_filename,
@@ -390,7 +436,9 @@ class PinterestScheduler:
             if not valid:
                 log.warning("  Caption safety check failed (%s) -- auto-fixing.", reason)
                 from agents.posting.pinterest_engine.inventory import (  # noqa: PLC0415
-                    build_caption_regex, is_raw_draft, strip_draft_headers,
+                    build_caption_regex,
+                    is_raw_draft,
+                    strip_draft_headers,
                 )
                 original = entry.get("original_caption", "")
                 fact_sheet = entry.get("raw_fact_sheet", "")

@@ -168,7 +168,8 @@ class PinterestPublisher:
         # Guard: caption safety
         caption = record.get("pinterest_caption", "")
         from agents.posting.pinterest_engine.inventory import (  # noqa: PLC0415
-            build_caption_regex, validate_caption_safe,
+            build_caption_regex,
+            validate_caption_safe,
         )
         valid, reason = validate_caption_safe(caption)
         if not valid:
@@ -186,21 +187,15 @@ class PinterestPublisher:
             or cfg.DEFAULT_TOPIC
         )[:100]
         video_path = (record.get("local_video_path") or "").strip()
-        prefer_video = str(record.get("media_kind") or "").strip().lower() == "video"
-        if (
-            prefer_video
-            and video_path
-            and Path(video_path).is_file()
-            and Path(video_path).suffix.lower() in _VIDEO_EXTS
-        ):
-            log.info(
-                "Publishing video pin: '%s' (board=%s, file=%s)",
-                title, self.board_id, Path(video_path).name,
-            )
-            video_result = self._publish_video(record, Path(video_path), pin_image_bytes)
-            if video_result:
-                return video_result
-            log.warning("Video pin failed for %s — falling back to image pin.", record.get("post_id", "?"))
+        if not pin_image_bytes:
+            if video_path and Path(video_path).suffix.lower() in _VIDEO_EXTS:
+                log.info(
+                    "Skipping video pin (image cards only): %s",
+                    Path(video_path).name,
+                )
+            else:
+                log.warning("No pin image for %s — skipping.", record.get("post_id", "?"))
+            return None
 
         payload = {
             "board_id": self.board_id,
@@ -425,7 +420,8 @@ class PinterestPublisher:
 
         new_token = result.get("access_token", "")
         if not new_token:
-            log.error("Refresh response missing access_token: %s", result)
+            keys = sorted(result.keys()) if isinstance(result, dict) else []
+            log.error("Refresh response missing access_token (fields=%s)", ",".join(keys))
             return False
 
         self.token = new_token

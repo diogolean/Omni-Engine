@@ -26,11 +26,25 @@ def _read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+_UNSET = {"", "todo", "tbd", "unknown", "none"}
+
+
+def is_unset(value: str | None) -> bool:
+    """True for blank and for explicit TODO placeholders in account config."""
+    return (value or "").strip().lower() in _UNSET
+
+
 def channel_env_file(branding: str) -> Path | None:
-    """Same candidate order as the Pinterest CLI, excluding the shared root ``.env``."""
+    """Same candidate order as the Pinterest CLI, excluding the shared root ``.env``.
+
+    ``channels_env/`` is the read-write mount of the host ``channels_config``
+    tree, so a refreshed token written there survives the next container.
+    """
     root = repo_root()
     slug = branding.strip()
     candidates = [
+        root / "channels_env" / slug / ".env",
+        root / "channels_env" / slug / f".env.{slug}",
         root / "channels_config" / slug / ".env",
         root / "channels_config" / slug / f".env.{slug}",
         root / f".env.{slug}",
@@ -65,25 +79,50 @@ def resolve_pinterest_token(account: Account) -> str:
 
 
 def resolve_pinterest_board_id(account: Account) -> str:
+    literal = (account.extra.get("board_id") or "").strip()
+    if literal and not is_unset(literal):
+        return literal
     dedicated = _env_value(account.board_id_env)
-    if dedicated:
+    if dedicated and not is_unset(dedicated):
         return dedicated
     from_file = _from_channel_file(account, "PINTEREST_BOARD_ID")
-    if from_file:
+    if from_file and not is_unset(from_file):
         return from_file
-    return _env_value(account.extra.get("legacy_board_id_env", "PINTEREST_BOARD_ID"))
+    legacy = _env_value(account.extra.get("legacy_board_id_env", "PINTEREST_BOARD_ID"))
+    return "" if is_unset(legacy) else legacy
 
 
 def resolve_pinterest_board_name(account: Account) -> str:
     dedicated = _env_value(account.board_name_env)
-    if dedicated:
+    if dedicated and not is_unset(dedicated):
         return dedicated
-    if account.board_name.strip():
+    if account.board_name.strip() and not is_unset(account.board_name):
         return account.board_name.strip()
     from_file = _from_channel_file(account, "PINTEREST_BOARD_NAME")
+    if from_file and not is_unset(from_file):
+        return from_file
+    legacy = _env_value(account.extra.get("legacy_board_name_env", "PINTEREST_BOARD_NAME"))
+    return "" if is_unset(legacy) else legacy
+
+
+def resolve_pinterest_app_id(account: Account) -> str:
+    dedicated = _env_value(account.extra.get("app_id_env", ""))
+    if dedicated:
+        return dedicated
+    from_file = _from_channel_file(account, "PINTEREST_APP_ID")
     if from_file:
         return from_file
-    return _env_value(account.extra.get("legacy_board_name_env", "PINTEREST_BOARD_NAME"))
+    return _env_value("PINTEREST_APP_ID")
+
+
+def resolve_pinterest_app_secret(account: Account) -> str:
+    dedicated = _env_value(account.extra.get("app_secret_env", ""))
+    if dedicated:
+        return dedicated
+    from_file = _from_channel_file(account, "PINTEREST_APP_SECRET")
+    if from_file:
+        return from_file
+    return _env_value("PINTEREST_APP_SECRET")
 
 
 def resolve_pinterest_refresh_token(account: Account) -> str:
@@ -125,12 +164,34 @@ def remember_rotated_token(account: Account, env_path: Path | None = None) -> No
     applied = os.getenv("_OMNI_APPLIED_PINTEREST_TOKEN", "").strip()
     if not current or not applied or current == applied:
         return
-    path = env_path or (repo_root() / ".env")
-    upsert_env_key(path, account.token_env, current)
-    refresh = os.getenv("PINTEREST_REFRESH_TOKEN", "").strip()
-    applied_refresh = os.getenv("_OMNI_APPLIED_PINTEREST_REFRESH", "").strip()
-    if refresh and account.refresh_token_env and refresh != applied_refresh:
-        upsert_env_key(path, account.refresh_token_env, refresh)
+    primary = env_path or (repo_root() / ".env")
+    for path in _token_write_paths(primary):
+        upsert_env_key(path, account.token_env, current)
+        refresh = os.getenv("PINTEREST_REFRESH_TOKEN", "").strip()
+        applied_refresh = os.getenv("_OMNI_APPLIED_PINTEREST_REFRESH", "").strip()
+        if refresh and account.refresh_token_env and refresh != applied_refresh:
+            upsert_env_key(path, account.refresh_token_env, refresh)
+
+
+def _token_write_paths(primary: Path) -> list[Path]:
+    """Channel env plus the root ``.env`` when the channel file is the mount.
+
+    A container restart loads ``/opt/omni-engine/.env`` into the process, so a
+    refresh that lands only on the channel file would be hidden by the stale
+    suffixed key. Tests that pass a temp file outside ``channels_env`` do not
+    touch the repository ``.env``.
+    """
+    paths = [primary]
+    root = repo_root() / ".env"
+    mount = repo_root() / "channels_env"
+    try:
+        primary.resolve().relative_to(mount.resolve())
+        on_mount = True
+    except ValueError:
+        on_mount = False
+    if on_mount and root.resolve() != primary.resolve():
+        paths.append(root)
+    return paths
 
 
 @contextmanager
@@ -140,6 +201,8 @@ def pinterest_account_env(account: Account):
     board_id = resolve_pinterest_board_id(account)
     board_name = resolve_pinterest_board_name(account)
     refresh = resolve_pinterest_refresh_token(account)
+    app_id = resolve_pinterest_app_id(account)
+    app_secret = resolve_pinterest_app_secret(account)
     updates: dict[str, str] = {}
     if token:
         updates["PINTEREST_ACCESS_TOKEN"] = token
@@ -151,6 +214,10 @@ def pinterest_account_env(account: Account):
     if refresh:
         updates["PINTEREST_REFRESH_TOKEN"] = refresh
         updates["_OMNI_APPLIED_PINTEREST_REFRESH"] = refresh
+    if app_id:
+        updates["PINTEREST_APP_ID"] = app_id
+    if app_secret:
+        updates["PINTEREST_APP_SECRET"] = app_secret
     previous = {key: os.environ.get(key) for key in updates}
     os.environ.update(updates)
     try:
