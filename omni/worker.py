@@ -2,9 +2,11 @@
 
 One wake publishes ``PINTEREST_PINS_PER_RUN`` image pins (default 1) for
 every active row in ``config/pinterest_accounts.yaml``. Media comes from
-B2 one object at a time. Video files are skipped. The process then sleeps
-a random gap between ``MIN_INTERVAL_HOURS`` and ``MAX_INTERVAL_HOURS``
-(default 3–6). ``--dry-run`` builds the cards and does not call Pinterest.
+B2 one object at a time. Video files are skipped. Before the first publish,
+and between wakes, the process sleeps a random gap between
+``MIN_INTERVAL_HOURS`` and ``MAX_INTERVAL_HOURS`` (default 3–6).
+``--once`` and ``--dry-run`` skip that initial delay. ``--dry-run`` builds
+the cards and does not call Pinterest.
 
 YouTube scheduling stays on ``main.py --publish-youtube`` (``publishAt``).
 This worker does not upload videos on a timer.
@@ -134,6 +136,13 @@ def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
         os.getenv("MAX_INTERVAL_HOURS", "6"),
         dry_run,
     )
+    # A fresh container must not publish in the same minute it starts.
+    if not once and not dry_run:
+        pause = interval_seconds()
+        log.info("Initial delay before the first publish: %.0f minutes", pause / 60.0)
+        _sleep_until(pause, stop)
+        if stop["flag"]:
+            return
     while not stop["flag"]:
         run_cycle(dry_run=dry_run)
         if once or stop["flag"]:

@@ -368,7 +368,11 @@ class PinterestPublisher:
     def _build_description(self, record: dict) -> str:
         """Pinterest pin description: caption + hashtags, max 500 chars total."""
         tags = _hashtags()
-        caption = record.get("pinterest_caption") or record.get("humanized_caption", "")
+        from agents.posting.pinterest_engine.inventory import polish_pin_text  # noqa: PLC0415
+
+        caption = polish_pin_text(
+            str(record.get("pinterest_caption") or record.get("humanized_caption", ""))
+        )
         max_caption = 500 - len(tags) - 2
         if len(caption) > max_caption:
             caption = caption[:max_caption - 3].rsplit(" ", 1)[0] + "..."
