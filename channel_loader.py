@@ -937,6 +937,13 @@ class PageContext:
         return raw if raw in ("nano", "economic", "premium") else "economic"
 
     @property
+    def image_source_policy(self) -> str:
+        """``free_first``, ``ai_only``, or ``free_only``. See the free-image ADR."""
+        from agents.media.free_images.policy import resolve_policy
+
+        return resolve_policy(self.page_id, self.page_cfg)
+
+    @property
     def enable_cost_tracking(self) -> bool:
         """True = write cost telemetry JSON (cost_*.json) after each variant."""
         return bool(self.page_cfg.get("ENABLE_COST_TRACKING", False))

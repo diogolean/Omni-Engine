@@ -804,6 +804,9 @@ class PinterestScheduler:
             return path, delete_after
         if delete_after and path is not None:
             path.unlink(missing_ok=True)
+        free_path = self._free_license_photo(entry, channel)
+        if free_path is not None:
+            return free_path, True
         generated = ensure_flux_photo(
             entry,
             outputs_dir=self.outputs_dir,
@@ -813,6 +816,43 @@ class PinterestScheduler:
             bucket=self.context.get("b2_bucket"),
         )
         return generated, False
+
+    def _free_license_photo(self, entry: dict, channel: str) -> Path | None:
+        """One vetted free-license file, before FLUX. None when the search misses."""
+        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+        from agents.media.free_images.policy import resolve_policy  # noqa: PLC0415
+        from agents.media.free_images.sourcer import resolve_image_source  # noqa: PLC0415
+        from utils.pipeline_paths import temp_path  # noqa: PLC0415
+
+        policy = resolve_policy(channel)
+        if policy == "ai_only":
+            return None
+        stem = str(entry.get("subject_slug") or entry.get("post_id") or "pin").strip() or "pin"
+        dest = temp_path(channel or "pinterest", "free_images", "pins", f"{stem}.jpg")
+        try:
+            decision = resolve_image_source(
+                channel=channel,
+                dest=dest,
+                topic=str(entry.get("topic") or entry.get("pinterest_title") or ""),
+                entity=str(entry.get("entity") or entry.get("named_entity") or ""),
+                sentence=str(
+                    entry.get("original_caption") or entry.get("humanized_caption") or ""
+                ),
+                policy=policy,
+                producer="pinterest_card",
+            )
+        except B2DailyCapError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.info("Free-license photo skipped (%s).", type(exc).__name__)
+            return None
+        hit = decision.hit
+        if hit is None or not dest.is_file():
+            return None
+        entry["image_credit"] = hit.credit_line
+        entry["image_source"] = "free_license"
+        entry["image_attribution"] = hit.attribution.to_json()
+        return dest
 
     # ------------------------------------------------------------------
 

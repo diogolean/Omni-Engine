@@ -17,6 +17,8 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 PAGE_ID: str = "master_mei"
 PAGE_DISPLAY_NAME: str = "Master Mei | Mind Control"
+# Own avatar assets and the existing generator. Free-image search stays off.
+IMAGE_SOURCE_POLICY: str = "ai_only"
 
 CONTENT_NICHE: str = (
     "Protocol for Liberation: Pai Mei cold discipline, financial warfare & wealth creation, "

@@ -24,6 +24,8 @@ DEFAULT_AVATAR_MODE = "OFF"
 DEFAULT_FORMAT = "IMAGE_AVATAR"
 IMAGE_ASPECT_RATIO = "4:5"
 USES_AVATAR_REFERENCE = False
+# Real photographs are allowed before a generated background.
+IMAGE_SOURCE_POLICY = "free_first"
 
 ATMOSPHERE_STYLE = (
     "Warm, soft lifestyle photography. Morning light through linen curtains, "

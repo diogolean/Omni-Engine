@@ -20,6 +20,8 @@ accounts:
     # This flag is article lookups only. Pinterest API calls stay verified.
     article_tls_verify: false
     # WordPress featured images on this site are title graphics. Never pin them.
+    # A missing or title-graphic library file can be filled from a free-license
+    # search before FLUX. The published card is still the PinTransformer composite.
     use_featured_image: false
     # Each new card is also a Facebook post for this page, queued in Post Planner.
     facebook_postplanner: true

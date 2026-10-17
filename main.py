@@ -2906,6 +2906,21 @@ def _produce_variant_worker(
                 page_cost_tier=_page_cost,
                 tier=_img_route.tier,
             )
+            if page_ctx is not None:
+                from agents.media.free_images.integrate import wrap_image_generate
+
+                _free_producer = (
+                    "reel_image"
+                    if post_type in ("ECONOMIC_REEL", "WAN_REEL")
+                    else "facebook_card"
+                )
+                adapter.generate = wrap_image_generate(
+                    adapter.generate,
+                    channel=page_ctx.page_id,
+                    page_cfg=page_ctx.page_cfg,
+                    query=resolved_subject or visual_subject or "",
+                    producer=_free_producer,
+                )
             # master_mei: always prefer forced avatar.png over cycled assets
             _gen_ref = effective_ref_path if image_avatar_mode == "ON" else None
             _gen_weight: float | None = None
@@ -5899,6 +5914,18 @@ def _produce_variant_worker(
             _LOG.warning("Research log write failed: %s", log_exc)
 
     caption_str = caption if isinstance(caption, str) else ""
+    try:
+        from agents.media.free_images.attribution import append_credit, credits_for_images
+
+        _credit_paths = []
+        if img_path_display:
+            _credit_paths.append(img_path_display)
+        _credit_paths.extend(list(locals().get("_sequence_image_paths") or []))
+        _image_credit = credits_for_images(_credit_paths)
+        if _image_credit:
+            caption_str = append_credit(caption_str, _image_credit, limit=2000)
+    except Exception:  # noqa: BLE001 — credit is optional metadata
+        pass
 
     meta: dict[str, Any] = {}
     with write_lock:
@@ -7209,6 +7236,15 @@ def run_test_images_debug_mode(
     # Routes to RemoteGPUImageAdapter when ENABLE_REMOTE_GPU_WORKFLOWS=true
     adapter = get_image_adapter(
         model_id=img_model_id, page_cost_tier=_page_cost, tier=_img_route.tier,
+    )
+    from agents.media.free_images.integrate import wrap_image_generate
+
+    adapter.generate = wrap_image_generate(
+        adapter.generate,
+        channel=page_ctx.page_id,
+        page_cfg=page_ctx.page_cfg,
+        query="",
+        producer="reel_image",
     )
 
     # --test-images for master_mei: never attach avatar.png (Mei excluded).

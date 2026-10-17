@@ -61,6 +61,8 @@ _PROJECT: dict = FACTORY_SETTINGS.get("PROJECT_CONFIG") or {}
 # ---------------------------------------------------------------------------
 PAGE_ID: str = "endless_summer_paradise"
 PAGE_DISPLAY_NAME: str = "Endless Summer Paradise"
+# Library ingest of owned source footage. Do not replace it with stock search.
+IMAGE_SOURCE_POLICY: str = "ai_only"
 YOUTUBE_CHANNEL_HINT: str = PAGE_DISPLAY_NAME
 YOUTUBE_PRESERVE_TITLE_STRUCTURE: bool = True
 CONTENT_NICHE: str = (

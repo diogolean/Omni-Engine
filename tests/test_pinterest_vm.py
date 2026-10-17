@@ -931,9 +931,18 @@ def test_flux_fallback_replaces_a_missing_or_title_graphic(
         path.write_bytes(_photo())
         return path
 
+    def _no_free(**_kwargs):
+        from agents.media.free_images.models import SourceDecision
+
+        return SourceDecision(policy="free_first", query="puma punku", reason="none_passed")
+
     monkeypatch.setattr(
         "agents.posting.pinterest_engine.flux_photo.generate_flux_photo",
         fake_flux,
+    )
+    monkeypatch.setattr(
+        "agents.media.free_images.sourcer.resolve_image_source",
+        _no_free,
     )
     stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
     assert stats["published"] == 1
@@ -941,6 +950,63 @@ def test_flux_fallback_replaces_a_missing_or_title_graphic(
     uploaded = [key for key in client.objects if key.endswith("puma-punku.jpg")]
     assert uploaded
     assert client.deletes == []
+
+
+def test_missing_photo_uses_a_free_license_source_before_flux(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A title graphic becomes a composited card from a free photo, without Flux."""
+    _prepare_channel(monkeypatch, tmp_path)
+    record_key = "ancient_knowledge/library/post_free.json"
+    graphic_key = "ancient_knowledge/library/images/free-title.jpg"
+    client = FakeS3(
+        {
+            record_key: _library_record(
+                "baalbek-trilithon",
+                "Baalbek trilithon",
+                "images/free-title.jpg",
+            ),
+            graphic_key: _title_graphic(),
+        }
+    )
+
+    def _forbid_flux(**_kwargs):
+        raise AssertionError("Flux runs only after free-license search misses")
+
+    def _free(**kwargs):
+        from agents.media.free_images.models import Attribution, FreeImageHit, SourceDecision
+
+        dest = Path(kwargs["dest"])
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1200, 1800), (24, 96, 140)).save(dest, format="JPEG")
+        attribution = Attribution(
+            title="Baalbek stones",
+            author="Ada",
+            license="cc_by",
+            source_url="https://example.test/baalbek",
+        )
+        hit = FreeImageHit(
+            path=dest,
+            sidecar_path=dest.with_name(dest.name + ".attribution.json"),
+            attribution=attribution,
+            credit_line=(
+                'Photo: "Baalbek stones" by Ada, CC BY — https://example.test/baalbek'
+            ),
+            width=1200,
+            height=1800,
+            score=1.0,
+            provider="wikimedia",
+        )
+        return SourceDecision(policy="free_first", query="Baalbek", reason="hit", hit=hit)
+
+    monkeypatch.setattr(
+        "agents.posting.pinterest_engine.flux_photo.generate_flux_photo",
+        _forbid_flux,
+    )
+    monkeypatch.setattr("agents.media.free_images.sourcer.resolve_image_source", _free)
+    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    assert stats["published"] == 1
+    assert not any(key.endswith("baalbek-trilithon.jpg") for key in client.objects)
 
 
 def test_flux_asks_for_a_portrait_frame(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
