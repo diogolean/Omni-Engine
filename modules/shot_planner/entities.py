@@ -62,6 +62,10 @@ class Entity:
     # still is a reference edit, or the Commons photograph.
     text_only_safe: bool = False
     edit_negatives: tuple[str, ...] = ()
+    event_search: tuple[str, ...] = ()
+    event_categories: tuple[str, ...] = ()
+    event_period: str = ""
+    event_negatives: tuple[str, ...] = ()
 
 
 def repo_root() -> Path:
@@ -152,6 +156,10 @@ def load_entities(channel: str) -> list[Entity]:
             commons_categories=_texts("commons_categories"),
             text_only_safe=bool(row.get("text_only_safe")),
             edit_negatives=_texts("edit_negatives"),
+            event_search=_texts("event_search"),
+            event_categories=_texts("event_categories"),
+            event_period=str(row.get("event_period") or "").strip(),
+            event_negatives=_texts("event_negatives"),
         ))
     return found
 

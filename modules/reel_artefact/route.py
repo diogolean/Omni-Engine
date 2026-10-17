@@ -9,7 +9,14 @@ from pathlib import Path
 
 from PIL import Image
 
-from modules.reel_artefact.budget import note_real_use, real_allowed, take_nano_slot
+from modules.reel_artefact.budget import (
+    claim_still,
+    file_hash_key,
+    note_real_use,
+    real_allowed,
+    release_still,
+    take_nano_slot,
+)
 from modules.reel_artefact.crop import anchor_for, prepare_reel_frame
 from modules.reel_artefact.fetch import FetchedArtefact, fetch_gallery
 from modules.reel_artefact.logbook import note_source
@@ -92,6 +99,7 @@ def acquire_photo(
     allow_nano: bool = True,
     text_only: bool = False,
     skip_real: bool = False,
+    n_beats: int = 0,
 ) -> Path | None:
     """Write the artefact still to ``dest``.
 
@@ -136,6 +144,7 @@ def acquire_photo(
             kind="nb-text",
             beat_index=beat_index,
             slot=slot,
+            n_beats=n_beats,
         )
 
     if chosen == "commons":
@@ -162,6 +171,7 @@ def acquire_photo(
                 kind="nb-ref",
                 beat_index=beat_index,
                 slot=slot,
+                n_beats=n_beats,
             )
         if allow_nano and bool(getattr(entity, "text_only_safe", False)):
             return _variation(
@@ -179,6 +189,7 @@ def acquire_photo(
                 kind="nb-text",
                 beat_index=beat_index,
                 slot=slot,
+                n_beats=n_beats,
             )
         return None
 
@@ -204,6 +215,7 @@ def acquire_photo(
             kind="nb-ref",
             beat_index=beat_index,
             slot=slot,
+            n_beats=n_beats,
         )
         if edited is not None:
             return edited
@@ -227,6 +239,7 @@ def acquire_photo(
             kind="nb-text",
             beat_index=beat_index,
             slot=slot,
+            n_beats=n_beats,
         )
     return None
 
@@ -288,6 +301,15 @@ def _variation_lock(folder: Path) -> threading.Lock:
         return lock
 
 
+_CAPPED = object()
+_ANGLES = (
+    "a tighter crop on the display case",
+    "a three-quarter view from the left",
+    "a low angle along the plinth",
+    "a wider view with the case small in the hall",
+)
+
+
 def _variation(
     entity: Entity,
     dest: Path,
@@ -304,51 +326,209 @@ def _variation(
     kind: str = "nb-ref",
     beat_index: int = 0,
     slot: int = 0,
+    n_beats: int = 0,
 ) -> Path | None:
     folder = cache_dir or _fallback_cache(channel, entity.id)
     folder.mkdir(parents=True, exist_ok=True)
     cached = folder / ("variation_text.jpg" if kind == "nb-text" else "variation_ref.jpg")
     with _variation_lock(folder):
-        model_id = ""
-        created = False
-        if not cached.is_file():
-            if not take_nano_slot():
-                logger.info(
-                    "Nano Banana cap reached | entity=%s | beat=%s",
-                    entity.id,
-                    int(beat_index) + 1,
-                )
-                return None
-            has_reference = reference is not None and Path(reference).is_file()
-            prompt = _edit_prompt(entity, has_reference=has_reference)
-            try:
-                if generate_image is not None:
-                    model_id = str(generate_image(prompt, cached, reference) or "nanobanana")
-                else:
-                    from modules.reel_artefact.nanobanana import generate_artefact_image
+        if cached.is_file():
+            placed = _place_cached(
+                cached,
+                dest,
+                entity,
+                reference=reference,
+                license_name=license_name,
+                credit=credit,
+                title=title,
+                source_url=source_url,
+                author=author,
+                beat_index=beat_index,
+                slot=slot,
+                n_beats=n_beats,
+            )
+            if placed is not _CAPPED:
+                return placed if isinstance(placed, Path) else None
+        return _render_edit(
+            entity,
+            dest,
+            reference=reference,
+            folder=folder,
+            canonical=cached,
+            generate_image=generate_image,
+            license_name=license_name,
+            credit=credit,
+            title=title,
+            source_url=source_url,
+            author=author,
+            kind=kind,
+            beat_index=beat_index,
+            slot=slot,
+            n_beats=n_beats,
+        )
 
-                    model_id = generate_artefact_image(prompt, cached, reference=reference)
-            except Exception as exc:  # noqa: BLE001
-                logger.info("Nano Banana variation failed (%s)", type(exc).__name__)
-                return None
-            if not cached.is_file():
-                return None
-            (folder / f"{cached.name}.model").write_text(model_id, encoding="utf-8")
-            created = True
-        else:
-            note = folder / f"{cached.name}.model"
-            model_id = note.read_text(encoding="utf-8").strip() if note.is_file() else ""
-        marker = folder / f"{cached.name}.published"
-        first_publish = created or not marker.is_file()
-        marker.write_text("1", encoding="utf-8")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(cached.read_bytes())
+
+def _place_cached(
+    cached: Path,
+    dest: Path,
+    entity: Entity,
+    *,
+    reference: Path | None,
+    license_name: str,
+    credit: str,
+    title: str,
+    source_url: str,
+    author: str,
+    beat_index: int,
+    slot: int,
+    n_beats: int,
+):
+    """Copy a previous edit. ``_CAPPED`` when this hash is already at the limit."""
+    try:
+        key = file_hash_key(str(cached))
+    except OSError:
+        return None
+    try:
+        target = str(dest.resolve())
+    except OSError:
+        target = str(dest)
+    ok, reason = claim_still(target, key, n_beats)
+    if not ok:
+        logger.info(
+            "cached edit capped | entity=%s | beat=%s | %s",
+            entity.id,
+            int(beat_index) + 1,
+            reason,
+        )
+        return _CAPPED
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(cached.read_bytes())
+    except OSError:
+        release_still(target, key)
+        return None
     write_motion_sidecar(dest, profile=profile_for(slot))
-    provider = "nanobanana" if first_publish else "reuse"
-    if first_publish:
-        note_source(f"{kind}:{model_id or 'nanobanana'}", entity.id, int(beat_index) + 1)
-    else:
-        note_source("reuse:approved", entity.id, int(beat_index) + 1)
+    note_source("reuse:cache", entity.id, int(beat_index) + 1)
+    _write_edit_sidecar(
+        dest,
+        entity,
+        reference=reference,
+        license_name=license_name,
+        credit=credit,
+        title=title,
+        source_url=source_url,
+        author=author,
+        provider="reuse",
+        model_id="",
+        image_hash=key,
+    )
+    return dest
+
+
+def _render_edit(
+    entity: Entity,
+    dest: Path,
+    *,
+    reference: Path | None,
+    folder: Path,
+    canonical: Path,
+    generate_image,
+    license_name: str,
+    credit: str,
+    title: str,
+    source_url: str,
+    author: str,
+    kind: str,
+    beat_index: int,
+    slot: int,
+    n_beats: int,
+) -> Path | None:
+    """A new Nano Banana edit. A capped cache asks for a different angle."""
+    if not take_nano_slot():
+        logger.info(
+            "Nano Banana cap reached | entity=%s | beat=%s",
+            entity.id,
+            int(beat_index) + 1,
+        )
+        return None
+    has_reference = reference is not None and Path(reference).is_file()
+    prompt = _edit_prompt(entity, has_reference=has_reference)
+    target = canonical
+    if canonical.is_file():
+        angle = _ANGLES[int(beat_index) % len(_ANGLES)]
+        prompt = (
+            f"{prompt} Different framing from the cached still: {angle}. "
+            "Not the same crop."
+        )
+        target = folder / f"variation_{kind}_{int(beat_index):02d}_{int(slot):02d}.jpg"
+    try:
+        if generate_image is not None:
+            model_id = str(generate_image(prompt, target, reference) or "nanobanana")
+        else:
+            from modules.reel_artefact.nanobanana import generate_artefact_image
+
+            model_id = generate_artefact_image(prompt, target, reference=reference)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Nano Banana variation failed (%s)", type(exc).__name__)
+        return None
+    if not target.is_file():
+        return None
+    (folder / f"{target.name}.model").write_text(model_id, encoding="utf-8")
+    try:
+        key = file_hash_key(str(target))
+    except OSError:
+        return None
+    try:
+        reserved = str(dest.resolve())
+    except OSError:
+        reserved = str(dest)
+    ok, reason = claim_still(reserved, key, n_beats)
+    if not ok:
+        logger.info(
+            "new edit matched a capped still | entity=%s | %s",
+            entity.id,
+            reason,
+        )
+        return None
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if target.resolve() != dest.resolve():
+            dest.write_bytes(target.read_bytes())
+    except OSError:
+        release_still(reserved, key)
+        return None
+    write_motion_sidecar(dest, profile=profile_for(slot))
+    note_source(f"{kind}:{model_id or 'nanobanana'}", entity.id, int(beat_index) + 1)
+    _write_edit_sidecar(
+        dest,
+        entity,
+        reference=reference,
+        license_name=license_name,
+        credit=credit,
+        title=title,
+        source_url=source_url,
+        author=author,
+        provider="nanobanana",
+        model_id=model_id,
+        image_hash=key,
+    )
+    return dest
+
+
+def _write_edit_sidecar(
+    dest: Path,
+    entity: Entity,
+    *,
+    reference: Path | None,
+    license_name: str,
+    credit: str,
+    title: str,
+    source_url: str,
+    author: str,
+    provider: str,
+    model_id: str,
+    image_hash: str,
+) -> None:
     write_source_sidecar(
         dest,
         {
@@ -363,30 +543,33 @@ def _variation(
             "source_url": source_url,
             "author": author,
             "model_id": model_id if provider == "nanobanana" else "",
+            "image_hash": image_hash,
+            "reuse_key": image_hash,
+            "still_kind": "object",
         },
     )
-    if credit:
-        from agents.media.free_images.attribution import credit_line, write_sidecar
-        from agents.media.free_images.models import Attribution
+    if not credit:
+        return
+    from agents.media.free_images.attribution import credit_line, write_sidecar
+    from agents.media.free_images.models import Attribution
 
-        line = credit or credit_line(
+    line = credit or credit_line(
+        title=title,
+        author=author,
+        license_name=license_name,
+        source_url=source_url,
+    )
+    write_sidecar(
+        dest,
+        Attribution(
             title=title,
-            author=author,
-            license_name=license_name,
+            author=author or "Unknown",
+            license=license_name or "see source",
             source_url=source_url,
-        )
-        write_sidecar(
-            dest,
-            Attribution(
-                title=title,
-                author=author or "Unknown",
-                license=license_name or "see source",
-                source_url=source_url,
-                provider=provider,
-            ),
-            credit=line,
-        )
-    return dest
+            provider=provider,
+        ),
+        credit=line,
+    )
 
 
 def _edit_prompt(entity: Entity, *, has_reference: bool) -> str:

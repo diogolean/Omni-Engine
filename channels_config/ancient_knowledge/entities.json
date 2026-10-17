@@ -35,6 +35,22 @@
     "edit_negatives": [
       "corroded fragments only",
       "never intact gears"
+    ],
+    "event_period": "1900-1901",
+    "event_search": [
+      "Antikythera wreck sponge divers",
+      "Antikythera shipwreck 1901",
+      "Symi sponge divers Antikythera"
+    ],
+    "event_categories": [
+      "Category:Antikythera wreck"
+    ],
+    "event_negatives": [
+      "no modern scuba",
+      "no modern dive mask",
+      "no wetsuit",
+      "no modern boat",
+      "no outboard motor"
     ]
   },
   {

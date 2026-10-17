@@ -12,6 +12,7 @@ from modules.reel_artefact.budget import (
     beat_budget_usd,
     nano_cap,
     nano_used,
+    reel_budget_usd,
     reel_spent,
     refund,
     try_spend,
@@ -57,8 +58,13 @@ def rung_names() -> list[str]:
     return names or list(_DEFAULT)
 
 
-def rungs_for(kind: str) -> list[str]:
-    """Scene beats never climb the artefact-photo rungs."""
+def rungs_for(kind: str, *, event: bool = False) -> list[str]:
+    """Scene beats never climb the artefact-photo rungs.
+
+    An event beat looks for an archival photograph before Flux.
+    """
+    if event:
+        return ["event", "flux", "flux", "reuse"]
     if kind == "scene":
         return list(_SCENE)
     return rung_names()
@@ -74,6 +80,9 @@ class RungContext:
     rejection: str = ""
     attempt: int = 0
     n_beats: int = 0
+    concept: str = ""
+    replan: int = 0
+    event: bool = False
 
 
 @dataclass
@@ -100,6 +109,8 @@ class LadderResult:
     reason: str = ""
     spend: dict[str, int] = field(default_factory=dict)
     kind: str = "object"
+    beat_spent: float = 0.0
+    replans: int = 0
 
 
 def history_text(history: list[RungAttempt]) -> str:
@@ -163,7 +174,7 @@ def _bill_key(rung: str, path: Path | None) -> str:
         return "image_nanobanana_lite"
     if rung == "flux":
         return "image_flux_schnell"
-    if rung == "real":
+    if rung == "real" or rung == "event":
         return "image_commons"
     if rung == "reuse":
         return "image_reuse"
@@ -181,6 +192,15 @@ def _skip(history: list[RungAttempt], rung: str, reason: str, beat: int) -> None
     )
 
 
+def _budget_can_pay(beat_spent: float, cost: float | None = None) -> bool:
+    needed = FLUX_USD if cost is None else cost
+    if beat_spent + needed > beat_budget_usd() + 1e-9:
+        return False
+    if reel_spent() + needed > reel_budget_usd() + 1e-9:
+        return False
+    return True
+
+
 def run_ladder(
     *,
     beat_index: int,
@@ -194,9 +214,132 @@ def run_ladder(
     judge: Judge | None = None,
     checkpoint: Any = None,
     entity_id: str = "",
+    event: bool = False,
+    name: str = "",
+    period: str = "",
+    negatives: tuple[str, ...] | list[str] = (),
+    llm: Callable[..., str | None] | None = None,
 ) -> LadderResult:
-    """Climb until one still passes. Do not lower the 0.70 judge."""
+    """Climb until one still passes. Do not lower the 0.70 judge.
+
+    A failed rung is never published. When the ladder is exhausted and the
+    beat budget can still pay for another Flux still, the concept is
+    re-planned up to ``REEL_REPLAN_MAX`` times (default 2).
+    """
     del entity_id
+    from modules.reel_artefact.replan import next_concept, replan_limit
+
+    result = _climb(
+        beat_index=beat_index,
+        narration=narration,
+        prompt=prompt,
+        dest_dir=dest_dir,
+        kind=kind,
+        text_only_safe=text_only_safe,
+        n_beats=n_beats,
+        producers=producers,
+        judge=judge,
+        checkpoint=checkpoint,
+        event=event,
+    )
+    if result.passed or result.resumed:
+        return result
+    history = list(result.history)
+    spent = result.beat_spent
+    spend = dict(result.spend)
+    reason = result.reason
+    done = 0
+    for attempt in range(1, replan_limit() + 1):
+        if not _budget_can_pay(spent):
+            logger.info(
+                "LADDER | beat=%s | replan=skip-budget | spent_beat=%.4f",
+                int(beat_index) + 1,
+                spent,
+            )
+            break
+        concept = next_concept(
+            narration,
+            kind=kind,
+            event=event,
+            name=name,
+            period=period,
+            rejection=reason,
+            attempt=attempt,
+            negatives=negatives,
+            llm=llm,
+        )
+        logger.info(
+            "LADDER | beat=%s | replan=%s | concept=%.80s",
+            int(beat_index) + 1,
+            attempt,
+            concept,
+        )
+        nxt = _climb(
+            beat_index=beat_index,
+            narration=narration,
+            prompt=concept,
+            dest_dir=dest_dir,
+            kind=kind,
+            text_only_safe=text_only_safe,
+            n_beats=n_beats,
+            producers=producers,
+            judge=judge,
+            checkpoint=None,
+            event=event,
+            concept=concept,
+            replan=attempt,
+            beat_spent_in=spent,
+        )
+        history.extend(nxt.history)
+        spent = nxt.beat_spent
+        for key_name, count in nxt.spend.items():
+            spend[key_name] = spend.get(key_name, 0) + int(count)
+        reason = nxt.reason or reason
+        done = attempt
+        if nxt.passed:
+            nxt.history = history
+            nxt.first_pass = False
+            nxt.replans = attempt
+            nxt.kept = False
+            nxt.spend = spend
+            nxt.beat_spent = spent
+            return nxt
+    _finish_log(beat_index, history, True, spent, kept=False)
+    return LadderResult(
+        path=None,
+        passed=False,
+        rung="",
+        history=history,
+        verdict=result.verdict,
+        fail_reel=True,
+        kept=False,
+        first_pass=False,
+        score=result.score,
+        reason=reason or "ladder_exhausted",
+        spend=spend,
+        kind=kind or "object",
+        beat_spent=spent,
+        replans=done,
+    )
+
+
+def _climb(
+    *,
+    beat_index: int,
+    narration: str,
+    prompt: str,
+    dest_dir: Path | str,
+    kind: str = "object",
+    text_only_safe: bool = False,
+    n_beats: int = 0,
+    producers: dict[str, Producer] | None = None,
+    judge: Judge | None = None,
+    checkpoint: Any = None,
+    event: bool = False,
+    concept: str = "",
+    replan: int = 0,
+    beat_spent_in: float = 0.0,
+) -> LadderResult:
     folder = Path(dest_dir)
     ctx = RungContext(
         beat_index=int(beat_index),
@@ -205,43 +348,50 @@ def run_ladder(
         dest=folder / "ladder.jpg",
         kind=kind or "object",
         n_beats=max(0, int(n_beats or 0)),
+        concept=concept or "",
+        replan=int(replan or 0),
+        event=bool(event),
     )
     calls = producers or {}
     if checkpoint is not None:
         saved = checkpoint.approved_beat(int(beat_index))
         if saved and Path(str(saved.get("path") or "")).is_file():
             path = Path(str(saved["path"]))
-            from modules.reel_artefact.reuse import remember_approved
+            if _reserve(path, ctx.n_beats) and _diverse(path):
+                from modules.reel_artefact.reuse import remember_approved
 
-            remember_approved(path, kind=str(saved.get("kind") or kind or "object"))
-            logger.info(
-                "LADDER | beat=%s | history=resume:pass | fail_reel=False | spent_beat=0",
-                int(beat_index) + 1,
-            )
-            return LadderResult(
-                path=path,
-                passed=True,
-                resumed=True,
-                rung=str(saved.get("rung") or "resume"),
-                verdict={"resumed": True, "ladder": True, **(saved.get("verdict") or {})},
-                first_pass=saved.get("first_pass"),
-                score=saved.get("score"),
-                reason=str(saved.get("reason") or ""),
-                kind=str(saved.get("kind") or kind),
-            )
+                remember_approved(path, kind=str(saved.get("kind") or kind or "object"))
+                logger.info(
+                    "LADDER | beat=%s | history=resume:pass | fail_reel=False | spent_beat=0",
+                    int(beat_index) + 1,
+                )
+                return LadderResult(
+                    path=path,
+                    passed=True,
+                    resumed=True,
+                    rung=str(saved.get("rung") or "resume"),
+                    verdict={"resumed": True, "ladder": True, **(saved.get("verdict") or {})},
+                    first_pass=saved.get("first_pass"),
+                    score=saved.get("score"),
+                    reason=str(saved.get("reason") or ""),
+                    kind=str(saved.get("kind") or kind),
+                )
+            _release(path)
 
     history: list[RungAttempt] = []
     spend: dict[str, int] = {}
-    beat_spent = 0.0
-    saw_scored_fail = False
+    beat_spent = max(0.0, float(beat_spent_in or 0.0))
+    saw_scored_fail = bool(replan)
     last_verdict: dict = {}
-    last_path: Path | None = None
-    order = rungs_for(ctx.kind)
+    order = rungs_for(ctx.kind, event=bool(event))
     budget = beat_budget_usd()
 
     for attempt, rung in enumerate(order):
         ctx.attempt = attempt
-        ctx.dest = folder / f"ladder_{int(beat_index):02d}_{rung}_{attempt:02d}.jpg"
+        stem = f"ladder_{int(beat_index):02d}_{rung}_{attempt:02d}"
+        if replan:
+            stem = f"{stem}_p{int(replan):02d}"
+        ctx.dest = folder / f"{stem}.jpg"
         if rung == "nb-text" and not text_only_safe:
             _skip(history, rung, "unsafe", int(beat_index) + 1)
             continue
@@ -287,19 +437,28 @@ def run_ladder(
                 charged = False
             history.append(RungAttempt(rung=rung, status="fail", reason="missing"))
             continue
-        if charged and rung in {"nb-ref", "nb-text"} and _already_paid(path):
+        shown = _shown_rung(rung, path)
+        if charged and (shown == "reuse" or _already_paid(path)):
             refund(cost)
             beat_spent = max(0.0, beat_spent - cost)
             charged = False
+        reserved = _reserve(path, ctx.n_beats)
+        if not reserved:
+            if charged:
+                refund(cost)
+                beat_spent = max(0.0, beat_spent - cost)
+            history.append(RungAttempt(
+                rung=shown, status="skip", reason="still", path=str(path),
+            ))
+            continue
         if charged:
-            key = _bill_key(rung, path)
+            key = _bill_key(shown, path)
             if key:
                 spend[key] = spend.get(key, 0) + 1
-        elif rung in {"real", "reuse"}:
-            key = _bill_key(rung, path)
+        elif shown in {"real", "reuse", "event"}:
+            key = _bill_key(shown, path)
             if key:
                 spend[key] = spend.get(key, 0) + 1
-        last_path = path
         if judge is None:
             verdict = {
                 "is_relevant": True,
@@ -321,28 +480,45 @@ def run_ladder(
         ctx.rejection = str(verdict.get("rejection_reason") or "")
         scored = verdict.get("qa_status") != "unavailable"
         if verdict_passed(verdict):
+            if not _diverse(path):
+                _release(path)
+                saw_scored_fail = True
+                history.append(RungAttempt(
+                    rung=shown,
+                    status="fail",
+                    reason="near-duplicate",
+                    path=str(path),
+                ))
+                logger.info(
+                    "LADDER | beat=%s | rung=%s | status=fail | near-duplicate",
+                    int(beat_index) + 1,
+                    shown,
+                )
+                continue
             first = not saw_scored_fail
-            _finish_log(beat_index, history + [
-                RungAttempt(rung=rung, status="pass", path=str(path), cost_usd=cost),
-            ], False, beat_spent, kept=False)
+            passed_row = RungAttempt(
+                rung=shown, status="pass", path=str(path), cost_usd=cost if charged else 0.0,
+            )
+            _finish_log(beat_index, history + [passed_row], False, beat_spent, kept=False)
             return LadderResult(
                 path=path,
                 passed=True,
-                rung=rung,
-                history=history + [RungAttempt(
-                    rung=rung, status="pass", path=str(path), cost_usd=cost,
-                )],
+                rung=shown,
+                history=history + [passed_row],
                 verdict=verdict,
                 first_pass=first if scored else False,
                 score=_score(verdict),
                 reason="",
                 spend=spend,
                 kind=ctx.kind,
+                beat_spent=beat_spent,
+                replans=int(replan or 0),
             )
         if scored:
             saw_scored_fail = True
+        _release(path)
         history.append(RungAttempt(
-            rung=rung,
+            rung=shown,
             status="fail",
             reason=ctx.rejection or "rejected",
             cost_usd=cost if charged else 0.0,
@@ -351,27 +527,27 @@ def run_ladder(
         logger.info(
             "LADDER | beat=%s | rung=%s | status=fail | cost=%.4f | %s",
             int(beat_index) + 1,
-            rung,
+            shown,
             cost if charged else 0.0,
             ctx.rejection or "rejected",
         )
 
-    kept_path, kept = _keep_compatible(ctx, last_path, history)
-    fail = not kept
-    _finish_log(beat_index, history, fail, beat_spent, kept=kept)
+    _finish_log(beat_index, history, True, beat_spent, kept=False)
     return LadderResult(
-        path=kept_path,
+        path=None,
         passed=False,
-        rung="kept" if kept else "",
+        rung="",
         history=history,
         verdict=last_verdict,
-        fail_reel=fail,
-        kept=kept,
+        fail_reel=True,
+        kept=False,
         first_pass=False,
         score=_score(last_verdict),
         reason=str(last_verdict.get("rejection_reason") or "ladder_exhausted"),
         spend=spend,
         kind=ctx.kind,
+        beat_spent=beat_spent,
+        replans=int(replan or 0),
     )
 
 
@@ -397,38 +573,57 @@ def _already_paid(path: Path) -> bool:
     }
 
 
-def _keep_compatible(
-    ctx: RungContext,
-    last_path: Path | None,
-    history: list[RungAttempt],
-) -> tuple[Path | None, bool]:
-    """Hold a compatible still only when the cap still allows it.
+def _shown_rung(rung: str, path: Path) -> str:
+    from modules.reel_artefact.source import source_meta
 
-    A scene beat will not keep an artefact photograph. A copy the judge just
-    rejected is published so one beat does not drop the reel, and it is not
-    saved as a new approval. Past the cap, the reel fails closed.
-    """
-    from modules.reel_artefact.reuse import approved_still, reuse_into
+    provider = str(source_meta(path).get("provider") or "")
+    if provider == "reuse":
+        return "reuse"
+    return rung
 
-    origin = approved_still(ctx.kind)
-    if origin is None:
-        return None, False
-    if history and history[-1].rung == "reuse" and history[-1].status == "fail":
-        if last_path is not None and last_path.is_file():
-            return last_path, True
-        return None, False
-    if _reuse_block(ctx):
-        return None, False
-    copied = reuse_into(
-        ctx.dest,
-        ctx.beat_index,
-        source=origin,
-        kind=ctx.kind,
-        n_beats=ctx.n_beats,
-    )
-    if copied is None or not Path(copied).is_file():
-        return None, False
-    return Path(copied), True
+
+def _content_key(path: Path) -> str:
+    from modules.reel_artefact.budget import file_hash_key
+    from modules.reel_artefact.source import source_meta
+
+    meta = source_meta(path)
+    saved = str(meta.get("image_hash") or meta.get("reuse_key") or "")
+    if saved.startswith("sha256:"):
+        return saved
+    try:
+        return file_hash_key(str(path))
+    except OSError:
+        try:
+            return str(path.resolve())
+        except OSError:
+            return str(path)
+
+
+def _reserve(path: Path, n_beats: int) -> bool:
+    from modules.reel_artefact.budget import claim_still
+
+    try:
+        target = str(path.resolve())
+    except OSError:
+        target = str(path)
+    ok, _reason = claim_still(target, _content_key(path), n_beats)
+    return ok
+
+
+def _release(path: Path) -> None:
+    from modules.reel_artefact.budget import release_still
+
+    try:
+        target = str(path.resolve())
+    except OSError:
+        target = str(path)
+    release_still(target, _content_key(path))
+
+
+def _diverse(path: Path) -> bool:
+    from modules.reel_artefact.diversity import claim_diverse
+
+    return claim_diverse(path)
 
 
 def _score(verdict: dict) -> float | None:

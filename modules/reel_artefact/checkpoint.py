@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 from pathlib import Path
@@ -34,6 +35,19 @@ def _script_key(script: str) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def checkpoint_mode() -> str:
+    """``use``, ``ignore``, or ``clear``.
+
+    ``REEL_CHECKPOINT=0`` skips resume. ``clear`` deletes the manifest first.
+    """
+    raw = (os.getenv("REEL_CHECKPOINT") or "").strip().lower()
+    if raw in {"0", "off", "false", "no", "ignore"}:
+        return "ignore"
+    if raw in {"clear", "reset"}:
+        return "clear"
+    return "use"
+
+
 class ReelCheckpoint:
     """One manifest per reel, under the channel store. Not a temp folder."""
 
@@ -48,9 +62,14 @@ class ReelCheckpoint:
         root = channel_store_dir(channel or "ancient_knowledge", create=True)
         folder = root / "reel_checkpoints" / _slug(reel_id)
         folder.mkdir(parents=True, exist_ok=True)
-        return cls(folder / "manifest.json")
+        path = folder / "manifest.json"
+        if checkpoint_mode() == "clear" and path.is_file():
+            path.unlink()
+        return cls(path)
 
     def approved_beat(self, index: int) -> dict | None:
+        if checkpoint_mode() == "ignore":
+            return None
         with self._lock:
             row = self._load().get("beats", {}).get(str(int(index)))
         if not isinstance(row, dict) or not row.get("approved"):
@@ -130,6 +149,8 @@ class ReelCheckpoint:
             self._write(data)
 
     def load_tts(self, input_script: str) -> dict | None:
+        if checkpoint_mode() == "ignore":
+            return None
         with self._lock:
             row = self._load().get("tts", {}).get(_script_key(input_script))
         if not isinstance(row, dict):

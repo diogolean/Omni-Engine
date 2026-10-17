@@ -7,13 +7,16 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from modules.reel_artefact.events import acquire_event_photo
 from modules.reel_artefact.ladder import (
     LadderResult,
     reprompt_from_defect,
     run_ladder,
 )
+from modules.reel_artefact.logbook import note_accepted
+from modules.reel_artefact.prompts import context_flux_prompt, event_flux_prompt
 from modules.reel_artefact.reuse import remember_approved
-from modules.reel_artefact.role import beat_kind
+from modules.reel_artefact.role import beat_kind, is_event
 from modules.reel_artefact.route import acquire_photo, generic_flux_prompt
 from modules.reel_qa.models import StillGateResult
 from modules.reel_qa.relevance import (
@@ -68,13 +71,15 @@ def climb_act(
     folder.mkdir(parents=True, exist_ok=True)
     safe = bool(entity and entity.text_only_safe) and kind == "object"
     shape = canonical_shape or (entity.canonical_shape if entity else "")
+    event = (not is_cta) and is_event(narration, camera=camera, setting=setting)
     kwargs = dict(generate_kwargs or {})
     kwargs.pop("visual_role", None)
     producers = {
         "real": _real(entity, channel, beat_index),
+        "event": _event(entity, channel),
         "nb-ref": _nano(entity, channel, beat_index, text_only=False),
         "nb-text": _nano(entity, channel, beat_index, text_only=True),
-        "flux": _flux(flux_generate, kwargs),
+        "flux": _flux(flux_generate, kwargs, entity),
         "reuse": _reuse(kind, entity.id if entity else ""),
     }
 
@@ -111,7 +116,14 @@ def climb_act(
         judge=_judge,
         checkpoint=checkpoint,
         entity_id=entity.id if entity else "",
+        event=event,
+        name=entity.name if entity else "",
+        period=str(getattr(entity, "event_period", "") or "") if entity else "",
+        negatives=tuple(getattr(entity, "event_negatives", ()) or ()) if entity else (),
+        llm=_gemini_reprompt if _llm_allowed() else None,
     )
+    if result.passed and not result.resumed:
+        note_accepted(result.rung or "flux")
     if result.passed and result.path is not None and not result.resumed:
         remember_approved(result.path, kind=kind)
         if checkpoint is not None:
@@ -161,6 +173,7 @@ def _real(entity: Entity | None, channel: str, beat_index: int):
             mode="chain",
             beat_index=beat_index,
             allow_nano=False,
+            n_beats=ctx.n_beats,
         )
     return _run
 
@@ -178,19 +191,47 @@ def _nano(entity: Entity | None, channel: str, beat_index: int, *, text_only: bo
             allow_nano=True,
             text_only=text_only,
             skip_real=not text_only,
+            n_beats=ctx.n_beats,
         )
     return _run
 
 
-def _flux(generate: Callable[..., Any], kwargs: dict):
+def _event(entity: Entity | None, channel: str):
+    def _run(ctx) -> Path | None:
+        if entity is None or not ctx.event:
+            return None
+        return acquire_event_photo(
+            entity,
+            ctx.dest,
+            channel=channel,
+            beat_index=ctx.beat_index,
+            n_beats=ctx.n_beats,
+        )
+    return _run
+
+
+def _flux(generate: Callable[..., Any], kwargs: dict, entity: Entity | None):
     def _run(ctx):
-        if ctx.rejection:
+        name = entity.name if entity else ""
+        period = str(getattr(entity, "event_period", "") or "") if entity else ""
+        negatives = tuple(getattr(entity, "event_negatives", ()) or ()) if entity else ()
+        if ctx.concept:
+            text = ctx.concept
+        elif ctx.rejection:
             text = reprompt_from_defect(
                 ctx.narration,
                 ctx.prompt,
                 ctx.rejection,
                 llm=_gemini_reprompt,
             )
+            if ctx.event or ctx.kind == "object":
+                text = f"{text} {_object_ban(name)}"
+        elif ctx.event:
+            text = event_flux_prompt(
+                ctx.narration, name=name, period=period, negatives=negatives,
+            )
+        elif ctx.kind == "object":
+            text = context_flux_prompt(ctx.narration, name=name)
         else:
             text = generic_flux_prompt(ctx.prompt or ctx.narration)
         call = {key: value for key, value in kwargs.items() if key in _FLUX_KEYS}
@@ -219,6 +260,23 @@ def _reuse(kind: str, entity_id: str):
             n_beats=ctx.n_beats,
         )
     return _run
+
+
+def _object_ban(name: str) -> str:
+    named = f"Do not depict {name}. " if name else ""
+    return (
+        f"{named}Do not depict a complete mechanism, clean brass gears, "
+        "or an invented gold figurine."
+    )
+
+
+def _llm_allowed() -> bool:
+    disabled = (os.getenv("REEL_LADDER_LLM") or "").strip().lower() in {
+        "0", "off", "false", "no",
+    }
+    if disabled:
+        return False
+    return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
 
 
 def _gemini_reprompt(narration: str, prompt: str, rejection: str) -> str | None:
@@ -285,7 +343,7 @@ def _gate(result: LadderResult, *, stem: str) -> StillGateResult:
     if result.resumed:
         verdict["is_relevant"] = True
         verdict["qa_status"] = verdict.get("qa_status") or "scored"
-    publishable = bool(result.passed or result.kept) and result.path is not None
+    publishable = bool(result.passed) and result.path is not None
     flux_fails = sum(
         1 for row in result.history if row.rung == "flux" and row.status == "fail"
     )

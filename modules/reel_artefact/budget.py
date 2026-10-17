@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 
 _LOCK = threading.Lock()
 _USED = 0
@@ -195,3 +196,62 @@ def note_reuse(path: str, key: str) -> None:
             _SEEN_PATHS.add(resolved)
         _STILL_USES[token] = _STILL_USES.get(token, 0) + 1
         _REUSE_BEATS += 1
+
+
+def file_hash_key(path: str) -> str:
+    """Stable id for identical bytes, including a cache file copied to a new dest."""
+    import hashlib
+
+    digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    return "sha256:" + digest
+
+
+def claim_still(path: str, key: str, n_beats: int) -> tuple[bool, str]:
+    """Reserve one use of ``key``. The same hash cannot fill the reel.
+
+    The first use is the original. Later uses count toward the reuse fraction.
+    A path that was already reserved returns success without a second increment.
+    """
+    resolved = str(path or "")
+    token = key or resolved
+    if not token:
+        return True, ""
+    global _REUSE_BEATS
+    with _LOCK:
+        if resolved and resolved in _SEEN_PATHS:
+            return True, ""
+        uses = int(_STILL_USES.get(token, 0))
+        if uses >= reuse_max_per_still():
+            return False, "still"
+        beats = max(0, int(n_beats or 0))
+        if uses >= 1 and beats > 0 and (_REUSE_BEATS + 1) / beats > reuse_max_fraction() + 1e-9:
+            return False, "fraction"
+        if resolved:
+            _SEEN_PATHS.add(resolved)
+        _STILL_USES[token] = uses + 1
+        if uses >= 1:
+            _REUSE_BEATS += 1
+        return True, ""
+
+
+def release_still(path: str, key: str) -> None:
+    """Give back a reservation when the judge rejects the still."""
+    resolved = str(path or "")
+    token = key or resolved
+    if not token:
+        return
+    global _REUSE_BEATS
+    with _LOCK:
+        if resolved and resolved not in _SEEN_PATHS:
+            return
+        if resolved:
+            _SEEN_PATHS.discard(resolved)
+        uses = int(_STILL_USES.get(token, 0))
+        if uses <= 0:
+            return
+        if uses >= 2:
+            _REUSE_BEATS = max(0, _REUSE_BEATS - 1)
+        if uses == 1:
+            _STILL_USES.pop(token, None)
+        else:
+            _STILL_USES[token] = uses - 1

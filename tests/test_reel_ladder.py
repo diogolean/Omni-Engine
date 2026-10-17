@@ -2,6 +2,7 @@
 """Fallback ladder: judged rungs, resume, caps, and the documentary Flux role."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from modules.reel_artefact.budget import (
     reset_uses,
     still_uses,
 )
+from modules.reel_artefact.diversity import reset_diversity
 from modules.reel_artefact.ladder import (
     RungContext,
     history_text,
@@ -58,11 +60,13 @@ def _clean_reel_counters() -> None:
     reset_spend()
     reset_uses()
     reset_approved()
+    reset_diversity()
     yield
     reset_nano_budget()
     reset_spend()
     reset_uses()
     reset_approved()
+    reset_diversity()
 
 
 def test_judge_threshold_stays_at_070() -> None:
@@ -429,3 +433,347 @@ def test_reuse_cost_line_is_separate_from_commons() -> None:
     assert "(17 stills)" in rendered
     assert "20 generation" not in rendered
     assert "FLUX Schnell" not in rendered
+
+
+def test_a_failed_reuse_is_not_publishable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REEL_REPLAN_MAX", "0")
+    monkeypatch.setenv("REEL_LADDER", "reuse")
+
+    def _reuse(ctx: RungContext) -> Path:
+        return _jpeg(ctx.dest)
+
+    result = run_ladder(
+        beat_index=4,
+        narration="The pendant in its case.",
+        prompt="museum case",
+        dest_dir=tmp_path,
+        kind="object",
+        producers={"reuse": _reuse},
+        judge=lambda _path, _ctx: _fail(),
+    )
+    assert result.passed is False
+    assert result.kept is False
+    assert result.path is None
+    assert result.fail_reel is True
+    assert result.score != 1.0
+
+
+def test_replan_tries_a_new_concept_then_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REEL_REPLAN_MAX", "1")
+    monkeypatch.setenv("REEL_LADDER_LLM", "0")
+    monkeypatch.setenv("REEL_LADDER", "flux")
+    seen: list[str] = []
+
+    def _flux(ctx: RungContext) -> Path:
+        seen.append(ctx.concept or ctx.prompt)
+        return _jpeg(ctx.dest, (20 + len(seen), 30, 40))
+
+    def _judge(path: Path, ctx: RungContext) -> dict:
+        del path
+        if ctx.replan:
+            return _pass(0.92)
+        return _fail()
+
+    result = run_ladder(
+        beat_index=0,
+        narration="The pendant sits in its case.",
+        prompt="museum case",
+        dest_dir=tmp_path,
+        kind="object",
+        name="Quimbaya golden ornaments",
+        producers={"flux": _flux},
+        judge=_judge,
+    )
+    assert result.passed is True
+    assert result.replans == 1
+    assert result.first_pass is False
+    assert result.kept is False
+    assert "museum hall" in seen[-1].lower() or "display case" in seen[-1].lower()
+    assert "complete mechanism" in seen[-1].lower()
+    assert "gold figurine" in seen[-1].lower()
+
+
+def test_replan_stops_when_the_beat_budget_is_spent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REEL_REPLAN_MAX", "2")
+    monkeypatch.setenv("REEL_LADDER_LLM", "0")
+    monkeypatch.setenv("REEL_BEAT_BUDGET_USD", "0.003")
+    monkeypatch.setenv("REEL_LADDER", "flux")
+    calls = {"n": 0}
+
+    def _flux(ctx: RungContext) -> Path:
+        calls["n"] += 1
+        return _jpeg(ctx.dest, (9, 9, calls["n"]))
+
+    result = run_ladder(
+        beat_index=0,
+        narration="A museum hall.",
+        prompt="hall",
+        dest_dir=tmp_path,
+        kind="scene",
+        producers={"flux": _flux},
+        judge=lambda _path, _ctx: _fail(),
+    )
+    assert calls["n"] == 1
+    assert result.passed is False
+    assert result.fail_reel is True
+    assert result.path is None
+    assert result.kept is False
+
+
+def test_accepted_rungs_drive_the_reel_counter() -> None:
+    from modules.reel_artefact.logbook import note_accepted, note_source, reset, summary_line
+
+    reset()
+    note_source("nb-ref:gemini", "quimbaya", 1)
+    note_source("nb-ref:gemini", "quimbaya", 2)
+    note_accepted("flux")
+    note_accepted("flux")
+    note_accepted("reuse")
+    note_accepted("event")
+    line = summary_line()
+    assert "flux=2" in line
+    assert "reuse=1" in line
+    assert "event=1" in line
+    assert "nb-ref=0" in line
+
+
+def test_cached_edit_is_reuse_and_a_third_copy_is_a_new_angle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.reel_artefact.route import _variation
+    from modules.shot_planner.entities import Entity
+
+    monkeypatch.setenv("REEL_REUSE_MAX_PER_STILL", "2")
+    monkeypatch.setenv("REEL_NANOBANANA_MAX_PER_REEL", "4")
+    entity = Entity(
+        id="quimbaya_ornaments",
+        name="Quimbaya golden ornaments",
+        aliases=("quimbaya",),
+        kind="artifact",
+        canonical_visual="small gold pendants",
+        era="pre-Columbian",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        canonical_shape="a small gold pendant",
+        text_only_safe=False,
+    )
+    reference = _jpeg(tmp_path / "ref.jpg", (180, 140, 40))
+    calls = {"n": 0, "prompts": []}
+
+    def _generate(prompt: str, dest: Path, reference_image) -> str:
+        del reference_image
+        calls["n"] += 1
+        calls["prompts"].append(prompt)
+        Image.new("RGB", (64, 96), (calls["n"], 8, 8)).save(dest, format="JPEG")
+        return "gemini-3.1-flash-lite-image"
+
+    paths = []
+    for index in range(3):
+        made = _variation(
+            entity,
+            tmp_path / f"beat{index}.jpg",
+            reference=reference,
+            channel="ancient_knowledge",
+            cache_dir=tmp_path / "cache",
+            generate_image=_generate,
+            license_name="",
+            credit="",
+            title=entity.name,
+            source_url="",
+            author="",
+            kind="nb-ref",
+            beat_index=index,
+            slot=index,
+            n_beats=19,
+        )
+        paths.append(made)
+    assert paths[0] is not None and paths[1] is not None and paths[2] is not None
+    assert calls["n"] == 2
+    first = json.loads(Path(str(paths[0]) + ".source.json").read_text(encoding="utf-8"))
+    second = json.loads(Path(str(paths[1]) + ".source.json").read_text(encoding="utf-8"))
+    third = json.loads(Path(str(paths[2]) + ".source.json").read_text(encoding="utf-8"))
+    assert first["provider"] == "nanobanana"
+    assert second["provider"] == "reuse"
+    assert third["provider"] == "nanobanana"
+    assert first["image_hash"] == second["image_hash"]
+    assert third["image_hash"] != first["image_hash"]
+    assert "different framing" in calls["prompts"][1].lower()
+
+
+def test_event_rungs_and_prompt_keep_the_artefact_out() -> None:
+    from modules.reel_artefact.prompts import context_flux_prompt, event_flux_prompt
+
+    assert rungs_for("scene", event=True) == ["event", "flux", "flux", "reuse"]
+    text = event_flux_prompt(
+        "In 1901, divers raised the shipwreck off Antikythera.",
+        name="Antikythera Mechanism",
+        period="1900-1901",
+        negatives=("no modern scuba", "no modern boats"),
+    ).lower()
+    assert "1900-1901" in text
+    assert "no modern scuba" in text
+    assert "no modern boats" in text
+    assert "do not depict antikythera mechanism" in text
+    assert "complete mechanism" in text
+    assert "film grain" in text
+    context = context_flux_prompt(
+        "The mechanism fills the case.",
+        name="Antikythera Mechanism",
+    ).lower()
+    assert "museum hall" in context or "display case" in context
+    assert "clean brass gears" in context
+    assert "gold figurine" in context
+
+
+def test_near_duplicate_frames_do_not_both_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REEL_REPLAN_MAX", "0")
+    monkeypatch.setenv("REEL_LADDER", "flux")
+    monkeypatch.setenv("REEL_STILL_HAMMING", "8")
+
+    def _flux(ctx: RungContext) -> Path:
+        return _jpeg(ctx.dest, (4, 4, 4))
+
+    first = run_ladder(
+        beat_index=0,
+        narration="A crowd on the shore.",
+        prompt="crowd",
+        dest_dir=tmp_path / "a",
+        kind="scene",
+        producers={"flux": _flux},
+        judge=lambda _path, _ctx: _pass(0.95),
+    )
+    second = run_ladder(
+        beat_index=1,
+        narration="Another crowd on the shore.",
+        prompt="crowd again",
+        dest_dir=tmp_path / "b",
+        kind="scene",
+        producers={"flux": _flux},
+        judge=lambda _path, _ctx: _pass(0.95),
+    )
+    assert first.passed is True
+    assert second.passed is False
+    assert second.path is None
+    assert any(row.reason == "near-duplicate" for row in second.history)
+
+
+def test_ignore_checkpoint_does_not_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.reel_artefact.checkpoint import ReelCheckpoint
+
+    image = _jpeg(tmp_path / "saved.jpg")
+    ckpt = ReelCheckpoint(tmp_path / "manifest.json")
+    ckpt.save_beat(
+        0,
+        image=image,
+        score=0.95,
+        reason="",
+        rung="flux",
+        verdict=_pass(0.95),
+        first_pass=True,
+        kind="scene",
+    )
+    assert ckpt.approved_beat(0) is not None
+    monkeypatch.setenv("REEL_CHECKPOINT", "ignore")
+    assert ckpt.approved_beat(0) is None
+    monkeypatch.setenv("REEL_CHECKPOINT", "clear")
+    again = ReelCheckpoint.for_reel("ancient_knowledge", "smoke9-clear-test")
+    if again.path.is_file():
+        again.path.unlink()
+    again.save_beat(
+        0,
+        image=image,
+        score=0.95,
+        reason="",
+        rung="flux",
+        verdict=_pass(0.95),
+        first_pass=True,
+        kind="scene",
+    )
+    ReelCheckpoint.for_reel("ancient_knowledge", "smoke9-clear-test")
+    assert again.approved_beat(0) is None
+
+
+def test_event_search_publishes_a_commons_still(tmp_path: Path) -> None:
+    from agents.media.free_images.http import HttpResponse
+    from modules.reel_artefact.events import acquire_event_photo
+    from modules.shot_planner.entities import Entity
+
+    entity = Entity(
+        id="antikythera_mechanism",
+        name="Antikythera Mechanism",
+        aliases=("antikythera",),
+        kind="artifact",
+        canonical_visual="fragments",
+        era="Hellenistic",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        event_search=("Antikythera wreck sponge divers",),
+        event_categories=("Category:Antikythera wreck",),
+        event_period="1900-1901",
+    )
+    page = {
+        "title": "File:Antikythera sponge divers 1901.jpg",
+        "imageinfo": [{
+            "url": "https://example.test/divers.jpg",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Divers.jpg",
+            "thumburl": "https://example.test/divers.jpg",
+            "width": 1600,
+            "height": 1200,
+            "mime": "image/jpeg",
+            "extmetadata": {
+                "ObjectName": {"value": "Antikythera sponge divers 1901"},
+                "LicenseShortName": {"value": "Public domain"},
+                "Artist": {"value": "Unknown"},
+            },
+        }],
+    }
+
+    class _Client:
+        def get(self, url, params=None, headers=None):
+            del headers
+            params = params or {}
+            if "divers.jpg" in url:
+                return HttpResponse(200, _jpeg_bytes())
+            if params.get("list") == "categorymembers":
+                body = {"query": {"categorymembers": [
+                    {"title": "File:Antikythera sponge divers 1901.jpg"},
+                ]}}
+                return HttpResponse(200, json.dumps(body).encode())
+            if params.get("titles") or params.get("gsrsearch"):
+                body = {"query": {"pages": {"1": page}}}
+                return HttpResponse(200, json.dumps(body).encode())
+            return HttpResponse(404, b"")
+
+    dest = tmp_path / "event.jpg"
+    made = acquire_event_photo(
+        entity,
+        dest,
+        channel="ancient_knowledge",
+        beat_index=1,
+        n_beats=16,
+        client=_Client(),
+    )
+    assert made == dest and dest.is_file()
+    side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
+    assert side["provider"] == "commons" or side["image_hash"].startswith("sha256:")
+    assert side["image_hash"].startswith("sha256:")
+
+
+def _jpeg_bytes() -> bytes:
+    import io
+
+    buf = io.BytesIO()
+    Image.new("RGB", (1600, 1200), (70, 90, 110)).save(buf, format="JPEG")
+    return buf.getvalue()

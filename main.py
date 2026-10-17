@@ -3281,12 +3281,14 @@ def _produce_variant_worker(
         from modules.reel_artefact.budget import reset_spend as _reset_spend
         from modules.reel_artefact.budget import reset_uses as _reset_uses
         from modules.reel_artefact.checkpoint import mark_tts_resumed as _mark_tts
+        from modules.reel_artefact.diversity import reset_diversity as _reset_diverse
         from modules.reel_artefact.logbook import reset as _reset_sources
         from modules.reel_artefact.reuse import reset_approved as _reset_approved
 
         _reset_nano()
         _reset_spend()
         _reset_uses()
+        _reset_diverse()
         _reset_sources()
         _reset_approved()
         _mark_tts(False)
@@ -7806,6 +7808,22 @@ def cli() -> None:
         help='Optional topic/subject ("Castor Oil"). Omit for AI-chosen subjects.',
     )
     parser.add_argument(
+        "--ignore-reel-checkpoints",
+        action="store_true",
+        help=(
+            "Do not resume approved reel stills or TTS from the checkpoint. "
+            "Same as REEL_CHECKPOINT=ignore."
+        ),
+    )
+    parser.add_argument(
+        "--clear-reel-checkpoints",
+        action="store_true",
+        help=(
+            "Delete the reel checkpoint manifest before this run. "
+            "Same as REEL_CHECKPOINT=clear."
+        ),
+    )
+    parser.add_argument(
         "--quantity", "--count", "-n",
         dest="quantity",
         type=int,
@@ -8471,6 +8489,10 @@ def cli() -> None:
         ),
     )
     args = parser.parse_args()
+    if getattr(args, "clear_reel_checkpoints", False):
+        os.environ["REEL_CHECKPOINT"] = "clear"
+    elif getattr(args, "ignore_reel_checkpoints", False):
+        os.environ["REEL_CHECKPOINT"] = "ignore"
     if getattr(args, "deepinfra_flux2dev", False):
         os.environ["LOFI_FLUX_BACKEND"] = "flux2-dev"
     # True CLI value before page locks (master_mei/anna) mutate args.avatar.

@@ -99,6 +99,32 @@ def image_role_for(
     return "flux"
 
 
+_EVENT = (
+    "shipwreck",
+    "wreck",
+    "diver",
+    "divers",
+    "sponge",
+    "excavation",
+    "excavated",
+    "discovery",
+    "discovered",
+    "recovered",
+    "recover",
+)
+
+
+def is_event(
+    narration: str = "",
+    *,
+    camera: str = "",
+    setting: str = "",
+) -> bool:
+    """A historical event, not a portrait of the artefact."""
+    blob = " ".join((narration, camera, setting)).lower()
+    return any(cue in blob for cue in _EVENT)
+
+
 def beat_kind(
     entity: Entity | None,
     *,
