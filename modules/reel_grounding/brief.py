@@ -126,9 +126,9 @@ _KNOWN: tuple[KnownObject, ...] = (
         ("egypt", "egyptian", "pharaoh", "pharaohs", "sphinx", "pyramid", "pyramids", "giza"),
     ),
     KnownObject(
-        "Colombian golden jet planes",
-        ("jet plane", "golden jet"),
-        "small golden ornaments shaped like ancient jet aircraft",
+        "Quimbaya gold pendants",
+        ("quimbaya", "jet plane", "golden jet", "colombian golden"),
+        "small pre-Columbian gold pendants and figurines in a museum case",
     ),
     KnownObject(
         "London Hammer",
@@ -159,6 +159,16 @@ _DRIFT = (
     "vault door",
     "fantasy landscape",
     "city street",
+    "fighter jet",
+    "modern aircraft",
+    "sci-fi hangar",
+    "spaceship",
+    "steampunk",
+    "futuristic interior",
+    "modern library",
+    "CGI",
+    "miniature model",
+    "clay diorama",
 )
 
 
