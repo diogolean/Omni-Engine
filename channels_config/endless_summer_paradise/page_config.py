@@ -6,6 +6,7 @@ All channel settings live in this directory. Paths resolve from
 ``Path(__file__).parent`` via ``settings.json`` (source folder + library) and
 ``factory_settings.json`` (legacy MEDIAUPSCALE production DNA). Optional env
 overrides: ``ESP_SOURCE_DIRECTORY``, ``ESP_VIDEO_LIBRARY``.
+AI clip generation is a separate switch in ``video_config.py`` and stays off.
 
 Metadata strategy (US high-RPM):
   Titles  → [Hook] — 1950s Surreal Jell-O Waterpark | Brand/Sub-theme
