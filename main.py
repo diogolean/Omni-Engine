@@ -168,6 +168,8 @@ from typing import Any, Optional
 import config as app_config
 from utils.pipeline_paths import outputs_root, page_outputs_dir, pipeline_logs_dir
 
+from core.google_guardrail import bind_run_channel
+
 if (app_config.ACTIVE_PAGE or "").lower() != (_PRELOADED_PAGE or "").lower():
     app_config.bind_active_page(_PRELOADED_PAGE)
     print(
@@ -175,6 +177,8 @@ if (app_config.ACTIVE_PAGE or "").lower() != (_PRELOADED_PAGE or "").lower():
         f"outputs={app_config.PAGE_OUTPUTS_DIR}",
         flush=True,
     )
+else:
+    bind_run_channel(_PRELOADED_PAGE)
 from agents.writer.caption_engine import (
     CaptionEngine,
     build_gemini_researcher_instruction,
@@ -8131,7 +8135,7 @@ def cli() -> None:
         help=(
             "Avatar / Gemini image tier. "
             "flash (default when --avatar ON): models/gemini-2.5-flash-image at 1K "
-            "(~$0.005/img, ~$0.10 / 20). "
+            "(~$0.039/img, ~$0.78 / 20). "
             "gemini-pro: models/gemini-3-pro-image-preview at 1K "
             "($0.03/img, ~$0.60 / 20). "
             "2K is never selected by this flag."
@@ -8331,6 +8335,8 @@ def cli() -> None:
     page_id: str = args.page
     if (page_id or "").strip() and (app_config.ACTIVE_PAGE or "").lower() != page_id.lower():
         app_config.bind_active_page(page_id)
+    elif (page_id or "").strip():
+        bind_run_channel(page_id)
 
     # Load page config to read per-page defaults.
     _tmp_page_cfg: dict = {}

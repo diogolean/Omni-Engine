@@ -453,7 +453,7 @@ def _gemini_cost_usd(model_id: str | None) -> float:
     try:
         return float(app_config.estimate_gemini_image_usd(model_id))
     except Exception:
-        return 0.03 if _gemini_cost_key(model_id) == "image_gemini_pro" else 0.005
+        return 0.03 if _gemini_cost_key(model_id) == "image_gemini_pro" else 0.039
 
 
 class ImageProvider(ABC):

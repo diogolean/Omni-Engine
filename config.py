@@ -121,7 +121,9 @@ GEMINI_IMAGE_SIZE: str = (os.getenv("GEMINI_IMAGE_SIZE") or "1K").strip().upper(
 if GEMINI_IMAGE_SIZE not in {"1K", "2K"}:
     GEMINI_IMAGE_SIZE = "1K"
 # Official 1K list prices used for pre-flight logs + guardrail estimates.
-GEMINI_FLASH_IMAGE_1K_USD: float = 0.005
+# gemini-2.5-flash-image (Nano Banana) is $0.039. Successors live in
+# modules/reel_artefact/pricing.py.
+GEMINI_FLASH_IMAGE_1K_USD: float = 0.039
 GEMINI_PRO_IMAGE_1K_USD: float = 0.03
 GEMINI_PRO_IMAGE_2K_USD: float = 0.134
 SAFE_CLAUDE_MODEL: str = "claude-3-5-sonnet-latest"
@@ -517,11 +519,28 @@ def estimate_gemini_image_usd(model_id: str | None, *, image_size: str | None = 
     low = (model_id or "").lower()
     if "pro" in low or "imagen" in low:
         return GEMINI_PRO_IMAGE_2K_USD if size == "2K" else GEMINI_PRO_IMAGE_1K_USD
-    if "flash" in low and "image" in low:
+    listed = _listed_flash_image_usd(model_id)
+    if listed is not None:
+        return listed
+    if ("flash" in low and "image" in low) or "nano-banana" in low:
         return GEMINI_FLASH_IMAGE_1K_USD
     if is_gemini_image_model(model_id):
         return GEMINI_FLASH_IMAGE_1K_USD
     return 0.0
+
+
+def _listed_flash_image_usd(model_id: str | None) -> float | None:
+    try:
+        from modules.reel_artefact.pricing import NANOBANANA_USD
+    except Exception:
+        return None
+    key = (model_id or "").strip()
+    bare = key.split("/")[-1]
+    if key in NANOBANANA_USD:
+        return float(NANOBANANA_USD[key])
+    if bare in NANOBANANA_USD:
+        return float(NANOBANANA_USD[bare])
+    return None
 
 
 def is_gemini_image_model(raw: str | None) -> bool:
@@ -735,6 +754,12 @@ def bind_active_page(page: str) -> str:
         "ACTIVE_PAGE bound | page=%s outputs=%s clips=%s",
         ACTIVE_PAGE, PAGE_OUTPUTS_DIR, PAGE_OUTPUTS_DIR / "clips",
     )
+    try:
+        from core.google_guardrail import bind_run_channel
+
+        bind_run_channel(slug)
+    except Exception:
+        logger.debug("Google cost channel not bound.", exc_info=True)
     return ACTIVE_PAGE
 
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Pick a still for one beat. Commons first, then a reference-conditioned edit."""
+"""Pick a still for one beat. Reference-edit first, then a Commons still."""
 from __future__ import annotations
 
 import logging
@@ -56,10 +56,10 @@ def acquire_photo(
 ) -> Path | None:
     """Write the artefact still to ``dest``.
 
-    ``chain`` uses a Commons frame when it clears the resolution floor.
-    Otherwise, and on a QA retry, it asks Nano Banana to edit the reference.
-    ``commons`` never calls the generator. ``nanobanana`` always edits.
-    ``flux`` returns None so the caller keeps Flux.
+    ``chain`` asks Nano Banana to edit the Commons reference. A large Commons
+    still is used when that edit cannot run. Text-only generation runs only
+    when ``entity.text_only_safe`` is set. ``commons`` never calls the
+    generator. ``flux`` returns None so the caller keeps Flux.
     """
     chosen = mode or artefact_mode()
     if chosen in {None, "flux"}:
@@ -70,30 +70,48 @@ def acquire_photo(
         cache_dir=cache_dir,
         client=client,
     )
-    use_commons = chosen in {"commons", "chain"} and not variation
-    if use_commons and fetched is not None and fetched.usable_as_still and fetched.still_path:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(Path(fetched.still_path).read_bytes())
-        _stamp(dest, fetched, entity, provider="commons", model_id="")
-        return dest
     if chosen == "commons":
-        return None
+        if variation:
+            return None
+        return _publish_commons(fetched, dest, entity)
     if chosen not in {"nanobanana", "chain"}:
         return None
     reference = fetched.reference_path if fetched is not None else None
-    return _variation(
-        entity,
-        dest,
-        reference=reference,
-        channel=channel,
-        cache_dir=cache_dir or _cache_parent(fetched),
-        generate_image=generate_image,
-        license_name=fetched.license_name if fetched else "",
-        credit=fetched.credit_line if fetched else "",
-        title=fetched.title if fetched else entity.name,
-        source_url=fetched.source_url if fetched else "",
-        author=fetched.author if fetched else "",
-    )
+    has_reference = reference is not None and Path(reference).is_file()
+    allow_text = bool(getattr(entity, "text_only_safe", False))
+    edited: Path | None = None
+    if has_reference or allow_text:
+        edited = _variation(
+            entity,
+            dest,
+            reference=reference if has_reference else None,
+            channel=channel,
+            cache_dir=cache_dir or _cache_parent(fetched),
+            generate_image=generate_image,
+            license_name=fetched.license_name if fetched else "",
+            credit=fetched.credit_line if fetched else "",
+            title=fetched.title if fetched else entity.name,
+            source_url=fetched.source_url if fetched else "",
+            author=fetched.author if fetched else "",
+        )
+    if edited is not None:
+        return edited
+    if chosen == "chain" and not variation:
+        return _publish_commons(fetched, dest, entity)
+    return None
+
+
+def _publish_commons(
+    fetched: FetchedArtefact | None,
+    dest: Path,
+    entity: Entity,
+) -> Path | None:
+    if fetched is None or not fetched.usable_as_still or not fetched.still_path:
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(Path(fetched.still_path).read_bytes())
+    _stamp(dest, fetched, entity, provider="commons", model_id="")
+    return dest
 
 
 def _cache_parent(fetched: FetchedArtefact | None) -> Path | None:
@@ -185,23 +203,40 @@ def _variation(
 def _edit_prompt(entity: Entity, *, has_reference: bool) -> str:
     shape = entity.canonical_shape or entity.canonical_visual or entity.name
     if has_reference:
-        return (
+        text = (
             "Edit the reference photograph into a photoreal 9:16 documentary still. "
             f"Keep the real object's shape: {shape}. "
             "New museum lighting and a slightly different camera angle. "
-            "Do not add text, a watermark, or a modern vehicle."
+            "Do not add text or a watermark. "
+            "Do not invent parts that are absent from the reference."
         )
-    return (
-        "Photoreal documentary photograph, 9:16, of this real artefact and nothing else: "
-        f"{entity.name}. Shape: {shape}. Museum case, single raking lamp, "
-        "real camera, no text, no watermark."
-    )
+    else:
+        text = (
+            "Photoreal documentary photograph, 9:16, of this real artefact and nothing else: "
+            f"{entity.name}. Shape: {shape}. Museum case, single raking lamp, "
+            "real camera, no text, no watermark."
+        )
+    limits = _limits(entity)
+    if limits:
+        return f"{text} {limits}"
+    return text
+
+
+def _limits(entity: Entity) -> str:
+    items = [
+        str(item).strip().rstrip(".")
+        for item in getattr(entity, "edit_negatives", ()) or ()
+        if str(item).strip()
+    ]
+    if not items:
+        return ""
+    return "Constraints: " + ", ".join(items) + "."
 
 
 def _fallback_cache(channel: str, entity_id: str) -> Path:
-    from utils.pipeline_paths import temp_path
+    from modules.reel_artefact.fetch import artefact_cache_dir
 
-    return temp_path(channel or "ancient_knowledge", "artefact_cache", entity_id)
+    return artefact_cache_dir(channel, entity_id)
 
 
 def _stamp(

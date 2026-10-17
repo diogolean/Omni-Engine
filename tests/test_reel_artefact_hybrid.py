@@ -244,3 +244,236 @@ def test_subtitle_band_is_cropped_before_the_frame_judge(tmp_path: Path) -> None
     clean = strip_subtitle_band(src, tmp_path / "clean.jpg")
     assert clean is not None
     assert Image.open(clean).size[1] == int(200 * 0.76)
+
+
+def _quimbaya() -> Entity:
+    return Entity(
+        id="quimbaya_ornaments",
+        name="Quimbaya golden ornaments",
+        aliases=("quimbaya",),
+        kind="artifact",
+        canonical_visual="small gold pendants",
+        era="pre-Columbian",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        canonical_shape="a small gold pendant with delta wings, a tail fin, and a stylised head",
+        commons_search=("Quimbaya gold pendant",),
+        commons_titles=("File:Precolombina cultura prc.jpg",),
+        text_only_safe=False,
+        edit_negatives=(
+            "no propeller",
+            "no modern aircraft",
+            "no straight wings",
+            "no cockpit",
+        ),
+    )
+
+
+def test_chain_edits_a_large_reference_and_forbids_a_propeller(tmp_path: Path) -> None:
+    url = "https://example.test/pendant.jpg"
+    client = _Client(
+        pages={
+            "titles": {"1": _page("File:Precolombina cultura prc.jpg", 2000, 1400, "CC0", url)},
+            "search": {},
+        },
+        files={url: _jpeg(2000, 1400)},
+    )
+
+    def _generate(prompt: str, dest: Path, reference) -> str:
+        assert reference is not None and Path(reference).is_file()
+        assert "no propeller" in prompt
+        assert "no cockpit" in prompt
+        Image.new("RGB", (768, 1344), (20, 20, 20)).save(dest, format="JPEG")
+        return "gemini-2.5-flash-image"
+
+    dest = tmp_path / "out.jpg"
+    path = acquire_photo(
+        _quimbaya(),
+        dest,
+        channel="ancient_knowledge",
+        mode="chain",
+        client=client,
+        cache_dir=tmp_path / "cache",
+        generate_image=_generate,
+    )
+    assert path == dest
+    side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
+    assert side["provider"] == "nanobanana"
+    assert side["model_id"] == "gemini-2.5-flash-image"
+
+
+def test_a_failed_edit_can_still_use_the_commons_frame(tmp_path: Path) -> None:
+    url = "https://example.test/gears.jpg"
+    client = _Client(
+        pages={
+            "titles": {"1": _page("File:Gears.jpg", 2000, 1400, "CC0", url)},
+            "search": {},
+        },
+        files={url: _jpeg(2000, 1400)},
+    )
+
+    def _generate(prompt: str, dest: Path, reference) -> str:
+        del prompt, dest, reference
+        raise RuntimeError("GEMINI_API_KEY missing")
+
+    dest = tmp_path / "out.jpg"
+    path = acquire_photo(
+        _entity(),
+        dest,
+        channel="ancient_knowledge",
+        mode="chain",
+        client=client,
+        cache_dir=tmp_path / "cache",
+        generate_image=_generate,
+    )
+    assert path == dest and dest.is_file()
+    side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
+    assert side["provider"] == "commons"
+
+
+def test_text_only_runs_only_when_the_entity_marks_it_safe(tmp_path: Path) -> None:
+    class _Miss:
+        def get(self, url, params=None, headers=None):
+            del url, params, headers
+            return HttpResponse(404, b"")
+
+    calls = {"n": 0}
+
+    def _generate(prompt: str, dest: Path, reference) -> str:
+        del prompt
+        calls["n"] += 1
+        assert reference is None
+        Image.new("RGB", (768, 1344), (9, 9, 9)).save(dest, format="JPEG")
+        return "gemini-2.5-flash-image"
+
+    blocked = acquire_photo(
+        _entity(),
+        tmp_path / "blocked.jpg",
+        channel="ancient_knowledge",
+        mode="chain",
+        client=_Miss(),
+        cache_dir=tmp_path / "blocked-cache",
+        generate_image=_generate,
+    )
+    assert blocked is None
+    assert calls["n"] == 0
+    allowed_entity = Entity(
+        id="baghdad_battery",
+        name="Baghdad Battery",
+        aliases=("baghdad battery",),
+        kind="artifact",
+        canonical_visual="a clay jar",
+        era="Parthian",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        canonical_shape="a clay jar with a copper cylinder and an iron rod",
+        text_only_safe=True,
+    )
+    allowed = acquire_photo(
+        allowed_entity,
+        tmp_path / "allowed.jpg",
+        channel="ancient_knowledge",
+        mode="chain",
+        client=_Miss(),
+        cache_dir=tmp_path / "allowed-cache",
+        generate_image=_generate,
+    )
+    assert allowed is not None and calls["n"] == 1
+
+
+def test_preview_ref_refuses_a_missing_reference(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from modules.reel_artefact.preview import main, resolve_entity
+
+    found = resolve_entity("quimbaya", "ancient_knowledge")
+    assert found is not None and found.id == "quimbaya_ornaments"
+    assert found.text_only_safe is False
+    monkeypatch.setattr("modules.reel_artefact.preview.fetch_artefact", lambda *_a, **_k: None)
+    assert main(["antikythera", "--ref"]) == 1
+    assert "Ref-edit refused" in capsys.readouterr().err
+
+
+def test_preview_prints_the_reference_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from modules.reel_artefact.preview import main
+
+    reference = tmp_path / "reference.jpg"
+    Image.new("RGB", (40, 30), (1, 2, 3)).save(reference, format="JPEG")
+
+    class _Fetched:
+        reference_path = reference
+
+    dest = tmp_path / "out.jpg"
+
+    def _acquire(entity, path, **kwargs):
+        del entity
+        assert kwargs.get("mode") == "nanobanana"
+        path.write_bytes(reference.read_bytes())
+        Path(str(path) + ".source.json").write_text(
+            json.dumps({
+                "provider": "nanobanana",
+                "model_id": "gemini-2.5-flash-image",
+                "reference_image": str(reference),
+            }),
+            encoding="utf-8",
+        )
+        return path
+
+    monkeypatch.setattr(
+        "modules.reel_artefact.preview.fetch_artefact",
+        lambda *_a, **_k: _Fetched(),
+    )
+    monkeypatch.setattr("modules.reel_artefact.preview.acquire_photo", _acquire)
+    monkeypatch.setattr("utils.pipeline_paths.review_path", lambda *_parts: dest)
+    assert main(["quimbaya", "--ref"]) == 0
+    printed = capsys.readouterr().out
+    assert "model=gemini-2.5-flash-image" in printed
+    assert "reference=yes" in printed
+    assert f"path={dest}" in printed
+
+
+def test_google_image_cost_stays_on_the_reel_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from core.google_guardrail import (
+        GoogleCostTracker,
+        active_channel,
+        bind_cost_channel,
+        bind_run_channel,
+        image_unit_cost_usd,
+    )
+
+    monkeypatch.setenv("ACTIVE_PAGE", "anna_protocol")
+    monkeypatch.setenv("GEMINI_IMAGE_SIZE", "1K")
+    bind_run_channel("ancient_knowledge")
+    try:
+        bind_cost_channel("ancient_knowledge")
+        bind_cost_channel(None)
+        assert active_channel() == "ancient_knowledge"
+        seen: dict[str, str] = {}
+
+        def _worker() -> None:
+            seen["channel"] = active_channel()
+
+        thread = threading.Thread(target=_worker)
+        thread.start()
+        thread.join()
+        assert seen["channel"] == "ancient_knowledge"
+        assert image_unit_cost_usd("models/gemini-2.5-flash-image") == 0.039
+        assert image_unit_cost_usd("gemini-nano-banana-2.1") == 0.0336
+        tracker = GoogleCostTracker()
+        tracker.record(
+            model="gemini-2.5-flash-image",
+            kind="image",
+            images=1,
+            source="reel_artefact.nanobanana",
+        )
+        assert tracker._entries[-1].cost_usd == 0.039
+        assert tracker._entries[-1].channel == "ancient_knowledge"
+    finally:
+        bind_run_channel(None)
+        bind_cost_channel(None)
