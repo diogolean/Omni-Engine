@@ -2,6 +2,7 @@
 """Make a shot list obey the entity rules before it is rendered."""
 from __future__ import annotations
 
+from modules.reel_artefact.role import image_role_for
 from modules.shot_planner.entities import (
     Entity,
     entities_in_text,
@@ -99,6 +100,8 @@ def _fill(shot: Shot, entity: Entity | None, *, recap: bool, others: list[Entity
             lighting=shot.lighting or "soft documentary light on the subject",
             negatives=_uniq(shot.negatives),
             kb_miss=True,
+            canonical_shape="",
+            image_role="flux",
         )
     visual = entity.canonical_visual
     low = shot.narration.lower()
@@ -137,6 +140,14 @@ def _fill(shot: Shot, entity: Entity | None, *, recap: bool, others: list[Entity
         lighting=lighting,
         negatives=negatives,
         kb_miss=False,
+        canonical_shape=entity.canonical_shape or entity.canonical_visual,
+        image_role=image_role_for(
+            entity,
+            shot_type=shot_type,
+            narration=shot.narration,
+            camera=camera,
+            setting=setting,
+        ),
     )
 
 

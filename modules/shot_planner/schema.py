@@ -37,6 +37,8 @@ class Shot:
     lighting: str
     negatives: list[str] = field(default_factory=list)
     kb_miss: bool = False
+    canonical_shape: str = ""
+    image_role: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +55,8 @@ class Shot:
             "lighting": self.lighting,
             "negatives": list(self.negatives),
             "kb_miss": self.kb_miss,
+            "canonical_shape": self.canonical_shape,
+            "image_role": self.image_role,
         }
 
 
@@ -100,6 +104,8 @@ def shot_from_dict(raw: dict[str, Any]) -> Shot:
         lighting=_as_str(raw.get("lighting")),
         negatives=[_as_str(item) for item in negatives if _as_str(item)],
         kb_miss=bool(raw.get("kb_miss")),
+        canonical_shape=_as_str(raw.get("canonical_shape")),
+        image_role=_as_str(raw.get("image_role")).lower(),
     )
 
 

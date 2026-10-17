@@ -6,7 +6,12 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
-USER_AGENT = "MediaUpScaleFactory/1.0 (free-license image sourcing)"
+# Wikimedia blocks generic clients. The policy requires a descriptive
+# User-Agent that names the tool and a contact URL.
+USER_AGENT = (
+    "OmniEngine/1.0 (https://github.com/diogolean/Omni-Engine; "
+    "free-license image sourcing)"
+)
 
 
 class HttpResponse:
