@@ -185,6 +185,10 @@ class PinLedger:
                 content_type="application/x-ndjson",
             )
         except Exception as exc:  # noqa: BLE001
+            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+            if isinstance(exc, B2DailyCapError):
+                raise
             log.info("B2 ledger write failed (%s); local cache kept.", type(exc).__name__)
 
     def _read_remote(self) -> str | None:
@@ -193,6 +197,10 @@ class PinLedger:
 
             return read_object_text(self.key, client=self.client, bucket=self.bucket)
         except Exception as exc:  # noqa: BLE001
+            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+            if isinstance(exc, B2DailyCapError):
+                raise
             log.info("B2 ledger read failed (%s); using the local cache.", type(exc).__name__)
             return None
 

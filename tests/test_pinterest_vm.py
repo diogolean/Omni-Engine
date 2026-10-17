@@ -1252,3 +1252,23 @@ def test_facebook_media_falls_back_to_imgbb_when_b2_upload_fails(
     assert not (tmp_path / "ancient_knowledge" / "_tmp").exists() or not any(
         (tmp_path / "ancient_knowledge" / "_tmp").rglob("*")
     )
+
+
+def test_run_stops_when_the_b2_download_budget_is_spent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.setenv("B2_USAGE_PATH", str(tmp_path / "b2-usage.json"))
+    monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "0")
+    record_key = "ancient_knowledge/library/post_b2_cap.json"
+    image_key = "ancient_knowledge/library/images/b2-cap.jpg"
+    client = FakeS3(
+        {
+            record_key: _library_record("b2-cap", "Gobekli Tepe pillars", "images/b2-cap.jpg"),
+            image_key: _photo(),
+        }
+    )
+    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    assert stats["published"] == 0
+    assert stats["stopped"] == "b2_daily_cap"
+    assert client.downloads == []

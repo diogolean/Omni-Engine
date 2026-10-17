@@ -350,12 +350,27 @@ class PinterestScheduler:
 
             prefix = library_prefix(cfg.CHANNEL_ID)
         if prefix:
-            ensure_local_library(
-                self.outputs_dir,
-                prefix=prefix,
-                client=self.context.get("b2_client"),
-                bucket=self.context.get("b2_bucket"),
-            )
+            try:
+                ensure_local_library(
+                    self.outputs_dir,
+                    prefix=prefix,
+                    client=self.context.get("b2_client"),
+                    bucket=self.context.get("b2_bucket"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+                if not isinstance(exc, B2DailyCapError):
+                    raise
+                log.warning("B2 daily cap reached — stopping this run.")
+                return {
+                    "published": 0,
+                    "skipped": 0,
+                    "skipped_by_history": 0,
+                    "errors": 0,
+                    "remaining": 0,
+                    "stopped": "b2_daily_cap",
+                }
 
         inv = MasterInventory(outputs_dir=self.outputs_dir)
         data = inv.load()
@@ -418,7 +433,22 @@ class PinterestScheduler:
                     "errors": 0, "remaining": 0}
 
         self._attach_article_links(data.get("entries") or [])
-        ledger = self._load_ledger()
+        try:
+            ledger = self._load_ledger()
+        except Exception as exc:  # noqa: BLE001
+            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+            if not isinstance(exc, B2DailyCapError):
+                raise
+            log.warning("B2 daily cap reached — stopping this run.")
+            return {
+                "published": 0,
+                "skipped": 0,
+                "skipped_by_history": skipped_by_history,
+                "errors": 0,
+                "remaining": total_eligible,
+                "stopped": "b2_daily_cap",
+            }
         self._postplanner_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
         # Initialise tools. Method comes from the channel pack; default is the
@@ -514,7 +544,16 @@ class PinterestScheduler:
                 )
 
             # --- Source photo (library file, one B2 download, or FLUX) ---
-            image_path, delete_after = self._ensure_photo(entry, prefix)
+            try:
+                image_path, delete_after = self._ensure_photo(entry, prefix)
+            except Exception as exc:  # noqa: BLE001
+                from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+                if not isinstance(exc, B2DailyCapError):
+                    raise
+                log.warning("B2 daily cap reached — stopping this run.")
+                stats["stopped"] = "b2_daily_cap"
+                break
             source_hash = ""
             if image_path is not None and image_path.is_file():
                 from agents.posting.pinterest_engine.ledger import source_image_hash  # noqa: PLC0415
@@ -556,7 +595,16 @@ class PinterestScheduler:
                     "  [DRY RUN] Would record '%s' in scheduled_history.txt.",
                     src_filename,
                 )
-                self._queue_facebook(entry, pin_bytes, ledger, record_note=True)
+                try:
+                    self._queue_facebook(entry, pin_bytes, ledger, record_note=True)
+                except Exception as exc:  # noqa: BLE001
+                    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+                    if not isinstance(exc, B2DailyCapError):
+                        raise
+                    log.warning("B2 daily cap reached — stopping this run.")
+                    stats["stopped"] = "b2_daily_cap"
+                    break
                 inv.mark_posted(data, post_id, "DRY_RUN_PIN_ID")
                 inv.save(data)
                 stats["published"] += 1
@@ -576,22 +624,41 @@ class PinterestScheduler:
 
                 if result:
                     pin_id = result.get("id", "unknown")
-                    exported = self._queue_facebook(
-                        entry, pin_bytes, ledger, record_note=False
-                    )
+                    try:
+                        exported = self._queue_facebook(
+                            entry, pin_bytes, ledger, record_note=False
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+                        if not isinstance(exc, B2DailyCapError):
+                            raise
+                        exported = False
+                        stats["stopped"] = "b2_daily_cap"
+                        log.warning("B2 daily cap reached — stopping this run.")
                     inv.mark_posted(data, post_id, pin_id)
                     inv.save(data)              # crash-safe: save after EVERY success
                     history.record(src_filename, post_id, pin_id, topic)
-                    ledger.append(
-                        {
-                            "post_id": post_id,
-                            "title": title,
-                            "pin_id": pin_id,
-                            "source_hash": source_hash,
-                            "article": entry.get("target_url") or "",
-                            "facebook_exported": exported,
-                        }
-                    )
+                    try:
+                        ledger.append(
+                            {
+                                "post_id": post_id,
+                                "title": title,
+                                "pin_id": pin_id,
+                                "source_hash": source_hash,
+                                "article": entry.get("target_url") or "",
+                                "facebook_exported": exported,
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+                        if not isinstance(exc, B2DailyCapError):
+                            raise
+                        stats["published"] += 1
+                        log.warning("B2 daily cap reached — stopping this run.")
+                        stats["stopped"] = "b2_daily_cap"
+                        break
                     stats["published"] += 1
                     log.info(
                         "  Published! Pin ID=%s | history logged: %s",
@@ -600,6 +667,9 @@ class PinterestScheduler:
                 else:
                     log.warning("  Soft failure for %s -- NOT recorded in history.", post_id)
                     stats["errors"] += 1
+
+            if stats.get("stopped") == "b2_daily_cap":
+                break
 
             # --- Human-mimic interval (skip after last pin) ---
             is_last = (i == len(batch) - 1)
@@ -651,6 +721,10 @@ class PinterestScheduler:
                 bucket=self.context.get("b2_bucket"),
             )
         except Exception as exc:  # noqa: BLE001
+            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+            if isinstance(exc, B2DailyCapError):
+                raise
             log.info(
                 "  Facebook Post Planner row failed for %s (%s).",
                 post_id,

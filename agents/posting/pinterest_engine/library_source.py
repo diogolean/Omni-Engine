@@ -49,6 +49,10 @@ def ensure_local_library(
     try:
         keys = list_object_keys(prefix, client=client, bucket=bucket)
     except Exception as exc:  # noqa: BLE001
+        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+        if isinstance(exc, B2DailyCapError):
+            raise
         log.info("B2 library list failed (%s).", type(exc).__name__)
         return 0
     written = 0
@@ -106,8 +110,12 @@ def materialize_image(
     try:
         download_object(key, dest, client=client, bucket=bucket)
     except Exception as exc:  # noqa: BLE001
-        log.info("Library image download failed for %s (%s).", key, type(exc).__name__)
+        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
         dest.unlink(missing_ok=True)
+        if isinstance(exc, B2DailyCapError):
+            raise
+        log.info("Library image download failed for %s (%s).", key, type(exc).__name__)
         return None, False
     return dest, True
 
@@ -127,7 +135,11 @@ def upload_library_tree(
         return []
     try:
         existing = set(list_object_keys(prefix, client=client, bucket=bucket))
-    except Exception:
+    except Exception as exc:
+        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+        if isinstance(exc, B2DailyCapError):
+            raise
         existing = set()
     uploaded: list[str] = []
     for path in sorted(library.rglob("*")):
