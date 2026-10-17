@@ -14,6 +14,8 @@ import json
 import logging
 import os
 import time
+import uuid
+import weakref
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -28,6 +30,8 @@ _BACKOFF_ATTEMPTS = 3
 
 _listings: dict[str, dict] = {}
 _texts: dict[str, dict] = {}
+_client_tokens: weakref.WeakKeyDictionary[object, str] = weakref.WeakKeyDictionary()
+_TOKEN_ATTR = "_omni_b2_cache_token"
 
 
 class B2StorageCapError(RuntimeError):
@@ -91,10 +95,34 @@ def usage_path() -> Path:
 
 
 def client_token(client: object | None) -> str:
-    """Injected clients do not share a cache. The process client does."""
+    """Injected clients do not share a cache. The process client does.
+
+    ``id()`` is not a stable key. CPython reuses the address after the
+    client is freed, and this cache outlives that object, so a later
+    client would read the previous ledger or listing.
+    """
     if client is None:
         return "default"
-    return str(id(client))
+    try:
+        found = _client_tokens.get(client)
+    except TypeError:
+        found = None
+    if isinstance(found, str) and found:
+        return found
+    token = uuid.uuid4().hex
+    try:
+        _client_tokens[client] = token
+        return token
+    except TypeError:
+        pass
+    existing = getattr(client, _TOKEN_ATTR, None)
+    if isinstance(existing, str) and existing:
+        return existing
+    try:
+        setattr(client, _TOKEN_ATTR, token)
+    except (AttributeError, TypeError):
+        return token
+    return token
 
 
 def reset_caches() -> None:

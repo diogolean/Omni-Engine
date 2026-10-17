@@ -117,6 +117,30 @@ def test_listing_cache_skips_a_second_class_c_call(budget: Path) -> None:
     assert client.lists == 1
 
 
+def test_recycled_object_id_does_not_return_another_clients_text(budget: Path) -> None:
+    """A cache row stored under ``id(client)`` must not satisfy the next client."""
+    del budget
+    from agents.media.b2_budget import store_text
+
+    key = "pinterest/ledger/ancient_knowledge.jsonl"
+    fresh = '{"post_id":"post_facebook_dedupe","facebook_exported":true}\n'
+    second = _Client({key: fresh.encode()})
+    store_text(str(id(second)), "bucket", key, '{"post_id":"other"}\n')
+    assert read_object_text(key, client=second, bucket="bucket") == fresh
+    assert second.gets == 1
+
+
+def test_distinct_clients_keep_separate_text_caches(budget: Path) -> None:
+    del budget
+    key = "pinterest/ledger/ancient_knowledge.jsonl"
+    first = _Client({key: b"first\n"})
+    second = _Client({key: b"second\n"})
+    assert read_object_text(key, client=first, bucket="bucket") == "first\n"
+    assert read_object_text(key, client=second, bucket="bucket") == "second\n"
+    assert first.gets == 1
+    assert second.gets == 1
+
+
 def test_ledger_read_is_cached_until_the_object_is_replaced(budget: Path) -> None:
     del budget
     key = "pinterest/ledger/ancient.jsonl"
