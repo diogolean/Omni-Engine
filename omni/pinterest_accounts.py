@@ -127,6 +127,10 @@ def _account_from_row(raw: dict[str, Any], index: int) -> Account:
         "site_url": _required_str(raw, "site_url", index),
         "niche": _required_str(raw, "niche", index),
         "b2_prefix": _normalize_prefix(_required_str(raw, "b2_prefix", index)),
+        "b2_filename_pattern": str(raw.get("b2_filename_pattern") or "").strip(),
+        "article_tls_verify": (
+            "true" if _as_bool(raw.get("article_tls_verify"), default=True) else "false"
+        ),
         "channel_id": channel_id,
         "display_name": str(raw.get("display_name") or channel_id).strip(),
         "legacy_token_env": "PINTEREST_ACCESS_TOKEN",

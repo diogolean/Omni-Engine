@@ -13,7 +13,16 @@ import requests
 from PIL import Image
 
 from agents.media.b2_client import media_bucket_name, resolve_b2_bucket_name
-from agents.posting.pinterest_engine.inventory import MasterInventory
+from agents.posting.pinterest_engine.image_transformer import (
+    _SERIF_CANDIDATES,
+    PinTransformer,
+    _find_font,
+)
+from agents.posting.pinterest_engine.inventory import (
+    MasterInventory,
+    _generate_deepseek,
+    title_case_phrase,
+)
 from agents.posting.pinterest_engine.scheduler import (
     _entry_is_video_only,
     _title_is_filename,
@@ -26,15 +35,38 @@ from omni.pinterest_accounts import (
     active_pinterest_accounts,
     load_pinterest_accounts,
 )
-from omni.pinterest_drip import PublishedPins, publish_account
+from omni.pinterest_drip import (
+    PublishedPins,
+    fetch_wordpress_catalog,
+    match_article_slug,
+    publish_account,
+)
 from omni.publisher import MemoryIdempotencyStore
-from omni.worker import run_pinterest_drip
+from omni.worker import run_pinterest_drip, run_scheduler
 
 _SITE = "https://ancientknowledge.eokviral.com"
-_IMAGE_KEY = "ancient_knowledge/gobekli-tepe-pillars.jpg"
-_SECOND_KEY = "ancient_knowledge/nazca-lines.jpg"
-_VIDEO_KEY = "ancient_knowledge/reel_gobekli_tepe_v02.mp4"
+_IMAGE_KEY = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
+_SIDECAR_KEY = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.json"
+_SECOND_KEY = "fbcards/2026-10-05/ancient_not_a_place.jpg"
+_VIDEO_KEY = "fbcards/2026-10-04/ancient_clip.mp4"
+_ROOT_VIDEO = "reel_gobekli_tepe_v02.mp4"
+_UNMATCHED_KEY = "fbcards/2026-10-04/garden_roses.jpg"
 _ARTICLE = f"{_SITE}/gobekli-tepe-pillars"
+_SITE_SLUGS = [
+    "atlantis",
+    "baalbek",
+    "crystal-skulls",
+    "dendera-light",
+    "easter-island-moai",
+    "giants",
+    "nazca",
+    "oak-island",
+    "paititi",
+    "sumerian",
+    "tartaria",
+    "underwater-cities",
+    "voynich",
+]
 
 
 class _Body:
@@ -46,11 +78,19 @@ class _Body:
 
 
 class _Response:
-    def __init__(self, status_code: int, payload) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        payload,
+        *,
+        content: bytes | None = None,
+        headers: dict | None = None,
+    ) -> None:
         self.status_code = status_code
         self._payload = payload
-        self.text = json.dumps(payload)
-        self.content = self.text.encode()
+        self.text = json.dumps(payload) if payload is not None else ""
+        self.content = content if content is not None else self.text.encode()
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -133,7 +173,7 @@ def _capture_posts(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     loads = json.loads
 
     def fake_post(url, data=None, headers=None, json=None, timeout=None, **kwargs):  # noqa: A002
-        del json, timeout, kwargs
+        del json, timeout
         if "deepseek" in url:
             assert "Bearer " in (headers or {}).get("Authorization", "")
             reply = {
@@ -147,6 +187,7 @@ def _capture_posts(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
                 "url": url,
                 "body": loads(data),
                 "auth": (headers or {}).get("Authorization"),
+                "verify": kwargs.get("verify", True),
             }
         )
         return _Response(201, {"id": f"pin_{len(captured)}"})
@@ -161,7 +202,9 @@ def test_accounts_yaml_scales_without_code_and_marks_anna_todo(tmp_path: Path) -
     ancient = by_id["ancient_knowledge"]
     anna = by_id["anna_protocol"]
     assert ancient.extra["site_url"] == _SITE
-    assert ancient.extra["b2_prefix"] == "ancient_knowledge/"
+    assert ancient.extra["b2_prefix"] == "fbcards/"
+    assert ancient.extra["b2_filename_pattern"] == "^(ancient_|ancientknowl_)"
+    assert ancient.extra["article_tls_verify"] == "false"
     assert ancient.token_env == "PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE"
     assert ancient.extra["app_id_env"] == "PINTEREST_APP_ID_ANCIENT_KNOWLEDGE"
     assert ancient.extra["app_secret_env"] == "PINTEREST_APP_SECRET_ANCIENT_KNOWLEDGE"
@@ -173,6 +216,8 @@ def test_accounts_yaml_scales_without_code_and_marks_anna_todo(tmp_path: Path) -
     assert anna.extra["site_url"] == "TODO"
     assert anna.board_name == "TODO"
     assert anna.extra["b2_prefix"] == "anna_protocol/"
+    assert anna.extra["b2_filename_pattern"] == ""
+    assert anna.extra["article_tls_verify"] == "true"
     assert "site_url" in account_blockers(anna)
     assert "board" in account_blockers(anna)
 
@@ -214,21 +259,43 @@ def test_image_pin_uses_article_not_filename(
     monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
     _bind_tokens(monkeypatch)
     caplog.set_level("INFO")
-    sidecar_key = "ancient_knowledge/gobekli-tepe-pillars.json"
     client = FakeS3(
         {
-            _IMAGE_KEY: _jpeg(),
-            sidecar_key: _sidecar(),
-            _SECOND_KEY: _jpeg(),
+            _ROOT_VIDEO: b"video-bytes",
+            _UNMATCHED_KEY: _jpeg(),
             _VIDEO_KEY: b"video-bytes",
+            _IMAGE_KEY: _jpeg(),
+            _SIDECAR_KEY: _sidecar(),
+            _SECOND_KEY: _jpeg(),
         }
     )
+
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
+        assert verify is False
+        return _Response(
+            200,
+            [
+                {
+                    "slug": slug,
+                    "link": f"{_SITE}/{slug}",
+                    "title": {"rendered": slug},
+                    "excerpt": {"rendered": "<p>Notes.</p>"},
+                    "content": {"rendered": ""},
+                }
+                for slug in _SITE_SLUGS
+            ],
+            headers={"X-WP-TotalPages": "1"},
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
     captured = _capture_posts(monkeypatch)
     stats = publish_account(_ancient(), pins=1, client=client)
     assert stats["published"] == 1
     assert stats["errors"] == 0
     assert client.downloads == [_IMAGE_KEY]
     assert _VIDEO_KEY not in client.downloads
+    assert _ROOT_VIDEO not in client.downloads
+    assert _UNMATCHED_KEY not in client.downloads
     assert _SECOND_KEY not in client.downloads
     assert client.deletes == []
     assert client.buckets
@@ -238,6 +305,7 @@ def test_image_pin_uses_article_not_filename(
     body = captured[0]["body"]
     assert body["media_source"]["source_type"] == "image_base64"
     assert body["board_id"] == "board-ancient"
+    assert captured[0]["verify"] is True
     assert body["title"] == "Carved Pillars of Gobekli Tepe"
     assert body["link"] == _ARTICLE
     assert "gobekli tepe" not in body["title"].lower() or "Carved" in body["title"]
@@ -268,7 +336,7 @@ def test_deepseek_title_is_not_the_filename(
     monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test-key")
     _bind_tokens(monkeypatch)
-    key = "ancient_knowledge/reel_hidden_chamber_v03.jpg"
+    key = "fbcards/2026-10-04/ancientknowl_10-04_2130_chamber.jpg"
     sidecar = _sidecar(
         slug="hidden-chamber",
         topic="",
@@ -278,7 +346,9 @@ def test_deepseek_title_is_not_the_filename(
         humanized_caption="A sealed chamber under the hill still holds painted stone.",
         article_url=f"{_SITE}/hidden-chamber",
     )
-    client = FakeS3({key: _jpeg(), "ancient_knowledge/reel_hidden_chamber_v03.json": sidecar})
+    client = FakeS3(
+        {key: _jpeg(), "fbcards/2026-10-04/ancientknowl_10-04_2130_chamber.json": sidecar}
+    )
     captured = _capture_posts(monkeypatch)
     stats = publish_account(_ancient(), pins=1, client=client)
     assert stats["published"] == 1
@@ -290,36 +360,62 @@ def test_deepseek_title_is_not_the_filename(
 
 
 def test_wordpress_article_supplies_the_link(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     _bind_tokens(monkeypatch)
-    key = "ancient_knowledge/antikythera-mechanism.jpg"
+    caplog.set_level("WARNING")
+    from omni import pinterest_drip as drip_mod
+
+    drip_mod._tls_off_logged.clear()
+    key = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
     client = FakeS3({key: _jpeg()})
 
-    def fake_get(url, params=None, timeout=None, **_kwargs):
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
         assert url == f"{_SITE}/wp-json/wp/v2/posts"
-        assert params["slug"] == "antikythera-mechanism"
-        return _Response(
-            200,
-            [
-                {
-                    "slug": "antikythera-mechanism",
-                    "link": f"{_SITE}/antikythera-mechanism",
-                    "title": {"rendered": "The Antikythera Mechanism"},
-                    "excerpt": {"rendered": "<p>A geared device from a Hellenistic wreck.</p>"},
-                    "content": {"rendered": ""},
-                }
-            ],
-        )
+        assert params.get("slug") in (None, "")
+        assert verify is False
+        posts = []
+        for slug in _SITE_SLUGS:
+            if slug == "baalbek":
+                posts.append(
+                    {
+                        "slug": "baalbek",
+                        "link": f"{_SITE}/baalbek",
+                        "title": {"rendered": "Baalbek&#8217;s Trilithon"},
+                        "excerpt": {"rendered": "<p>Stones at Baalbek&#8217;s quarry.</p>"},
+                        "content": {"rendered": ""},
+                    }
+                )
+            else:
+                posts.append(
+                    {
+                        "slug": slug,
+                        "link": f"{_SITE}/{slug}",
+                        "title": {"rendered": f"{slug} notes"},
+                        "excerpt": {"rendered": "<p>Notes.</p>"},
+                        "content": {"rendered": ""},
+                    }
+                )
+        return _Response(200, posts, headers={"X-WP-TotalPages": "1"})
 
     monkeypatch.setattr(requests, "get", fake_get)
     captured = _capture_posts(monkeypatch)
     stats = publish_account(_ancient(), pins=1, client=client)
     assert stats["published"] == 1
-    assert captured[0]["body"]["link"] == f"{_SITE}/antikythera-mechanism"
-    assert captured[0]["body"]["title"].startswith("The Antikythera Mechanism")
+    assert captured[0]["body"]["link"] == f"{_SITE}/baalbek"
+    assert captured[0]["verify"] is True
+    title = captured[0]["body"]["title"]
+    assert "Baalbek's" in title
+    assert "&#8217;" not in title
+    assert "&#8217;S" not in title
+    assert "'S" not in title
+    assert "&#8217;" not in captured[0]["body"]["description"]
+    assert "Baalbek's" in captured[0]["body"]["description"]
     assert client.downloads == [key]
+    assert "TLS verification is OFF" in caplog.text
+    assert "Pinterest publishing still verifies" in caplog.text
 
 
 def test_dry_run_does_not_post_or_record(
@@ -330,7 +426,7 @@ def test_dry_run_does_not_post_or_record(
     client = FakeS3(
         {
             _IMAGE_KEY: _jpeg(),
-            "ancient_knowledge/gobekli-tepe-pillars.json": _sidecar(),
+            _SIDECAR_KEY: _sidecar(),
         }
     )
     captured = _capture_posts(monkeypatch)
@@ -518,3 +614,268 @@ def test_publisher_refresh_writes_env_without_logging_tokens(
     assert "super-secret-access" not in caplog.text
     assert "super-secret-refresh" not in caplog.text
     assert "app-secret" not in caplog.text
+
+
+def test_title_case_decodes_apostrophe_entities() -> None:
+    assert title_case_phrase("Baalbek&#8217;s trilithon") == "Baalbek's Trilithon"
+    assert title_case_phrase("Baalbek&#8217;S") == "Baalbek's"
+    assert "&#" not in title_case_phrase("Baalbek&#8217;s stones")
+
+
+def test_slug_match_uses_site_posts_and_skips_dates() -> None:
+    assert match_article_slug(_IMAGE_KEY, _SITE_SLUGS) == "baalbek"
+    assert match_article_slug("ancient_crystal_skulls.jpg", _SITE_SLUGS) == "crystal-skulls"
+    assert (
+        match_article_slug("ancient_easter_island_moai.jpg", _SITE_SLUGS)
+        == "easter-island-moai"
+    )
+    assert (
+        match_article_slug("ancientknowl_underwater_cities.jpg", _SITE_SLUGS)
+        == "underwater-cities"
+    )
+    assert match_article_slug("ancient_dendera_light.jpg", _SITE_SLUGS) == "dendera-light"
+    assert match_article_slug("ancient_oak_island.jpg", _SITE_SLUGS) == "oak-island"
+    assert match_article_slug("ancient_voynich.jpg", _SITE_SLUGS) == "voynich"
+    assert match_article_slug("ancient_baalbec.jpg", _SITE_SLUGS) == "baalbek"
+    assert match_article_slug("ancient_crystalsculls.jpg", _SITE_SLUGS) == "crystal-skulls"
+    assert (
+        match_article_slug("ancientknowl_underwatercity.jpg", _SITE_SLUGS)
+        == "underwater-cities"
+    )
+    assert match_article_slug("ancient_skull.jpg", _SITE_SLUGS) == ""
+    assert match_article_slug("ancientknowl_10-04_2130.jpg", _SITE_SLUGS) == ""
+    assert match_article_slug("ancientknowl.jpg", _SITE_SLUGS) == ""
+    assert match_article_slug("random_flower.jpg", _SITE_SLUGS) == ""
+
+
+def test_unmatched_card_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    _bind_tokens(monkeypatch)
+    unmatched = "fbcards/2026-10-04/ancient_not_a_place.jpg"
+    client = FakeS3({unmatched: _jpeg(), _ROOT_VIDEO: b"video"})
+
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
+        assert verify is False
+        return _Response(
+            200,
+            [
+                {
+                    "slug": slug,
+                    "link": f"{_SITE}/{slug}",
+                    "title": {"rendered": slug},
+                    "excerpt": {"rendered": "<p>Notes.</p>"},
+                    "content": {"rendered": ""},
+                }
+                for slug in _SITE_SLUGS
+            ],
+            headers={"X-WP-TotalPages": "1"},
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    stats = publish_account(_ancient(), pins=1, client=client)
+    assert stats["published"] == 0
+    assert stats["skipped"] == 1
+    assert client.downloads == []
+
+
+def test_featured_image_fallback_when_b2_download_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    _bind_tokens(monkeypatch)
+    key = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
+    featured = f"{_SITE}/wp-content/uploads/baalbek.jpg"
+
+    class _Broken(FakeS3):
+        def download_file(self, bucket, object_key, filename):
+            self.downloads.append(object_key)
+            raise OSError("unavailable")
+
+    client = _Broken({key: _jpeg()})
+    calls: list[str] = []
+
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
+        calls.append(url)
+        assert verify is False
+        if url.endswith("/wp-json/wp/v2/posts"):
+            return _Response(
+                200,
+                [
+                    {
+                        "slug": "baalbek",
+                        "link": f"{_SITE}/baalbek",
+                        "title": {"rendered": "Baalbek&#8217;s Trilithon"},
+                        "excerpt": {"rendered": "<p>Quarry stones.</p>"},
+                        "content": {"rendered": ""},
+                        "featured_media": 42,
+                    }
+                ],
+                headers={"X-WP-TotalPages": "1"},
+            )
+        if url.endswith("/wp-json/wp/v2/media/42"):
+            return _Response(200, {"source_url": featured})
+        if url == featured:
+            return _Response(200, None, content=_jpeg())
+        raise AssertionError(url)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    captured = _capture_posts(monkeypatch)
+    stats = publish_account(_ancient(), pins=1, client=client)
+    assert stats["published"] == 1
+    assert stats["errors"] == 0
+    assert featured in calls
+    assert f"{_SITE}/wp-json/wp/v2/media/42" in calls
+    assert "Baalbek's" in captured[0]["body"]["title"]
+    assert captured[0]["verify"] is True
+
+
+def test_article_lookup_logs_tls_mismatch(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def boom(*_args, **_kwargs):
+        raise requests.exceptions.SSLError("hostname mismatch")
+
+    monkeypatch.setattr(requests, "get", boom)
+    caplog.set_level("ERROR")
+    assert fetch_wordpress_catalog(_SITE, verify=True, account_id="ancient_knowledge") == []
+    assert "*.web-hosting.com" in caplog.text
+    assert "article_tls_verify" in caplog.text
+
+
+def test_deepseek_retries_fenced_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test-key")
+    monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    calls: list[dict] = []
+    dumps = json.dumps
+
+    def fake_post(url, json=None, headers=None, timeout=None, **_kwargs):  # noqa: A002
+        calls.append(json)
+        assert "Bearer deepseek-test-key" == (headers or {}).get("Authorization")
+        if len(calls) == 1:
+            return _Response(200, {"choices": [{"message": {"content": "sure, here you go"}}]})
+        fenced = (
+            "```json\n"
+            + dumps(
+                {
+                    "pinterest_title": "Baalbek&#8217;s Stones",
+                    "pinterest_caption": "Stones at Baalbek&#8217;s quarry.",
+                    "visual_hook": "BAALBEK&#8217;S STONES",
+                }
+            )
+            + "\n```"
+        )
+        return _Response(200, {"choices": [{"message": {"content": fenced}}]})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    data = _generate_deepseek("Baalbek&#8217;s trilithon", "Quarry stones.", "", 0)
+    assert calls[0]["response_format"] == {"type": "json_object"}
+    assert len(calls) == 2
+    assert data["pinterest_title"] == "Baalbek's Stones"
+    assert "&#" not in data["pinterest_caption"]
+    assert data["visual_hook"] == "BAALBEK'S STONES"
+    assert "deepseek-test-key" not in json.dumps(data)
+
+
+def test_deepseek_drops_response_format_when_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-test-key")
+    seen: list[bool] = []
+    dumps = json.dumps
+
+    def fake_post(url, json=None, headers=None, timeout=None, **_kwargs):  # noqa: A002
+        seen.append("response_format" in (json or {}))
+        if len(seen) == 1:
+            return _Response(400, {"error": "unsupported"})
+        body = dumps(
+            {
+                "pinterest_title": "Nazca Lines From Above",
+                "pinterest_caption": "The desert figures are still visible.",
+                "visual_hook": "LINES FROM ABOVE",
+            }
+        )
+        return _Response(200, {"choices": [{"message": {"content": body}}]})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    data = _generate_deepseek("Nazca", "Desert figures.", "", 0)
+    assert seen == [True, False]
+    assert data["pinterest_title"] == "Nazca Lines From Above"
+
+
+def test_rendered_card_uses_the_photo_and_a_scalable_font(tmp_path: Path) -> None:
+    source = tmp_path / "baalbek.jpg"
+    Image.new("RGB", (800, 1200), (220, 10, 10)).save(source, format="JPEG")
+    transformer = PinTransformer(outputs_dir=tmp_path / "out")
+    raw = transformer.get_pin_bytes(
+        {
+            "local_image_path": str(source),
+            "visual_hook": "BAALBEK&#8217;S STONES",
+            "topic": "Baalbek",
+            "subject_slug": "baalbek",
+        }
+    )
+    assert raw
+    card = Image.open(io.BytesIO(raw)).convert("RGB")
+    assert card.size == (1000, 1500)
+    pixels = card.load()
+    red = 0
+    dark = 0
+    total = 0
+    for y in range(600, 1100, 4):
+        for x in range(80, 920, 4):
+            total += 1
+            r, g, b = pixels[x, y]
+            if r > 150 and g < 80 and b < 80:
+                red += 1
+            if r < 40 and g < 40 and b < 40:
+                dark += 1
+    assert total > 0
+    assert red / total > 0.5
+    assert dark / total < 0.2
+    font = _find_font(_SERIF_CANDIDATES, 64)
+    _left, top, _right, bottom = font.getbbox("BAALBEK")
+    assert bottom - top >= 40
+    bundled = [
+        path
+        for path in _SERIF_CANDIDATES
+        if Path(path).name == "Montserrat-Bold.ttf" and Path(path).is_file()
+    ]
+    assert bundled
+
+
+def test_scheduler_waits_before_the_first_publish(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+
+    monkeypatch.setattr("omni.worker.interval_seconds", lambda rng=None: 12)
+
+    def fake_sleep(seconds, stop):
+        calls.append(("sleep", seconds))
+        if calls.count(("sleep", seconds)) > 1:
+            stop["flag"] = True
+
+    def fake_cycle(*, dry_run: bool = False):
+        calls.append(("cycle", dry_run))
+        return []
+
+    monkeypatch.setattr("omni.worker._sleep_until", fake_sleep)
+    monkeypatch.setattr("omni.worker.run_cycle", fake_cycle)
+    run_scheduler(once=False, dry_run=False)
+    assert calls == [("sleep", 12), ("cycle", False), ("sleep", 12)]
+
+
+def test_once_dry_run_does_not_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _no_interval(rng=None):
+        raise AssertionError("dry-run once must not sleep before publishing")
+
+    cycles: list[bool] = []
+    monkeypatch.setattr("omni.worker.interval_seconds", _no_interval)
+    monkeypatch.setattr(
+        "omni.worker.run_cycle",
+        lambda *, dry_run=False: cycles.append(dry_run) or [],
+    )
+    run_scheduler(once=True, dry_run=True)
+    assert cycles == [True]

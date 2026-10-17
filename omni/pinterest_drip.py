@@ -15,8 +15,10 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 
@@ -41,6 +43,8 @@ class Article:
     pinterest_title: str = ""
     pinterest_caption: str = ""
     visual_hook: str = ""
+    featured_image_url: str = ""
+    featured_media_id: str = ""
 
 
 @dataclass
@@ -194,7 +198,12 @@ def publish_account(
         return stats
 
     ledger = PublishedPins()
-    images = [key for key in keys if _is_image_key(key)]
+    pattern = account.extra.get("b2_filename_pattern", "")
+    images = [
+        key
+        for key in keys
+        if _is_image_key(key) and _filename_allowed(key, pattern)
+    ]
     videos = [key for key in keys if _is_video_key(key)]
     if videos:
         log.info(
@@ -211,6 +220,21 @@ def publish_account(
     publisher = PinterestAccountPublisher(store=store, max_retries=1)
     transformer = PinTransformer(outputs_dir=cfg.OUTPUTS_DIR)
     site = account.extra.get("site_url", "")
+    verify_tls = _article_tls_enabled(account)
+    catalog_rows: list[Article] | None = None
+
+    def _catalog() -> list[Article]:
+        nonlocal catalog_rows
+        if catalog_rows is None:
+            if is_unset(site):
+                catalog_rows = []
+            else:
+                catalog_rows = fetch_wordpress_catalog(
+                    site,
+                    verify=verify_tls,
+                    account_id=account.account_id,
+                )
+        return catalog_rows
 
     for key in pending:
         if stats["published"] >= pins:
@@ -224,7 +248,12 @@ def publish_account(
             read_text=read_object_text,
         )
         if article is None:
-            log.info("Skipping %s — no article content (titles are not taken from filenames)", key)
+            article = _match_catalog_article(key, _catalog())
+        if article is None:
+            log.info(
+                "Skipping %s — no matching article (titles are not taken from filenames)",
+                key,
+            )
             stats["skipped"] += 1
             continue
         previous_url = cfg.TARGET_URL
@@ -240,7 +269,20 @@ def publish_account(
 
         dest = _temp_image_path(account.branding, key)
         try:
-            download_object(key, dest, client=client, bucket=bucket_name)
+            if not _ensure_source_image(
+                key,
+                dest,
+                article,
+                client=client,
+                bucket=bucket_name,
+                download_object=download_object,
+                site=site,
+                verify=verify_tls,
+                account_id=account.account_id,
+            ):
+                log.warning("No usable source image for %s", key)
+                stats["errors"] += 1
+                continue
             record = _record(account, key, article, fields, dest)
             cfg.TARGET_URL = article.url
             try:
@@ -336,6 +378,17 @@ def _is_image_key(key: str) -> bool:
     return Path(key).suffix.lower() in _IMAGE_EXTS
 
 
+def _filename_allowed(key: str, pattern: str) -> bool:
+    """True when the object basename matches the account filename pattern."""
+    if not (pattern or "").strip():
+        return True
+    try:
+        return re.search(pattern, Path(key).name) is not None
+    except re.error:
+        log.warning("Invalid b2_filename_pattern %r; accepting image names", pattern)
+        return True
+
+
 def _is_video_key(key: str) -> bool:
     from agents.posting.pinterest_engine.inventory import is_video_filename  # noqa: PLC0415
 
@@ -362,8 +415,10 @@ def _article_url(site: str, slug: str, explicit: str = "") -> str:
     return f"{site.rstrip('/')}/{slug.strip('/')}"
 
 
-def _plain(html: str) -> str:
-    return re.sub(r"\s+", " ", _TAG_RE.sub(" ", html or "")).strip()
+def _plain(raw_html: str) -> str:
+    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
+
+    return normalize_pin_text(_TAG_RE.sub(" ", raw_html or ""))
 
 
 def _title_is_filename(title: str, object_key: str) -> bool:
@@ -387,14 +442,16 @@ def _pin_fields(article: Article, object_key: str) -> dict[str, str] | None:
     from agents.posting.pinterest_engine.inventory import (  # noqa: PLC0415
         build_visual_hook,
         generate_pin_copy,
+        normalize_pin_text,
+        polish_pin_text,
     )
 
-    title = article.pinterest_title.strip()
-    caption = article.pinterest_caption.strip()
-    hook = article.visual_hook.strip()
+    title = polish_pin_text(article.pinterest_title)
+    caption = polish_pin_text(article.pinterest_caption)
+    hook = normalize_pin_text(article.visual_hook)
     if _title_is_filename(title, object_key):
         title = ""
-    topic = article.topic.strip()
+    topic = polish_pin_text(article.topic)
     if _title_is_filename(topic, object_key):
         topic = ""
     body = article.body.strip()
@@ -466,13 +523,7 @@ def _resolve_article(
             article = _article_from_mapping(data, site=site, object_key=object_key)
             if article is not None:
                 return article
-    library = _article_from_library(account.branding, object_key, site)
-    if library is not None:
-        return library
-    slug = _lookup_slug(object_key)
-    if slug and not is_unset(site):
-        return fetch_wordpress_article(site, slug)
-    return None
+    return _article_from_library(account.branding, object_key, site)
 
 
 def _article_from_mapping(data: dict, *, site: str, object_key: str) -> Article | None:
@@ -542,41 +593,322 @@ def _article_from_library(channel: str, object_key: str, site: str) -> Article |
     return None
 
 
-def fetch_wordpress_article(site_url: str, slug: str) -> Article | None:
-    """Read one post from the site. A miss returns None; the filename is not used."""
-    if is_unset(site_url) or not slug:
-        return None
-    endpoint = site_url.rstrip("/") + "/wp-json/wp/v2/posts"
+_NOISE_TOKEN = re.compile(r"^(ancient|ancientknowl|ancientknowledge|reel)$", re.IGNORECASE)
+_DATE_TOKEN = re.compile(r"^\d{1,4}$")
+_SLUG_MATCH_FLOOR = 0.84
+_tls_off_logged: set[str] = set()
+
+
+def _article_tls_enabled(account: Account) -> bool:
+    """True unless this account explicitly turns article-lookup TLS off."""
+    raw = (account.extra.get("article_tls_verify") or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _verify_for_url(url: str, site_url: str, verify: bool, account_id: str) -> bool:
+    """Keep TLS on except for this account's own site when the flag is off.
+
+    Pinterest and any other host stay verified. The flag exists because the
+    article host currently presents a shared ``*.web-hosting.com`` certificate.
+    """
+    if verify:
+        return True
+    site_host = _host(site_url)
+    if site_host and _host(url) == site_host:
+        if account_id not in _tls_off_logged:
+            _tls_off_logged.add(account_id)
+            log.warning(
+                "Article lookup TLS verification is OFF for %s "
+                "(the site certificate does not match the host; often a shared "
+                "*.web-hosting.com certificate). Pinterest publishing still verifies TLS.",
+                account_id,
+            )
+        return False
+    return True
+
+
+def _log_ssl_failure(url: str) -> None:
+    log.error(
+        "Article lookup TLS failed for %s. The certificate does not match the site "
+        "(often a shared *.web-hosting.com certificate). Set article_tls_verify: false "
+        "on this account to look up articles only. Pinterest publishing stays verified.",
+        url,
+    )
+
+
+def _wp_get(
+    url: str,
+    *,
+    params: dict | None,
+    verify: bool,
+    site_url: str,
+    account_id: str,
+):
+    use_verify = _verify_for_url(url, site_url, verify, account_id)
     try:
-        resp = requests.get(
-            endpoint,
-            params={"slug": slug, "_fields": "link,slug,title,excerpt,content"},
-            timeout=20,
-        )
+        return requests.get(url, params=params, timeout=20, verify=use_verify)
+    except requests.exceptions.SSLError:
+        _log_ssl_failure(url)
+        return None
     except requests.RequestException as exc:
-        log.info("Article lookup failed for %s: %s", slug, type(exc).__name__)
+        log.info("Article lookup failed: %s", type(exc).__name__)
         return None
-    if resp.status_code != 200:
-        log.info("Article lookup HTTP %s for slug %s", resp.status_code, slug)
-        return None
-    try:
-        posts = resp.json()
-    except ValueError:
-        return None
-    if not isinstance(posts, list) or not posts:
-        return None
-    post = posts[0]
+
+
+def _featured_from_post(post: dict) -> tuple[str, str]:
+    media_id = str(post.get("featured_media") or "").strip()
+    if media_id in {"", "0"}:
+        media_id = ""
+    embedded = post.get("_embedded") or {}
+    media = embedded.get("wp:featuredmedia") if isinstance(embedded, dict) else None
+    if isinstance(media, list):
+        for item in media:
+            if isinstance(item, dict):
+                source = str(item.get("source_url") or "").strip()
+                if source:
+                    return source, media_id
+    return "", media_id
+
+
+def _article_from_wp_post(post: dict, site_url: str) -> Article | None:
     if not isinstance(post, dict):
         return None
     title = _plain(str((post.get("title") or {}).get("rendered") or ""))
     excerpt = _plain(str((post.get("excerpt") or {}).get("rendered") or ""))
     content = _plain(str((post.get("content") or {}).get("rendered") or ""))
     body = excerpt or content
-    link = str(post.get("link") or "").strip()
-    post_slug = str(post.get("slug") or slug).strip()
-    if not title and not body:
+    post_slug = str(post.get("slug") or "").strip()
+    if not post_slug or (not title and not body):
         return None
+    link = str(post.get("link") or "").strip()
     url = link.rstrip("/") if link else _article_url(site_url, post_slug)
     if not url:
         return None
-    return Article(url=url, topic=title, body=body or title, slug=post_slug)
+    featured_url, media_id = _featured_from_post(post)
+    return Article(
+        url=url,
+        topic=title,
+        body=body or title,
+        slug=post_slug,
+        featured_image_url=featured_url,
+        featured_media_id=media_id,
+    )
+
+
+def fetch_wordpress_catalog(
+    site_url: str,
+    *,
+    verify: bool = True,
+    account_id: str = "",
+) -> list[Article]:
+    """List the site's posts once. A TLS or HTTP failure returns an empty list."""
+    if is_unset(site_url):
+        return []
+    endpoint = site_url.rstrip("/") + "/wp-json/wp/v2/posts"
+    articles: list[Article] = []
+    for page in range(1, 6):
+        resp = _wp_get(
+            endpoint,
+            params={"per_page": 100, "page": page, "_embed": "wp:featuredmedia"},
+            verify=verify,
+            site_url=site_url,
+            account_id=account_id,
+        )
+        if resp is None:
+            break
+        if resp.status_code != 200:
+            if page == 1:
+                log.info("Article catalog HTTP %s for %s", resp.status_code, site_url)
+            break
+        try:
+            posts = resp.json()
+        except ValueError:
+            break
+        if not isinstance(posts, list) or not posts:
+            break
+        for post in posts:
+            article = _article_from_wp_post(post, site_url)
+            if article is not None:
+                articles.append(article)
+        total_pages = 1
+        headers = getattr(resp, "headers", None) or {}
+        try:
+            total_pages = int(headers.get("X-WP-TotalPages") or 1)
+        except (TypeError, ValueError):
+            total_pages = 1
+        if page >= total_pages:
+            break
+    return articles
+
+
+def _filename_tokens(filename: str) -> list[str]:
+    stem = Path(filename).stem.lower()
+    tokens: list[str] = []
+    for token in re.split(r"[_\-\s.]+", stem):
+        token = token.strip()
+        if not token or _DATE_TOKEN.match(token) or _NOISE_TOKEN.match(token):
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def match_article_slug(filename: str, slugs: list[str]) -> str:
+    """Best site slug for a card filename. Empty when nothing is close enough.
+
+    Exact token and full-slug matches win. Dates and the ``ancient`` /
+    ``ancientknowl`` prefixes are ignored so they cannot fuzzy-match a slug.
+    """
+    tokens = _filename_tokens(filename)
+    if not tokens:
+        return ""
+    compact = "".join(tokens)
+    joined = "-".join(tokens)
+    underscored = "_".join(tokens)
+    best = ""
+    best_score = 0.0
+    for slug in sorted({s.strip() for s in slugs if s and s.strip()}, key=len, reverse=True):
+        slug_l = slug.lower()
+        slug_tokens = [part for part in re.split(r"[-_]+", slug_l) if part]
+        slug_compact = "".join(slug_tokens)
+        if slug_l in {joined, underscored, compact} or slug_l in tokens:
+            return slug
+        if slug_compact and slug_compact in tokens:
+            return slug
+        if slug_tokens and all(part in tokens for part in slug_tokens):
+            return slug
+        if len(slug_compact) >= 8 and slug_compact in compact:
+            return slug
+        # Fuzzy the whole name, not a single short token, so "skull" cannot
+        # land on "crystal-skulls" while "baalbec" still reaches "baalbek".
+        score = 0.0
+        if len(compact) >= 5 and len(slug_compact) >= 5:
+            score = SequenceMatcher(None, compact, slug_compact).ratio()
+        if score > best_score:
+            best_score = score
+            best = slug
+    if best_score >= _SLUG_MATCH_FLOOR:
+        return best
+    return ""
+
+
+def _match_catalog_article(object_key: str, catalog: list[Article]) -> Article | None:
+    slug = match_article_slug(object_key, [article.slug for article in catalog])
+    if not slug:
+        return None
+    for article in catalog:
+        if article.slug.lower() == slug.lower():
+            return article
+    return None
+
+
+def _image_readable(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(path) as img:
+            img.convert("RGB").load()
+        return True
+    except Exception:  # noqa: BLE001
+        path.unlink(missing_ok=True)
+        return False
+
+
+def _download_featured(
+    url: str,
+    dest: Path,
+    *,
+    site: str,
+    verify: bool,
+    account_id: str,
+) -> bool:
+    resp = _wp_get(
+        url,
+        params=None,
+        verify=verify,
+        site_url=site,
+        account_id=account_id,
+    )
+    if resp is None or resp.status_code != 200 or not getattr(resp, "content", b""):
+        log.info("Featured image HTTP %s", getattr(resp, "status_code", "none"))
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(resp.content)
+    return _image_readable(dest)
+
+
+def _lookup_featured_url(
+    article: Article,
+    *,
+    site: str,
+    verify: bool,
+    account_id: str,
+) -> str:
+    if article.featured_image_url:
+        return article.featured_image_url
+    media_id = (article.featured_media_id or "").strip()
+    if not media_id or is_unset(site):
+        return ""
+    endpoint = site.rstrip("/") + f"/wp-json/wp/v2/media/{media_id}"
+    resp = _wp_get(
+        endpoint,
+        params={"_fields": "source_url"},
+        verify=verify,
+        site_url=site,
+        account_id=account_id,
+    )
+    if resp is None or resp.status_code != 200:
+        return ""
+    try:
+        payload = resp.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("source_url") or "").strip()
+
+
+def _ensure_source_image(
+    object_key: str,
+    dest: Path,
+    article: Article,
+    *,
+    client: Any | None,
+    bucket: str,
+    download_object,
+    site: str,
+    verify: bool,
+    account_id: str,
+) -> bool:
+    """Use the B2 object. If it is not a readable image, use the featured image."""
+    try:
+        download_object(object_key, dest, client=client, bucket=bucket)
+    except Exception as exc:  # noqa: BLE001
+        log.info("B2 download failed for %s: %s", object_key, type(exc).__name__)
+        dest.unlink(missing_ok=True)
+    else:
+        if _image_readable(dest):
+            return True
+        log.info("B2 object %s is not a readable image", object_key)
+        dest.unlink(missing_ok=True)
+    featured = _lookup_featured_url(
+        article,
+        site=site,
+        verify=verify,
+        account_id=account_id,
+    )
+    if not featured:
+        return False
+    log.info("Falling back to the article featured image for %s", object_key)
+    return _download_featured(
+        featured,
+        dest,
+        site=site,
+        verify=verify,
+        account_id=account_id,
+    )

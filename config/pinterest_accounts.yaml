@@ -12,7 +12,13 @@ accounts:
     display_name: Ancient Knowledge
     niche: ancient mysteries and lost civilizations
     site_url: https://ancientknowledge.eokviral.com
-    b2_prefix: ancient_knowledge/
+    # Live bucket: dated cards under fbcards/, Ancient Knowledge files only.
+    # Root mp4s are outside this prefix and are not listed.
+    b2_prefix: fbcards/
+    b2_filename_pattern: "^(ancient_|ancientknowl_)"
+    # The host currently presents a shared *.web-hosting.com certificate.
+    # This flag is article lookups only. Pinterest API calls stay verified.
+    article_tls_verify: false
     board_name: Ancient Knowledge
     board_id_env: PINTEREST_BOARD_ID_ANCIENT_KNOWLEDGE
     access_token_env: PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE

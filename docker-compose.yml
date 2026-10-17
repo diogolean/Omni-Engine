@@ -3,9 +3,12 @@
 # Secrets stay in the host .env (not in git). Compose reads OMNI_IMAGE_TAG
 # from that file for the image pin. GitHub Actions sets it to the git SHA.
 # Rollback: set OMNI_IMAGE_TAG to an older SHA and run
-#   docker compose pull && docker compose up -d
+#   docker compose pull engine && docker compose up -d engine
+# The scheduler is profile "scheduler". Deploy does not start it.
+# Start it with SCHEDULER_ENABLED=1, or:
+#   docker compose --profile scheduler up -d scheduler
 #
-# Local build (any arch): docker compose up -d --build
+# Local build (any arch): docker compose up -d --build engine
 # VM deploy uses the image already pushed to GHCR and does not need the Dockerfile.
 
 name: omni-engine
@@ -57,5 +60,7 @@ services:
     working_dir: /opt/omni-engine
     command: ["python", "-m", "omni.worker", "--role", "scheduler"]
     restart: unless-stopped
+    profiles:
+      - scheduler
     depends_on:
       - engine

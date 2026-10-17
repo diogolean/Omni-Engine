@@ -19,6 +19,7 @@ This module is imported by scheduler.py, publisher.py, and pinterest_main.py.
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -34,6 +35,50 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 MASTER_INVENTORY_FILENAME = "master_inventory.json"
 SCHEMA_VERSION = "2.0"
+
+
+def normalize_pin_text(text: str) -> str:
+    """Decode HTML entities and curly quotes so pin copy is plain text."""
+    cleaned = html.unescape(text or "")
+    cleaned = (
+        cleaned.replace("\u2019", "'")
+        .replace("\u2018", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u00a0", " ")
+    )
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def title_case_phrase(text: str) -> str:
+    """Title-case a phrase without turning ``Baalbek's`` into ``Baalbek'S``."""
+    cleaned = normalize_pin_text(text)
+
+    def one(word: str) -> str:
+        parts = re.split(r"(')", word)
+        out: list[str] = []
+        first = True
+        for part in parts:
+            if part == "'":
+                out.append(part)
+                first = False
+                continue
+            if not part:
+                continue
+            if first:
+                out.append(part[:1].upper() + part[1:].lower())
+                first = False
+            else:
+                out.append(part.lower())
+        return "".join(out)
+
+    return " ".join(one(word) for word in cleaned.split())
+
+
+def polish_pin_text(text: str) -> str:
+    """Unescape pin copy and keep the letter after an apostrophe lowercase."""
+    cleaned = normalize_pin_text(text)
+    return re.sub(r"(?<=')([A-Z])", lambda match: match.group(1).lower(), cleaned)
 
 
 def _target_url() -> str:
@@ -224,7 +269,7 @@ def build_caption_regex(source: str, variant_idx: int = 0) -> str:
 
 def build_title_template(topic: str) -> str:
     """Generate a keyword-rich SEO title (max 100 chars) from the topic."""
-    base = topic.strip().title()
+    base = title_case_phrase(topic)
     for sfx in [
         " | Practical Guide",
         " | Complete Overview",
@@ -238,7 +283,7 @@ def build_title_template(topic: str) -> str:
 
 def build_visual_hook(topic: str) -> str:
     """Short 5-word ALL-CAPS hook for the image overlay."""
-    return " ".join(topic.upper().split()[:5])
+    return " ".join(normalize_pin_text(topic).upper().split()[:5])
 
 
 def validate_caption_safe(caption: str) -> tuple[bool, str]:
@@ -417,8 +462,8 @@ def generate_pin_copy(topic: str, source_text: str, *, variant_idx: int = 0) -> 
     the fields from the article topic and body. The caller must not pass a
     filename as *topic*.
     """
-    topic = (topic or "").strip()
-    source = (source_text or "").strip()
+    topic = normalize_pin_text(topic)
+    source = normalize_pin_text(source_text)
     if not topic and not source:
         return {}
     if not topic:
@@ -473,41 +518,84 @@ def _generate_deepseek(
         "You write Pinterest pin copy from the article text. "
         "Never use a filename as the title."
     )
-    try:
-        resp = requests.post(
-            f"{base}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_msg},
-                ],
-                "max_tokens": 900,
-            },
-            timeout=60,
-        )
-    except requests.RequestException as exc:
-        log.warning("DeepSeek pin copy failed for '%s': %s", topic, type(exc).__name__)
-        return {}
-    if resp.status_code != 200:
-        log.warning("DeepSeek pin copy HTTP %s for '%s'", resp.status_code, topic)
-        return {}
-    try:
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-        raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("```").strip()
-        data = json.loads(raw)
-    except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError) as exc:
-        log.warning("DeepSeek pin copy parse failed for '%s': %s", topic, type(exc).__name__)
-        return {}
-    return {
-        "pinterest_title": str(data.get("pinterest_title", ""))[:100],
-        "pinterest_caption": str(data.get("pinterest_caption", "")),
-        "visual_hook": str(data.get("visual_hook", "")),
+    payload: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ],
+        "max_tokens": 900,
+        "response_format": {"type": "json_object"},
     }
+    dropped_format = False
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                f"{base}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=60,
+            )
+        except requests.RequestException as exc:
+            log.warning(
+                "DeepSeek pin copy failed for '%s' (attempt %s): %s",
+                topic,
+                attempt + 1,
+                type(exc).__name__,
+            )
+            continue
+        if (
+            resp.status_code == 400
+            and not dropped_format
+            and "response_format" in payload
+        ):
+            payload.pop("response_format", None)
+            dropped_format = True
+            log.info("DeepSeek rejected response_format; retrying without it")
+            continue
+        if resp.status_code != 200:
+            log.warning(
+                "DeepSeek pin copy HTTP %s for '%s' (attempt %s)",
+                resp.status_code,
+                topic,
+                attempt + 1,
+            )
+            continue
+        try:
+            raw = resp.json()["choices"][0]["message"]["content"]
+            data = _parse_pin_json(raw)
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError) as exc:
+            log.warning(
+                "DeepSeek pin copy parse failed for '%s' (attempt %s): %s",
+                topic,
+                attempt + 1,
+                type(exc).__name__,
+            )
+            continue
+        return {
+            "pinterest_title": polish_pin_text(str(data.get("pinterest_title", "")))[:100],
+            "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
+            "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
+        }
+    return {}
+
+
+def _parse_pin_json(raw: str) -> dict:
+    """Parse a pin-copy object, including fenced or prose-wrapped JSON."""
+    text = (raw or "").strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        raise json.JSONDecodeError("no JSON object", text, 0)
+    data = json.loads(text[start : end + 1])
+    if not isinstance(data, dict):
+        raise json.JSONDecodeError("pin copy was not an object", text, start)
+    return data
 
 
 def _generate_ai(

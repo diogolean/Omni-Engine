@@ -75,14 +75,26 @@ def _button_label() -> str:
 _PINS_SUBDIR = "pinterest_pins"
 
 # ---------------------------------------------------------------------------
-# Font resolution (Windows serif/sans stack with fallbacks)
+# Font resolution
+# Windows faces first (the PC engine), then Liberation/DejaVu in the Docker
+# image, then the Montserrat and Poppins files shipped in this repo.
+# ImageFont.load_default() ignores point size, so it is only a last resort.
 # ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_warned_default_font = False
+
 _SERIF_CANDIDATES = [
     r"C:\Windows\Fonts\georgia.ttf",
     r"C:\Windows\Fonts\georgiai.ttf",
     r"C:\Windows\Fonts\palatia.ttf",
     r"C:\Windows\Fonts\times.ttf",
     r"C:\Windows\Fonts\timesbd.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    str(_REPO_ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Bold.ttf"),
+    str(_REPO_ROOT / "Fonts" / "Lora" / "EBGaramond-Italic.ttf"),
 ]
 
 _SANS_CANDIDATES = [
@@ -90,18 +102,31 @@ _SANS_CANDIDATES = [
     r"C:\Windows\Fonts\calibrib.ttf",
     r"C:\Windows\Fonts\segoeui.ttf",
     r"C:\Windows\Fonts\arial.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    str(_REPO_ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Regular.ttf"),
+    str(_REPO_ROOT / "Fonts" / "Poppins" / "Poppins-Regular.ttf"),
 ]
 
 
 def _find_font(
     candidates: list[str], size: int
 ) -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
+    global _warned_default_font
     for path in candidates:
         if Path(path).is_file():
             try:
                 return ImageFont.truetype(path, size)
             except Exception:  # noqa: BLE001
                 continue
+    if not _warned_default_font:
+        _warned_default_font = True
+        log.warning(
+            "No scalable pin font found; hook text will render tiny. "
+            "Install fonts-liberation or keep Fonts/Montserrat in the image."
+        )
     return ImageFont.load_default()
 
 
@@ -178,7 +203,9 @@ def _draw_hook_zone(
     canvas.paste(panel, (0, zone_top), panel)
 
     # Hook text wrapped to ~22 chars per line
-    hook_clean = hook_text.strip().upper()
+    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
+
+    hook_clean = normalize_pin_text(hook_text).upper()
     lines = textwrap.wrap(hook_clean, width=22) or [hook_clean[:22]]
 
     font_large = _find_font(_SERIF_CANDIDATES, 64)

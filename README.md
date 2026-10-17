@@ -476,12 +476,13 @@ cp .env.example .env
 pytest -q tests/test_omni_config.py tests/test_omni_publisher.py
 
 # Optional: run the same process the VM runs.
-docker compose up -d --build
+# `up -d` starts the engine only. The scheduler is profile "scheduler".
+docker compose up -d --build engine
 docker compose exec engine python main.py --channel wonder_feed --post-type ECONOMIC_REEL --qty 1
-docker compose logs -f scheduler
+docker compose --profile scheduler logs -f scheduler
 ```
 
-One scheduler wake posts `PINTEREST_PINS_PER_RUN` image pins (default 1) for each ready account in `config/pinterest_accounts.yaml`, then sleeps a random gap between `MIN_INTERVAL_HOURS` and `MAX_INTERVAL_HOURS` (default 3–6). Video objects are skipped. Titles come from the article or DeepSeek, not from the filename. `python -m omni.worker --role scheduler --once` runs a single wake. Add `--dry-run` to build the cards without calling Pinterest.
+One scheduler wake posts `PINTEREST_PINS_PER_RUN` image pins (default 1) for each ready account in `config/pinterest_accounts.yaml`. It waits a random gap between `MIN_INTERVAL_HOURS` and `MAX_INTERVAL_HOURS` (default 3–6) before the first publish, then sleeps the same kind of gap between wakes. `--once` and `--dry-run` skip that initial wait. Video objects are skipped. Titles come from the article or DeepSeek, not from the filename. `python -m omni.worker --role scheduler --once` runs a single wake. Add `--dry-run` to build the cards without calling Pinterest.
 
 ### GitHub Secrets
 
@@ -502,10 +503,10 @@ Repository secrets (Settings → Secrets and variables → Actions):
 3. Sets `OMNI_IMAGE_TAG` in the VM `.env` to that SHA, appends the SHA to `/opt/omni-engine/releases.log`, then runs:
 
 ```bash
-cd /opt/omni-engine && docker compose pull && docker compose up -d
+cd /opt/omni-engine && docker compose pull engine && docker compose up -d engine
 ```
 
-Pull requests do not deploy. They run Ruff and the omni pytest modules (`validate.yml`).
+That starts the **engine only**. The scheduler is not started by deploy. Set `SCHEDULER_ENABLED=1` in the VM `.env` before a deploy when the scheduler should come up with the engine, or start it by hand (see below). Pull requests do not deploy. They run Ruff and the omni pytest modules (`validate.yml`).
 
 ### One-time VM setup
 
@@ -519,6 +520,25 @@ nano /opt/omni-engine/.env
 ```
 
 The published-pin ledger is `outputs/pinterest/published_pins.json` on the mounted outputs volume (account, B2 object, and article). Channel env files the operator maintains live at `/opt/omni-engine/channels_config/<channel>/.env` and `.env.<channel>`. Compose mounts that directory read-write at `channels_env/` inside the container so a token refresh survives the next container, without hiding the image's channel package. Root `/opt/omni-engine/.env` is mounted read-write for the same reason.
+
+Ancient Knowledge reads cards from B2 prefix `fbcards/` whose filenames match `^(ancient_|ancientknowl_)` (for example `fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg`). Each card is matched to a WordPress post slug on `https://ancientknowledge.eokviral.com`. Images with no slug match are skipped. The article host currently serves a shared `*.web-hosting.com` certificate, so `article_tls_verify: false` in `config/pinterest_accounts.yaml` applies to those article lookups only. Pinterest API calls stay TLS-verified. A deploy of this image installs Liberation and DejaVu fonts (and the repo Montserrat/Poppins files) so the card uses the source photo and a real point size. Rebuild or redeploy before the next dry run or the old image will still render tiny text.
+
+Start the scheduler only when you mean to publish:
+
+```bash
+cd /opt/omni-engine
+# optional: persist it across deploys
+# grep -q '^SCHEDULER_ENABLED=' .env || echo 'SCHEDULER_ENABLED=1' >> .env
+docker compose --profile scheduler up -d scheduler
+```
+
+Dry run (no Pinterest call, no ledger write, no multi-hour wait):
+
+```bash
+cd /opt/omni-engine
+docker compose --profile scheduler run --rm --no-deps scheduler \
+  python -m omni.worker --role scheduler --once --dry-run
+```
 
 ### GHCR login on the VM
 
@@ -543,8 +563,10 @@ On the VM, the same steps by hand:
 ```bash
 cd /opt/omni-engine
 # edit OMNI_IMAGE_TAG=<previous git sha> in .env
-docker compose pull
-docker compose up -d
+docker compose pull engine
+docker compose up -d engine
+# scheduler only if SCHEDULER_ENABLED=1, or:
+# docker compose --profile scheduler up -d scheduler
 ```
 
 ---
