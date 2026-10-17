@@ -1711,6 +1711,15 @@ def _build_act_clip(
     # ── Diagonal pan direction (acts rotate through 8 compass directions) ─────
     # ── Motion profile (cycles across acts for varied camera dynamics) ────────
     _mp = _MOTION_PROFILES[act_index % len(_MOTION_PROFILES)]
+    if not protect_headroom:
+        try:
+            from modules.reel_artefact.motion import motion_override
+
+            _slow = motion_override(image_path)
+        except Exception:  # noqa: BLE001
+            _slow = None
+        if _slow:
+            _mp = _slow
     if protect_headroom:
         _mp_zoom_start = _MEI_LAST_ZOOM_START
         _mp_zoom_end = _MEI_LAST_ZOOM_END

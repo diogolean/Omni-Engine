@@ -53,6 +53,9 @@ class Entity:
     setting: str
     confusions: tuple[str, ...]
     channels: tuple[str, ...]
+    canonical_shape: str = ""
+    commons_search: tuple[str, ...] = ()
+    commons_titles: tuple[str, ...] = ()
 
 
 def repo_root() -> Path:
@@ -115,6 +118,14 @@ def load_entities(channel: str) -> list[Entity]:
             if str(item).strip()
         )
         name = str(row.get("name") or row.get("id") or "").strip()
+
+        def _texts(key: str) -> tuple[str, ...]:
+            return tuple(
+                str(item).strip()
+                for item in (row.get(key) or [])
+                if str(item).strip()
+            )
+
         found.append(Entity(
             id=str(row["id"]).strip(),
             name=name,
@@ -129,6 +140,9 @@ def load_entities(channel: str) -> list[Entity]:
                 if str(item).strip()
             ),
             channels=tuple(str(item).strip() for item in (row.get("channels") or []) if item),
+            canonical_shape=str(row.get("canonical_shape") or "").strip(),
+            commons_search=_texts("commons_search"),
+            commons_titles=_texts("commons_titles"),
         ))
     return found
 
