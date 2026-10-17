@@ -24,9 +24,10 @@ jobs:
 
       - name: Lint
         run: >
-          ruff check omni modules/memory
+          ruff check omni modules/memory modules/shot_planner
           scripts/backup_supermemory.py
           tests/test_omni_config.py
+          tests/test_shot_planner.py
           tests/test_omni_publisher.py
           tests/test_pinterest_vm.py
           tests/test_memory_client.py
@@ -42,3 +43,4 @@ jobs:
           tests/test_memory_client.py
           tests/test_supermemory_service.py
           tests/test_repo_root_layout.py
+          tests/test_shot_planner.py
