@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from agents.media.b2_client import media_bucket_name, resolve_b2_bucket_name
 from agents.posting.pinterest_engine.image_transformer import (
@@ -38,6 +38,7 @@ from omni.pinterest_accounts import (
 from omni.pinterest_drip import (
     PublishedPins,
     fetch_wordpress_catalog,
+    is_text_graphic,
     match_article_slug,
     publish_account,
 )
@@ -130,6 +131,34 @@ class FakeS3:
 def _jpeg() -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (32, 48), (40, 30, 20)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _photo() -> bytes:
+    """A varied photograph, not a flat title card."""
+    img = Image.new("RGB", (120, 180))
+    pixels = img.load()
+    for y in range(180):
+        for x in range(120):
+            if y < 60:
+                pixels[x, y] = (30 + (x % 50), 80 + (y % 40), 150 + (x % 40))
+            elif y < 120:
+                pixels[x, y] = (170 + (x % 40), 60 + (y % 30), 30 + (x % 25))
+            else:
+                pixels[x, y] = (20 + (x % 30), 150 + (y % 40), 40 + (x % 20))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _title_graphic() -> bytes:
+    """Dark teal field with gold circles, the site's featured title card."""
+    img = Image.new("RGB", (120, 180), (16, 78, 86))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((28, 24, 92, 88), outline=(212, 168, 64), width=4)
+    draw.ellipse((46, 100, 74, 128), outline=(212, 168, 64), width=3)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
     return buf.getvalue()
 
 
@@ -264,9 +293,9 @@ def test_image_pin_uses_article_not_filename(
             _ROOT_VIDEO: b"video-bytes",
             _UNMATCHED_KEY: _jpeg(),
             _VIDEO_KEY: b"video-bytes",
-            _IMAGE_KEY: _jpeg(),
+            _IMAGE_KEY: _photo(),
             _SIDECAR_KEY: _sidecar(),
-            _SECOND_KEY: _jpeg(),
+            _SECOND_KEY: _photo(),
         }
     )
 
@@ -347,7 +376,7 @@ def test_deepseek_title_is_not_the_filename(
         article_url=f"{_SITE}/hidden-chamber",
     )
     client = FakeS3(
-        {key: _jpeg(), "fbcards/2026-10-04/ancientknowl_10-04_2130_chamber.json": sidecar}
+        {key: _photo(), "fbcards/2026-10-04/ancientknowl_10-04_2130_chamber.json": sidecar}
     )
     captured = _capture_posts(monkeypatch)
     stats = publish_account(_ancient(), pins=1, client=client)
@@ -370,7 +399,7 @@ def test_wordpress_article_supplies_the_link(
 
     drip_mod._tls_off_logged.clear()
     key = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
-    client = FakeS3({key: _jpeg()})
+    client = FakeS3({key: _photo()})
 
     def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
         assert url == f"{_SITE}/wp-json/wp/v2/posts"
@@ -425,7 +454,7 @@ def test_dry_run_does_not_post_or_record(
     _bind_tokens(monkeypatch)
     client = FakeS3(
         {
-            _IMAGE_KEY: _jpeg(),
+            _IMAGE_KEY: _photo(),
             _SIDECAR_KEY: _sidecar(),
         }
     )
@@ -438,6 +467,17 @@ def test_dry_run_does_not_post_or_record(
     assert client.deletes == []
     assert not PublishedPins().path.is_file()
     assert not list((tmp_path / "ancient_knowledge" / "_tmp" / "pinterest").glob("*"))
+    dry_cards = list((tmp_path / "pinterest" / "dryrun").glob("*.jpg"))
+    assert len(dry_cards) == 1
+    dry_card = Image.open(dry_cards[0]).convert("RGB")
+    assert dry_card.size == (1000, 1500)
+    bottom = [
+        dry_card.getpixel((x, y))
+        for y in range(1300, 1480, 8)
+        for x in range(40, 960, 8)
+    ]
+    # The photo fills the bottom. The old layout painted a flat dark button there.
+    assert sum(1 for r, g, b in bottom if g > 100 and r < 80) / len(bottom) > 0.5
 
     live = publish_account(_ancient(), pins=1, client=client)
     assert live["published"] == 1
@@ -643,6 +683,10 @@ def test_slug_match_uses_site_posts_and_skips_dates() -> None:
         == "underwater-cities"
     )
     assert match_article_slug("ancient_skull.jpg", _SITE_SLUGS) == ""
+    assert match_article_slug("giants-tomb-sardinia.jpg", _SITE_SLUGS) == ""
+    assert match_article_slug("ancient_giants_tomb_sardinia.jpg", _SITE_SLUGS) == ""
+    assert match_article_slug("ancient_giants.jpg", _SITE_SLUGS) == "giants"
+    assert match_article_slug("ancient_nazca_lines.jpg", _SITE_SLUGS) == "nazca"
     assert match_article_slug("ancientknowl_10-04_2130.jpg", _SITE_SLUGS) == ""
     assert match_article_slug("ancientknowl.jpg", _SITE_SLUGS) == ""
     assert match_article_slug("random_flower.jpg", _SITE_SLUGS) == ""
@@ -719,7 +763,7 @@ def test_featured_image_fallback_when_b2_download_fails(
         if url.endswith("/wp-json/wp/v2/media/42"):
             return _Response(200, {"source_url": featured})
         if url == featured:
-            return _Response(200, None, content=_jpeg())
+            return _Response(200, None, content=_photo())
         raise AssertionError(url)
 
     monkeypatch.setattr(requests, "get", fake_get)
@@ -731,6 +775,171 @@ def test_featured_image_fallback_when_b2_download_fails(
     assert f"{_SITE}/wp-json/wp/v2/media/42" in calls
     assert "Baalbek's" in captured[0]["body"]["title"]
     assert captured[0]["verify"] is True
+
+
+def test_body_photo_replaces_a_title_graphic(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    _bind_tokens(monkeypatch)
+    key = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
+    featured = f"{_SITE}/wp-content/uploads/baalbek-title.jpg"
+    photo_url = f"{_SITE}/wp-content/uploads/baalbek-quarry.jpg"
+    client = FakeS3({key: _title_graphic()})
+    calls: list[str] = []
+
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
+        calls.append(url)
+        if url.endswith("/wp-json/wp/v2/posts"):
+            return _Response(
+                200,
+                [
+                    {
+                        "slug": "baalbek",
+                        "link": f"{_SITE}/baalbek",
+                        "title": {"rendered": "Baalbek&#8217;s Trilithon"},
+                        "excerpt": {"rendered": "<p>Quarry stones.</p>"},
+                        "content": {
+                            "rendered": (
+                                f'<img src="{featured}">'
+                                f'<img src="{photo_url}">'
+                            )
+                        },
+                        "featured_media": 42,
+                        "_embedded": {
+                            "wp:featuredmedia": [{"source_url": featured}],
+                        },
+                    }
+                ],
+                headers={"X-WP-TotalPages": "1"},
+            )
+        if url == featured:
+            return _Response(200, None, content=_title_graphic())
+        if url == photo_url:
+            return _Response(200, None, content=_photo())
+        raise AssertionError(url)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    captured = _capture_posts(monkeypatch)
+    stats = publish_account(_ancient(), pins=1, client=client)
+    assert stats["published"] == 1
+    assert stats["errors"] == 0
+    assert photo_url in calls
+    assert featured not in calls
+    assert captured[0]["body"]["link"] == f"{_SITE}/baalbek"
+
+
+def test_title_graphic_without_a_photo_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    _bind_tokens(monkeypatch)
+    caplog.set_level("INFO")
+    key = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
+    featured = f"{_SITE}/wp-content/uploads/baalbek-title.jpg"
+
+    class _Broken(FakeS3):
+        def download_file(self, bucket, object_key, filename):
+            self.downloads.append(object_key)
+            raise OSError("unavailable")
+
+    client = _Broken({key: _title_graphic()})
+
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
+        if url.endswith("/wp-json/wp/v2/posts"):
+            return _Response(
+                200,
+                [
+                    {
+                        "slug": "baalbek",
+                        "link": f"{_SITE}/baalbek",
+                        "title": {"rendered": "Baalbek&#8217;s Trilithon"},
+                        "excerpt": {"rendered": "<p>Quarry stones.</p>"},
+                        "content": {"rendered": ""},
+                        "featured_media": 7,
+                        "_embedded": {"wp:featuredmedia": [{"source_url": featured}]},
+                    }
+                ],
+                headers={"X-WP-TotalPages": "1"},
+            )
+        if url == featured:
+            return _Response(200, None, content=_title_graphic())
+        raise AssertionError(url)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    captured = _capture_posts(monkeypatch)
+    stats = publish_account(_ancient(), pins=1, client=client)
+    assert stats["published"] == 0
+    assert stats["skipped"] == 1
+    assert captured == []
+    assert "no real photo" in caplog.text
+
+
+def test_image_map_assigns_or_skips(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    _bind_tokens(monkeypatch)
+    caplog.set_level("INFO")
+    mapping = tmp_path / "pinterest_image_map.yaml"
+    mapping.write_text(
+        "\n".join(
+            [
+                "ancient_knowledge:",
+                "  ancient_not_a_place: baalbek",
+                "  ancient_giants_tomb_sardinia: skip",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PINTEREST_IMAGE_MAP", str(mapping))
+    assigned = "fbcards/2026-10-04/ancient_not_a_place.jpg"
+    skipped = "fbcards/2026-10-04/ancient_giants_tomb_sardinia.jpg"
+    client = FakeS3({assigned: _photo(), skipped: _photo()})
+
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
+        return _Response(
+            200,
+            [
+                {
+                    "slug": "baalbek",
+                    "link": f"{_SITE}/baalbek",
+                    "title": {"rendered": "Baalbek&#8217;s Trilithon"},
+                    "excerpt": {"rendered": "<p>Quarry stones.</p>"},
+                    "content": {"rendered": ""},
+                },
+                {
+                    "slug": "giants",
+                    "link": f"{_SITE}/giants",
+                    "title": {"rendered": "Giant skeleton hoax"},
+                    "excerpt": {"rendered": "<p>Not Sardinia.</p>"},
+                    "content": {"rendered": ""},
+                },
+            ],
+            headers={"X-WP-TotalPages": "1"},
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    captured = _capture_posts(monkeypatch)
+    stats = publish_account(_ancient(), pins=2, client=client)
+    assert stats["published"] == 1
+    assert stats["skipped"] >= 1
+    assert client.downloads == [assigned]
+    assert captured[0]["body"]["link"] == f"{_SITE}/baalbek"
+    assert "pinterest_image_map.yaml says skip" in caplog.text
+    assert skipped in caplog.text
+
+
+def test_text_graphic_detector(tmp_path: Path) -> None:
+    graphic = tmp_path / "title.jpg"
+    photo = tmp_path / "photo.jpg"
+    graphic.write_bytes(_title_graphic())
+    photo.write_bytes(_photo())
+    assert is_text_graphic(graphic) is True
+    assert is_text_graphic(photo) is False
 
 
 def test_article_lookup_logs_tls_mismatch(
@@ -808,8 +1017,14 @@ def test_deepseek_drops_response_format_when_unsupported(
 
 def test_rendered_card_uses_the_photo_and_a_scalable_font(tmp_path: Path) -> None:
     source = tmp_path / "baalbek.jpg"
-    Image.new("RGB", (800, 1200), (220, 10, 10)).save(source, format="JPEG")
-    transformer = PinTransformer(outputs_dir=tmp_path / "out")
+    photo = Image.new("RGB", (1200, 800))
+    pixels = photo.load()
+    for y in range(800):
+        color = (240, 200, 20) if y < 400 else (20, 190, 220)
+        for x in range(1200):
+            pixels[x, y] = color
+    photo.save(source, format="JPEG", quality=95)
+    transformer = PinTransformer(outputs_dir=tmp_path / "out", method="cover")
     raw = transformer.get_pin_bytes(
         {
             "local_image_path": str(source),
@@ -822,20 +1037,20 @@ def test_rendered_card_uses_the_photo_and_a_scalable_font(tmp_path: Path) -> Non
     card = Image.open(io.BytesIO(raw)).convert("RGB")
     assert card.size == (1000, 1500)
     pixels = card.load()
-    red = 0
+    cyan = 0
     dark = 0
     total = 0
-    for y in range(600, 1100, 4):
-        for x in range(80, 920, 4):
+    for y in range(1100, 1480, 4):
+        for x in range(40, 960, 4):
             total += 1
             r, g, b = pixels[x, y]
-            if r > 150 and g < 80 and b < 80:
-                red += 1
-            if r < 40 and g < 40 and b < 40:
+            if r < 80 and g > 120 and b > 140:
+                cyan += 1
+            if r < 50 and g < 80 and b < 80:
                 dark += 1
     assert total > 0
-    assert red / total > 0.5
-    assert dark / total < 0.2
+    assert cyan / total > 0.7
+    assert dark / total < 0.15
     font = _find_font(_SERIF_CANDIDATES, 64)
     _left, top, _right, bottom = font.getbbox("BAALBEK")
     assert bottom - top >= 40

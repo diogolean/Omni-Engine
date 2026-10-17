@@ -4,10 +4,10 @@ pinterest_engine.image_transformer
 -----------------------------------
 Transforms existing 3:4 library assets into 1000x1500 (2:3) Pinterest Sales Pins.
 
-Visual layout (top to bottom):
-  - Hook zone (top 30%): dark vignette + VISUAL HOOK text in large serif font
-  - Photo zone (middle): the library image, center-cropped or blurred-padded
-  - Button zone (bottom 17%): dark bar with CTA label + optional URL
+The VM drip uses method ``cover``: the source photo is cover-cropped to
+1000x1500 and the hook sits on a top gradient. There is no empty band.
+``blurred_padding`` and ``center_crop`` keep the older hook panel and
+bottom button bar.
 
 Usage:
     from agents.posting.pinterest_engine.image_transformer import PinTransformer
@@ -21,7 +21,7 @@ import logging
 import textwrap
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 log = logging.getLogger(__name__)
 
@@ -227,6 +227,41 @@ def _draw_hook_zone(
     draw.line([(60, div_y), (PIN_W - 60, div_y)], fill=divider[:3], width=2)
 
 
+def _fade_mask(width: int, height: int, max_alpha: int, *, top: bool) -> Image.Image:
+    """Grayscale mask, strongest at the top or the bottom edge."""
+    ramp = Image.linear_gradient("L").resize((width, height))
+    if top:
+        ramp = ImageOps.invert(ramp)
+    return ramp.point(lambda value: int(value * max_alpha / 255))
+
+
+def _draw_cover_hook(canvas: Image.Image, hook_text: str) -> None:
+    """Hook text on a top gradient. The photo still fills the frame."""
+    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
+
+    fade_h = int(PIN_H * 0.38)
+    mask = _fade_mask(PIN_W, fade_h, 185, top=True)
+    overlay = Image.new("RGBA", (PIN_W, fade_h), (8, 12, 14, 0))
+    overlay.putalpha(mask)
+    canvas.paste(overlay, (0, 0), overlay)
+
+    hook_clean = normalize_pin_text(hook_text).upper()
+    lines = textwrap.wrap(hook_clean, width=18) or [hook_clean[:18]]
+    font_large = _find_font(_SERIF_CANDIDATES, 64)
+    line_height = 74
+    total_h = len(lines) * line_height
+    cursor_y = max(36, (fade_h - total_h) // 3)
+    draw = ImageDraw.Draw(canvas)
+    hook_text_colour = _theme_color("hook_text")
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font_large)
+        text_w = bbox[2] - bbox[0]
+        x = (PIN_W - text_w) // 2
+        draw.text((x + 2, cursor_y + 2), line, font=font_large, fill=(0, 0, 0, 160))
+        draw.text((x, cursor_y), line, font=font_large, fill=hook_text_colour)
+        cursor_y += line_height
+
+
 def _draw_button_zone(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -290,7 +325,8 @@ class PinTransformer:
     outputs_dir : Path, optional
         Root outputs/ directory. Defaults to config.OUTPUTS_DIR.
     method : str
-        'blurred_padding' (default) or 'center_crop'.
+        'cover' fills the 2:3 frame and lays the hook on a gradient.
+        'blurred_padding' and 'center_crop' keep the older band layout.
     """
 
     def __init__(
@@ -409,6 +445,11 @@ class PinTransformer:
 
     def _compose(self, source: Image.Image, visual_hook: str) -> Image.Image:
         """Assemble the final 1000x1500 canvas."""
+        if self.method == "cover":
+            canvas = _center_crop_to_size(source, PIN_W, PIN_H).convert("RGBA")
+            _draw_cover_hook(canvas, visual_hook)
+            return canvas.convert("RGB")
+
         if self.method == "center_crop":
             canvas = _center_crop_to_size(source, PIN_W, PIN_H)
         else:
