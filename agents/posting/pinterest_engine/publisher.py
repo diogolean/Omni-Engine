@@ -152,9 +152,13 @@ class PinterestPublisher:
 
     def publish(self, record: dict, pin_image_bytes: bytes) -> dict | None:
         """
-        Publish a pin. Guards against double-posting and unsafe captions.
+        Create one new pin. Guards against double-posting and unsafe captions.
+
         Returns the Pinterest API response dict on success, None on soft failure.
         Raises PinterestTokenExpiredError if token is dead and refresh fails.
+
+        Existing board pins are never edited. A new article link is only
+        sent on this create call. There is no relink or update path.
         """
         # Guard: never double-post
         if record.get("publication_status", {}).get("posted_on_pinterest"):
@@ -197,10 +201,13 @@ class PinterestPublisher:
                 log.warning("No pin image for %s — skipping.", record.get("post_id", "?"))
             return None
 
+        from agents.posting.pinterest_engine.pin_copy import pin_alt_text  # noqa: PLC0415
+
         payload = {
             "board_id": self.board_id,
             "title": title,
             "description": self._build_description(record),
+            "alt_text": pin_alt_text(record),
             "link": record.get("target_url") or _sales_url() or None,
             "media_source": {
                 "source_type": "image_base64",
@@ -208,6 +215,8 @@ class PinterestPublisher:
                 "data": base64.b64encode(pin_image_bytes).decode("ascii"),
             },
         }
+        if not payload["alt_text"]:
+            payload.pop("alt_text")
         if not payload["link"]:
             payload.pop("link")
 
@@ -366,19 +375,10 @@ class PinterestPublisher:
         return resp
 
     def _build_description(self, record: dict) -> str:
-        """Pinterest pin description: caption + hashtags, max 500 chars total."""
-        tags = _hashtags()
-        from agents.posting.pinterest_engine.inventory import polish_pin_text  # noqa: PLC0415
+        """Keyword sentence plus the article line from ``pin_theme``. Max 500 chars."""
+        from agents.posting.pinterest_engine.pin_copy import build_pin_description  # noqa: PLC0415
 
-        caption = polish_pin_text(
-            str(record.get("pinterest_caption") or record.get("humanized_caption", ""))
-        )
-        max_caption = 500 - len(tags) - 2
-        if len(caption) > max_caption:
-            caption = caption[:max_caption - 3].rsplit(" ", 1)[0] + "..."
-        if tags:
-            return f"{caption}\n\n{tags}"
-        return caption
+        return build_pin_description(record)
 
     def _try_refresh(self) -> bool:
         """

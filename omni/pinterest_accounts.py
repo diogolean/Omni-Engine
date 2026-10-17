@@ -134,6 +134,7 @@ def _account_from_row(raw: dict[str, Any], index: int) -> Account:
         "use_featured_image": (
             "true" if _as_bool(raw.get("use_featured_image"), default=True) else "false"
         ),
+        "runner": _runner(raw.get("runner")),
         "channel_id": channel_id,
         "display_name": str(raw.get("display_name") or channel_id).strip(),
         "legacy_token_env": "PINTEREST_ACCESS_TOKEN",
@@ -153,6 +154,15 @@ def _account_from_row(raw: dict[str, Any], index: int) -> Account:
         board_name_env=str(raw.get("board_name_env") or "").strip(),
         refresh_token_env=_required_str(raw, "refresh_token_env", index),
         extra=extra,
+    )
+
+
+def _runner(value: Any) -> str:
+    text = str(value or "both").strip().lower()
+    if text in {"local", "docker", "both", "off"}:
+        return text
+    raise PinterestAccountsError(
+        f"runner must be local, docker, both, or off (got {value!r})"
     )
 
 

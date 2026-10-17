@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -45,6 +46,19 @@ _DEFAULT_MAX_HOURS = 6.0
 _DEFAULT_PINS_MIN = 3
 _DEFAULT_PINS_MAX = 5
 _INTER_PIN_COURTESY_SEC = 3   # brief pause before starting sleep countdown
+
+
+def _write_dry_run_card(account_id: str, post_id: str, pin_bytes: bytes) -> Path:
+    """Save a dry-run card under outputs/pinterest/dryrun/ for inspection."""
+    from utils.pipeline_paths import outputs_root  # noqa: PLC0415
+
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{account_id}_{post_id}")
+    if not safe.lower().endswith((".jpg", ".jpeg")):
+        safe += ".jpg"
+    dest = outputs_root() / "pinterest" / "dryrun" / safe
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(pin_bytes)
+    return dest
 
 # ---------------------------------------------------------------------------
 # FilenameHistory  --  the filename-level duplicate guard
@@ -293,6 +307,7 @@ class PinterestScheduler:
         no_wait: bool = False,
         min_interval_hours: float | None = None,
         max_interval_hours: float | None = None,
+        context: dict | None = None,
     ) -> None:
         self.outputs_dir = outputs_dir or cfg.OUTPUTS_DIR
         self.dry_run = dry_run
@@ -300,6 +315,7 @@ class PinterestScheduler:
         self.min_interval_hours = min_interval_hours
         self.max_interval_hours = max_interval_hours
         self.pins_per_run = pins_per_run or _resolve_pins_per_run()
+        self.context = context or {}
 
         log.info(
             "Scheduler ready: pins_per_run=%d  dry_run=%s  no_wait=%s  "
@@ -317,22 +333,41 @@ class PinterestScheduler:
 
         Returns stats dict: {published, skipped, skipped_by_history, errors, remaining}.
         """
-        from agents.posting.pinterest_engine.image_transformer import PinTransformer  # noqa: PLC0415
+        from agents.posting.pinterest_engine.image_transformer import (  # noqa: PLC0415
+            PinTransformer,
+            configured_pin_method,
+        )
         from agents.posting.pinterest_engine.inventory import MasterInventory, validate_caption_safe  # noqa: PLC0415
+        from agents.posting.pinterest_engine.library_source import ensure_local_library  # noqa: PLC0415
         from agents.posting.pinterest_engine.publisher import (  # noqa: PLC0415
             PinterestPublisher,
             PinterestTokenExpiredError,
         )
 
+        prefix = str(self.context.get("b2_prefix") or "")
+        if not prefix and cfg.CHANNEL_ID:
+            from agents.posting.pinterest_engine.library_source import library_prefix  # noqa: PLC0415
+
+            prefix = library_prefix(cfg.CHANNEL_ID)
+        if prefix:
+            ensure_local_library(
+                self.outputs_dir,
+                prefix=prefix,
+                client=self.context.get("b2_client"),
+                bucket=self.context.get("b2_bucket"),
+            )
+
         inv = MasterInventory(outputs_dir=self.outputs_dir)
         data = inv.load()
-
-        if not data.get("entries"):
+        library_ids = {
+            path.stem for path in (self.outputs_dir / "library").glob("post_*.json")
+        }
+        known_ids = {entry.get("post_id") for entry in data.get("entries") or []}
+        if not known_ids or not library_ids <= known_ids:
             log.info(
-                "master_inventory.json is empty — auto-syncing library images "
-                "(template metadata, no Claude)."
+                "Building master inventory from the library with the Claude pin-copy path."
             )
-            data = inv.build(use_ai=False)
+            data = inv.build(use_ai=True)
             if not data.get("entries"):
                 log.warning(
                     "No recyclable assets found under %s. "
@@ -382,8 +417,15 @@ class PinterestScheduler:
                     "skipped_by_history": skipped_by_history,
                     "errors": 0, "remaining": 0}
 
-        # Initialise tools
-        transformer = PinTransformer(outputs_dir=self.outputs_dir)
+        self._attach_article_links(data.get("entries") or [])
+        ledger = self._load_ledger()
+
+        # Initialise tools. Method comes from the channel pack; default is the
+        # original blurred-padding card (hook panel, gold divider, CTA bar).
+        transformer = PinTransformer(
+            outputs_dir=self.outputs_dir,
+            method=str(self.context.get("pin_method") or configured_pin_method()),
+        )
 
         publisher = None
         if not self.dry_run:
@@ -425,10 +467,20 @@ class PinterestScheduler:
                 stats["skipped"] += 1
                 continue
 
+            if entry.get("_skip_article") == "skip":
+                log.info("  Skipping %s — image map says skip.", post_id)
+                stats["skipped"] += 1
+                continue
+
             log.info(
                 "[%d/%d] Processing: '%s'  post_id=%s  file=%s",
                 i + 1, len(batch), topic, post_id, src_filename,
             )
+
+            if ledger.seen(post_id=post_id, title=title):
+                log.info("  Skipping %s — already in the shared ledger or on the board.", post_id)
+                stats["skipped"] += 1
+                continue
 
             # --- Safety: validate caption ---
             caption = entry.get("pinterest_caption", "")
@@ -460,19 +512,44 @@ class PinterestScheduler:
                     "fact_sheet" if (is_raw_draft(original) and fact_sheet) else "original_caption",
                 )
 
+            # --- Source photo (library file, one B2 download, or FLUX) ---
+            image_path, delete_after = self._ensure_photo(entry, prefix)
+            source_hash = ""
+            if image_path is not None and image_path.is_file():
+                from agents.posting.pinterest_engine.ledger import source_image_hash  # noqa: PLC0415
+
+                source_hash = source_image_hash(image_path)
+                entry["local_image_path"] = str(image_path)
+            if source_hash and ledger.seen(post_id=post_id, title=title, source_hash=source_hash):
+                log.info("  Skipping %s — source image already pinned.", post_id)
+                if delete_after and image_path is not None:
+                    image_path.unlink(missing_ok=True)
+                stats["skipped"] += 1
+                continue
+
             # --- Transform image ---
-            pin_bytes = transformer.get_pin_bytes(entry)
+            pin_bytes = None
+            try:
+                pin_bytes = transformer.get_pin_bytes(entry)
+                if pin_bytes:
+                    transformer.transform(entry)   # also save pin to disk for audit
+            finally:
+                if delete_after and image_path is not None:
+                    image_path.unlink(missing_ok=True)
             if pin_bytes is None:
                 log.warning("  No image for %s -- skipping.", post_id)
                 stats["skipped"] += 1
                 continue
 
-            transformer.transform(entry)   # also save pin to disk for audit
-
             if self.dry_run:
+                card_path = _write_dry_run_card(
+                    str(self.context.get("account_id") or cfg.CHANNEL_ID or "pin"),
+                    post_id,
+                    pin_bytes,
+                )
                 log.info(
-                    "  [DRY RUN] Would publish '%s' (%d bytes pin image).",
-                    title, len(pin_bytes),
+                    "  [DRY RUN] Would publish '%s' (%d bytes pin image) card=%s",
+                    title, len(pin_bytes), card_path,
                 )
                 log.info(
                     "  [DRY RUN] Would record '%s' in scheduled_history.txt.",
@@ -500,6 +577,15 @@ class PinterestScheduler:
                     inv.mark_posted(data, post_id, pin_id)
                     inv.save(data)              # crash-safe: save after EVERY success
                     history.record(src_filename, post_id, pin_id, topic)
+                    ledger.append(
+                        {
+                            "post_id": post_id,
+                            "title": title,
+                            "pin_id": pin_id,
+                            "source_hash": source_hash,
+                            "article": entry.get("target_url") or "",
+                        }
+                    )
                     stats["published"] += 1
                     log.info(
                         "  Published! Pin ID=%s | history logged: %s",
@@ -526,6 +612,79 @@ class PinterestScheduler:
             stats["skipped_by_history"], stats["errors"], stats["remaining"],
         )
         return stats
+
+    def _attach_article_links(self, entries: list[dict]) -> None:
+        site = str(self.context.get("site_url") or cfg.TARGET_URL or "").strip()
+        if not site or site.upper() == "TODO":
+            return
+        verify = self.context.get("article_tls_verify", True)
+        if isinstance(verify, str):
+            verify = verify.strip().lower() not in {"0", "false", "no", "off"}
+        account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
+        catalog = self.context.get("catalog")
+        if catalog is None:
+            from agents.posting.pinterest_engine.articles import fetch_wordpress_catalog  # noqa: PLC0415
+
+            catalog = fetch_wordpress_catalog(site, verify=bool(verify), account_id=account)
+        from agents.posting.pinterest_engine.articles import attach_article_url  # noqa: PLC0415
+
+        for entry in entries:
+            if attach_article_url(entry, catalog, account) == "skip":
+                entry["_skip_article"] = "skip"
+
+    def _load_ledger(self):
+        import os  # noqa: PLC0415
+
+        from agents.posting.pinterest_engine.ledger import (  # noqa: PLC0415
+            PinLedger,
+            fetch_board_pins,
+        )
+
+        account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "default")
+        cache = self.context.get("ledger_cache")
+        ledger = PinLedger(
+            account,
+            client=self.context.get("b2_client"),
+            bucket=self.context.get("b2_bucket"),
+            cache_path=cache,
+        )
+        ledger.load()
+        pins = list(self.context.get("board_pins") or [])
+        if not pins and not self.context.get("skip_board_fetch"):
+            token = (os.getenv("PINTEREST_ACCESS_TOKEN") or "").strip()
+            board = (os.getenv("PINTEREST_BOARD_ID") or "").strip()
+            if token and board:
+                pins = fetch_board_pins(board, token)
+        if pins:
+            ledger.seed_board_pins(pins)
+        return ledger
+
+    def _ensure_photo(self, entry: dict, prefix: str) -> tuple[Path | None, bool]:
+        from agents.posting.pinterest_engine.flux_photo import ensure_flux_photo  # noqa: PLC0415
+        from agents.posting.pinterest_engine.library_source import materialize_image  # noqa: PLC0415
+        from agents.posting.pinterest_engine.photos import is_text_graphic  # noqa: PLC0415
+
+        channel = str(cfg.CHANNEL_ID or self.context.get("account_id") or "pinterest")
+        path, delete_after = materialize_image(
+            entry,
+            prefix=prefix,
+            channel=channel,
+            client=self.context.get("b2_client"),
+            bucket=self.context.get("b2_bucket"),
+        )
+        if path is not None and path.is_file() and not is_text_graphic(path):
+            return path, delete_after
+        if delete_after and path is not None:
+            path.unlink(missing_ok=True)
+        generated = ensure_flux_photo(
+            entry,
+            outputs_dir=self.outputs_dir,
+            channel_id=channel,
+            prefix=prefix or f"{channel}/library/",
+            client=self.context.get("b2_client"),
+            bucket=self.context.get("b2_bucket"),
+        )
+        return generated, False
 
     # ------------------------------------------------------------------
 
