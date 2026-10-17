@@ -4030,6 +4030,19 @@ def _produce_variant_worker(
             _sr_act_meta: dict[int, dict[str, Any]] = {}
             _sr_act_jobs: dict[int, Any] = {}
             _sr_act_start = 0 if _ak_voice_ready else 1
+            _planned_shots = None
+            try:
+                from modules.shot_planner.plan import plan_for_reel
+
+                _planned_shots = plan_for_reel(
+                    channel=str((page_ctx.page_id if page_ctx else "") or ""),
+                    topic=str(resolved_subject or ""),
+                    script=str(_early_seq_script or ""),
+                    tracker=cost_tracker,
+                )
+            except Exception as _plan_exc:  # noqa: BLE001
+                _LOG.warning("[ShotPlanner] fell back to resolver: %s", _plan_exc)
+                _planned_shots = None
             for _act_i in range(_sr_act_start, _seq_n):
                 _snippet = (
                     _spoken_snippets[_act_i]
@@ -4129,39 +4142,55 @@ def _produce_variant_worker(
                         f"{_lighting_tail}"
                         f"{_rag_tail}"
                     )
-                try:
-                    from modules.reel_grounding.prompt import assemble_beat
+                _plan_shot = None
+                if _planned_shots is not None:
+                    from modules.shot_planner.plan import shot_for_beat
+                    from modules.shot_planner.render import render_shot
 
-                    _shot_name = _shot_pair[0] if _shot_pair else ""
-                    _shot_text = _shot_pair[1] if _shot_pair else ""
-                    _light_name = _light_pair[0] if _light_pair else ""
-                    _light_text = _light_pair[1] if _light_pair else ""
-                    _beat_plan = assemble_beat(
-                        topic=str(resolved_subject or ""),
-                        script=str(_early_seq_script or ""),
-                        spoken=str(_snippet or ""),
-                        draft=_act_prompt,
-                        shot_name=str(_shot_name or ""),
-                        shot_text=str(_shot_text or ""),
-                        lighting_name=str(_light_name or ""),
-                        lighting_text=str(_light_text or ""),
+                    _plan_shot = shot_for_beat(_planned_shots, str(_snippet or ""))
+                if _plan_shot is not None:
+                    _rendered = render_shot(
+                        _plan_shot,
                         channel=str((page_ctx.page_id if page_ctx else "") or ""),
-                        domain_anchors=str(_act_anchors or ""),
-                        previous_spoken=str(_prev_snip or ""),
-                        next_spoken=str(_next_snip or ""),
-                        banned=list(_act_banned or []),
-                        negative=str(_act_neg or ""),
                     )
-                    _act_prompt = _beat_plan.positive
-                    _act_neg = _beat_plan.negative or _act_neg
-                    _act_banned = list(_beat_plan.banned)
-                    if _beat_plan.object_label:
-                        resolved_subject_for_beat = _beat_plan.object_label
-                    else:
+                    _act_prompt = _rendered.positive
+                    if _rendered.negative:
+                        _act_neg = _rendered.negative
+                    resolved_subject_for_beat = _rendered.subject
+                else:
+                    try:
+                        from modules.reel_grounding.prompt import assemble_beat
+
+                        _shot_name = _shot_pair[0] if _shot_pair else ""
+                        _shot_text = _shot_pair[1] if _shot_pair else ""
+                        _light_name = _light_pair[0] if _light_pair else ""
+                        _light_text = _light_pair[1] if _light_pair else ""
+                        _beat_plan = assemble_beat(
+                            topic=str(resolved_subject or ""),
+                            script=str(_early_seq_script or ""),
+                            spoken=str(_snippet or ""),
+                            draft=_act_prompt,
+                            shot_name=str(_shot_name or ""),
+                            shot_text=str(_shot_text or ""),
+                            lighting_name=str(_light_name or ""),
+                            lighting_text=str(_light_text or ""),
+                            channel=str((page_ctx.page_id if page_ctx else "") or ""),
+                            domain_anchors=str(_act_anchors or ""),
+                            previous_spoken=str(_prev_snip or ""),
+                            next_spoken=str(_next_snip or ""),
+                            banned=list(_act_banned or []),
+                            negative=str(_act_neg or ""),
+                        )
+                        _act_prompt = _beat_plan.positive
+                        _act_neg = _beat_plan.negative or _act_neg
+                        _act_banned = list(_beat_plan.banned)
+                        if _beat_plan.object_label:
+                            resolved_subject_for_beat = _beat_plan.object_label
+                        else:
+                            resolved_subject_for_beat = str(resolved_subject or "")
+                    except Exception as _ground_exc:  # noqa: BLE001
+                        _LOG.warning("visual grounding skipped (%s)", _ground_exc)
                         resolved_subject_for_beat = str(resolved_subject or "")
-                except Exception as _ground_exc:  # noqa: BLE001
-                    _LOG.warning("visual grounding skipped (%s)", _ground_exc)
-                    resolved_subject_for_beat = str(resolved_subject or "")
                 # Log per-act plan for verifiability — this is the anti-monotony
                 # signal that ends up in the compiled prompt.
                 try:
@@ -4169,8 +4198,10 @@ def _produce_variant_worker(
                     _shot_name_log = _shot_pair[0] if _shot_pair else "(fallback-cycle)"
                     _light_name_log = _light_pair[0] if _light_pair else "(none)"
                     _LOG.info(
-                        "VISUAL PLAN | act %d/%d | object=%s | subject=%s | shot=%s | lighting=%s",
+                        "VISUAL PLAN | act %d/%d | via=%s | object=%s | "
+                        "subject=%s | shot=%s | lighting=%s",
                         _act_i + 1, _seq_n,
+                        "planner" if _plan_shot is not None else "resolver",
                         resolved_subject_for_beat,
                         _subj_name_log, _shot_name_log, _light_name_log,
                     )

@@ -349,7 +349,8 @@ def ground_image_prompt(
     if hints.accepted:
         lines.append(f"PREVIOUSLY ACCEPTED DEPICTION: {hints.accepted[0]}")
     lines.append(
-        "Photoreal documentary photograph, 35mm film grain, full-bleed, "
+        "STYLE LOCK: photoreal documentary photograph from a real camera, "
+        "natural materials and dust, 35mm film grain, full-bleed, "
         "no text, no watermark, no border."
     )
     return " ".join(lines)
