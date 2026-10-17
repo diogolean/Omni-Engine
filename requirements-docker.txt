@@ -28,3 +28,5 @@ gspread>=6.0.0
 pyperclip>=1.8.2
 edge-tts>=6.1.9
 PyYAML>=6.0
+# v3 API. The 5.x SDK speaks /ns/{namespace} and does not work with server 0.0.8.
+supermemory==3.62.0

@@ -23,7 +23,15 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements-ci.txt
 
       - name: Lint
-        run: ruff check omni tests/test_omni_config.py tests/test_omni_publisher.py tests/test_pinterest_vm.py
+        run: >
+          ruff check omni modules/memory
+          scripts/backup_supermemory.py
+          tests/test_omni_config.py
+          tests/test_omni_publisher.py
+          tests/test_pinterest_vm.py
+          tests/test_memory_client.py
+          tests/test_supermemory_service.py
+          tests/test_repo_root_layout.py
 
       - name: Test
         run: >
@@ -31,5 +39,7 @@ jobs:
           tests/test_omni_config.py
           tests/test_omni_publisher.py
           tests/test_pinterest_vm.py
+          tests/test_memory_client.py
+          tests/test_supermemory_service.py
           tests/test_repo_root_layout.py
           tests/test_video_providers.py

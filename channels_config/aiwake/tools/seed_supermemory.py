@@ -105,31 +105,10 @@ def load_approved_sessions(
 
 def existing_history_ids(bridge: SupermemoryBridge) -> set[str]:
     ids = {str(row.get("session_id") or "") for row in bridge.ledger_sessions() if row.get("session_id")}
-    client = bridge._client_or_none()  # noqa: SLF001 — seed-only inventory
-    if client is None:
-        return ids
     try:
-        page = 1
-        while page <= 20:
-            listed = client.documents.list(
-                container_tags=[HISTORY_CONTAINER],
-                limit=200,
-                page=page,
-            )
-            memories = getattr(listed, "memories", None) or []
-            if not memories:
-                break
-            for item in memories:
-                meta = getattr(item, "metadata", None) or {}
-                if isinstance(meta, dict) and meta.get("session_id"):
-                    ids.add(str(meta["session_id"]))
-            pagination = getattr(listed, "pagination", None)
-            total_pages = int(getattr(pagination, "total_pages", 1) or 1) if pagination else 1
-            if page >= total_pages:
-                break
-            page += 1
+        ids.update(bridge.remote_session_ids())
     except Exception as exc:  # noqa: BLE001
-        _LOG.warning("could not list existing Supermemory documents (%s)", exc)
+        _LOG.warning("could not list existing Supermemory documents (%s)", type(exc).__name__)
     return ids
 
 
@@ -138,7 +117,7 @@ def seed_supermemory(
     library_path: Path | None = None,
     dry_run: bool = False,
     force_offline: bool = False,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     sessions = load_approved_sessions(library_path=library_path)
     bridge = SupermemoryBridge(force_offline=force_offline)
     already = existing_history_ids(bridge)
@@ -149,6 +128,7 @@ def seed_supermemory(
         "history_failed": 0,
         "rule_seeded": 0,
         "remote_active": int(bridge.is_active),
+        "base_url": bridge.base_url if bridge.is_active else "",
     }
 
     for item in sessions:
@@ -182,9 +162,9 @@ def seed_supermemory(
     return stats
 
 
-def render_report(stats: dict[str, int]) -> str:
+def render_report(stats: dict[str, Any]) -> str:
     total = int(stats["history_seeded"]) + int(stats["rule_seeded"])
-    host = "localhost:6767" if stats.get("remote_active") else "local JSON ledger"
+    host = str(stats.get("base_url") or "") or "local JSON ledger"
     return "\n".join(
         [
             "[OmniEngine] Supermemory seed complete",
