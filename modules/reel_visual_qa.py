@@ -392,6 +392,7 @@ def generate_and_gate(
     prefer_stem: str = "",
     max_attempts_n: int | None = None,
     evaluate_fn: Any | None = None,
+    episode_subject: str = "",
 ):
     """Retry a still against its spoken line. Fail closed. See ``modules.reel_qa.retry``.
 
@@ -413,4 +414,5 @@ def generate_and_gate(
         prefer_stem=prefer_stem,
         max_attempts_n=max_attempts_n,
         evaluate_fn=evaluate_fn,
+        episode_subject=episode_subject,
     )

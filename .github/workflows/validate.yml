@@ -44,4 +44,5 @@ jobs:
           tests/test_repo_root_layout.py
           tests/test_reel_grounding.py
           tests/test_reel_angle_memory.py
+          tests/test_reel_followup_fixes.py
           tests/test_ffmpeg_kill_posix.py

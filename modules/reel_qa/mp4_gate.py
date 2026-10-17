@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,82 @@ _LOG = logging.getLogger(__name__)
 
 _MEAN_DB = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
 _MAX_DB = re.compile(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
+_DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+_AUDIO_STREAM = re.compile(
+    r"Stream\s+#\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?:\s*Audio:",
+    re.IGNORECASE,
+)
+
+
+def ffmpeg_executable() -> str | None:
+    """ffmpeg on PATH, else the imageio-ffmpeg binary shipped with the app."""
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return None
+    try:
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001
+        return None
+    if exe and Path(exe).is_file():
+        return str(exe)
+    return None
+
+
+def ffprobe_executable() -> str | None:
+    """ffprobe on PATH, or a sibling of the resolved ffmpeg binary."""
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    ffmpeg = ffmpeg_executable()
+    if not ffmpeg:
+        return None
+    parent = Path(ffmpeg).parent
+    for name in ("ffprobe.exe", "ffprobe"):
+        sibling = parent / name
+        if sibling.is_file():
+            return str(sibling)
+    return None
+
+
+def _technical_probe_error(error: str) -> bool:
+    err = (error or "").strip()
+    return err.startswith("probe_unavailable") or err in {
+        "probe_failed",
+        "probe_unparseable",
+    }
+
+
+def _duration_from_banner(blob: str) -> float:
+    match = _DURATION.search(blob or "")
+    if not match:
+        return 0.0
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    seconds = float(match.group(3))
+    return hours * 3600.0 + minutes * 60.0 + seconds
+
+
+def _loudness(ffmpeg: str, video: Path) -> tuple[float | None, float | None, str]:
+    try:
+        loud = subprocess.run(
+            [ffmpeg, "-i", str(video), "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, None, f"loudness_unavailable:{type(exc).__name__}"
+    blob = (loud.stderr or "") + "\n" + (loud.stdout or "")
+    mean_match = _MEAN_DB.search(blob)
+    max_match = _MAX_DB.search(blob)
+    mean_db = float(mean_match.group(1)) if mean_match else None
+    max_db = float(max_match.group(1)) if max_match else None
+    return mean_db, max_db, ""
 
 
 @dataclass(frozen=True)
@@ -92,22 +169,22 @@ def select_cues(cues: list[SubtitleCue], limit: int | None = None) -> list[Subti
     return picked
 
 
-def probe_media(path: Path | str) -> dict[str, Any]:
-    """ffprobe duration + audio stream, then ffmpeg mean loudness."""
-    video = Path(path)
-    empty = {
-        "error": "missing_video",
+def _empty_probe(error: str) -> dict[str, Any]:
+    return {
+        "error": error,
         "duration_s": 0.0,
         "has_audio": False,
         "mean_volume_db": None,
         "max_volume_db": None,
     }
-    if not video.is_file():
-        return empty
+
+
+def _probe_ffprobe(binary: str, video: Path) -> dict[str, Any] | None:
+    """JSON probe. ``None`` means the caller should try the ffmpeg banner."""
     try:
         probe = subprocess.run(
             [
-                "ffprobe",
+                binary,
                 "-v", "error",
                 "-show_entries", "format=duration:stream=codec_type",
                 "-of", "json",
@@ -118,63 +195,96 @@ def probe_media(path: Path | str) -> dict[str, Any]:
             timeout=30,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {**empty, "error": f"probe_unavailable:{type(exc).__name__}"}
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     if probe.returncode != 0:
-        return {**empty, "error": "probe_failed"}
+        return None
     import json
 
     try:
         payload = json.loads(probe.stdout or "{}")
     except json.JSONDecodeError:
-        return {**empty, "error": "probe_unparseable"}
+        return None
     try:
         duration = float((payload.get("format") or {}).get("duration") or 0.0)
     except (TypeError, ValueError):
         duration = 0.0
     streams = payload.get("streams") or []
-    has_audio = any(str(s.get("codec_type")) == "audio" for s in streams if isinstance(s, dict))
-    mean_db = None
-    max_db = None
-    if has_audio:
-        try:
-            loud = subprocess.run(
-                ["ffmpeg", "-i", str(video), "-af", "volumedetect", "-f", "null", "-"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {
-                "error": f"loudness_unavailable:{type(exc).__name__}",
-                "duration_s": duration,
-                "has_audio": True,
-                "mean_volume_db": None,
-                "max_volume_db": None,
-            }
-        blob = (loud.stderr or "") + "\n" + (loud.stdout or "")
-        mean_match = _MEAN_DB.search(blob)
-        max_match = _MAX_DB.search(blob)
-        if mean_match:
-            mean_db = float(mean_match.group(1))
-        if max_match:
-            max_db = float(max_match.group(1))
+    has_audio = any(
+        str(stream.get("codec_type")) == "audio"
+        for stream in streams
+        if isinstance(stream, dict)
+    )
     return {
         "error": "",
         "duration_s": duration,
         "has_audio": has_audio,
-        "mean_volume_db": mean_db,
-        "max_volume_db": max_db,
+        "mean_volume_db": None,
+        "max_volume_db": None,
     }
+
+
+def _probe_ffmpeg_banner(binary: str, video: Path) -> dict[str, Any] | None:
+    """Parse ``ffmpeg -i`` stderr. imageio-ffmpeg builds often have no ffprobe."""
+    try:
+        proc = subprocess.run(
+            [binary, "-hide_banner", "-i", str(video)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    blob = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    if "Duration:" not in blob:
+        return None
+    return {
+        "error": "",
+        "duration_s": _duration_from_banner(blob),
+        "has_audio": bool(_AUDIO_STREAM.search(blob)),
+        "mean_volume_db": None,
+        "max_volume_db": None,
+    }
+
+
+def probe_media(path: Path | str) -> dict[str, Any]:
+    """Duration, audio stream, and mean loudness.
+
+    Uses ffprobe when it is on PATH. Otherwise parses ``ffmpeg -i`` and
+    ``volumedetect`` from PATH or the imageio-ffmpeg binary. A missing
+    binary is ``probe_unavailable``, not a silent reel.
+    """
+    video = Path(path)
+    if not video.is_file():
+        return _empty_probe("missing_video")
+    measured: dict[str, Any] | None = None
+    ffprobe = ffprobe_executable()
+    if ffprobe:
+        measured = _probe_ffprobe(ffprobe, video)
+    ffmpeg = ffmpeg_executable()
+    if measured is None and ffmpeg:
+        measured = _probe_ffmpeg_banner(ffmpeg, video)
+    if measured is None:
+        return _empty_probe("probe_unavailable:FileNotFoundError")
+    if measured.get("has_audio") and ffmpeg:
+        mean_db, max_db, loud_err = _loudness(ffmpeg, video)
+        measured["mean_volume_db"] = mean_db
+        measured["max_volume_db"] = max_db
+        if loud_err:
+            measured["error"] = loud_err
+    return measured
 
 
 def extract_frame(video: Path, at_s: float, dest: Path) -> Path | None:
     dest.parent.mkdir(parents=True, exist_ok=True)
+    ffmpeg = ffmpeg_executable()
+    if not ffmpeg:
+        return None
     try:
         proc = subprocess.run(
             [
-                "ffmpeg", "-y",
+                ffmpeg, "-y",
                 "-ss", f"{max(0.0, float(at_s)):.3f}",
                 "-i", str(video),
                 "-frames:v", "1",
@@ -202,10 +312,24 @@ def decide_mp4_gate(
     """Pure pass/fail from a probe and per-frame scores. Frame rows already carry ``passed``."""
     reasons: list[str] = []
     err = str((probe or {}).get("error") or "")
-    if err:
-        reasons.append(err)
     duration = float((probe or {}).get("duration_s") or 0.0)
     floor = float(min_duration if min_duration is not None else min_duration_s())
+    # No binary, or a probe that returned nothing usable. Do not invent
+    # "too short" / "no audio" / "subtitle mismatch" from the missing data.
+    if _technical_probe_error(err):
+        return {
+            "passed": False,
+            "reasons": [err],
+            "duration_s": duration,
+            "has_audio": bool((probe or {}).get("has_audio")),
+            "mean_volume_db": (probe or {}).get("mean_volume_db"),
+            "max_volume_db": (probe or {}).get("max_volume_db"),
+            "min_duration_s": floor,
+            "frames": list(frames or []),
+            "technical_failure": True,
+        }
+    if err:
+        reasons.append(err)
     if duration < floor:
         reasons.append("duration_below_minimum")
     if not (probe or {}).get("has_audio"):

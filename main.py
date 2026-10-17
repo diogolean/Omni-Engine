@@ -1246,25 +1246,14 @@ def _trim_script_to_word_limit(script: str, max_words: int = 140) -> str:
 def _filter_audio_tag_timings(
     word_timings: list[tuple[str, float, float]],
 ) -> list[tuple[str, float, float]]:
-    """Drop ElevenLabs behavior-tag / SSML tokens from subtitle timings."""
-    if not word_timings:
-        return word_timings
-    _tag_re = _re.compile(
-        r'^\[?(?:cackles?|chuckles?|cold\s*chuckle|arrogant\s*scoff|'
-        r'deep\s*subtle\s*laugh|dry\s*laugh|laughs?|sighs?|whispers?|'
-        r'pause|beat|silence)\]?$',
-        _re.IGNORECASE,
-    )
-    _break_re = _re.compile(r'break|time=|^\d+(\.\d+)?s?$', _re.IGNORECASE)
-    out: list[tuple[str, float, float]] = []
-    for w, s, e in word_timings:
-        if not w:
-            continue
-        tok = w.strip(" .,;:!?<>/\"'")
-        if _tag_re.match(tok) or _break_re.match(tok) or tok.lower() in {"<", ">", "/", "s"}:
-            continue
-        out.append((w, s, e))
-    return out
+    """Drop ElevenLabs behavior-tag / SSML tokens from subtitle timings.
+
+    Years and quantities stay. Only a duration fragment such as ``1.5s``
+    (leaked from a break tag) is removed.
+    """
+    from modules.reel_qa.timings import filter_spoken_timings
+
+    return filter_spoken_timings(word_timings)
 
 
 # ---------------------------------------------------------------------------
