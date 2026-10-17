@@ -39,6 +39,8 @@ The Unified Multi-Page Factory is a production-grade Python automation pipeline 
 
 ## Architecture
 
+How the factory is deployed, and the decisions behind B2, the runners, and reel QA, is in [docs/architecture/overview.md](docs/architecture/overview.md).
+
 ### Page / Persona Orchestration
 
 Page selection is a **bootstrap-time binding**, not a runtime swap.

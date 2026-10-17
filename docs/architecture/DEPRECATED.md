@@ -1,6 +1,8 @@
-# Deprecated — do not add files here
+# Showcase files moved
 
-Architecture artifacts for the recruiter showcase live in **`portfolio_showcase/`**. This directory is kept only so old links fail loudly instead of drifting into a second source of truth.
+The recruiter-showcase notes that used to live in this directory now live in **`portfolio_showcase/`**. Do not put those pipeline posters back here.
+
+Operational architecture (system map, diagrams, decision records) lives beside this file. Start at [overview.md](overview.md).
 
 | What used to live here | Where it is now |
 |---|---|

@@ -4834,6 +4834,47 @@ def run_economic_reel_lofi(
             approve_gate=approve_gate,
         )
         item = asdict(result)
+        item["post_type"] = "ECONOMIC_REEL_LOFI"
+        if result.video_path or result.meta_path:
+            from modules.reel_qa.pipeline import seal_compiled_reel
+
+            _lofi_meta: dict[str, Any] = {}
+            if result.meta_path and Path(result.meta_path).is_file():
+                try:
+                    _lofi_meta = json.loads(Path(result.meta_path).read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    _lofi_meta = {}
+            _script = _lofi_meta.get("script") if isinstance(_lofi_meta.get("script"), dict) else {}
+            _lines = [r for r in (_script.get("lines") or []) if isinstance(r, dict)]
+            _images = list(_lofi_meta.get("scene_images") or [])
+            _lofi_beats = []
+            for _bi, _line in enumerate(_lines):
+                _lofi_beats.append({
+                    "index": _bi,
+                    "text": str(_line.get("text") or _line.get("beat_text") or ""),
+                    "image_path": str(_images[_bi]) if _bi < len(_images) else "",
+                    "start_s": float(_bi) * float(_lofi_meta.get("scene_duration_s") or 3.0),
+                    "end_s": float(_bi + 1) * float(_lofi_meta.get("scene_duration_s") or 3.0),
+                    "passed": None,
+                })
+            _qa_dir = page_outputs / "qa"
+            _stem = Path(result.video_path).stem if result.video_path else f"lofi_{i:02d}"
+            _qa = seal_compiled_reel(
+                video_path=result.video_path,
+                post_type="ECONOMIC_REEL_LOFI",
+                beats=_lofi_beats,
+                output_dir=_qa_dir,
+                stem=_stem,
+                channel=page,
+            )
+            item["qa_verdict"] = _qa.get("verdict") or "fail"
+            item["qa_report_path"] = _qa.get("report_path") or ""
+            item["qa_report"] = _qa
+            if item["qa_verdict"] != "pass":
+                item["manual_review"] = True
+                item["errors"] = list(item.get("errors") or []) + [
+                    _qa.get("blocked_reason") or "qa_fail"
+                ]
         items.append(item)
         if result.ok:
             ok_n += 1

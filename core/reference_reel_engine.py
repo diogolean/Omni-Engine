@@ -978,42 +978,74 @@ class ReferenceReelEngine:
                 "ambient_prompt": ambient_prompt,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+
+            # ── PostPlanner xlsx (only when reel QA verdict is pass) ────
+            from modules.reel_qa.pipeline import seal_compiled_reel
+            from modules.reel_qa.publish import planner_row_allowed
+
+            _qa = seal_compiled_reel(
+                video_path=rendered,
+                post_type="REFERENCE_BASED_REELS",
+                beats=[{
+                    "index": 0,
+                    "text": hook_text,
+                    "start_s": 0.0,
+                    "end_s": float(actual_dur or 0.0),
+                    "passed": None,
+                }],
+                output_dir=self.outputs_dir / "qa",
+                stem=rendered.stem,
+                channel=str(getattr(self.page_ctx, "page_id", "") or ""),
+                score_stills=False,
+            )
+            _variant_result["post_type"] = "REFERENCE_BASED_REELS"
+            _variant_result["qa_verdict"] = _qa.get("verdict") or "fail"
+            _variant_result["qa_report_path"] = _qa.get("report_path") or ""
+            lib_entry["qa_verdict"] = _variant_result["qa_verdict"]
+            lib_entry["qa_report_path"] = _variant_result["qa_report_path"]
             try:
                 from agents.media.content_library import append_entry
                 append_entry(content_library_path, lib_entry)
             except Exception as lib_exc:
                 _LOG.warning("content_library write failed: %s", lib_exc)
-
-            # ── PostPlanner xlsx ──────────────────────────────────────────
             media_url = b2_url or str(rendered)
-            try:
-                from agents.posting.post_planner import (
-                    append_postplanner_xlsx_row,
-                    append_planner_row,
+            if not planner_row_allowed(post_type="REFERENCE_BASED_REELS", report=_qa):
+                _LOG.error(
+                    "REEL QA blocked Post Planner | verdict=%s",
+                    _qa.get("verdict"),
                 )
-                import config as _cfg
+                print(
+                    f"[VisualQA] Post Planner skipped | verdict={_qa.get('verdict')}"
+                )
+            else:
+                try:
+                    import config as _cfg
+                    from agents.posting.post_planner import (
+                        append_planner_row,
+                        append_postplanner_xlsx_row,
+                    )
 
-                append_postplanner_xlsx_row(
-                    Path(pp_dir),
-                    run_stamp=rs,
-                    posting_time=posting_slot_display,
-                    caption=caption,
-                    media_url=media_url,
-                )
+                    append_postplanner_xlsx_row(
+                        Path(pp_dir),
+                        run_stamp=rs,
+                        posting_time=posting_slot_display,
+                        caption=caption,
+                        media_url=media_url,
+                    )
 
-                bulk_xlsx = self.outputs_dir / "automated_bulk_posts_import.xlsx"
-                append_planner_row(
-                    bulk_xlsx,
-                    posting_time=posting_slot_display,
-                    caption=caption,
-                    url_link="",
-                    media_url=media_url,
-                    post_type_value="VIDEO",
-                    template_path=getattr(_cfg, "BULK_POSTS_TEMPLATE_XLSX", None),
-                )
-                print("[refReel]   PostPlanner updated.")
-            except Exception as pp_exc:
-                _LOG.warning("PostPlanner write failed: %s", pp_exc)
+                    bulk_xlsx = self.outputs_dir / "automated_bulk_posts_import.xlsx"
+                    append_planner_row(
+                        bulk_xlsx,
+                        posting_time=posting_slot_display,
+                        caption=caption,
+                        url_link="",
+                        media_url=media_url,
+                        post_type_value="VIDEO",
+                        template_path=getattr(_cfg, "BULK_POSTS_TEMPLATE_XLSX", None),
+                    )
+                    print("[refReel]   PostPlanner updated.")
+                except Exception as pp_exc:
+                    _LOG.warning("PostPlanner write failed: %s", pp_exc)
 
             results.append(_variant_result)
 
