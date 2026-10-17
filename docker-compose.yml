@@ -7,6 +7,10 @@
 # The scheduler is profile "scheduler". Deploy does not start it.
 # Start it with SCHEDULER_ENABLED=1, or:
 #   docker compose --profile scheduler up -d scheduler
+# Supermemory is profile "memory". Deploy does not start it either.
+# Start it by hand after the image is in GHCR:
+#   docker compose --profile memory up -d supermemory
+# No host port is published. The engine uses http://supermemory:6767.
 #
 # Local build (any arch): docker compose up -d --build engine
 # VM deploy uses the image already pushed to GHCR and does not need the Dockerfile.
@@ -24,6 +28,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       OMNI_ROLE: engine
+      # On the compose network. Processes outside compose keep their own URL.
+      SUPERMEMORY_BASE_URL: http://supermemory:6767
     volumes:
       - ./outputs:/opt/omni-engine/outputs
       - ./credentials:/opt/omni-engine/credentials
@@ -65,3 +71,33 @@ services:
       - scheduler
     depends_on:
       - engine
+
+  # Opt-in. No published port. Data stays on the named volume.
+  # 0.0.9+ requires the API key on every request and defaults to 127.0.0.1;
+  # SUPERMEMORY_HOST=0.0.0.0 is inside the container only.
+  supermemory:
+    image: ghcr.io/diogolean/supermemory-server:${SUPERMEMORY_IMAGE_TAG:-0.0.9}
+    build:
+      context: docker/supermemory
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      SUPERMEMORY_DATA_DIR: /data
+      SUPERMEMORY_HOST: 0.0.0.0
+      SUPERMEMORY_PORT: "6767"
+      SUPERMEMORY_DISABLE_TELEMETRY: "1"
+    volumes:
+      - supermemory-data:/data
+    restart: unless-stopped
+    profiles:
+      - memory
+    mem_limit: 2g
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+volumes:
+  supermemory-data:
