@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,7 @@ from omni.pinterest_accounts import (
 )
 from omni.pinterest_drip import (
     PublishedPins,
+    _mapped_slug,
     fetch_wordpress_catalog,
     is_text_graphic,
     match_article_slug,
@@ -179,12 +181,17 @@ def _sidecar(**extra) -> bytes:
     return json.dumps(payload).encode()
 
 
-def _ancient() -> Account:
-    return next(
-        account
-        for account in active_pinterest_accounts()
-        if account.account_id == "ancient_knowledge"
+def _ancient(*, featured: bool | None = None) -> Account:
+    account = next(
+        item
+        for item in active_pinterest_accounts()
+        if item.account_id == "ancient_knowledge"
     )
+    if featured is None:
+        return account
+    extra = dict(account.extra)
+    extra["use_featured_image"] = "true" if featured else "false"
+    return replace(account, extra=extra)
 
 
 def _bind_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,6 +241,7 @@ def test_accounts_yaml_scales_without_code_and_marks_anna_todo(tmp_path: Path) -
     assert ancient.extra["b2_prefix"] == "fbcards/"
     assert ancient.extra["b2_filename_pattern"] == "^(ancient_|ancientknowl_)"
     assert ancient.extra["article_tls_verify"] == "false"
+    assert ancient.extra["use_featured_image"] == "false"
     assert ancient.token_env == "PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE"
     assert ancient.extra["app_id_env"] == "PINTEREST_APP_ID_ANCIENT_KNOWLEDGE"
     assert ancient.extra["app_secret_env"] == "PINTEREST_APP_SECRET_ANCIENT_KNOWLEDGE"
@@ -247,6 +255,7 @@ def test_accounts_yaml_scales_without_code_and_marks_anna_todo(tmp_path: Path) -
     assert anna.extra["b2_prefix"] == "anna_protocol/"
     assert anna.extra["b2_filename_pattern"] == ""
     assert anna.extra["article_tls_verify"] == "true"
+    assert anna.extra["use_featured_image"] == "true"
     assert "site_url" in account_blockers(anna)
     assert "board" in account_blockers(anna)
 
@@ -686,6 +695,11 @@ def test_slug_match_uses_site_posts_and_skips_dates() -> None:
     assert match_article_slug("giants-tomb-sardinia.jpg", _SITE_SLUGS) == ""
     assert match_article_slug("ancient_giants_tomb_sardinia.jpg", _SITE_SLUGS) == ""
     assert match_article_slug("ancient_giants.jpg", _SITE_SLUGS) == "giants"
+    assert (
+        match_article_slug("ancientknowl_10-04_2130_baalbek-trilithon.jpg", _SITE_SLUGS)
+        == "baalbek"
+    )
+    assert match_article_slug("baalbek-trilithon.jpg", _SITE_SLUGS) == "baalbek"
     assert match_article_slug("ancient_nazca_lines.jpg", _SITE_SLUGS) == "nazca"
     assert match_article_slug("ancientknowl_10-04_2130.jpg", _SITE_SLUGS) == ""
     assert match_article_slug("ancientknowl.jpg", _SITE_SLUGS) == ""
@@ -768,7 +782,7 @@ def test_featured_image_fallback_when_b2_download_fails(
 
     monkeypatch.setattr(requests, "get", fake_get)
     captured = _capture_posts(monkeypatch)
-    stats = publish_account(_ancient(), pins=1, client=client)
+    stats = publish_account(_ancient(featured=True), pins=1, client=client)
     assert stats["published"] == 1
     assert stats["errors"] == 0
     assert featured in calls
@@ -822,12 +836,62 @@ def test_body_photo_replaces_a_title_graphic(
 
     monkeypatch.setattr(requests, "get", fake_get)
     captured = _capture_posts(monkeypatch)
-    stats = publish_account(_ancient(), pins=1, client=client)
+    stats = publish_account(_ancient(featured=True), pins=1, client=client)
     assert stats["published"] == 1
     assert stats["errors"] == 0
     assert photo_url in calls
     assert featured not in calls
     assert captured[0]["body"]["link"] == f"{_SITE}/baalbek"
+
+
+def test_ancient_knowledge_skips_without_a_b2_photo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("PINTEREST_IMAGE_MAP", raising=False)
+    _bind_tokens(monkeypatch)
+    caplog.set_level("INFO")
+    key = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek-trilithon.jpg"
+    featured = f"{_SITE}/wp-content/uploads/baalbek-title.jpg"
+
+    class _Broken(FakeS3):
+        def download_file(self, bucket, object_key, filename):
+            self.downloads.append(object_key)
+            raise OSError("unavailable")
+
+    client = _Broken({key: _photo()})
+    calls: list[str] = []
+
+    def fake_get(url, params=None, timeout=None, verify=True, **_kwargs):
+        calls.append(url)
+        if url.endswith("/wp-json/wp/v2/posts"):
+            return _Response(
+                200,
+                [
+                    {
+                        "slug": "baalbek",
+                        "link": f"{_SITE}/baalbek",
+                        "title": {"rendered": "Baalbek&#8217;s Trilithon"},
+                        "excerpt": {"rendered": "<p>Quarry stones.</p>"},
+                        "content": {"rendered": f'<img src="{featured}">'},
+                        "featured_media": 7,
+                        "_embedded": {"wp:featuredmedia": [{"source_url": featured}]},
+                    }
+                ],
+                headers={"X-WP-TotalPages": "1"},
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    captured = _capture_posts(monkeypatch)
+    stats = publish_account(_ancient(), pins=1, client=client)
+    assert stats["published"] == 0
+    assert stats["skipped"] == 1
+    assert captured == []
+    assert featured not in calls
+    assert "use_featured_image is false" in caplog.text
+    assert _mapped_slug("ancient_knowledge", key) == "baalbek"
 
 
 def test_title_graphic_without_a_photo_is_skipped(

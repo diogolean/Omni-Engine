@@ -131,6 +131,9 @@ def _account_from_row(raw: dict[str, Any], index: int) -> Account:
         "article_tls_verify": (
             "true" if _as_bool(raw.get("article_tls_verify"), default=True) else "false"
         ),
+        "use_featured_image": (
+            "true" if _as_bool(raw.get("use_featured_image"), default=True) else "false"
+        ),
         "channel_id": channel_id,
         "display_name": str(raw.get("display_name") or channel_id).strip(),
         "legacy_token_env": "PINTEREST_ACCESS_TOKEN",

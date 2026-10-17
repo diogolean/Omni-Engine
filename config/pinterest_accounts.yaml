@@ -19,6 +19,9 @@ accounts:
     # The host currently presents a shared *.web-hosting.com certificate.
     # This flag is article lookups only. Pinterest API calls stay verified.
     article_tls_verify: false
+    # Every featured image on this site is a title graphic, and the posts
+    # have no body photos. Publish the B2 file or skip the pin.
+    use_featured_image: false
     board_name: Ancient Knowledge
     board_id_env: PINTEREST_BOARD_ID_ANCIENT_KNOWLEDGE
     access_token_env: PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE

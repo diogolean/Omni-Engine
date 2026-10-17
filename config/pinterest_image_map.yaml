@@ -4,6 +4,6 @@
 # object key to a WordPress slug. Use skip when that image must not publish.
 # Distinctive-word matching still runs for images that are not listed here.
 #
-# ancient_knowledge:
-#   giants-tomb-sardinia: skip
-#   ancientknowl_10-04_2130_baalbek: baalbek
+ancient_knowledge:
+  baalbek-trilithon: baalbek
+  # giants-tomb-sardinia: skip

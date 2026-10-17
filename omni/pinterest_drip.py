@@ -302,6 +302,7 @@ def publish_account(
                 site=site,
                 verify=verify_tls,
                 account_id=account.account_id,
+                use_featured=_use_featured_image(account),
             ):
                 log.info(
                     "Skipping %s — no real photo (title graphics are not pinned)",
@@ -677,6 +678,12 @@ def _article_tls_enabled(account: Account) -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _use_featured_image(account: Account) -> bool:
+    """False when this account must pin the B2 photo and nothing else."""
+    raw = (account.extra.get("use_featured_image") or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _host(url: str) -> str:
     return (urlsplit(url).hostname or "").lower()
 
@@ -853,10 +860,13 @@ def match_article_slug(filename: str, slugs: list[str]) -> str:
 
     A match needs the same distinctive words as the slug. Generic words
     (``tomb``, ``ancient``, ``lines``) do not count, so ``giants-tomb-sardinia``
-    does not attach to the ``giants`` article. A one-token typo such as
-    ``baalbec`` can still reach ``baalbek``.
+    does not attach to the ``giants`` article. A slug may also be the leading
+    word of the filename topic plus one extra word (``baalbek-trilithon``
+    matches ``baalbek``). A one-token typo such as ``baalbec`` can still
+    reach ``baalbek``.
     """
-    distinctive = _distinctive_tokens(_filename_tokens(filename))
+    topic_tokens = _filename_tokens(filename)
+    distinctive = _distinctive_tokens(topic_tokens)
     if not distinctive:
         return ""
     file_set = set(distinctive)
@@ -874,6 +884,8 @@ def match_article_slug(filename: str, slugs: list[str]) -> str:
             continue
         if set(slug_tokens) == file_set:
             return slug
+        if _slug_prefixes_topic(slug, topic_tokens):
+            return slug
         slug_compact = "".join(slug_tokens)
         shorter = min(len(file_compact), len(slug_compact))
         longer = max(len(file_compact), len(slug_compact))
@@ -886,6 +898,24 @@ def match_article_slug(filename: str, slugs: list[str]) -> str:
     if best_score >= _SLUG_MATCH_FLOOR:
         return best
     return ""
+
+
+def _raw_slug_tokens(slug: str) -> list[str]:
+    return [part for part in re.split(r"[-_]+", slug.strip().lower()) if part]
+
+
+def _slug_prefixes_topic(slug: str, topic_tokens: list[str]) -> bool:
+    """True when the slug is the filename topic plus one trailing word.
+
+    ``baalbek`` is a prefix of ``baalbek-trilithon``. ``giants`` is not a
+    prefix of ``giants-tomb-sardinia``, which has two words after it.
+    """
+    slug_tokens = _raw_slug_tokens(slug)
+    if not slug_tokens:
+        return False
+    if len(topic_tokens) != len(slug_tokens) + 1:
+        return False
+    return topic_tokens[: len(slug_tokens)] == slug_tokens
 
 
 def _no_match_reason(object_key: str) -> str:
@@ -938,10 +968,15 @@ def _mapped_slug(account_id: str, object_key: str) -> str | None:
         return None
     stem = Path(object_key).stem.lower()
     name = Path(object_key).name.lower()
-    for candidate in (object_key.lower(), name, stem):
-        if candidate in rows:
-            return rows[candidate]
-    return None
+    best_key = ""
+    best_slug: str | None = None
+    for key, slug in rows.items():
+        exact = key in {object_key.lower(), name, stem}
+        suffix = stem.endswith("_" + key) or stem.endswith("-" + key)
+        if (exact or suffix) and len(key) > len(best_key):
+            best_key = key
+            best_slug = slug
+    return best_slug
 
 
 def _article_for_slug(slug: str, catalog: list[Article]) -> Article | None:
@@ -1161,11 +1196,13 @@ def _ensure_source_image(
     site: str,
     verify: bool,
     account_id: str,
+    use_featured: bool = True,
 ) -> bool:
     """Prefer the B2 photo, then a body photo, then a real featured photo.
 
-    Title-card graphics are skipped. If nothing left is a photograph, the
-    caller does not publish.
+    Title-card graphics are skipped. When ``use_featured`` is false, only
+    the B2 photo is allowed. If nothing left is a photograph, the caller
+    does not publish.
     """
     try:
         download_object(object_key, dest, client=client, bucket=bucket)
@@ -1176,6 +1213,13 @@ def _ensure_source_image(
         if _accept_photo(dest, label=f"B2 object {object_key}"):
             return True
         dest.unlink(missing_ok=True)
+
+    if not use_featured:
+        log.info(
+            "No B2 photo for %s; use_featured_image is false, so the pin is skipped",
+            object_key,
+        )
+        return False
 
     featured = _lookup_featured_url(
         article,
