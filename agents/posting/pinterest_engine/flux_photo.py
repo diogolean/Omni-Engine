@@ -9,6 +9,9 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 FLUX_SCHNELL = "black-forest-labs/FLUX.1-schnell"
+# Portrait 2:3, multiples of 16, so the photo fills the 1000x1500 card.
+FLUX_PIN_WIDTH = 832
+FLUX_PIN_HEIGHT = 1248
 
 
 def atmosphere_style(channel_id: str) -> str:
@@ -35,6 +38,7 @@ def flux_prompt(topic: str, channel_id: str) -> str:
     return (
         f"{style}\n\n"
         f"Subject: {subject}. "
+        "Portrait 2:3 photograph, the subject filling the frame. "
         "A real photograph of the place, not a poster, not a title card, "
         "no words, no letters, no captions, no logos."
     )
@@ -58,8 +62,8 @@ def generate_flux_photo(
         output_directory=dest_dir,
         aspect_ratio="2:3",
         avatar_mode="OFF",
-        width=768,
-        height=1152,
+        width=FLUX_PIN_WIDTH,
+        height=FLUX_PIN_HEIGHT,
         model_name=FLUX_SCHNELL,
     )
     if path is None:

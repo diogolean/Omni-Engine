@@ -705,6 +705,7 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
 ) -> None:
     """Hook, CTA, domain, and description come from pin_theme. Publish only creates pins."""
     import inspect
+
     from PIL import ImageDraw
 
     from agents.posting.pinterest_engine import config as cfg
@@ -712,6 +713,7 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
     from agents.posting.pinterest_engine.pin_copy import (
         build_pin_description,
         keyword_first_title,
+        pin_alt_text,
     )
 
     cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)
@@ -725,21 +727,23 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
         "variant_index": 0,
         "target_url": f"{_SITE}/baalbek",
     }
-    drawn: list[str] = []
+    drawn: list[tuple[int, str]] = []
     original = ImageDraw.ImageDraw.text
 
     def spy(self, xy, text, *args, **kwargs):
-        drawn.append(str(text))
+        drawn.append((int(xy[0]), str(text)))
         return original(self, xy, text, *args, **kwargs)
 
     monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
     raw = PinTransformer(outputs_dir=tmp_path / "pins").get_pin_bytes(record)
     assert raw
-    blob = " ".join(drawn).upper()
+    blob = " ".join(text for _x, text in drawn).upper()
     assert "WHAT THE RECORDS LEAVE OUT ABOUT BAALBEK" in blob
     assert "READ THE FULL STORY ->" in blob
     assert "ANCIENTKNOWLEDGE.EOKVIRAL.COM" in blob
     assert "FOLLOW ANCIENT KNOWLEDGE" not in blob
+    domain_x = [x for x, text in drawn if "eokviral.com" in text.lower()]
+    assert domain_x and max(domain_x) < 80
 
     title = keyword_first_title(record["pinterest_title"], record["topic"])
     assert title.lower().startswith("baalbek")
@@ -747,8 +751,10 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
     record["pinterest_title"] = title
     description = build_pin_description(record)
     assert description.lower().startswith("baalbek")
-    assert f"Read the full article at {_SITE}/baalbek" in description
+    assert description.endswith(f"Read the full article at {_SITE}/baalbek")
+    assert len(description) <= 220
     assert "Practical Guide" not in description
+    assert pin_alt_text(record) == title
 
     publish_src = inspect.getsource(publisher_mod.PinterestPublisher.publish)
     post_src = inspect.getsource(publisher_mod.PinterestPublisher._post_with_retry)
@@ -813,12 +819,12 @@ def test_dry_run_renders_library_photo_and_links_the_article(
     _prepare_channel(monkeypatch, tmp_path)
     image_key = "ancient_knowledge/library/images/baalbek.jpg"
     record_key = "ancient_knowledge/library/post_site_link.json"
-    client = FakeS3(
-        {
-            record_key: _library_record("baalbek-trilithon", "Baalbek trilithon", "images/baalbek.jpg"),
-            image_key: _photo(),
-        }
+    library_row = _library_record(
+        "baalbek-trilithon",
+        "Baalbek trilithon",
+        "images/baalbek.jpg",
     )
+    client = FakeS3({record_key: library_row, image_key: _photo()})
     catalog = [
         Article(
             url=f"{_SITE}/baalbek",
@@ -922,3 +928,71 @@ def test_flux_fallback_replaces_a_missing_or_title_graphic(
     uploaded = [key for key in client.objects if key.endswith("puma-punku.jpg")]
     assert uploaded
     assert client.deletes == []
+
+
+def test_flux_asks_for_a_portrait_frame(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from agents.posting.pinterest_engine.flux_photo import (
+        FLUX_PIN_HEIGHT,
+        FLUX_PIN_WIDTH,
+        generate_flux_photo,
+    )
+
+    seen: dict = {}
+
+    class _Adapter:
+        def generate(self, _prompt, **kwargs):
+            seen.update(kwargs)
+            dest = Path(kwargs["output_directory"]) / f"{kwargs['output_stem']}.jpg"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(_photo())
+            return dest
+
+    monkeypatch.setattr(
+        "agents.media.providers.image_provider.get_image_adapter",
+        lambda **_kwargs: _Adapter(),
+    )
+    path = generate_flux_photo(
+        topic="Baalbek",
+        channel_id="ancient_knowledge",
+        dest_dir=tmp_path,
+        stem="baalbek",
+    )
+    assert path is not None and path.is_file()
+    assert seen["width"] == FLUX_PIN_WIDTH == 832
+    assert seen["height"] == FLUX_PIN_HEIGHT == 1248
+    assert seen["aspect_ratio"] == "2:3"
+
+
+def test_publish_sends_alt_text_and_does_not_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents.posting.pinterest_engine.publisher import PinterestPublisher
+
+    captured: dict = {}
+
+    def _capture(self, payload):
+        captured.update(payload)
+        return {"id": "pin_new"}
+
+    monkeypatch.setattr(PinterestPublisher, "_post_with_retry", _capture)
+    publisher = PinterestPublisher(
+        access_token="tok",
+        board_id="board-1",
+        require_board=False,
+    )
+    result = publisher.publish(
+        {
+            "post_id": "post_baalbek",
+            "topic": "Baalbek trilithon",
+            "pinterest_title": "Baalbek Trilithon",
+            "pinterest_caption": "The quarry stones are still there.",
+            "target_url": f"{_SITE}/baalbek",
+            "publication_status": {"posted_on_pinterest": False},
+        },
+        b"jpeg-bytes",
+    )
+    assert result["id"] == "pin_new"
+    assert captured["alt_text"] == "Baalbek Trilithon"
+    assert captured["link"] == f"{_SITE}/baalbek"
+    assert captured["description"].endswith(f"{_SITE}/baalbek")
+    assert len(captured["description"]) <= 220

@@ -91,8 +91,20 @@ def card_site_domain(record: dict | None = None) -> str:
     return ""
 
 
+_DESCRIPTION_LIMIT = 220
+
+
+def pin_alt_text(record: dict) -> str:
+    """Alt text from the article title, then the topic. Pinterest allows 500 characters."""
+    from agents.posting.pinterest_engine.inventory import polish_pin_text  # noqa: PLC0415
+
+    title = polish_pin_text(str(record.get("pinterest_title") or ""))
+    topic = polish_pin_text(str(record.get("topic") or ""))
+    return (title or topic)[:500]
+
+
 def build_pin_description(record: dict) -> str:
-    """Keyword-first sentence, then the configured line that names the article URL."""
+    """About 220 characters, ending with the CTA line and the article URL."""
     from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
     from agents.posting.pinterest_engine.inventory import polish_pin_text  # noqa: PLC0415
 
@@ -108,15 +120,18 @@ def build_pin_description(record: dict) -> str:
     closer = ""
     if url:
         closer = polish_pin_text(_fill(closer_template, title=title, topic=topic, url=url))
-    parts = [part for part in (lead, closer) if part]
-    body = "\n\n".join(parts)
-    tags = (cfg.HASHTAGS or "").strip()
-    if tags:
-        room = 500 - len(tags) - 2
-        if len(body) > room:
-            body = body[: max(0, room - 3)].rsplit(" ", 1)[0] + "..."
-        return f"{body}\n\n{tags}"[:500]
-    return body[:500]
+    if not closer:
+        return lead[:_DESCRIPTION_LIMIT]
+    separator = "\n"
+    budget = _DESCRIPTION_LIMIT - len(closer) - len(separator)
+    if budget < 1 or len(closer) >= _DESCRIPTION_LIMIT:
+        return closer
+    if len(lead) > budget:
+        trimmed = lead[:budget].rsplit(" ", 1)[0].rstrip(" ,;:-—")
+        lead = trimmed or lead[:budget].rstrip()
+    if not lead:
+        return closer
+    return f"{lead}{separator}{closer}"
 
 
 def finalize_pin_copy(entry: dict) -> None:

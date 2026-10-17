@@ -12,15 +12,14 @@ import logging
 import os
 from typing import Any
 
-from omni.accounts import pinterest_account_env
-from omni.models import Account
-from omni.pinterest_accounts import account_blockers
-
-from agents.posting.pinterest_engine.articles import (  # noqa: E402
+from agents.posting.pinterest_engine.articles import (
     fetch_wordpress_catalog,
     match_article_slug,
 )
-from agents.posting.pinterest_engine.photos import is_text_graphic  # noqa: E402
+from agents.posting.pinterest_engine.photos import is_text_graphic
+from omni.accounts import pinterest_account_env
+from omni.models import Account
+from omni.pinterest_accounts import account_blockers
 
 log = logging.getLogger("omni.pinterest_drip")
 

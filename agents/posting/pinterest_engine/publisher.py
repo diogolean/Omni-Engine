@@ -201,10 +201,13 @@ class PinterestPublisher:
                 log.warning("No pin image for %s — skipping.", record.get("post_id", "?"))
             return None
 
+        from agents.posting.pinterest_engine.pin_copy import pin_alt_text  # noqa: PLC0415
+
         payload = {
             "board_id": self.board_id,
             "title": title,
             "description": self._build_description(record),
+            "alt_text": pin_alt_text(record),
             "link": record.get("target_url") or _sales_url() or None,
             "media_source": {
                 "source_type": "image_base64",
@@ -212,6 +215,8 @@ class PinterestPublisher:
                 "data": base64.b64encode(pin_image_bytes).decode("ascii"),
             },
         }
+        if not payload["alt_text"]:
+            payload.pop("alt_text")
         if not payload["link"]:
             payload.pop("link")
 

@@ -303,7 +303,6 @@ def _draw_button_zone(
     canvas.paste(btn_panel, (0, zone_top), btn_panel)
 
     font_btn = _find_font(_SERIF_CANDIDATES, 36)
-    font_url = _find_font(_SANS_CANDIDATES, 20)
 
     # Top border line
     draw.line([(0, zone_top), (PIN_W, zone_top)], fill=divider[:3], width=3)
@@ -327,10 +326,21 @@ def _draw_button_zone(
         )
 
     if url:
-        url_bbox = draw.textbbox((0, 0), url, font=font_url)
-        url_w = url_bbox[2] - url_bbox[0]
+        # Left side of the bar. The bottom-right stays empty for Pinterest's own chrome.
+        margin_left = 48
+        margin_right = 180
+        max_w = PIN_W - margin_left - margin_right
+        size = 20
+        font_url = _find_font(_SANS_CANDIDATES, size)
+        url_box = draw.textbbox((0, 0), url, font=font_url)
+        url_w = url_box[2] - url_box[0]
+        while url_w > max_w and size > 12:
+            size -= 1
+            font_url = _find_font(_SANS_CANDIDATES, size)
+            url_box = draw.textbbox((0, 0), url, font=font_url)
+            url_w = url_box[2] - url_box[0]
         draw.text(
-            ((PIN_W - url_w) // 2, btn_y + (52 if label else 28)),
+            (margin_left, btn_y + (52 if label else 28)),
             url,
             font=font_url,
             fill=url_text,
