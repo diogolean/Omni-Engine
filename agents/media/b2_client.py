@@ -122,6 +122,21 @@ def download_object(
     return dest
 
 
+def upload_object(
+    key: str,
+    source: "bytes | Path",
+    *,
+    client=None,
+    bucket: str | None = None,
+    content_type: str = "application/octet-stream",
+) -> None:
+    """Upload one object. Does not delete anything already in the bucket."""
+    s3 = client if client is not None else _get_b2_resource().meta.client
+    bucket_name = (bucket or "").strip() or media_bucket_name()
+    body = source.read_bytes() if isinstance(source, Path) else bytes(source)
+    s3.put_object(Bucket=bucket_name, Key=key, Body=body, ContentType=content_type)
+
+
 def read_object_text(key: str, *, client=None, bucket: str | None = None) -> str | None:
     """Read one small object (a sidecar JSON) as text. Missing keys return None."""
     s3 = client if client is not None else _get_b2_resource().meta.client

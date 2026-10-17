@@ -29,6 +29,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -157,11 +158,34 @@ def cmd_sync(args: argparse.Namespace) -> None:
     print()
 
 
+def _runner_allows_this_process(channel_id: str | None) -> bool:
+    """PC runs accounts marked local or both. Docker is a different process."""
+    if not channel_id:
+        return True
+    from omni.pinterest_accounts import load_pinterest_accounts  # noqa: PLC0415
+    from omni.pinterest_drip import account_runs_here, publisher_mode  # noqa: PLC0415
+
+    try:
+        accounts = load_pinterest_accounts()
+    except Exception:
+        return True
+    account = next((row for row in accounts if row.account_id == channel_id), None)
+    if account is None:
+        return True
+    return account_runs_here(account, publisher_mode("local"))
+
+
 def cmd_schedule(args: argparse.Namespace) -> None:
     from agents.posting.pinterest_engine.publisher import PinterestTokenExpiredError  # noqa: PLC0415
     from agents.posting.pinterest_engine.scheduler import PinterestScheduler  # noqa: PLC0415
 
     outputs_dir = _apply_runtime_overrides(args)
+    if not _runner_allows_this_process(config.CHANNEL_ID):
+        print(
+            "\n[SCHEDULE] This account's runner does not include "
+            f"PUBLISHER_MODE={os.getenv('PUBLISHER_MODE') or 'local'}. Nothing was published.\n"
+        )
+        return
     qty = args.quantity
 
     print(f"\n[SCHEDULE] Starting safe-drip session: {qty} pins")

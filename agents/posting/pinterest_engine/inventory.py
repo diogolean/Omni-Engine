@@ -267,18 +267,38 @@ def build_caption_regex(source: str, variant_idx: int = 0) -> str:
     return re.sub(r"  +", " ", result).strip()
 
 
+_BLOCKED_TITLE_SUFFIXES = (
+    " | Practical Guide",
+    " | Complete Overview",
+    " Tips | Quick Reference",
+    " — Key Insights",
+    " - Key Insights",
+    " | Key Insights",
+)
+
+
+def sanitize_pin_title(title: str) -> str:
+    """Plain pin title. Template suffixes such as ``| Practical Guide`` are removed."""
+    text = polish_pin_text(title)
+    changed = True
+    while changed and text:
+        changed = False
+        for suffix in _BLOCKED_TITLE_SUFFIXES:
+            if text.lower().endswith(suffix.lower()):
+                text = text[: -len(suffix)].strip(" |-—–")
+                changed = True
+    text = re.sub(
+        r"\s*[|—–-]\s*(?:practical guide|complete overview|key insights|quick reference)\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip(" |-—–")
+    return text[:100]
+
+
 def build_title_template(topic: str) -> str:
-    """Generate a keyword-rich SEO title (max 100 chars) from the topic."""
-    base = title_case_phrase(topic)
-    for sfx in [
-        " | Practical Guide",
-        " | Complete Overview",
-        " Tips | Quick Reference",
-        " — Key Insights",
-    ]:
-        if len(base + sfx) <= 100:
-            return base + sfx
-    return base[:100]
+    """Keyword title from the topic. No template suffix is appended."""
+    return sanitize_pin_title(title_case_phrase(topic))[:100]
 
 
 def build_visual_hook(topic: str) -> str:
@@ -445,8 +465,8 @@ SOURCE CAPTION:
 RULES:
 1. Remove every "Comment [KEYWORD]", "Type [KEYWORD]", "DM me" CTA entirely.
 2. End with a humble, non-pushy line{url_rule}.
-3. The pinterest_title must be a keyword-rich search phrase, max 100 chars.
-4. visual_hook is 5-8 words in ALL CAPS for overlay text.
+3. The pinterest_title must lead with the subject keyword, max 100 chars. No suffix such as "| Practical Guide" or "— Key Insights".
+4. visual_hook is a truthful curiosity gap about the real topic, 5-12 words, no invented claims.
 
 OUTPUT: Valid JSON only, no markdown:
 {{"pinterest_title": "...", "pinterest_caption": "...", "visual_hook": "..."}}
@@ -576,7 +596,7 @@ def _generate_deepseek(
             )
             continue
         return {
-            "pinterest_title": polish_pin_text(str(data.get("pinterest_title", "")))[:100],
+            "pinterest_title": sanitize_pin_title(str(data.get("pinterest_title", ""))),
             "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
             "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
         }
@@ -631,9 +651,9 @@ def _generate_ai(
         raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("```").strip()
         data = json.loads(raw)
         return {
-            "pinterest_title": str(data.get("pinterest_title", ""))[:100],
-            "pinterest_caption": str(data.get("pinterest_caption", "")),
-            "visual_hook": str(data.get("visual_hook", "")),
+            "pinterest_title": sanitize_pin_title(str(data.get("pinterest_title", ""))),
+            "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
+            "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
         }
     except Exception as exc:  # noqa: BLE001
         log.warning("AI generation failed for '%s': %s", topic, exc)
@@ -816,6 +836,13 @@ class MasterInventory:
                 "publication_status": pub_status,
             }
 
+            if entry.get("pinterest_title"):
+                entry["pinterest_title"] = sanitize_pin_title(entry["pinterest_title"])
+            if entry.get("pinterest_caption"):
+                entry["pinterest_caption"] = polish_pin_text(entry["pinterest_caption"])
+            if entry.get("visual_hook"):
+                entry["visual_hook"] = normalize_pin_text(entry["visual_hook"])
+
             if needs_generation:
                 if use_ai and client:
                     ai_result = _generate_ai(
@@ -840,6 +867,9 @@ class MasterInventory:
                             entry["pinterest_caption"], variant_idx
                         )
 
+            from agents.posting.pinterest_engine.pin_copy import finalize_pin_copy  # noqa: PLC0415
+
+            finalize_pin_copy(entry)
             entries.append(entry)   # always accumulate in memory
 
         recycled = self._recycle_unpaired_videos(entries, existing_map)
@@ -878,7 +908,6 @@ class MasterInventory:
         return [
             e for e in data.get("entries", [])
             if not e.get("publication_status", {}).get("posted_on_pinterest", False)
-            and (e.get("local_image_path") or e.get("imgbb_url"))
             and str(e.get("media_kind") or "image").lower() != "video"
             and e.get("pinterest_title")
             and e.get("pinterest_caption")

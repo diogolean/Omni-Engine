@@ -12,15 +12,14 @@ accounts:
     display_name: Ancient Knowledge
     niche: ancient mysteries and lost civilizations
     site_url: https://ancientknowledge.eokviral.com
-    # Live bucket: dated cards under fbcards/, Ancient Knowledge files only.
-    # Root mp4s are outside this prefix and are not listed.
-    b2_prefix: fbcards/
-    b2_filename_pattern: "^(ancient_|ancientknowl_)"
+    # Same tree as outputs/ancient_knowledge/library/ on the PC.
+    b2_prefix: ancient_knowledge/library/
+    # local = PC script only, docker = VM scheduler only, both = either, off = never.
+    runner: both
     # The host currently presents a shared *.web-hosting.com certificate.
     # This flag is article lookups only. Pinterest API calls stay verified.
     article_tls_verify: false
-    # Every featured image on this site is a title graphic, and the posts
-    # have no body photos. Publish the B2 file or skip the pin.
+    # WordPress featured images on this site are title graphics. Never pin them.
     use_featured_image: false
     board_name: Ancient Knowledge
     board_id_env: PINTEREST_BOARD_ID_ANCIENT_KNOWLEDGE
@@ -36,7 +35,8 @@ accounts:
     # account can publish. The B2 prefix and token env names are ready.
     niche: TODO
     site_url: TODO
-    b2_prefix: anna_protocol/
+    b2_prefix: anna_protocol/library/
+    runner: both
     board_name: TODO
     board_id_env: PINTEREST_BOARD_ID_ANNA_PROTOCOL
     access_token_env: PINTEREST_ACCESS_TOKEN_ANNA_PROTOCOL

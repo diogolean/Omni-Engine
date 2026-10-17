@@ -62,14 +62,16 @@ _HOOK_ZONE_TOP_FRAC = 0.04
 _HOOK_ZONE_BOT_FRAC = 0.30
 _BUTTON_ZONE_TOP_FRAC = 0.83
 
-def _sales_url() -> str:
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
-    return cfg.TARGET_URL
-
-
 def _button_label() -> str:
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
-    return cfg.CTA_BUTTON_LABEL
+    from agents.posting.pinterest_engine.pin_copy import card_cta_label  # noqa: PLC0415
+
+    return card_cta_label()
+
+
+def _card_domain() -> str:
+    from agents.posting.pinterest_engine.pin_copy import card_site_domain  # noqa: PLC0415
+
+    return card_site_domain()
 
 # Output subdirectory under outputs/
 _PINS_SUBDIR = "pinterest_pins"
@@ -83,12 +85,19 @@ _PINS_SUBDIR = "pinterest_pins"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _warned_default_font = False
 
+# Windows Georgia first (the PC face). The repo then ships Liberation Serif,
+# the metric-compatible Georgia substitute, so Docker and a Linux checkout
+# render the same hook. System fonts are only a fallback after that.
+_BUNDLED_SERIF = _REPO_ROOT / "Fonts" / "LiberationSerif"
 _SERIF_CANDIDATES = [
     r"C:\Windows\Fonts\georgia.ttf",
+    r"C:\Windows\Fonts\georgiab.ttf",
     r"C:\Windows\Fonts\georgiai.ttf",
     r"C:\Windows\Fonts\palatia.ttf",
     r"C:\Windows\Fonts\times.ttf",
     r"C:\Windows\Fonts\timesbd.ttf",
+    str(_BUNDLED_SERIF / "LiberationSerif-Bold.ttf"),
+    str(_BUNDLED_SERIF / "LiberationSerif-Regular.ttf"),
     "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
@@ -102,13 +111,29 @@ _SANS_CANDIDATES = [
     r"C:\Windows\Fonts\calibrib.ttf",
     r"C:\Windows\Fonts\segoeui.ttf",
     r"C:\Windows\Fonts\arial.ttf",
+    str(_REPO_ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Regular.ttf"),
+    str(_REPO_ROOT / "Fonts" / "Poppins" / "Poppins-Regular.ttf"),
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    str(_REPO_ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Regular.ttf"),
-    str(_REPO_ROOT / "Fonts" / "Poppins" / "Poppins-Regular.ttf"),
 ]
+
+
+def configured_pin_method() -> str:
+    """Channel ``pin_image_method``, otherwise the original blurred-padding card."""
+    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+
+    pack, _path = cfg.load_channel_content_pack(cfg.CHANNEL_ID)
+    raw = str(
+        pack.get("pin_image_method")
+        or pack.get("pin_method")
+        or "blurred_padding"
+    ).strip().lower()
+    if raw in {"blurred_padding", "center_crop", "cover"}:
+        return raw
+    log.warning("Unknown pin_image_method %r; using blurred_padding.", raw)
+    return "blurred_padding"
 
 
 def _find_font(
@@ -284,7 +309,7 @@ def _draw_button_zone(
     draw.line([(0, zone_top), (PIN_W, zone_top)], fill=divider[:3], width=3)
 
     label = _button_label()
-    url = _sales_url()
+    url = _card_domain()
 
     # Skip CTA chrome entirely when the channel defines neither label nor URL.
     if not label and not url:
@@ -354,7 +379,9 @@ class PinTransformer:
         imgbb_url = record.get("imgbb_url", "")
         from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
         topic = record.get("topic") or cfg.DEFAULT_TOPIC
-        visual_hook = record.get("visual_hook") or topic
+        from agents.posting.pinterest_engine.pin_copy import card_hook_text  # noqa: PLC0415
+
+        visual_hook = card_hook_text(record) or topic
         subject_slug = record.get("subject_slug", "pin")
         variant = record.get("variant_index", 0)
 
@@ -390,8 +417,10 @@ class PinTransformer:
 
         img_path = record.get("local_image_path", "")
         imgbb_url = record.get("imgbb_url", "")
+        from agents.posting.pinterest_engine.pin_copy import card_hook_text  # noqa: PLC0415
+
         visual_hook = (
-            record.get("visual_hook")
+            card_hook_text(record)
             or record.get("topic")
             or cfg.DEFAULT_TOPIC
         )
