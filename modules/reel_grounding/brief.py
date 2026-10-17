@@ -87,7 +87,54 @@ _PROPER_OBJECT = re.compile(
     r"\b([A-Z][A-Za-z'’\-]+(?:\s+[A-Z][A-Za-z'’\-]+){0,3})\s+"
     r"((?i:spark\s+plugs?|artifacts?|artefacts?|spheres?|hammers?|mechanisms?|"
     r"batter(?:y|ies)|skulls?|tablets?|devices?|geodes?|concretions?|"
-    r"figurines?|idols?))\b"
+    r"figurines?|idols?|boxes|planes?))\b"
+)
+
+
+@dataclass(frozen=True)
+class KnownObject:
+    """A named artefact and the picture that should lead its beats."""
+
+    label: str
+    aliases: tuple[str, ...]
+    look: str
+    # Channel bans that describe this object. They must not be negatives.
+    allow_bans: tuple[str, ...] = ()
+
+
+# Order does not matter; the script's first mention sets the segment order.
+_KNOWN: tuple[KnownObject, ...] = (
+    KnownObject(
+        "Antikythera Mechanism",
+        ("antikythera",),
+        "corroded bronze gear fragments in a museum case",
+    ),
+    KnownObject(
+        "Coso artifact",
+        ("coso",),
+        "a small manufactured piece sealed inside a split rock geode",
+    ),
+    KnownObject(
+        "Klerksdorp spheres",
+        ("klerksdorp",),
+        "small grooved metal spheres",
+    ),
+    KnownObject(
+        "Serapeum granite boxes",
+        ("serapeum", "granite box"),
+        "massive rough granite boxes in an underground stone gallery",
+        ("egypt", "egyptian", "pharaoh", "pharaohs", "sphinx", "pyramid", "pyramids", "giza"),
+    ),
+    KnownObject(
+        "Colombian golden jet planes",
+        ("jet plane", "golden jet"),
+        "small golden ornaments shaped like ancient jet aircraft",
+    ),
+    KnownObject(
+        "London Hammer",
+        ("london hammer",),
+        "",
+    ),
 )
 _GEOLOGY = (
     "geological", "natural formation", "concretion", "geode", "mineral",
@@ -97,17 +144,21 @@ _THEORY = (
     "believe", "skeptic", "hoax", "forgery", "theory", "debate", "historian",
     "researcher", "mainstream", "claim", "scholar",
 )
-# A vague subject let Flux invent these on the Lost OOPArts smoke: a cannon
-# for "geological formation", a cyberpunk figure for a technology line, and a
-# foggy monument for a beat that started mid-sentence. They are not in the
-# channel style block. The object leads the prompt; these stay in DO NOT DEPICT.
+# These words were drawing the wrong still when they sat in the positive
+# prompt ("do not depict a cannon" still shows a cannon). They belong on
+# the real negative prompt only.
 _DRIFT = (
-    "a cannon, artillery piece, or firearm",
-    "a cyberpunk character, neon costume, or science-fiction figure",
-    "a statue or idol standing in for the artefact",
-    "foggy monument or temple architecture standing in for a small object",
-    "a city street or urban alley",
-    "a fantasy landscape",
+    "cannon",
+    "artillery",
+    "firearm",
+    "cyberpunk character",
+    "classical statue",
+    "foggy monument",
+    "torchlit ruins",
+    "clock face",
+    "vault door",
+    "fantasy landscape",
+    "city street",
 )
 
 
@@ -181,16 +232,74 @@ def _bare_name(name: str) -> str:
     return " ".join(parts)
 
 
+def _plural(token: str) -> str:
+    if token.endswith(("s", "x", "z", "ch", "sh")):
+        return token + r"(?:es)?"
+    return token + r"s?"
+
+
+def _alias_at(text: str, alias: str) -> int:
+    parts = [re.escape(part) for part in alias.split() if part]
+    if not parts:
+        return -1
+    parts[-1] = _plural(parts[-1])
+    pattern = r"\b" + r"\s+".join(parts) + r"\b"
+    match = re.search(pattern, text or "", flags=re.IGNORECASE)
+    return match.start() if match else -1
+
+
+def known_for(label: str) -> KnownObject | None:
+    low = _bare(label).lower()
+    if not low:
+        return None
+    for item in _KNOWN:
+        if item.label.lower() == low:
+            return item
+        if any(_alias_at(low, alias) >= 0 for alias in item.aliases):
+            return item
+    return None
+
+
+def known_look(label: str) -> str:
+    item = known_for(label)
+    return item.look if item else ""
+
+
+def _canonical(label: str) -> str:
+    item = known_for(label)
+    return item.label if item else " ".join((label or "").split())
+
+
 def named_objects(text: str) -> list[str]:
-    """Proper-name objects in the order they appear. ``Coso artifact`` stays intact."""
-    found: list[str] = []
-    seen: set[str] = set()
-    for match in _PROPER_OBJECT.finditer(text or ""):
+    """Named artefacts in the order they are introduced.
+
+    A new name starts a new segment. ``Serapeum`` and ``jet planes`` count
+    even when the noun is not in the generic artefact list.
+    """
+    blob = text or ""
+    hits: list[tuple[int, str]] = []
+    seen_known: set[str] = set()
+    for item in _KNOWN:
+        positions = [_alias_at(blob, alias) for alias in item.aliases]
+        positions = [pos for pos in positions if pos >= 0]
+        if not positions:
+            continue
+        seen_known.add(item.label.lower())
+        hits.append((min(positions), item.label))
+    for match in _PROPER_OBJECT.finditer(blob):
         name = _bare_name(match.group(1))
         if not name:
             continue
-        label = f"{name} {match.group(2)}"
-        key = " ".join(label.lower().split())
+        label = _canonical(f"{name} {match.group(2)}")
+        if label.lower() in seen_known:
+            continue
+        hits.append((match.start(), label))
+        seen_known.add(label.lower())
+    hits.sort(key=lambda pair: pair[0])
+    found: list[str] = []
+    seen: set[str] = set()
+    for _pos, label in hits:
+        key = label.lower()
         if key in seen:
             continue
         seen.add(key)
@@ -268,6 +377,14 @@ def _mentions_monument(text: str) -> bool:
     return bool(_hits(text, _MONUMENT_CUES))
 
 
+def _neighbour_object(previous_spoken: str, next_spoken: str) -> str:
+    previous = named_objects(previous_spoken)
+    if previous:
+        return previous[-1]
+    following = named_objects(next_spoken)
+    return following[0] if following else ""
+
+
 def resolve_beat_object(
     brief: EpisodeBrief,
     spoken: str,
@@ -279,37 +396,25 @@ def resolve_beat_object(
 ) -> str:
     """The physical thing this one beat should show.
 
-    A beat that names the Coso artifact does not inherit the Klerksdorp
-    spheres, and a theory line that names neither keeps the object mentioned
-    just before it. A mid-sentence fragment borrows the neighbour.
+    A beat that names the Serapeum, the jet planes, or any other catalogue
+    object switches to that object. Neighbour text cannot override it.
+    A line that names nothing keeps the object introduced most recently
+    before it in the script.
     """
     here = named_objects(spoken)
     if here:
         return here[-1] if _starts_as_fragment(spoken) else here[0]
-    locked = _bare(locked_object)
+    locked = _canonical(_bare(locked_object)) if _bare(locked_object) else ""
     if locked:
         return locked
-    if _starts_as_fragment(spoken):
-        previous = named_objects(previous_spoken)
-        if previous:
-            return previous[-1]
-        following = named_objects(next_spoken)
-        if following:
-            return following[0]
     prior = _object_before(script, spoken)
     if prior:
         return prior
-    # A theory line that never names the object keeps the neighbour's object
-    # when the line cannot be placed in the script.
-    previous = named_objects(previous_spoken)
-    if previous:
-        return previous[-1]
-    following = named_objects(next_spoken)
-    if following:
-        return following[0]
+    if _starts_as_fragment(spoken) or not (script or "").strip():
+        borrowed = _neighbour_object(previous_spoken, next_spoken)
+        if borrowed:
+            return borrowed
     if len(brief.objects) == 1:
-        return brief.objects[0]
-    if brief.hero_is_object and brief.objects:
         return brief.objects[0]
     return ""
 
@@ -398,13 +503,17 @@ def visual_for_beat(
             "plain laboratory bench: metal surface, tool marks, and the same artefact"
         )
         return _beat_visual("lab", subject, place_clause, avoid, True, True, label, others)
-    if label and geology:
+    look = known_look(label)
+    if label and geology and "antikythera" not in shown.lower():
         subject = (
             f"a documentary close-up of {shown} as a natural rock concretion "
             "or geode cross-section. The same object fills the frame. "
             "This is the sceptical reading of that same object"
         )
         return _beat_visual("theory", subject, place_clause, avoid, True, True, label, others)
+    if label and look:
+        subject = f"{look}. The picture is {shown}"
+        return _beat_visual("object", subject, place_clause, avoid, True, True, label, others)
     if label and theory:
         subject = (
             f"{shown} large on a research table. The sentence is a theory "

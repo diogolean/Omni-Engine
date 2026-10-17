@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from modules.reel_grounding.memory import recall, remember
-from modules.reel_grounding.prompt import ground_image_prompt
+from modules.reel_grounding.prompt import assemble_beat, ground_image_prompt
 from modules.reel_grounding.still_cache import (
     cache_matches_spoken,
     write_spoken_sidecar,
@@ -121,14 +121,15 @@ def test_memory_names_a_previous_rejection(tmp_path: Path) -> None:
         root=tmp_path,
     )
     assert any("alley" in item for item in hints.rejected)
-    prompt = ground_image_prompt(
+    plan = assemble_beat(
         topic=_TOPIC,
         script=_SCRIPT,
         spoken="The hammer sat in Cretaceous rock.",
         channel="ancient_knowledge",
         memory_root=tmp_path,
     )
-    assert "generic urban alley" in prompt.lower()
+    assert "generic urban alley" not in plan.positive.lower()
+    assert "generic urban alley" in plan.negative.lower()
 
 
 def test_stale_still_without_a_sidecar_is_not_reused(tmp_path: Path) -> None:

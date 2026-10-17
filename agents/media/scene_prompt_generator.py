@@ -524,13 +524,13 @@ def generate_scene_prompts(
             scene["image_generation_prompt"], anchors,
         )
         try:
-            from modules.reel_grounding.prompt import ground_image_prompt
-
             _prev_spoken = chunks[_chunk_i - 1].text if _chunk_i else ""
             _next_spoken = (
                 chunks[_chunk_i + 1].text if _chunk_i + 1 < len(chunks) else ""
             )
-            scene["image_generation_prompt"] = ground_image_prompt(
+            from modules.reel_grounding.prompt import assemble_beat
+
+            _plan = assemble_beat(
                 topic=str(dna.get("topic") or ""),
                 script=script,
                 spoken=chunk.text,
@@ -539,13 +539,18 @@ def generate_scene_prompts(
                 domain_anchors=anchors,
                 previous_spoken=_prev_spoken,
                 next_spoken=_next_spoken,
+                banned=list(banned or []),
+                negative=str(scene.get("negative_prompt") or ""),
             )
+            scene["image_generation_prompt"] = _plan.positive
+            scene["negative_prompt"] = _plan.negative
+            banned = list(_plan.banned)
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("ground beat prompt skipped (%s)", exc)
         scene["domain_id"] = domain_id
         scene["domain_anchors"] = anchors
         scene["banned_subjects"] = banned
-        if banned:
+        if banned and not scene.get("negative_prompt"):
             scene["negative_prompt"] = _anti_slop_negative(
                 chunk.text, banned,
             )

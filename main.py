@@ -4130,15 +4130,13 @@ def _produce_variant_worker(
                         f"{_rag_tail}"
                     )
                 try:
-                    from modules.reel_grounding.prompt import (
-                        ground_image_prompt as _ground_prompt,
-                    )
+                    from modules.reel_grounding.prompt import assemble_beat
 
                     _shot_name = _shot_pair[0] if _shot_pair else ""
                     _shot_text = _shot_pair[1] if _shot_pair else ""
                     _light_name = _light_pair[0] if _light_pair else ""
                     _light_text = _light_pair[1] if _light_pair else ""
-                    _act_prompt = _ground_prompt(
+                    _beat_plan = assemble_beat(
                         topic=str(resolved_subject or ""),
                         script=str(_early_seq_script or ""),
                         spoken=str(_snippet or ""),
@@ -4151,9 +4149,19 @@ def _produce_variant_worker(
                         domain_anchors=str(_act_anchors or ""),
                         previous_spoken=str(_prev_snip or ""),
                         next_spoken=str(_next_snip or ""),
+                        banned=list(_act_banned or []),
+                        negative=str(_act_neg or ""),
                     )
+                    _act_prompt = _beat_plan.positive
+                    _act_neg = _beat_plan.negative or _act_neg
+                    _act_banned = list(_beat_plan.banned)
+                    if _beat_plan.object_label:
+                        resolved_subject_for_beat = _beat_plan.object_label
+                    else:
+                        resolved_subject_for_beat = str(resolved_subject or "")
                 except Exception as _ground_exc:  # noqa: BLE001
                     _LOG.warning("visual grounding skipped (%s)", _ground_exc)
+                    resolved_subject_for_beat = str(resolved_subject or "")
                 # Log per-act plan for verifiability — this is the anti-monotony
                 # signal that ends up in the compiled prompt.
                 try:
@@ -4161,8 +4169,9 @@ def _produce_variant_worker(
                     _shot_name_log = _shot_pair[0] if _shot_pair else "(fallback-cycle)"
                     _light_name_log = _light_pair[0] if _light_pair else "(none)"
                     _LOG.info(
-                        "VISUAL PLAN | act %d/%d | subject=%s | shot=%s | lighting=%s",
+                        "VISUAL PLAN | act %d/%d | object=%s | subject=%s | shot=%s | lighting=%s",
                         _act_i + 1, _seq_n,
+                        resolved_subject_for_beat,
                         _subj_name_log, _shot_name_log, _light_name_log,
                     )
                 except Exception:
@@ -4177,6 +4186,7 @@ def _produce_variant_worker(
                     "banned_subjects": list(_act_banned or []),
                     "domain_anchors": str(_act_anchors or ""),
                     "negative_prompt": _act_neg,
+                    "episode_subject": str(resolved_subject_for_beat or ""),
                 }
                 from modules.reel_visual_qa import generate_and_gate as _qwen_gate
 
@@ -4196,12 +4206,16 @@ def _produce_variant_worker(
                         "avatar_mode": "OFF",
                         "negative_prompt": _act_neg,
                         "free_image_sentence": _snippet,
-                        "free_image_entity": str(resolved_subject or ""),
+                        "free_image_entity": str(
+                            resolved_subject_for_beat or resolved_subject or ""
+                        ),
                     },
                     banned_subjects=list(_act_banned or []) or None,
                     domain_anchors=str(_act_anchors or ""),
                     prefer_stem=stem,
-                    episode_subject=str(resolved_subject or ""),
+                    episode_subject=str(
+                        resolved_subject_for_beat or resolved_subject or ""
+                    ),
                 )
 
             _gpu_baseline = 0.0
@@ -4334,11 +4348,15 @@ def _produce_variant_worker(
                             "avatar_mode": "OFF",
                             "negative_prompt": _meta.get("negative_prompt"),
                             "free_image_sentence": _snippet,
-                            "free_image_entity": str(resolved_subject or ""),
+                            "free_image_entity": str(
+                                _meta.get("episode_subject") or resolved_subject or ""
+                            ),
                         },
                         banned_subjects=list(_meta.get("banned_subjects") or []) or None,
                         domain_anchors=str(_meta.get("domain_anchors") or ""),
-                        episode_subject=str(resolved_subject or ""),
+                        episode_subject=str(
+                            _meta.get("episode_subject") or resolved_subject or ""
+                        ),
                     )
                     _accept_gate(_regen, _act_i, _snippet)
                     continue

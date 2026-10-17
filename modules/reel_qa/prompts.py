@@ -92,8 +92,16 @@ def refine_prompt(
             "Do not replace the subject with a cityscape or alley of that name."
         )
     reason = (rejection_reason or "").strip()
+    primed = ("cannon", "clock", "vault", "statue", "fog", "ruin", "cyberpunk", "firearm")
     if reason and reason not in {"below_relevance_threshold"}:
-        bits.append(f"The previous image was rejected: {reason}. Do not repeat that element.")
+        if any(word in reason.lower() for word in primed):
+            bits.append(
+                "The previous still missed this object. Show only the primary subject."
+            )
+        else:
+            bits.append(
+                f"The previous image was rejected: {reason}. Do not repeat that element."
+            )
     bits.append(
         "Photoreal documentary still of only the primary subject named in that "
         f"sentence. Camera variation {int(attempt)}. "
