@@ -16,14 +16,17 @@ import io
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import unquote
 
 from PIL import Image
 
 from agents.media.free_images.attribution import credit_line, write_sidecar
-from agents.media.free_images.http import HttpClient, RequestsClient
+from agents.media.free_images.http import USER_AGENT, HttpClient, RequestsClient
 from agents.media.free_images.licenses import license_allowed
 from agents.media.free_images.models import Attribution, Candidate
 from agents.media.free_images.providers import WikimediaProvider, parse_wikimedia
@@ -40,6 +43,9 @@ from modules.shot_planner.entities import Entity
 logger = logging.getLogger(__name__)
 
 _MAX_BYTES = 25_000_000
+_MAX_ATTEMPTS = 3
+_THUMB_WIDTH = "1280"
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
 _COMMONS = "https://commons.wikimedia.org/w/api.php"
 _MET_SEARCH = "https://collectionapi.metmuseum.org/public/collection/v1/search"
 _MET_OBJECT = "https://collectionapi.metmuseum.org/public/collection/v1/objects/{object_id}"
@@ -145,10 +151,20 @@ def fetch_artefact(
     return fetched
 
 
-def _default_cache(channel: str, entity_id: str) -> Path:
-    from utils.pipeline_paths import temp_path
+def artefact_cache_dir(channel: str, entity_id: str) -> Path:
+    """Permanent reference cache: ``channels_config/<channel>/store/artefact_cache/``.
 
-    return temp_path(channel or "ancient_knowledge", "artefact_cache", entity_id)
+    A Commons file is downloaded once. ``_tmp`` is scratch and must not hold it.
+    """
+    from utils.pipeline_paths import channel_store_dir
+
+    slug = re.sub(r"[^a-z0-9_-]+", "_", (entity_id or "entity").strip().lower()).strip("_")
+    root = channel_store_dir(channel or "ancient_knowledge", create=True)
+    return root / "artefact_cache" / (slug or "entity")
+
+
+def _default_cache(channel: str, entity_id: str) -> Path:
+    return artefact_cache_dir(channel, entity_id)
 
 
 def _select(entity: Entity, client: HttpClient) -> tuple[Candidate | None, bool]:
@@ -197,7 +213,9 @@ def _title_candidates(entity: Entity, client: HttpClient) -> list[Candidate]:
             "titles": "|".join(titles[:8]),
             "prop": "imageinfo",
             "iiprop": "url|size|mime|extmetadata",
+            "iiurlwidth": _THUMB_WIDTH,
         },
+        headers={"User-Agent": USER_AGENT},
     )
     if not response.ok:
         return []
@@ -317,34 +335,82 @@ def _score(candidate: Candidate, entity: Entity) -> float:
 
 
 def _download(candidate: Candidate, client: HttpClient) -> bytes | None:
-    original = _download_url(candidate.download_url, client)
-    if original is not None:
-        return original
-    thumb = _thumbnail_url(candidate, client)
-    if not thumb:
-        return None
-    return _download_url(thumb, client)
+    """Prefer a 1280px thumbnail. The original is the fallback."""
+    thumb = (candidate.thumbnail_url or "").strip() or _thumbnail_url(candidate, client)
+    if thumb and thumb != (candidate.download_url or ""):
+        got = _download_url(thumb, client)
+        if got is not None:
+            return got
+    return _download_url(candidate.download_url, client)
 
 
 def _download_url(url: str, client: HttpClient) -> bytes | None:
     if not url:
         return None
-    try:
-        response = client.get(url)
-    except Exception as exc:  # noqa: BLE001
-        logger.info("Artefact download failed (%s)", type(exc).__name__)
-        return None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            response = client.get(url, headers={"User-Agent": USER_AGENT})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Artefact download failed | status=error | error=%s | attempt=%d/%d | url=%s",
+                type(exc).__name__,
+                attempt,
+                _MAX_ATTEMPTS,
+                url,
+            )
+            if attempt >= _MAX_ATTEMPTS:
+                return None
+            _pause(float(2 ** (attempt - 1)))
+            continue
+        if _usable_body(response):
+            return response.content
+        status = int(getattr(response, "status", 0) or 0)
+        logger.warning(
+            "Artefact download failed | status=%s | attempt=%d/%d | url=%s",
+            status,
+            attempt,
+            _MAX_ATTEMPTS,
+            url,
+        )
+        if status not in _RETRY_STATUSES or attempt >= _MAX_ATTEMPTS:
+            return None
+        _pause(_retry_wait(response, attempt))
+    return None
+
+
+def _usable_body(response) -> bool:
     if not response.ok or not response.content:
-        return None
+        return False
     if len(response.content) > _MAX_BYTES:
-        return None
-    if response.content[:1] == b"<":
-        return None
-    return response.content
+        return False
+    return response.content[:1] != b"<"
+
+
+def _retry_wait(response, attempt: int) -> float:
+    headers = getattr(response, "headers", None) or {}
+    raw = str(headers.get("retry-after") or "").strip()
+    if raw:
+        try:
+            return min(max(float(raw), 0.0), 15.0)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(raw)
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                delay = (when - datetime.now(timezone.utc)).total_seconds()
+                return min(max(delay, 0.0), 15.0)
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return float(2 ** (attempt - 1))
+
+
+def _pause(seconds: float) -> None:
+    if seconds > 0:
+        time.sleep(seconds)
 
 
 def _thumbnail_url(candidate: Candidate, client: HttpClient) -> str:
-    """A 1600px JPEG when the original is rate-limited or too large."""
+    """A 1280px JPEG. Originals are larger and more often rate-limited."""
     title = ""
     source = candidate.source_url or ""
     if "/wiki/" in source:
@@ -363,12 +429,18 @@ def _thumbnail_url(candidate: Candidate, client: HttpClient) -> str:
                 "titles": title,
                 "prop": "imageinfo",
                 "iiprop": "url",
-                "iiurlwidth": "1600",
+                "iiurlwidth": _THUMB_WIDTH,
             },
+            headers={"User-Agent": USER_AGENT},
         )
     except Exception:  # noqa: BLE001
         return candidate.thumbnail_url or ""
     if not response.ok:
+        logger.warning(
+            "Artefact thumbnail lookup failed | status=%s | title=%s",
+            getattr(response, "status", 0),
+            title,
+        )
         return candidate.thumbnail_url or ""
     rows = parse_wikimedia(response.json())
     if rows and rows[0].thumbnail_url:

@@ -56,6 +56,11 @@ class Entity:
     canonical_shape: str = ""
     commons_search: tuple[str, ...] = ()
     commons_titles: tuple[str, ...] = ()
+    # Text-only Nano Banana is allowed only when a live check showed the
+    # shape survives without a reference (Baghdad Battery). Otherwise the
+    # still is a reference edit, or the Commons photograph.
+    text_only_safe: bool = False
+    edit_negatives: tuple[str, ...] = ()
 
 
 def repo_root() -> Path:
@@ -143,6 +148,8 @@ def load_entities(channel: str) -> list[Entity]:
             canonical_shape=str(row.get("canonical_shape") or "").strip(),
             commons_search=_texts("commons_search"),
             commons_titles=_texts("commons_titles"),
+            text_only_safe=bool(row.get("text_only_safe")),
+            edit_negatives=_texts("edit_negatives"),
         ))
     return found
 

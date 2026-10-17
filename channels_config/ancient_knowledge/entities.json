@@ -25,6 +25,11 @@
     ],
     "commons_titles": [
       "File:Mechanism of Antikythera, 150-100 BC, NAMA, 191431.jpg"
+    ],
+    "text_only_safe": false,
+    "edit_negatives": [
+      "corroded fragments only",
+      "never intact gears"
     ]
   },
   {
@@ -138,6 +143,13 @@
     ],
     "commons_titles": [
       "File:Precolombina cultura prc.jpg"
+    ],
+    "text_only_safe": false,
+    "edit_negatives": [
+      "no propeller",
+      "no modern aircraft",
+      "no straight wings",
+      "no cockpit"
     ]
   },
   {
@@ -339,7 +351,9 @@
     ],
     "commons_titles": [
       "File:Ironie pile Bagdad.jpg"
-    ]
+    ],
+    "text_only_safe": true,
+    "edit_negatives": []
   },
   {
     "id": "easter_island_moai",
