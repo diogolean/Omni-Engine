@@ -21,7 +21,12 @@
     ],
     "canonical_shape": "corroded bronze gear fragments of a mechanical device",
     "commons_search": [
-      "Antikythera mechanism NAMA"
+      "Antikythera mechanism NAMA",
+      "Antikythera mechanism fragments",
+      "Mechanism of Antikythera"
+    ],
+    "commons_categories": [
+      "Category:Antikythera Mechanism"
     ],
     "commons_titles": [
       "File:Mechanism of Antikythera, 150-100 BC, NAMA, 191431.jpg"
@@ -139,7 +144,15 @@
     "canonical_shape": "a small gold pendant with delta wings, a tail fin, and a stylised head",
     "commons_search": [
       "Quimbaya gold pendant",
-      "precolombina cultura quimbaya"
+      "precolombina cultura quimbaya",
+      "Quimbaya airplanes",
+      "golden jets",
+      "Museo del Oro Quimbaya"
+    ],
+    "commons_categories": [
+      "Category:Quimbaya",
+      "Category:Quimbaya culture",
+      "Category:Museo del Oro"
     ],
     "commons_titles": [
       "File:Precolombina cultura prc.jpg"
@@ -347,7 +360,11 @@
     "canonical_shape": "a clay jar with a copper cylinder and an iron rod",
     "commons_search": [
       "Baghdad battery",
-      "pile de Bagdad"
+      "pile de Bagdad",
+      "Parthian battery jar"
+    ],
+    "commons_categories": [
+      "Category:Baghdad Battery"
     ],
     "commons_titles": [
       "File:Ironie pile Bagdad.jpg"

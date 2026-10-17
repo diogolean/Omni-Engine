@@ -29,7 +29,7 @@ from agents.media.free_images.attribution import credit_line, write_sidecar
 from agents.media.free_images.http import USER_AGENT, HttpClient, RequestsClient
 from agents.media.free_images.licenses import license_allowed
 from agents.media.free_images.models import Attribution, Candidate
-from agents.media.free_images.providers import WikimediaProvider, parse_wikimedia
+from agents.media.free_images.providers import parse_wikimedia
 from modules.reel_artefact.crop import (
     STILL_MIN_SHORT,
     prepare_reel_frame,
@@ -60,8 +60,16 @@ _BAD_TITLE = (
     "locator map",
     "london gazette",
     "flag of",
+    "army",
+    "soldier",
+    "air force",
+    "boeing",
+    "airbus",
+    "airport",
+    "squadron",
 )
 _VECTOR = (".svg", ".djvu", ".pdf")
+_MAX_PHOTOS = 6
 
 
 @dataclass
@@ -94,61 +102,52 @@ def fetch_artefact(
     """Return a cached or freshly downloaded photograph. None when nothing passes."""
     folder = Path(cache_dir) if cache_dir else _default_cache(channel, entity.id)
     folder.mkdir(parents=True, exist_ok=True)
-    cached = _read_cache(folder)
-    if cached is not None:
-        if dest is not None and cached.still_path is not None:
-            _publish(cached, dest, entity)
-            return _point_at(cached, dest)
-        return cached
+    gallery = _read_gallery(folder)
+    if not gallery:
+        single = _read_cache(folder)
+        if single is not None:
+            gallery = [single]
+    if gallery:
+        best = _prefer_still(gallery)
+        if dest is not None and best.still_path is not None:
+            _publish(best, dest, entity)
+            return _point_at(best, dest)
+        return best
     http = client or RequestsClient(timeout=20.0)
-    chosen, locked_small = _select(entity, http)
-    if chosen is None:
+    saved = _download_gallery(entity, folder, http)
+    if not saved:
         return None
-    if locked_small:
-        logger.info(
-            "Commons file for %s is below %dpx; reference only",
-            entity.id,
-            STILL_MIN_SHORT,
-        )
-    raw = _download(chosen, http)
-    if raw is None:
-        return None
-    try:
-        with Image.open(io.BytesIO(raw)) as opened:
-            image = opened.convert("RGB")
-            width, height = image.size
-    except Exception as exc:  # noqa: BLE001
-        logger.info("Artefact image unreadable (%s)", type(exc).__name__)
-        return None
-    if not usable_as_reference(width, height):
-        return None
-    canonical = license_allowed(chosen.license_raw) or ""
-    still_ok = usable_as_still(width, height)
-    reference = folder / "reference.jpg"
-    image.save(reference, format="JPEG", quality=90)
-    still_path: Path | None = None
-    fit = ""
-    if still_ok:
-        frame, fit = prepare_reel_frame(image)
-        still_path = folder / "still.jpg"
-        frame.save(still_path, format="JPEG", quality=92)
-        write_motion_sidecar(still_path)
-    record = _write_meta(
-        folder,
-        entity=entity,
-        candidate=chosen,
-        license_name=canonical,
-        width=width,
-        height=height,
-        still_path=still_path,
-        reference_path=reference,
-        fit=fit,
-    )
-    fetched = _from_meta(folder, record)
-    if dest is not None and fetched.still_path is not None:
-        _publish(fetched, dest, entity)
-        return _point_at(fetched, dest)
-    return fetched
+    best = _prefer_still(saved)
+    if dest is not None and best.still_path is not None:
+        _publish(best, dest, entity)
+        return _point_at(best, dest)
+    return best
+
+
+def fetch_gallery(
+    entity: Entity,
+    *,
+    channel: str,
+    cache_dir: Path | None = None,
+    client: HttpClient | None = None,
+) -> list[FetchedArtefact]:
+    """Every cached photograph for ``entity``, stills first."""
+    folder = Path(cache_dir) if cache_dir else _default_cache(channel, entity.id)
+    folder.mkdir(parents=True, exist_ok=True)
+    gallery = _read_gallery(folder)
+    if gallery:
+        return gallery
+    single = _read_cache(folder)
+    if single is not None:
+        return [single]
+    http = client or RequestsClient(timeout=20.0)
+    return _download_gallery(entity, folder, http)
+
+
+def list_candidates(entity: Entity, client: HttpClient | None = None) -> list[Candidate]:
+    """Licensed search hits with sizes. Does not download bytes."""
+    http = client or RequestsClient(timeout=20.0)
+    return _collect(entity, http)
 
 
 def artefact_cache_dir(channel: str, entity_id: str) -> Path:
@@ -167,35 +166,66 @@ def _default_cache(channel: str, entity_id: str) -> Path:
     return artefact_cache_dir(channel, entity_id)
 
 
-def _select(entity: Entity, client: HttpClient) -> tuple[Candidate | None, bool]:
-    """Return the candidate and whether a title lock forbids using it as a still.
+def _prefer_still(photos: list[FetchedArtefact]) -> FetchedArtefact:
+    for photo in photos:
+        if photo.usable_as_still:
+            return photo
+    return photos[0]
 
-    A curated file that is too small is the shape reference. A larger search
-    hit of a different object must not replace it.
-    """
-    locked = _title_candidates(entity, client)
-    locked_ok = [item for item in locked if _accept(item, entity, title_lock=True)]
-    if locked_ok:
-        best = locked_ok[0]
-        small = not usable_as_still(best.width, best.height)
-        return best, small
+
+def _collect(entity: Entity, client: HttpClient) -> list[Candidate]:
+    """Title-locked files plus licensed search hits. Army and modern aircraft drop out."""
     found: list[Candidate] = []
+    locked: list[Candidate] = []
+    seen: set[str] = set()
+
+    def add(items: list[Candidate], *, title_lock: bool) -> None:
+        for item in items:
+            if not _accept(item, entity, title_lock=title_lock):
+                continue
+            key = (item.download_url or item.source_url or item.title).split("?")[0].lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            if title_lock:
+                locked.append(item)
+            else:
+                found.append(item)
+
+    add(_title_candidates(entity, client), title_lock=True)
     for query in _queries(entity):
-        found.extend(_commons_search(query, client))
-        found.extend(_met_search(query, client))
-        found.extend(_smithsonian_search(query, client))
-    ranked = [item for item in found if _accept(item, entity, title_lock=False)]
-    ranked.sort(key=lambda item: _score(item, entity), reverse=True)
-    if not ranked:
-        return None, False
-    return ranked[0], False
+        add(_commons_search(query, client), title_lock=False)
+        add(_openverse_search(query, client), title_lock=False)
+        add(_met_search(query, client), title_lock=False)
+        add(_smithsonian_search(query, client), title_lock=False)
+        add(_europeana_search(query, client), title_lock=False)
+    for category in getattr(entity, "commons_categories", ()) or ():
+        add(_commons_category(str(category), client), title_lock=False)
+    def rank(item: Candidate) -> tuple[int, float]:
+        return (_usable_rank(item), _score(item, entity))
+
+    locked.sort(key=rank, reverse=True)
+    found.sort(key=rank, reverse=True)
+    # The known file stays even when search returns a full page of larger hits.
+    return (locked + found)[:_MAX_PHOTOS]
+
+
+def _usable_rank(candidate: Candidate) -> int:
+    long_side = max(candidate.width, candidate.height)
+    if long_side >= 1080:
+        return 3
+    if long_side >= 720:
+        return 2
+    if min(candidate.width, candidate.height) >= 200:
+        return 1
+    return 0
 
 
 def _queries(entity: Entity) -> list[str]:
     queries = [item for item in entity.commons_search if item.strip()]
     if not queries:
         queries = [entity.name]
-    return queries[:4]
+    return queries[:6]
 
 
 def _title_candidates(entity: Entity, client: HttpClient) -> list[Candidate]:
@@ -224,23 +254,202 @@ def _title_candidates(entity: Entity, client: HttpClient) -> list[Candidate]:
 
 def _commons_search(query: str, client: HttpClient) -> list[Candidate]:
     try:
-        return WikimediaProvider().search(query, client, limit=8)
+        response = client.get(
+            _COMMONS,
+            params={
+                "action": "query",
+                "format": "json",
+                "generator": "search",
+                "gsrsearch": f"filetype:bitmap {query}",
+                "gsrnamespace": "6",
+                "gsrlimit": "8",
+                "prop": "imageinfo",
+                "iiprop": "url|size|mime|extmetadata",
+                "iiurlwidth": _THUMB_WIDTH,
+            },
+            headers={"User-Agent": USER_AGENT},
+        )
     except Exception as exc:  # noqa: BLE001
         logger.info("Commons search failed (%s)", type(exc).__name__)
         return []
+    if not response.ok:
+        logger.warning("Commons search failed | status=%s | query=%s", response.status, query)
+        return []
+    return parse_wikimedia(response.json())
+
+
+def _commons_category(category: str, client: HttpClient) -> list[Candidate]:
+    title = category if category.lower().startswith("category:") else f"Category:{category}"
+    try:
+        response = client.get(
+            _COMMONS,
+            params={
+                "action": "query",
+                "format": "json",
+                "list": "categorymembers",
+                "cmtitle": title,
+                "cmtype": "file",
+                "cmlimit": "10",
+            },
+            headers={"User-Agent": USER_AGENT},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Commons category failed (%s)", type(exc).__name__)
+        return []
+    if not response.ok:
+        logger.warning("Commons category failed | status=%s | category=%s", response.status, title)
+        return []
+    try:
+        members = ((response.json().get("query") or {}).get("categorymembers") or [])
+    except Exception:  # noqa: BLE001
+        return []
+    titles = [
+        str(row.get("title") or "")
+        for row in members
+        if isinstance(row, dict) and str(row.get("title") or "").lower().endswith(
+            (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
+        )
+    ]
+    if not titles:
+        return []
+    try:
+        info = client.get(
+            _COMMONS,
+            params={
+                "action": "query",
+                "format": "json",
+                "titles": "|".join(titles[:8]),
+                "prop": "imageinfo",
+                "iiprop": "url|size|mime|extmetadata",
+                "iiurlwidth": _THUMB_WIDTH,
+            },
+            headers={"User-Agent": USER_AGENT},
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    if not info.ok:
+        return []
+    return parse_wikimedia(info.json())
+
+
+def _openverse_search(query: str, client: HttpClient) -> list[Candidate]:
+    try:
+        from agents.media.free_images.providers import OpenverseProvider
+
+        return OpenverseProvider().search(query, client, limit=6)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Openverse search failed (%s)", type(exc).__name__)
+        return []
+
+
+def _europeana_search(query: str, client: HttpClient) -> list[Candidate]:
+    """Europeana's search API is free and key-gated. No key means skip."""
+    import os
+
+    key = (os.getenv("EUROPEANA_API_KEY") or "").strip()
+    if not key:
+        return []
+    try:
+        response = client.get(
+            "https://api.europeana.eu/record/v2/search.json",
+            params={
+                "wskey": key,
+                "query": query,
+                "media": "true",
+                "reusability": "open",
+                "qf": "TYPE:IMAGE",
+                "rows": "6",
+                "profile": "rich",
+            },
+            headers={"User-Agent": USER_AGENT},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Europeana search failed (%s)", type(exc).__name__)
+        return []
+    if response.status == 401 or response.status == 403:
+        logger.warning("Europeana search skipped | status=%s", response.status)
+        return []
+    if not response.ok:
+        logger.warning("Europeana search failed | status=%s", response.status)
+        return []
+    try:
+        items = (response.json().get("items") or [])
+    except Exception:  # noqa: BLE001
+        return []
+    found: list[Candidate] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        shown = row.get("edmIsShownBy") or row.get("edmPreview") or []
+        url = shown[0] if isinstance(shown, list) and shown else ""
+        rights = row.get("rights") or []
+        right = rights[0] if isinstance(rights, list) and rights else ""
+        title = row.get("title") or []
+        name = title[0] if isinstance(title, list) and title else ""
+        creators = row.get("dcCreator") or []
+        author = creators[0] if isinstance(creators, list) and creators else ""
+        license_raw = _europeana_license(str(right))
+        if license_allowed(license_raw) is None:
+            continue
+        found.append(
+            Candidate(
+                provider="europeana",
+                title=str(name),
+                description="",
+                author=str(author),
+                license_raw=license_raw,
+                license_url=str(right),
+                source_url=str(row.get("guid") or url),
+                download_url=str(url),
+                thumbnail_url=str(url),
+                width=0,
+                height=0,
+            )
+        )
+    return [item for item in found if item.download_url]
+
+
+def _europeana_license(right: str) -> str:
+    """Map a Europeana rights URL onto a string the allowlist already understands."""
+    text = (right or "").lower()
+    if "publicdomain/zero" in text or "creativecommons.org/publicdomain/zero" in text:
+        return "CC0"
+    if "publicdomain/mark" in text or "noc-oklr" in text:
+        return "Public domain"
+    if "by-sa" in text:
+        return "CC BY-SA"
+    if "/by/" in text or "licenses/by" in text:
+        return "CC BY"
+    return right
+
+
+def _met_get(client: HttpClient, url: str, params: dict | None = None):
+    """One try, then one retry. HTTP 410 is skipped immediately."""
+    last = None
+    for _attempt in range(2):
+        try:
+            last = client.get(url, params=params, headers={"User-Agent": USER_AGENT})
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Met request failed (%s)", type(exc).__name__)
+            last = None
+            continue
+        if last.status == 410:
+            logger.info("Met search skipped | status=410")
+            return None
+        if last.ok:
+            return last
+        if last.status not in {429, 500, 502, 503, 504}:
+            logger.warning("Met search failed | status=%s", last.status)
+            return None
+    if last is not None and not last.ok:
+        logger.warning("Met search failed | status=%s", last.status)
+    return None
 
 
 def _met_search(query: str, client: HttpClient) -> list[Candidate]:
     """Met open access. A 410 or a missing key is an empty result, not an error."""
-    try:
-        response = client.get(
-            _MET_SEARCH,
-            params={"q": query, "hasImages": "true"},
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.info("Met search failed (%s)", type(exc).__name__)
-        return []
-    if not response.ok:
+    response = _met_get(client, _MET_SEARCH, {"q": query, "hasImages": "true"})
+    if response is None:
         return []
     try:
         payload = response.json()
@@ -251,11 +460,8 @@ def _met_search(query: str, client: HttpClient) -> list[Candidate]:
         return []
     found: list[Candidate] = []
     for object_id in ids[:3]:
-        try:
-            detail = client.get(_MET_OBJECT.format(object_id=object_id))
-        except Exception:  # noqa: BLE001
-            continue
-        if not detail.ok:
+        detail = _met_get(client, _MET_OBJECT.format(object_id=object_id))
+        if detail is None:
             continue
         try:
             row = detail.json()
@@ -446,6 +652,180 @@ def _thumbnail_url(candidate: Candidate, client: HttpClient) -> str:
     if rows and rows[0].thumbnail_url:
         return rows[0].thumbnail_url
     return candidate.thumbnail_url or ""
+
+
+def _download_gallery(
+    entity: Entity,
+    folder: Path,
+    client: HttpClient,
+) -> list[FetchedArtefact]:
+    saved: list[FetchedArtefact] = []
+    for index, candidate in enumerate(_collect(entity, client)):
+        photo = _save_candidate(entity, folder, client, candidate, index)
+        if photo is not None:
+            saved.append(photo)
+    if not saved:
+        return []
+    _write_gallery(folder, entity, saved)
+    primary = _prefer_still(saved)
+    _write_meta(
+        folder,
+        entity=entity,
+        candidate=_candidate_from(primary),
+        license_name=primary.license_name,
+        width=primary.width,
+        height=primary.height,
+        still_path=primary.still_path,
+        reference_path=primary.reference_path,
+        fit="",
+    )
+    return saved
+
+
+def _candidate_from(photo: FetchedArtefact) -> Candidate:
+    return Candidate(
+        provider=photo.provider,
+        title=photo.title,
+        author=photo.author,
+        license_raw=photo.license_name,
+        source_url=photo.source_url,
+        download_url=photo.source_url,
+    )
+
+
+def _save_candidate(
+    entity: Entity,
+    folder: Path,
+    client: HttpClient,
+    candidate: Candidate,
+    index: int,
+) -> FetchedArtefact | None:
+    raw = _download(candidate, client)
+    if raw is None:
+        return None
+    try:
+        with Image.open(io.BytesIO(raw)) as opened:
+            image = opened.convert("RGB")
+            width, height = image.size
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Artefact image unreadable (%s)", type(exc).__name__)
+        return None
+    if not usable_as_reference(width, height):
+        logger.info(
+            "Artefact image for %s is below the reference floor (%dx%d)",
+            entity.id,
+            width,
+            height,
+        )
+        return None
+    canonical = license_allowed(candidate.license_raw) or ""
+    reference = folder / f"photo_{index:02d}.jpg"
+    image.save(reference, format="JPEG", quality=90)
+    still_path: Path | None = None
+    fit = ""
+    if usable_as_still(width, height):
+        frame, fit = prepare_reel_frame(image)
+        still_path = folder / f"still_{index:02d}.jpg"
+        frame.save(still_path, format="JPEG", quality=92)
+        write_motion_sidecar(still_path, profile="slow_push")
+    else:
+        logger.info(
+            "Artefact file for %s is %dx%d; reference only (long side under %d)",
+            entity.id,
+            width,
+            height,
+            STILL_MIN_SHORT,
+        )
+    needs_credit = credit_required(canonical)
+    line = ""
+    if needs_credit:
+        line = credit_line(
+            title=candidate.title,
+            author=candidate.author,
+            license_name=canonical,
+            source_url=candidate.source_url,
+        )
+    provider = "commons" if candidate.provider == "wikimedia" else candidate.provider
+    return FetchedArtefact(
+        still_path=still_path,
+        reference_path=reference,
+        usable_as_still=still_path is not None,
+        provider=provider,
+        license_name=canonical,
+        credit_line=line,
+        title=candidate.title,
+        source_url=candidate.source_url,
+        author=candidate.author,
+        width=width,
+        height=height,
+    )
+
+
+def _write_gallery(folder: Path, entity: Entity, photos: list[FetchedArtefact]) -> None:
+    payload = {
+        "entity_id": entity.id,
+        "photos": [
+            {
+                "reference": photo.reference_path.name,
+                "still": photo.still_path.name if photo.still_path else "",
+                "usable_as_still": photo.usable_as_still,
+                "provider": photo.provider,
+                "license": photo.license_name,
+                "credit_line": photo.credit_line,
+                "title": photo.title,
+                "author": photo.author,
+                "source_url": photo.source_url,
+                "width": photo.width,
+                "height": photo.height,
+                "fit": "",
+            }
+            for photo in photos
+        ],
+    }
+    (folder / "gallery.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _read_gallery(folder: Path) -> list[FetchedArtefact]:
+    path = folder / "gallery.json"
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    rows = payload.get("photos") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return []
+    found: list[FetchedArtefact] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        reference = folder / str(row.get("reference") or "")
+        if not reference.is_file():
+            continue
+        still_name = str(row.get("still") or "")
+        still = folder / still_name if still_name else None
+        if still is not None and not still.is_file():
+            still = None
+        found.append(
+            FetchedArtefact(
+                still_path=still,
+                reference_path=reference,
+                usable_as_still=bool(row.get("usable_as_still")) and still is not None,
+                provider=str(row.get("provider") or "commons"),
+                license_name=str(row.get("license") or ""),
+                credit_line=str(row.get("credit_line") or ""),
+                title=str(row.get("title") or ""),
+                source_url=str(row.get("source_url") or ""),
+                author=str(row.get("author") or ""),
+                width=int(row.get("width") or 0),
+                height=int(row.get("height") or 0),
+            )
+        )
+    return found
 
 
 def _write_meta(
