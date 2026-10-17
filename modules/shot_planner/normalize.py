@@ -6,11 +6,31 @@ from modules.shot_planner.entities import (
     Entity,
     entities_in_text,
     is_abstract_close,
+    is_commentary,
     is_era_generic,
 )
 from modules.shot_planner.schema import SHOT_TYPES, Shot
 
 _GEOLOGY = ("geological", "natural formation", "concretion", "geode cross")
+_BAD_SCENE = (
+    "sci-fi", "science fiction", "steampunk", "futuristic", "spaceship",
+    "hangar", "fighter jet", "cyberpunk", "modern library", "bookshelf",
+    "bookshelves", "reading lamp", "miniature", "clay model",
+)
+_DOC_NEGATIVES = (
+    "science fiction",
+    "steampunk",
+    "futuristic interior",
+    "spaceship",
+    "fighter jet",
+    "modern aircraft",
+    "hangar",
+    "modern library",
+    "CGI",
+    "miniature model",
+    "clay diorama",
+    "illustration",
+)
 
 
 def _uniq(items: list[str]) -> list[str]:
@@ -24,6 +44,36 @@ def _uniq(items: list[str]) -> list[str]:
         seen.add(key)
         found.append(text)
     return found
+
+
+def _ungrounded(shot: Shot) -> bool:
+    blob = " ".join((shot.setting, shot.camera, shot.canonical_visual)).lower()
+    return any(term in blob for term in _BAD_SCENE)
+
+
+def _documentary_frame(entity: Entity, *, recap: bool) -> tuple[str, str, str, str]:
+    """Camera, setting, lighting, shot type for a grounded documentary still."""
+    if entity.kind == "place":
+        return (
+            "archival documentary photograph of the real site in open air",
+            entity.setting or "the real site",
+            "natural daylight, documentary",
+            "wide",
+        )
+    if recap:
+        return (
+            "cinematic museum hero shot, subject fills the frame",
+            "museum case",
+            "single raking museum lamp",
+            "close",
+        )
+    return (
+        "documentary photograph of the artefact in a museum case, "
+        "or an archaeologist examining it",
+        entity.setting or "museum case",
+        "single raking museum lamp",
+        "close",
+    )
 
 
 def _fill(shot: Shot, entity: Entity | None, *, recap: bool, others: list[Entity]) -> Shot:
@@ -56,11 +106,9 @@ def _fill(shot: Shot, entity: Entity | None, *, recap: bool, others: list[Entity
         visual = (
             "a rock concretion or geode cross-section of the same Coso artifact"
         )
-    if recap:
-        camera = "cinematic museum hero shot, subject fills the frame"
-        lighting = "single raking museum lamp"
-        shot_type = "close"
-        setting = entity.setting or "museum gallery"
+    unsafe = _ungrounded(shot)
+    if recap or unsafe:
+        camera, setting, lighting, shot_type = _documentary_frame(entity, recap=recap)
     else:
         camera = shot.camera or _default_camera(entity, shot.narration)
         lighting = shot.lighting or _default_light(entity)
@@ -68,9 +116,11 @@ def _fill(shot: Shot, entity: Entity | None, *, recap: bool, others: list[Entity
             entity, shot.narration,
         )
         setting = shot.setting or entity.setting or "the find as named in the narration"
+    extra = list(_DOC_NEGATIVES) if (recap or unsafe) else []
     negatives = _uniq(
         list(shot.negatives)
         + list(entity.confusions)
+        + extra
         + [other.name for other in others if other.id != entity.id]
     )
     return Shot(
@@ -122,31 +172,37 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
     line about the Coso artifact keeps that entity and shows the concretion.
     """
     by_id = {entity.id: entity for entity in entities}
-    bound: list[tuple[Shot, Entity | None, bool]] = []
+    bound: list[tuple[Shot, Entity | None, bool, bool]] = []
     previous: Entity | None = None
     introduced: list[Entity] = []
     for shot in shots:
         named = entities_in_text(shot.narration, entities)
         named_ent = named[0] if named else None
-        era_bad = is_era_generic(shot.subject) or is_era_generic(shot.entity_id.replace("_", " "))
-        close = is_abstract_close(shot.narration) and named_ent is None
+        era_bad = is_era_generic(shot.subject) or is_era_generic(
+            shot.entity_id.replace("_", " "),
+        )
+        commentary = is_commentary(shot.narration)
+        abstract = is_abstract_close(shot.narration) and named_ent is None
         if named_ent is not None:
             entity = named_ent
-        elif close or era_bad:
+        elif era_bad or abstract:
+            entity = previous
+        elif commentary and previous is not None:
             entity = previous
         elif shot.entity_id in by_id:
             entity = by_id[shot.entity_id]
         else:
             entity = previous
-        if entity is not None and not close and entity not in introduced:
+        inherit = abstract or era_bad or (commentary and named_ent is None)
+        if entity is not None and not inherit and entity not in introduced:
             introduced.append(entity)
-        if entity is not None and not close:
+        if entity is not None and not inherit:
             previous = entity
-        bound.append((shot, entity, close))
+        bound.append((shot, entity, abstract or commentary, abstract))
     main = introduced[0] if introduced else previous
     output: list[Shot] = []
-    for index, (shot, entity, close) in enumerate(bound, start=1):
-        if close and main is not None:
+    for index, (shot, entity, recap, pin_main) in enumerate(bound, start=1):
+        if pin_main and main is not None:
             entity = main
         if not shot.id:
             shot = Shot(
@@ -164,5 +220,5 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
                 negatives=list(shot.negatives),
                 kb_miss=shot.kb_miss,
             )
-        output.append(_fill(shot, entity, recap=close, others=introduced))
+        output.append(_fill(shot, entity, recap=recap, others=introduced))
     return output
