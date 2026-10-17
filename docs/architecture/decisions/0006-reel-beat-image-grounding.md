@@ -61,6 +61,12 @@ path keeps a JSONL file instead, under `outputs/<channel>/_review/visual_memory.
 - `REEL_VISUAL_MEMORY=1` (default) appends one row per judged still and
   feeds an accepted depiction or a rejection reason into the next prompt
   for the same topic. Overlap is token Jaccard. No extra model call.
+- `REEL_ANGLE_MEMORY=1` (default) appends a `kind: angle` row to that same
+  ledger when an Ancient Knowledge script is accepted. The next script for
+  that topic slug receives the last six angles and hooks inside the
+  existing sequence prompt and is told to take a new lens. No extra LLM
+  call. `REEL_ANGLE_MEMORY=0` leaves the prompt unchanged. Master Mei is
+  not included.
 
 A still in the image cache is reused only when a `.spoken.json` sidecar
 says that file already passed QA for the same spoken line. Older files

@@ -195,6 +195,9 @@ REEL_TIER2_SECONDS_PER_ACT: float = 10.0  # slower body, ~8-12 s / still clamped
 # constants pinned to REEL_DURATION_TARGET_MIN was the Round-6 root cause
 # of the silent under-delivery bug at long durations.
 CONTENT_LIBRARY_LOOKBACK: int = 40   # reject repeating a monument/theme in last N posts
+# A deliberate revisit of the same theme (CLI topic, or the pool running dry)
+# is kept. REEL_ANGLE_MEMORY records the lens used and asks the next script
+# for a different hook, sub-question, evidence focus, or narrative frame.
 
 # WAN_REEL duration window — separate from ECONOMIC_REEL (do not merge).
 # Animated blocks use FIXED clip length (never progressive image pacing).

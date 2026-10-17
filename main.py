@@ -1339,6 +1339,31 @@ _VOICE_MAX_OBSERVED_WPS: float = 4.0      # sanity ceiling for WPS math
 _MAX_AUDIO_DURATION_RETRIES: int = 1
 
 
+def _commit_reel_angle(caption_engine, page_ctx, topic: str, script: str) -> None:
+    """Record the angle locked for an accepted Ancient Knowledge script.
+
+    The script call already happened. This only appends one ledger row.
+    """
+    page_id = (getattr(page_ctx, "page_id", "") or "") if page_ctx is not None else ""
+    mode = (getattr(page_ctx, "narrative_mode", "") or "") if page_ctx is not None else ""
+    from modules.reel_grounding.config import angle_memory_for
+    from modules.reel_grounding.memory import opening_hook, remember_angle
+
+    if not angle_memory_for(page_id, mode):
+        return
+    if len((script or "").split()) < 40:
+        return
+    angle = ""
+    if caption_engine is not None:
+        angle = str(getattr(caption_engine, "last_reel_angle", "") or "")
+    remember_angle(
+        channel=page_id,
+        topic=topic,
+        angle=angle,
+        hook=opening_hook(script),
+    )
+
+
 def _synthesize_sequence_voice_track(
     script: str,
     *,
@@ -3511,6 +3536,9 @@ def _produce_variant_worker(
                 generated_hooks_cache=generated_hooks_cache,
                 cost_tracker=cost_tracker,
             )
+            _commit_reel_angle(
+                caption_engine, page_ctx, resolved_subject, _early_seq_script,
+            )
             if _voice_path is not None and _narr_dur > 0.5:
                 _ak_voice_ready = True
                 # Round-4 fix: hook/body-bucket/CTA planner runs AFTER measured
@@ -4822,6 +4850,9 @@ def _produce_variant_worker(
                 elif _early_seq_script and len(_early_seq_script.split()) >= 40:
                     _seq_script = _early_seq_script
                     _voiceover_script = _seq_script
+                    _commit_reel_angle(
+                        caption_engine, page_ctx, resolved_subject, _seq_script,
+                    )
                     _LOG.info(
                         "SEQUENCE_REEL | reusing early narrative script "
                         "(%d words) — no regen needed.",
@@ -4860,6 +4891,9 @@ def _produce_variant_worker(
                         cost_tracker.track_text(char_count=len(_seq_script))
                     if _seq_script and len(_seq_script.split()) >= 40:
                         _voiceover_script = _seq_script
+                        _commit_reel_angle(
+                            caption_engine, page_ctx, resolved_subject, _seq_script,
+                        )
                         _LOG.info(
                             "SEQUENCE_REEL | fallback voiceover generated: %d words",
                             len(_seq_script.split()),
