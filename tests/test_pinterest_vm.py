@@ -251,6 +251,8 @@ def test_accounts_yaml_scales_without_code_and_marks_anna_todo(tmp_path: Path) -
     assert ancient.extra["b2_filename_pattern"] == ""
     assert ancient.extra["article_tls_verify"] == "false"
     assert ancient.extra["use_featured_image"] == "false"
+    assert ancient.extra["facebook_postplanner"] == "true"
+    assert ancient.extra["facebook_page_name"] == "Ancient Knowledge"
     assert ancient.token_env == "PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE"
     assert ancient.extra["app_id_env"] == "PINTEREST_APP_ID_ANCIENT_KNOWLEDGE"
     assert ancient.extra["app_secret_env"] == "PINTEREST_APP_SECRET_ANCIENT_KNOWLEDGE"
@@ -266,6 +268,8 @@ def test_accounts_yaml_scales_without_code_and_marks_anna_todo(tmp_path: Path) -
     assert anna.extra["b2_filename_pattern"] == ""
     assert anna.extra["article_tls_verify"] == "true"
     assert anna.extra["use_featured_image"] == "true"
+    assert anna.extra["facebook_postplanner"] == "false"
+    assert anna.extra["facebook_page_name"] == "Anna's Garden"
     assert "site_url" in account_blockers(anna)
     assert "board" in account_blockers(anna)
 
@@ -805,6 +809,15 @@ def _prepare_channel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PUBLISHER_MODE", "docker")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # A previous run can restore a posted inventory and hide a new library card.
+    store = (
+        Path(__file__).resolve().parents[1]
+        / "channels_config"
+        / "ancient_knowledge"
+        / "store"
+        / "master_inventory.json"
+    )
+    store.unlink(missing_ok=True)
     monkeypatch.setattr(
         "agents.posting.pinterest_engine.inventory.MasterInventory._load_ai_client",
         lambda self: (None, None),
@@ -996,3 +1009,266 @@ def test_publish_sends_alt_text_and_does_not_patch(
     assert captured["link"] == f"{_SITE}/baalbek"
     assert captured["description"].endswith(f"{_SITE}/baalbek")
     assert len(captured["description"]) <= 220
+
+
+def _sheet_rows(path: Path) -> list[tuple]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path)
+    try:
+        sheet = workbook.active
+        rows = []
+        for row in sheet.iter_rows(min_row=1, max_col=3, values_only=True):
+            if any(cell not in (None, "") for cell in row):
+                rows.append(tuple(row))
+        return rows
+    finally:
+        workbook.close()
+
+
+def test_facebook_settings_come_from_the_account_file_when_the_runner_omits_them() -> None:
+    from agents.posting.pinterest_engine.facebook_queue import facebook_settings
+
+    ancient = facebook_settings({"account_id": "ancient_knowledge"})
+    assert ancient["enabled"] is True
+    assert ancient["page_name"] == "Ancient Knowledge"
+    anna = facebook_settings({"account_id": "anna_protocol"})
+    assert anna["enabled"] is False
+    assert anna["page_name"] == "Anna's Garden"
+
+
+def test_facebook_caption_is_a_hook_two_or_three_lines_and_the_article(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from agents.posting.pinterest_engine import config as cfg
+    from agents.posting.pinterest_engine.facebook_queue import (
+        build_facebook_caption,
+        facebook_body_lines,
+    )
+    from agents.posting.pinterest_engine.pin_copy import card_hook_text
+
+    _prepare_channel(monkeypatch, tmp_path)
+    cfg.configure(channel_id="ancient_knowledge")
+    url = f"{_SITE}/baalbek"
+    record = {
+        "topic": "Baalbek trilithon",
+        "pinterest_title": "Baalbek Trilithon",
+        "humanized_caption": (
+            "The stones weigh more than the cranes of that century. "
+            "The quarry is still visible across the valley. "
+            "The joints have no mortar."
+        ),
+        "target_url": url,
+    }
+    lines = facebook_body_lines(record)
+    assert 2 <= len(lines) <= 3
+    caption = build_facebook_caption(record, page_name="Ancient Knowledge")
+    parts = caption.split("\n\n")
+    assert parts[0] == card_hook_text(record)
+    assert parts[-1] == url
+    body = [line for line in parts[1].split("\n") if line.strip()]
+    assert body == lines
+
+
+def test_new_card_appends_a_facebook_postplanner_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.delenv("B2_BUCKET_NAME", raising=False)
+    record_key = "ancient_knowledge/library/post_facebook_queue.json"
+    image_key = "ancient_knowledge/library/images/facebook-queue.jpg"
+    client = FakeS3(
+        {
+            record_key: _library_record(
+                "facebook-queue",
+                "Gobekli Tepe pillars",
+                "images/facebook-queue.jpg",
+            ),
+            image_key: _photo(),
+        }
+    )
+    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    assert stats["published"] == 1
+    assert client.downloads == [image_key]
+    assert client.deletes == []
+
+    folder = tmp_path / "ancient_knowledge" / "postplanner"
+    cumulative = _sheet_rows(folder / "cumulative.xlsx")
+    assert cumulative[0] == ("DATE / TIME", "CAPTION", "MEDIA URL")
+    assert len(cumulative) == 2
+    _when, caption, media = cumulative[1]
+    assert "Gobekli Tepe" in caption
+    assert caption.count("\n") >= 2
+    runs = list(folder.glob("postplan_*.xlsx"))
+    assert len(runs) == 1
+    assert _sheet_rows(runs[0])[1][2] == media
+    card_key = "ancient_knowledge/postplanner/cards/post_facebook_queue.jpg"
+    assert card_key in client.objects
+    assert media == (
+        "https://MediaupscaleStorage.s3.us-east-005.backblazeb2.com/" + card_key
+    )
+    assert "ancient_knowledge/postplanner/cumulative.xlsx" in client.objects
+    assert any(key.startswith("ancient_knowledge/postplanner/postplan_") for key in client.objects)
+    ledger = client.objects["pinterest/ledger/ancient_knowledge.jsonl"].decode()
+    assert '"facebook_exported": true' in ledger
+    assert '"pin_recorded": false' in ledger
+
+
+def test_facebook_row_is_skipped_when_the_ledger_already_exported_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_channel(monkeypatch, tmp_path)
+    record_key = "ancient_knowledge/library/post_facebook_dedupe.json"
+    image_key = "ancient_knowledge/library/images/facebook-dedupe.jpg"
+    note = json.dumps(
+        {
+            "account": "ancient_knowledge",
+            "post_id": "post_facebook_dedupe",
+            "title": "",
+            "facebook_exported": True,
+            "pin_recorded": False,
+        }
+    )
+    client = FakeS3(
+        {
+            record_key: _library_record(
+                "facebook-dedupe",
+                "Derinkuyu underground city",
+                "images/facebook-dedupe.jpg",
+            ),
+            image_key: _photo(),
+            "pinterest/ledger/ancient_knowledge.jsonl": (note + "\n").encode(),
+        }
+    )
+    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    assert stats["published"] == 1
+    assert not (tmp_path / "ancient_knowledge" / "postplanner").exists()
+    assert "ancient_knowledge/postplanner/cards/post_facebook_dedupe.jpg" not in client.objects
+
+
+def test_facebook_postplanner_stays_off_when_the_account_flag_is_false(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_channel(monkeypatch, tmp_path)
+    record_key = "ancient_knowledge/library/post_facebook_off.json"
+    image_key = "ancient_knowledge/library/images/facebook-off.jpg"
+    client = FakeS3(
+        {
+            record_key: _library_record(
+                "facebook-off",
+                "Nan Madol canals",
+                "images/facebook-off.jpg",
+            ),
+            image_key: _photo(),
+        }
+    )
+    extra = dict(_ancient().extra)
+    extra["facebook_postplanner"] = "false"
+    stats = publish_account(
+        replace(_ancient(), extra=extra),
+        pins=1,
+        dry_run=True,
+        client=client,
+        catalog=[],
+    )
+    assert stats["published"] == 1
+    assert not (tmp_path / "ancient_knowledge" / "postplanner").exists()
+    assert not any("postplanner/" in key for key in client.objects)
+
+
+def test_facebook_media_url_uses_a_seven_day_presign_when_b2_offers_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from agents.posting.pinterest_engine.facebook_queue import enqueue_facebook_card
+
+    class _Signing(FakeS3):
+        def generate_presigned_url(self, operation, Params=None, ExpiresIn=None):
+            assert operation == "get_object"
+            assert ExpiresIn == 604800
+            return f"https://signed.example/{Params['Key']}?exp={ExpiresIn}"
+
+    client = _Signing({})
+    queued = enqueue_facebook_card(
+        {
+            "post_id": "post_signed",
+            "topic": "Baalbek trilithon",
+            "pinterest_title": "Baalbek Trilithon",
+            "humanized_caption": "The quarry is still visible. The joints have no mortar.",
+            "target_url": f"{_SITE}/baalbek",
+            "variant_index": 0,
+        },
+        b"jpeg-bytes",
+        channel_id="ancient_knowledge",
+        page_name="Ancient Knowledge",
+        planner_dir=tmp_path / "postplanner",
+        run_stamp="20261017T120000Z",
+        client=client,
+        bucket="MediaupscaleStorage",
+        posting_time="",
+    )
+    assert queued is True
+    media = _sheet_rows(tmp_path / "postplanner" / "cumulative.xlsx")[1][2]
+    assert media.startswith(
+        "https://signed.example/ancient_knowledge/postplanner/cards/post_signed.jpg"
+    )
+    assert "exp=604800" in media
+
+
+def test_facebook_media_falls_back_to_imgbb_when_b2_upload_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from agents.posting.pinterest_engine.facebook_queue import enqueue_facebook_card
+
+    class _Down(FakeS3):
+        def put_object(self, **kwargs):
+            raise RuntimeError("b2 down")
+
+    _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.setenv("IMGBB_API_KEY", "imgbb-test")
+    monkeypatch.setattr(
+        "agents.media.imgbb_client.upload_image_file_to_imgbb",
+        lambda api_key, path: "https://i.ibb.co/card.jpg",
+    )
+    queued = enqueue_facebook_card(
+        {
+            "post_id": "post_imgbb",
+            "topic": "Baalbek trilithon",
+            "humanized_caption": "The quarry is still visible. The joints have no mortar.",
+            "target_url": f"{_SITE}/baalbek",
+        },
+        _photo(),
+        channel_id="ancient_knowledge",
+        page_name="Ancient Knowledge",
+        planner_dir=tmp_path / "postplanner",
+        run_stamp="20261017T120100Z",
+        client=_Down({}),
+        bucket="MediaupscaleStorage",
+        posting_time="",
+    )
+    assert queued is True
+    assert _sheet_rows(tmp_path / "postplanner" / "cumulative.xlsx")[1][2] == (
+        "https://i.ibb.co/card.jpg"
+    )
+    assert not (tmp_path / "ancient_knowledge" / "_tmp").exists() or not any(
+        (tmp_path / "ancient_knowledge" / "_tmp").rglob("*")
+    )
+
+
+def test_run_stops_when_the_b2_download_budget_is_spent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.setenv("B2_USAGE_PATH", str(tmp_path / "b2-usage.json"))
+    monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "0")
+    record_key = "ancient_knowledge/library/post_b2_cap.json"
+    image_key = "ancient_knowledge/library/images/b2-cap.jpg"
+    client = FakeS3(
+        {
+            record_key: _library_record("b2-cap", "Gobekli Tepe pillars", "images/b2-cap.jpg"),
+            image_key: _photo(),
+        }
+    )
+    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    assert stats["published"] == 0
+    assert stats["stopped"] == "b2_daily_cap"
+    assert client.downloads == []

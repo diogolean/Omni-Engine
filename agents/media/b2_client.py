@@ -27,11 +27,40 @@ import os
 import time
 from pathlib import Path
 
+from agents.media.b2_budget import (
+    B2DailyCapError,
+    B2StorageCapError,
+    allow_video_download,
+    cached_listing,
+    cached_object_size,
+    cached_text,
+    call_with_cap_backoff,
+    charge,
+    choose_publish_key,
+    client_token,
+    invalidate_listings,
+    invalidate_text,
+    is_transaction_cap,
+    is_video_key,
+    note_download_bytes,
+    store_listing,
+    store_text,
+)
+
 logger = logging.getLogger(__name__)
 
-
-class B2StorageCapError(RuntimeError):
-    """Raised when B2 rejects an upload due to storage/cap AccessDenied."""
+__all__ = [
+    "B2DailyCapError",
+    "B2StorageCapError",
+    "B2VideoUploader",
+    "choose_publish_key",
+    "download_object",
+    "list_object_keys",
+    "media_bucket_name",
+    "read_object_text",
+    "resolve_b2_bucket_name",
+    "upload_object",
+]
 
 
 _B2_ENDPOINT_URL = "https://s3.us-east-005.backblazeb2.com"
@@ -81,25 +110,42 @@ def media_bucket_name() -> str:
 
 
 def list_object_keys(prefix: str, *, client=None, bucket: str | None = None) -> list[str]:
-    """Return object keys under *prefix*. Does not download object bodies."""
-    s3 = client if client is not None else _get_b2_resource().meta.client
+    """Return object keys under *prefix*. Does not download object bodies.
+
+    A prefix is listed at most once per cache TTL (six hours by default).
+    """
     bucket_name = (bucket or "").strip() or media_bucket_name()
+    token = client_token(client)
+    cached = cached_listing(token, bucket_name, prefix or "")
+    if cached is not None:
+        return cached
+    s3 = client if client is not None else _get_b2_resource().meta.client
     keys: list[str] = []
-    token: str | None = None
+    sizes: dict[str, int] = {}
+    page_token: str | None = None
     while True:
         kwargs: dict = {"Bucket": bucket_name, "Prefix": prefix or ""}
-        if token:
-            kwargs["ContinuationToken"] = token
-        page = s3.list_objects_v2(**kwargs)
+        if page_token:
+            kwargs["ContinuationToken"] = page_token
+        charge(class_c=1)
+        page = call_with_cap_backoff(
+            lambda kwargs=kwargs: s3.list_objects_v2(**kwargs),
+            what=f"list {prefix or '/'}",
+        )
         for item in page.get("Contents") or []:
             key = str(item.get("Key") or "")
             if key and not key.endswith("/"):
                 keys.append(key)
+                try:
+                    sizes[key] = int(item.get("Size") or 0)
+                except (TypeError, ValueError):
+                    sizes[key] = 0
         if not page.get("IsTruncated"):
             break
-        token = page.get("NextContinuationToken")
-        if not token:
+        page_token = page.get("NextContinuationToken")
+        if not page_token:
             break
+    store_listing(token, bucket_name, prefix or "", keys, sizes)
     return keys
 
 
@@ -109,16 +155,41 @@ def download_object(
     *,
     client=None,
     bucket: str | None = None,
+    allow_video: bool | None = None,
 ) -> Path:
-    """Download one object to *dest*. Never deletes the B2 object."""
-    s3 = client if client is not None else _get_b2_resource().meta.client
+    """Download one object to *dest*. Never deletes the B2 object.
+
+    Video keys are refused unless ``allow_video`` or ``B2_ALLOW_VIDEO_DOWNLOAD``
+    is set. Publish the image instead of pulling a multi-gigabyte clip.
+    """
+    video_ok = allow_video_download() if allow_video is None else allow_video
+    if is_video_key(key) and not video_ok:
+        raise B2DailyCapError(
+            f"Refusing video download of {key}. Publish the image, or set "
+            "B2_ALLOW_VIDEO_DOWNLOAD=true for this one file."
+        )
     bucket_name = (bucket or "").strip() or media_bucket_name()
+    known = cached_object_size(client_token(client), bucket_name, key)
+    if known and known > 1:
+        charge(class_b=1, download_bytes=known)
+        reserved = known
+    else:
+        charge(class_b=1, download_bytes=1)
+        reserved = 1
+    s3 = client if client is not None else _get_b2_resource().meta.client
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        s3.download_file(bucket_name, key, str(dest))
+        call_with_cap_backoff(
+            lambda: s3.download_file(bucket_name, key, str(dest)),
+            what=f"download {key}",
+        )
     except Exception:
         dest.unlink(missing_ok=True)
         raise
+    size = dest.stat().st_size if dest.is_file() else 0
+    # Replace the reservation with the bytes that actually arrived.
+    if size > reserved:
+        note_download_bytes(size - reserved)
     return dest
 
 
@@ -134,22 +205,53 @@ def upload_object(
     s3 = client if client is not None else _get_b2_resource().meta.client
     bucket_name = (bucket or "").strip() or media_bucket_name()
     body = source.read_bytes() if isinstance(source, Path) else bytes(source)
-    s3.put_object(Bucket=bucket_name, Key=key, Body=body, ContentType=content_type)
+
+    def _put() -> None:
+        s3.put_object(Bucket=bucket_name, Key=key, Body=body, ContentType=content_type)
+
+    call_with_cap_backoff(_put, what=f"upload {key}")
+    token = client_token(client)
+    invalidate_listings(token, bucket_name, key)
+    if content_type.startswith("text/") or content_type in {
+        "application/json",
+        "application/x-ndjson",
+    }:
+        store_text(token, bucket_name, key, body.decode("utf-8", errors="replace"))
+    else:
+        invalidate_text(token, bucket_name, key)
 
 
 def read_object_text(key: str, *, client=None, bucket: str | None = None) -> str | None:
-    """Read one small object (a sidecar JSON) as text. Missing keys return None."""
-    s3 = client if client is not None else _get_b2_resource().meta.client
+    """Read one small object (a sidecar or ledger) as text. Missing keys return None.
+
+    A hit within the listing TTL does not call B2 again.
+    """
     bucket_name = (bucket or "").strip() or media_bucket_name()
+    token = client_token(client)
+    cached = cached_text(token, bucket_name, key)
+    if cached is not None:
+        return cached
+    s3 = client if client is not None else _get_b2_resource().meta.client
     try:
-        obj = s3.get_object(Bucket=bucket_name, Key=key)
+        charge(class_b=1, download_bytes=1)
+        obj = call_with_cap_backoff(
+            lambda: s3.get_object(Bucket=bucket_name, Key=key),
+            what=f"read {key}",
+        )
+    except B2DailyCapError:
+        raise
     except Exception as exc:  # noqa: BLE001 — missing sidecar, not a credential dump
         logger.info("B2 object not read (%s): %s", type(exc).__name__, key)
         return None
     body = obj["Body"].read()
     if isinstance(body, bytes):
-        return body.decode("utf-8")
-    return str(body)
+        text = body.decode("utf-8")
+    else:
+        text = str(body)
+    if len(text.encode("utf-8")) > 1:
+        note_download_bytes(len(text.encode("utf-8")) - 1)
+    store_text(token, bucket_name, key, text)
+    return text
 
 
 def _is_storage_cap_error(exc: BaseException) -> bool:
@@ -281,12 +383,17 @@ class B2VideoUploader:
             last_exc: Exception | None = None
             for attempt in range(1, _B2_MAX_ATTEMPTS + 1):
                 try:
-                    self._resource().Object(bucket_name, key).upload_file(
-                        str(path),
-                        ExtraArgs={"ContentType": content_type},
+                    call_with_cap_backoff(
+                        lambda: self._resource().Object(bucket_name, key).upload_file(
+                            str(path),
+                            ExtraArgs={"ContentType": content_type},
+                        ),
+                        what=f"upload {key}",
                     )
                     last_exc = None
                     break
+                except B2DailyCapError:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
                     # Storage cap / AccessDenied — do not retry or dump stack traces
@@ -344,14 +451,21 @@ class B2VideoUploader:
         object is missing, so we treat both 403 and 404 as "not found".
         """
         try:
-            from botocore.exceptions import ClientError  # noqa: PLC0415
+            from botocore.exceptions import ClientError  # noqa: F401, PLC0415
         except ImportError:
             return False
 
         try:
+            charge(class_b=1)
             self._resource().Object(self._bucket(), key).load()
             return True
+        except B2DailyCapError:
+            raise
         except Exception as exc:  # noqa: BLE001
+            if is_transaction_cap(exc):
+                raise B2DailyCapError(
+                    f"B2 daily cap exceeded while checking {key}. Stopping this run."
+                ) from exc
             try:
                 code = exc.response["Error"]["Code"]   # type: ignore[attr-defined]
                 if code in ("404", "NoSuchKey"):

@@ -112,6 +112,11 @@ def publish_account(
             "board_pins": board_pins or [],
             "catalog": catalog,
             "skip_board_fetch": client is not None or board_pins is not None,
+            "facebook_postplanner": account.extra.get("facebook_postplanner", "false"),
+            "facebook_page_name": account.extra.get("facebook_page_name", ""),
+            "facebook_caption_template": account.extra.get(
+                "facebook_caption_template", ""
+            ),
         },
     )
     with pinterest_account_env(account):

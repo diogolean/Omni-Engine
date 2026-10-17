@@ -21,6 +21,9 @@ accounts:
     article_tls_verify: false
     # WordPress featured images on this site are title graphics. Never pin them.
     use_featured_image: false
+    # Each new card is also a Facebook post for this page, queued in Post Planner.
+    facebook_postplanner: true
+    facebook_page_name: Ancient Knowledge
     board_name: Ancient Knowledge
     board_id_env: PINTEREST_BOARD_ID_ANCIENT_KNOWLEDGE
     access_token_env: PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE
