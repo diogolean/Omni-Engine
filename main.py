@@ -7624,14 +7624,33 @@ def cli() -> None:
         ),
     )
     parser.add_argument(
+        "--dry-run",
+        "--json-only",
+        dest="dry_run",
+        action="store_true",
+        default=False,
+        help=(
+            "ECONOMIC_REEL_LOFI only: JSON-only staging. Runs the real writer + "
+            "validator + Stage 3 visual prompt assembly, then writes the FULL "
+            "final intermediate JSON (script text, per-beat timings + assembled "
+            "visual prompts, and layout config) to outputs/<page>/clips/"
+            "lofi_dry_run_*.json and STOPS — no image generation, no TTS, no "
+            "MoviePy/FFmpeg render. Review the JSON, then re-run WITHOUT this "
+            "flag for the single render test, or add --quantity N for the bulk "
+            "batch. Aliases: --json-only."
+        ),
+    )
+    parser.add_argument(
         "--lofi-no-review",
         dest="lofi_no_review",
         action="store_true",
         default=False,
         help=(
-            "ECONOMIC_REEL_LOFI: auto-pass Gate 1 (script) and Gate 2 "
-            "(assembled prompts after Stage 3). Default is review_required=true: "
-            "Gate 1 holds before TTS; Gate 2 holds before image generation."
+            "ECONOMIC_REEL_LOFI: auto-pass Gate 1 (script) only. "
+            "Gate 2 (assembled prompts after Stage 3, before any image API) "
+            "still requires --lofi-approve-gate 2. Default is "
+            "review_required=true: Gate 1 holds before TTS; Gate 2 holds "
+            "before image generation."
         ),
     )
     parser.add_argument(
@@ -8421,6 +8440,7 @@ def cli() -> None:
                 image_provider=getattr(args, "lofi_image_provider", "together"),
                 script_only=bool(getattr(args, "script_only", False)),
                 stills_only=bool(getattr(args, "stills_only", False)),
+                dry_run=bool(getattr(args, "dry_run", False)),
                 locked_scripts=getattr(args, "lofi_scripts", None),
                 review_required=(
                     False if bool(getattr(args, "lofi_no_review", False)) else None

@@ -872,6 +872,66 @@ def bgm_library_dir(*, module_root: Path | None = None, relative: str = TEST_BGM
     return test_bgm_path(module_root=module_root, relative=relative).parent
 
 
+_BGM_SHUFFLE_QUEUE: list[str] = []
+
+
+def _read_library_manifest(
+    dest_dir: Path,
+) -> dict:
+    """Return the parsed ``library_manifest.json`` payload, or ``None`` if absent."""
+    dest = dest_dir / BGM_MANIFEST_FILENAME
+    if not dest.is_file():
+        _LOG.info("no BGM library manifest at %s; falling back to inspection bed", dest)
+        return {}
+    try:
+        return json.loads(dest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        _LOG.warning("could not read BGM library manifest %s: %s", dest, exc)
+        return {}
+
+
+def _pick_library_tracks(
+    manifest: dict,
+    dest_dir: Path,
+    *,
+    rng,
+) -> list[str]:
+    """Approved, on-disk library filenames from the manifest (stable order)."""
+    candidates: list[str] = []
+    for row in manifest.get("library", ()) or ():
+        if not isinstance(row, dict):
+            continue
+        filename = str(row.get("filename", "") or "")
+        if not filename or not row.get("approved"):
+            continue
+        path = dest_dir / filename
+        if path.is_file() and path.stat().st_size >= _MIN_AUDIO_BYTES:
+            candidates.append(filename)
+    if not candidates:
+        # Fall back to whatever approved-production WAVs exist even without a row.
+        for filename in sorted(LOCKED_BGM_FILENAMES):
+            path = dest_dir / filename
+            if path.is_file() and path.stat().st_size >= _MIN_AUDIO_BYTES and filename != TEST_BGM_FILENAME:
+                candidates.append(filename)
+    return candidates
+
+
+def _next_bgm_filename(candidates: list[str], *, rng) -> str | None:
+    """Pull the next track from a non-repeating shuffle queue."""
+    if not candidates:
+        return None
+    global _BGM_SHUFFLE_QUEUE
+    if not _BGM_SHUFFLE_QUEUE:
+        _BGM_SHUFFLE_QUEUE = list(candidates)
+        rng.shuffle(_BGM_SHUFFLE_QUEUE)
+    filename = _BGM_SHUFFLE_QUEUE.pop(0)
+    if filename not in candidates:
+        _BGM_SHUFFLE_QUEUE = list(candidates)
+        rng.shuffle(_BGM_SHUFFLE_QUEUE)
+        filename = _BGM_SHUFFLE_QUEUE.pop(0)
+    return filename
+
+
 def resolve_bgm_track(
     config: BgmConfig | None,
     *,
@@ -904,7 +964,10 @@ def resolve_bgm_track(
             print(f"[BGM Engine] Selected track: {path.name}")
             return path
 
-    path = test_bgm_path(module_root=module_root, relative=config.test_track or TEST_BGM_RELATIVE)
+    path = test_bgm_path(
+        module_root=module_root,
+        relative=getattr(config, "test_track", None) or TEST_BGM_RELATIVE,
+    )
     if not path.is_file() or path.stat().st_size < _MIN_AUDIO_BYTES:
         _LOG.info(
             "BGM enabled but %s is missing; run --test-bgm to generate the inspection track",

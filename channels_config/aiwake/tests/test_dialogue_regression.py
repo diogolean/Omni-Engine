@@ -119,6 +119,17 @@ def test_cli_mode_defaults_fixed_and_accepts_cornered() -> None:
         parser.parse_args(["--quantity", "0"])
 
 
+def test_quantity_flag_is_capped() -> None:
+    """A runaway --quantity must refuse to launch a marathon render."""
+    from channels_config.aiwake.__main__ import _MAX_BATCH, main
+
+    assert _MAX_BATCH >= 2
+    with pytest.raises(SystemExit) as exc:
+        main(["--quantity", str(_MAX_BATCH + 1)])
+    assert "capped" in str(exc.value)
+    assert str(_MAX_BATCH) in str(exc.value)
+
+
 def test_fixed_mode_keeps_exact_question_answer_count_without_judging() -> None:
     provider = _SequenceProvider(
         [

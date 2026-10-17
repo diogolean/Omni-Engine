@@ -7,7 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 # ── Scene timing ────────────────────────────────────────────────────────────
 SCENE_DURATION_S: float = 3.0
@@ -36,9 +36,14 @@ MIN_SCENES: int = 8
 MAX_SCENES: int = 30
 THEMATIC_DEFAULT_SCENES: int = 9
 THEMATIC_MAX_SCENES: int = 9
-# Human hold after Stage 1 and Stage 3. False auto-passes both gates.
-# Gate 1 protects TTS spend; Gate 2 protects image spend.
+# Human hold after Stage 1 and Stage 3. False auto-passes Gate 1 only.
+# Gate 1 protects TTS spend; Gate 2 protects image spend and always requires
+# explicit --lofi-approve-gate 2 (see IMAGE_API_REQUIRES_GATE2). Default True.
 REVIEW_REQUIRED: bool = True
+# Image generation is blocked until Gate 2 is explicitly approved.
+IMAGE_API_REQUIRES_GATE2: bool = True
+# Default writer is the freeform brain (compose + spoken-budget gate).
+USE_FREEFORM_BRAIN: bool = True
 
 # ── Script / validation ─────────────────────────────────────────────────────
 # Fast production writer: one Gemini call, no LLM judge or repair loop.
@@ -84,6 +89,31 @@ LINE_REWRITE_MAX_PASSES: int = 2
 MAX_LINE_REPAIRS: int = 2
 # Isolated TTS overrun: auto-bump one beat's duration_s instead of sign-off.
 TTS_AUTO_BUMP_MAX_BEATS: int = 1
+# Best-effort bestown: cross-beat style / lighting-pixel mismatches are
+# non-blocking warnings (logged, not HOLD). True aligns with the best-effort
+# assembly policy; set False to restore the strict cross-beat HOLD.
+QA_NON_BLOCKING_CROSS_STYLE: bool = True
+# Resume/locked scripts that already cleared the writer judge get the full
+# validator re-run. Because Stage 2/3 stamp subject_type/setting, the strict
+# `visuals_ready` sub-block fires there — and subject_expression is a writer
+# authoring field the current stage pipeline only partially populates (blank on
+# silhouettes), so a resume of an already-approved script would otherwise HARD
+# STOP before image gen. Treat missing subject_expression / caption-tie as
+# non-blocking warnings (logged, no HOLD) so best-effort assembly can proceed.
+# Set False to restore the strict resume-time validator block.
+QA_NON_BLOCKING_SUBJECT_EXPRESSION: bool = True
+# Best-effort TTS overruns: an isolated beat whose rendered VO exceeds the
+# declared 3.0s slot (up from the auto-bump 35% cap) is logged and the slot is
+# stretched via slot_duration_for_vo instead of hard-failing the whole assemble.
+# The audio-driven timeline never hard-cuts VO, so a blip on one beat should not
+# abort an otherwise-clean reel. Set False to restore the strict hard raise.
+QA_NON_BLOCKING_VO_OVERRUN: bool = True
+# story_quality (spine/stakes/close) craft notes are logged by the validator as
+# non-blocking, and a script that already cleared the writer judge + Gate 2
+# concepts should not be hard-blocked at assemble by the same notes. Treat them
+# as non-blocking warnings at the ship gate. Set False to restore the strict
+# story-quality BLOCK.
+QA_NON_BLOCKING_STORY_QUALITY: bool = True
 TTS_AUTO_BUMP_MAX_FRAC: float = 0.35  # overrun ≤ 35% of original declared
 TTS_AUTO_BUMP_MAX_ABS_S: float = 1.5  # bump target ≤ +1.5s
 TTS_AUTO_BUMP_TOTAL_FRAC: float = 0.10  # total stays within 10% of request
@@ -95,6 +125,10 @@ DEFAULT_ARC_BY_MODULE: dict[str, str] = {
 CAPTION_HOLD_S: float = 0.55  # breath after the last word before a cut
 AUTHORITY_QUOTE_PROBABILITY: float = 0.0  # story monologue, not quote-maxims
 SCRIPT_MAX_RETRIES: int = 3
+# Outer script-generation loop is consolidated into the managed writer loop
+# (agent.writer.script_brain.compose, hard-capped at 2). This legacy fallback
+# path runs the generate_script loop only once to avoid double-nested retries.
+SCRIPT_LOOP_CAP: int = 1
 DEDUP_SIMILARITY_THRESHOLD: float = 0.85
 # Auto-reject if a script copies stored wf1–4 / mc1–3 transcripts.
 REFERENCE_OVERLAP_THRESHOLD: float = 0.80
@@ -918,6 +952,92 @@ KEN_BURNS_EASE: str = "smootherstep"  # ease-in-out
 ENABLE_KINETIC_PAN: bool = True
 KEN_BURNS_PAN_AMP_X: float = 5.0
 KEN_BURNS_PAN_AMP_Y: float = 3.0
+# Hard abort for hung ffmpeg / assemble subprocesses (does not apply unless
+# a caller passes timeout_s — default full-quality assemble has no cap).
+RENDER_SUBPROCESS_TIMEOUT_S: float = 300.0
+# Opt-in per-frame effect gates (assemble only). Default = all on = approved look.
+# Fast-preview / isolation flags skip the work entirely — they must not change
+# default output when omitted.
+RENDER_EFFECT_KEYS: tuple[str, ...] = (
+    "grain",
+    "vignette",
+    "kenburns",
+    "caption_fade",
+    "pulse",
+)
+
+
+def default_render_effects() -> dict[str, bool]:
+    return {k: True for k in RENDER_EFFECT_KEYS}
+
+
+# Grain overlay + caption fade always ship. Ken Burns / vignette / pulse
+# follow isolation timing (see outputs/wonder_feed/clips/effect_timing/).
+PRODUCTION_RENDER_EFFECTS: dict[str, bool] = {
+    "grain": True,
+    "vignette": True,
+    "kenburns": True,  # subtle zoom/pan (1.00→1.04, ease-in-out) — approved on
+    "caption_fade": True,
+    "pulse": False,  # +72s vs grain+caption baseline
+}
+USE_PRODUCTION_PRESET: bool = True
+# Isolation: effects cheaper than this vs grain+caption baseline stay ON.
+PRODUCTION_EFFECT_CHEAP_S: float = 30.0
+
+
+def production_render_effects() -> dict[str, bool]:
+    fx = dict(PRODUCTION_RENDER_EFFECTS)
+    fx["grain"] = True
+    fx["caption_fade"] = True
+    return {k: bool(fx.get(k, True)) for k in RENDER_EFFECT_KEYS}
+
+
+def resolve_render_effects(
+    effects: dict[str, bool] | None = None,
+    *,
+    fast_preview: bool = False,
+    disable: Sequence[str] | None = None,
+    only: str | Sequence[str] | None = None,
+    preset: str | None = None,
+) -> dict[str, bool]:
+    """
+    Build the per-frame effect gate dict.
+
+    Default (no args) is all-on unless ``USE_PRODUCTION_PRESET``.
+    ``fast_preview`` turns everything off.
+    ``only`` starts from all-off then enables named keys. ``disable`` then
+    turns keys off. ``effects`` overlays last.
+    """
+    known = set(RENDER_EFFECT_KEYS)
+    use_prod = str(preset or "").strip().lower() == "production" or (
+        bool(USE_PRODUCTION_PRESET) and effects is None and not fast_preview
+        and only is None
+    )
+    fx = production_render_effects() if use_prod else default_render_effects()
+    if fast_preview:
+        fx = {k: False for k in RENDER_EFFECT_KEYS}
+    if only is not None:
+        names = [only] if isinstance(only, str) else [str(x) for x in only]
+        bad = [n for n in names if n not in known]
+        if bad:
+            raise ValueError(f"unknown render effect(s): {bad}")
+        enabled = set(names)
+        fx = {k: (k in enabled) for k in RENDER_EFFECT_KEYS}
+    if disable:
+        bad = [str(n) for n in disable if str(n) not in known]
+        if bad:
+            raise ValueError(f"unknown render effect(s): {bad}")
+        for n in disable:
+            fx[str(n)] = False
+    if effects:
+        bad = [str(k) for k in effects if str(k) not in known]
+        if bad:
+            raise ValueError(f"unknown render effect(s): {bad}")
+        for k, v in effects.items():
+            fx[str(k)] = bool(v)
+    return fx
+
+
 # Animated lighting pulse (measurable luminance delta ~0.5–1s apart)
 ENABLE_LIGHT_BREATH: bool = True
 LIGHT_BREATH_AMP: float = 0.065  # more perceptible than 0.045

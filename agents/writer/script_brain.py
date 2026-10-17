@@ -28,7 +28,11 @@ from agents.writer.judge_gate import JudgeVerdict, judge_draft
 from agents.writer.spoken_budget import enforce_spoken_budget
 from agents.writer.writer_brief import WriterBrief
 
-DEFAULT_MAX_ATTEMPTS = 3
+# Single managed script loop. Hard-capped at 2 to prevent exponential LLM token
+# burn (pipeline must NOT wrap this in its own retry loop).
+DEFAULT_MAX_ATTEMPTS = 2
+# Absolute ceiling — env override can never raise the burn beyond this.
+HARD_MAX_ATTEMPTS = 2
 
 
 @dataclass
@@ -90,9 +94,11 @@ class BrainResult:
 def _max_attempts() -> int:
     raw = (os.getenv("LOFI_WRITER_MAX_ATTEMPTS") or "").strip()
     try:
-        return max(1, int(raw)) if raw else DEFAULT_MAX_ATTEMPTS
+        requested = max(1, int(raw)) if raw else DEFAULT_MAX_ATTEMPTS
     except ValueError:
-        return DEFAULT_MAX_ATTEMPTS
+        requested = DEFAULT_MAX_ATTEMPTS
+    # Hard clamp — never allow more than the managed cap regardless of env.
+    return min(requested, HARD_MAX_ATTEMPTS)
 
 
 def story_diagnostics(draft: ScriptDraft) -> dict[str, Any]:

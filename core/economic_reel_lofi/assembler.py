@@ -7,9 +7,17 @@ Reuses slow-zoom framing similar to compile_dynamic_reel without mutating it.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
+import os
+import queue
 import re
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -64,6 +72,55 @@ def _purge_moviepy_temp_audio() -> list[Path]:
     if removed:
         print(f"[LOFI audio] purged moviepy temp audio files={len(removed)}")
     return removed
+
+
+def _ffmpeg_subprocess_timeout_s() -> float:
+    return float(getattr(lofi_cfg, "RENDER_SUBPROCESS_TIMEOUT_S", 300.0) or 300.0)
+
+
+def kill_descendant_ffmpeg() -> int:
+    """Kill ffmpeg processes descended from this Python PID (timeout abort)."""
+    n = 0
+    try:
+        import psutil
+
+        me = psutil.Process(os.getpid())
+        for child in me.children(recursive=True):
+            name = (child.name() or "").lower()
+            if "ffmpeg" in name:
+                try:
+                    child.kill()
+                    n += 1
+                except Exception:  # noqa: BLE001
+                    pass
+        return n
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        pid = os.getpid()
+        ps = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                (
+                    "$seen=@(); $frontier=@(" + str(pid) + "); "
+                    "while($frontier.Count -gt 0){ $p=$frontier[0]; "
+                    "if($frontier.Count -gt 1){$frontier=$frontier[1..($frontier.Count-1)]}else{$frontier=@()}; "
+                    "Get-CimInstance Win32_Process -Filter \"ParentProcessId=$p\" | ForEach-Object { "
+                    "$seen+=$_; $frontier+=$_.ProcessId } }; "
+                    "$seen | Where-Object { $_.Name -match 'ffmpeg' } | "
+                    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+                ),
+            ],
+            timeout=20,
+            check=False,
+            capture_output=True,
+        )
+        del ps
+    except Exception:  # noqa: BLE001
+        pass
+    return n
 
 
 def _caption_words(text: str) -> list[str]:
@@ -178,6 +235,9 @@ def apply_duotone(
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+_VIGNETTE_MASK_CACHE: dict[tuple[int, int, float], np.ndarray] = {}
+
+
 def apply_vignette(rgb: np.ndarray, strength: float | None = None) -> np.ndarray:
     """Dark vintage vignette — corner darken, transparent center."""
     if strength is None:
@@ -189,14 +249,16 @@ def apply_vignette(rgb: np.ndarray, strength: float | None = None) -> np.ndarray
         return rgb
     strength = max(0.0, min(0.45, strength))
     h, w = rgb.shape[:2]
-    y, x = np.ogrid[:h, :w]
-    cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
-    # Normalized radial distance; corners ≈ 1.0+
-    dist = np.sqrt(((x - cx) / max(cx, 1.0)) ** 2 + ((y - cy) / max(cy, 1.0)) ** 2)
-    # Soft falloff: center untouched, corners darkened by ``strength``
-    edge = np.clip((dist - 0.35) / 0.95, 0.0, 1.0)
-    edge = edge * edge * (3.0 - 2.0 * edge)  # smoothstep
-    mask = (1.0 - strength * edge)[..., None]
+    key = (h, w, round(strength, 5))
+    mask = _VIGNETTE_MASK_CACHE.get(key)
+    if mask is None:
+        y, x = np.ogrid[:h, :w]
+        cy, cx = (h - 1) / 2.0, (w - 1) / 2.0
+        dist = np.sqrt(((x - cx) / max(cx, 1.0)) ** 2 + ((y - cy) / max(cy, 1.0)) ** 2)
+        edge = np.clip((dist - 0.35) / 0.95, 0.0, 1.0)
+        edge = edge * edge * (3.0 - 2.0 * edge)  # smoothstep
+        mask = (1.0 - strength * edge)[..., None].astype(np.float32)
+        _VIGNETTE_MASK_CACHE[key] = mask
     return np.clip(rgb.astype(np.float32) * mask, 0, 255).astype(np.uint8)
 
 
@@ -355,6 +417,9 @@ def apply_film_grain(
     return np.clip(out * 255.0, 0, 255).astype(np.uint8)
 
 
+_MULTIPLY_PLATE_CACHE: dict[tuple[int, int, int, float], tuple[np.ndarray, np.ndarray]] = {}
+
+
 def apply_caption_film_multiply(
     rgb: np.ndarray,
     *,
@@ -373,27 +438,33 @@ def apply_caption_film_multiply(
     if op < 0.001:
         return rgb
     h, w = rgb.shape[:2]
-    rng = np.random.default_rng(int(seed) & 0x7FFFFFFF)
-    nh, nw = max(1, h // 2), max(1, w // 2)
-    mono = rng.normal(0.0, 1.0, size=(nh, nw)).astype(np.float32)
-    mono = (
-        mono
-        + np.roll(mono, 2, 0)
-        + np.roll(mono, -2, 0)
-        + np.roll(mono, 2, 1)
-        + np.roll(mono, -2, 1)
-    ) / 5.0
-    plate = np.clip(0.58 + mono * 0.09, 0.32, 0.88)
-    plate = np.array(
-        PILImage.fromarray(
-            np.clip(plate * 255.0, 0, 255).astype(np.uint8), mode="L"
-        ).resize((w, h), PILImage.BILINEAR),
-        dtype=np.float32,
-    ) / 255.0
-    plate = plate[..., None]
-    y = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
-    band = np.exp(-((y - 0.46) ** 2) / (2.0 * 0.12 ** 2))
-    weight = (band * op)[..., None]
+    key = (h, w, int(seed) & 0x7FFFFFFF, round(op, 5))
+    cached = _MULTIPLY_PLATE_CACHE.get(key)
+    if cached is None:
+        rng = np.random.default_rng(key[2])
+        nh, nw = max(1, h // 2), max(1, w // 2)
+        mono = rng.normal(0.0, 1.0, size=(nh, nw)).astype(np.float32)
+        mono = (
+            mono
+            + np.roll(mono, 2, 0)
+            + np.roll(mono, -2, 0)
+            + np.roll(mono, 2, 1)
+            + np.roll(mono, -2, 1)
+        ) / 5.0
+        plate = np.clip(0.58 + mono * 0.09, 0.32, 0.88)
+        plate = np.array(
+            PILImage.fromarray(
+                np.clip(plate * 255.0, 0, 255).astype(np.uint8), mode="L"
+            ).resize((w, h), PILImage.BILINEAR),
+            dtype=np.float32,
+        ) / 255.0
+        plate = plate[..., None]
+        y = np.linspace(0.0, 1.0, h, dtype=np.float32)[:, None]
+        band = np.exp(-((y - 0.46) ** 2) / (2.0 * 0.12 ** 2))
+        weight = (band * op)[..., None]
+        cached = (plate, weight)
+        _MULTIPLY_PLATE_CACHE[key] = cached
+    plate, weight = cached
     base = rgb.astype(np.float32) / 255.0
     multiplied = base * plate
     out = base * (1.0 - weight) + multiplied * weight
@@ -605,6 +676,225 @@ def _cover_crop_to_canvas(ov: np.ndarray, w: int, h: int) -> np.ndarray:
     return cropped
 
 
+class _SeqOverlayReader:
+    """Sequential ffmpeg decode of the grain overlay — no per-frame MoviePy seek.
+
+    A pump thread keeps the pipe draining (Windows pipes are ~64KB). Frames are
+    cover-cropped to canvas and gain-applied once, then reused on duplicate idx.
+    """
+
+    prepped = True
+
+    def __init__(self, path: Path, w: int, h: int, gain: float, fps: float, duration_s: float):
+        import imageio_ffmpeg
+
+        self.path = Path(path)
+        self.w = int(w)
+        self.h = int(h)
+        self.gain = float(gain)
+        self.fps = max(1.0, float(fps))
+        self.duration_s = max(0.001, float(duration_s))
+        self.frame_bytes = self.w * self.h * 3
+        self.exe = imageio_ffmpeg.get_ffmpeg_exe()
+        self.proc: subprocess.Popen[bytes] | None = None
+        self.i = -1
+        self.cur: np.ndarray | None = None
+        self._idx_cache: dict[int, np.ndarray] = {}
+        self._q: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=6)
+        self._stop = threading.Event()
+        self._pump: threading.Thread | None = None
+        self._open()
+
+    def _cmd(self) -> list[str]:
+        vf = (
+            f"scale={self.w}:{self.h}:force_original_aspect_ratio=increase,"
+            f"crop={self.w}:{self.h}"
+        )
+        return [
+            self.exe,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(self.path),
+            "-vf",
+            vf,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "pipe:1",
+        ]
+
+    def _readexact(self, n: int) -> bytes | None:
+        if self.proc is None or self.proc.stdout is None:
+            return None
+        chunks: list[bytes] = []
+        got = 0
+        while got < n:
+            part = self.proc.stdout.read(n - got)
+            if not part:
+                return None
+            chunks.append(part)
+            got += len(part)
+        return b"".join(chunks)
+
+    def _pump_loop(self) -> None:
+        while not self._stop.is_set():
+            raw = self._readexact(self.frame_bytes)
+            if raw is None:
+                try:
+                    self._q.put(None, timeout=0.25)
+                except queue.Full:
+                    pass
+                return
+            fr = np.frombuffer(raw, dtype=np.uint8).reshape(self.h, self.w, 3).copy()
+            if self.gain != 1.0:
+                fr = np.clip(fr.astype(np.float32) * self.gain, 0, 255).astype(np.uint8)
+            while not self._stop.is_set():
+                try:
+                    self._q.put(fr, timeout=0.25)
+                    break
+                except queue.Full:
+                    continue
+
+    def _open(self) -> None:
+        self.close()
+        self._stop.clear()
+        self._q = queue.Queue(maxsize=6)
+        self.proc = subprocess.Popen(
+            self._cmd(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        self.i = -1
+        self.cur = None
+        self._pump = threading.Thread(target=self._pump_loop, name="lofi-ov-pump", daemon=True)
+        self._pump.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._pump is not None:
+            self._pump.join(timeout=1.5)
+            self._pump = None
+        if self.proc is None:
+            return
+        try:
+            if self.proc.stdout:
+                self.proc.stdout.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.proc.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            pass
+        self.proc = None
+
+    def get(self, t: float) -> np.ndarray:
+        u = float(t) % self.duration_s
+        idx = int(u * self.fps)
+        cached = self._idx_cache.get(idx)
+        if cached is not None:
+            return cached
+        if idx < self.i:
+            self._open()
+        while self.i < idx:
+            try:
+                fr = self._q.get(timeout=8.0)
+            except queue.Empty:
+                if self.cur is not None:
+                    return self.cur
+                return np.zeros((self.h, self.w, 3), dtype=np.uint8)
+            if fr is None:
+                self._open()
+                continue
+            self.i += 1
+            self.cur = fr
+            self._idx_cache[self.i] = fr
+            if len(self._idx_cache) > 8:
+                oldest = min(self._idx_cache)
+                if oldest != self.i:
+                    del self._idx_cache[oldest]
+        return self.cur if self.cur is not None else np.zeros((self.h, self.w, 3), dtype=np.uint8)
+
+    def __call__(self, t: float) -> np.ndarray:
+        return self.get(t)
+
+
+def _local_moviepy_scratch() -> Path:
+    """OS temp — MoviePy/ffmpeg stall when writing through Google Drive sync."""
+    path = Path(tempfile.gettempdir()) / "lofi_moviepy"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _cached_local_overlay(src: Path) -> Path:
+    """Copy the grain overlay off Drive once so sequential ffmpeg decode is local."""
+    src = Path(src)
+    dest = _local_moviepy_scratch() / "overlay_film_grain.mp4"
+    try:
+        if dest.is_file() and dest.stat().st_size == src.stat().st_size:
+            print(f"[LOFI assemble] grain_overlay local cache={dest}")
+            return dest
+        t0 = time.perf_counter()
+        print(f"[LOFI assemble] copying grain overlay to local scratch ({src.stat().st_size} bytes)")
+        shutil.copy2(src, dest)
+        print(f"[LOFI assemble] grain overlay copy {time.perf_counter() - t0:.1f}s")
+        return dest
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOFI assemble] WARN overlay local copy failed: {exc}")
+        return src
+
+
+def _probe_video_meta(path: Path) -> tuple[float, float, int, int]:
+    """Return (duration_s, fps, width, height) without MoviePy/Drive seeks."""
+    import imageio_ffmpeg
+
+    ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe())
+    probe = ffmpeg.with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
+    exe = str(probe if probe.is_file() else ffmpeg)
+    try:
+        raw = subprocess.check_output(
+            [
+                exe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height,r_frame_rate,duration",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+                str(path),
+            ],
+            timeout=30,
+            stderr=subprocess.STDOUT,
+        )
+        data = json.loads(raw.decode("utf-8", errors="replace") or "{}")
+        stream = (data.get("streams") or [{}])[0]
+        fmt = data.get("format") or {}
+        w = int(stream.get("width") or lofi_cfg.REEL_WIDTH)
+        h = int(stream.get("height") or lofi_cfg.REEL_HEIGHT)
+        dur = float(stream.get("duration") or fmt.get("duration") or 180.0)
+        rate = str(stream.get("r_frame_rate") or "30/1")
+        if "/" in rate:
+            a, b = rate.split("/", 1)
+            fps = float(a) / max(float(b), 1.0)
+        else:
+            fps = float(rate or 30.0)
+        return max(0.1, dur), max(1.0, fps), w, h
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOFI assemble] WARN ffprobe overlay meta failed: {exc}")
+        return 180.0, float(lofi_cfg.REEL_FPS), lofi_cfg.REEL_WIDTH, lofi_cfg.REEL_HEIGHT
+
+
 def _extract_grain_specks(ov: np.ndarray) -> np.ndarray:
     """Lift near-black film-grain plates so Screen/Overlay actually reads."""
     rgb = ov.astype(np.float32)
@@ -675,6 +965,7 @@ def apply_dust_overlay_screen(
     overlay_source: str | None = None,
 ) -> np.ndarray:
     """Single-pass grain: screen the overlay file onto the picture. No chroma pass."""
+    global _GRAIN_BLEND_LOGGED_T, _GRAIN_PREP_LOGGED
     del overlay_duration_s
     if not bool(getattr(lofi_cfg, "ENABLE_DUST_OVERLAY", True)):
         return rgb
@@ -696,11 +987,21 @@ def apply_dust_overlay_screen(
     ov = np.asarray(ov)
     h, w = rgb.shape[:2]
     native_h, native_w = int(ov.shape[0]), int(ov.shape[1])
-    ov = _cover_crop_to_canvas(ov, w, h)
+    prepped = bool(getattr(overlay_getter, "prepped", False))
+    if not prepped and (native_h != h or native_w != w):
+        ov = _cover_crop_to_canvas(ov, w, h)
     gain = float(getattr(lofi_cfg, "DUST_OVERLAY_GAIN", 1.0))
-    pre_mean = float(ov.astype(np.float32).mean())
-    pre_max = float(ov.max())
-    if gain != 1.0:
+    log_blend = False
+    t_key = int(round(float(t)))
+    if (
+        t_key in (0, 3, 6)
+        and t_key not in _GRAIN_BLEND_LOGGED_T
+        and abs(float(t) - t_key) < 0.05
+    ):
+        log_blend = True
+    pre_mean = float(ov.mean()) if log_blend else 0.0
+    pre_max = float(ov.max()) if log_blend else 0.0
+    if (not prepped) and gain != 1.0:
         ov = np.clip(ov.astype(np.float32) * gain, 0, 255).astype(np.uint8)
     blend = str(getattr(lofi_cfg, "DUST_OVERLAY_BLEND", "screen")).lower()
     a = rgb.astype(np.float32) / 255.0
@@ -709,13 +1010,7 @@ def apply_dust_overlay_screen(
         g = np.stack([g, g, g], axis=-1)
     elif g.shape[-1] == 4:
         g = g[..., :3]
-    global _GRAIN_BLEND_LOGGED_T
-    t_key = int(round(float(t)))
-    if (
-        t_key in (0, 3, 6)
-        and t_key not in _GRAIN_BLEND_LOGGED_T
-        and abs(float(t) - t_key) < 0.05
-    ):
+    if log_blend:
         _GRAIN_BLEND_LOGGED_T.add(t_key)
         src = overlay_source or str(getattr(lofi_cfg, "DUST_OVERLAY_REL", ""))
         print(
@@ -731,7 +1026,6 @@ def apply_dust_overlay_screen(
     else:
         mixed = _blend_screen(a, g)
     out = mixed if op >= 0.999 else (a * (1.0 - op) + mixed * op)
-    global _GRAIN_PREP_LOGGED
     if not _GRAIN_PREP_LOGGED:
         _GRAIN_PREP_LOGGED = True
         print(
@@ -1182,6 +1476,7 @@ def _pcm_peak_envelope(path: Path, sr: int = _VO_EDGE_TRIM_SR) -> tuple[np.ndarr
                 "-",
             ],
             stderr=subprocess.DEVNULL,
+            timeout=_ffmpeg_subprocess_timeout_s(),
         )
         env = np.abs(np.frombuffer(raw, dtype=np.float32))
         dur = float(len(env)) / float(sr) if sr else 0.0
@@ -1525,6 +1820,9 @@ def assemble_lofi_reel(
     sidecar_dir: Path | None = None,
     vo_sidecar_dir: Path | None = None,
     audit_out: dict[str, Any] | None = None,
+    render_effects: dict[str, bool] | None = None,
+    fast_preview: bool = False,
+    timeout_s: float | None = None,
 ) -> Path:
     """
     Compile Wonder Feed LOFI relationship/reflection reels.
@@ -1535,6 +1833,9 @@ def assemble_lofi_reel(
 
     One still per written line. ``caption_beats_per_scene`` cycles shorter
     on-screen captions over that held still, timed to the line's VO.
+
+    ``render_effects`` / ``fast_preview`` are opt-in gates. Default (omitted)
+    keeps every per-frame effect on — approved pipeline output.
     """
     try:
         from moviepy import (  # type: ignore
@@ -1555,6 +1856,15 @@ def assemble_lofi_reel(
     _GRAIN_BLEND_LOGS = 0
     _GRAIN_BLEND_LOGGED_T = set()
     _UPSCALE_LOGGED = set()
+    t_assemble0 = time.perf_counter()
+    fx = lofi_cfg.resolve_render_effects(
+        render_effects, fast_preview=bool(fast_preview)
+    )
+    print(
+        "[LOFI assemble] stage=prep_start render_effects "
+        + " ".join(f"{k}={int(fx[k])}" for k in lofi_cfg.RENDER_EFFECT_KEYS)
+        + (" fast_preview=1" if not any(fx.values()) else "")
+    )
 
     if len(scene_images) != len(captions):
         raise ValueError("scene_images and captions length mismatch")
@@ -1740,43 +2050,48 @@ def assemble_lofi_reel(
     # Reference film-grain overlay — loop/trim to final duration; Screen below caption
     overlay_getter = None
     overlay_clip = None
+    overlay_seq: _SeqOverlayReader | None = None
     overlay_start = 0.0
     overlay_fps = float(lofi_cfg.REEL_FPS)
     overlay_source_path = ""
-    if bool(getattr(lofi_cfg, "ENABLE_DUST_OVERLAY", True)):
+    if fx["grain"] and bool(getattr(lofi_cfg, "ENABLE_DUST_OVERLAY", True)):
         try:
-            from moviepy import VideoFileClip as _VFC  # type: ignore
-
-            ov_path = ensure_dust_overlay_asset(Path(engine_root))
+            ov_path = _cached_local_overlay(ensure_dust_overlay_asset(Path(engine_root)))
             overlay_source_path = str(ov_path)
-            overlay_clip = _VFC(str(ov_path), audio=False)
-            ov_dur = float(overlay_clip.duration or 1.0)
-            overlay_fps = float(overlay_clip.fps or lofi_cfg.REEL_FPS)
+            ov_dur, overlay_fps, ov_w, ov_h = _probe_video_meta(ov_path)
             overlay_start = 0.0
-            def overlay_getter(t, _clip=overlay_clip, _dur=ov_dur):
-                u = float(t) % max(_dur, 0.001)
-                u = min(max(0.0, u), _dur - 1e-3)
-                return _clip.get_frame(u)
+            gain = float(getattr(lofi_cfg, "DUST_OVERLAY_GAIN", 1.0))
+            overlay_seq = _SeqOverlayReader(
+                ov_path,
+                lofi_cfg.REEL_WIDTH,
+                lofi_cfg.REEL_HEIGHT,
+                gain,
+                overlay_fps,
+                ov_dur,
+            )
+            overlay_getter = overlay_seq
+            overlay_clip = None
             print(
                 f"[LOFI assemble] grain_overlay={ov_path} "
-                f"native={int(overlay_clip.w)}x{int(overlay_clip.h)} "
+                f"native={ov_w}x{ov_h} "
                 f"src_dur={ov_dur:.2f}s loop_or_trim=True blend="
                 f"{getattr(lofi_cfg, 'DUST_OVERLAY_BLEND', 'screen')} "
                 f"op={getattr(lofi_cfg, 'DUST_OVERLAY_OPACITY', 0.6)} "
-                f"gain={getattr(lofi_cfg, 'DUST_OVERLAY_GAIN', 1.0)} "
+                f"gain={gain} decode=seq_ffmpeg local_copy=1 "
                 f"below_caption=True below_logo=True"
             )
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("grain overlay load failed: %s", exc)
             print(f"[LOFI assemble] WARN grain overlay failed: {exc}")
             overlay_clip = None
+            overlay_seq = None
             overlay_getter = None
 
     # Brightness-factor debug table (independent of zoom) at 0.5s steps
     n_est = len(scene_images)
     total_est = float(sum(scene_durs))
     pulse_rows: list[dict[str, float]] = []
-    if bool(getattr(lofi_cfg, "LIGHT_BREATH_DEBUG", True)):
+    if fx["pulse"] and bool(getattr(lofi_cfg, "LIGHT_BREATH_DEBUG", True)):
         print("[LOFI pulse] brightness_factor vs time (independent of Ken Burns zoom)")
         t_s = 0.0
         while t_s <= total_est + 0.001:
@@ -1797,8 +2112,10 @@ def assemble_lofi_reel(
         f"highlight_clamp={getattr(lofi_cfg, 'ENABLE_HIGHLIGHT_CLAMP', True)} | "
         f"caption={style} size_frac={getattr(lofi_cfg, 'CAPTION_LINE_HEIGHT_FRAC', 0)} "
         f"size_px={int(lofi_cfg.REEL_HEIGHT * float(getattr(lofi_cfg, 'CAPTION_LINE_HEIGHT_FRAC', 0.034)))} "
-        f"word_fade=True | voice={lofi_cfg.tts_voice_id()} "
-        f"speed={lofi_cfg.tts_speed()}"
+        f"word_fade={int(fx['caption_fade'])} | voice={lofi_cfg.tts_voice_id()} "
+        f"speed={lofi_cfg.tts_speed()} | "
+        f"fx_grain={int(fx['grain'])} fx_vignette={int(fx['vignette'])} "
+        f"fx_kenburns={int(fx['kenburns'])} fx_pulse={int(fx['pulse'])}"
     )
 
     for idx, (img_path, caption) in enumerate(zip(scene_images, captions)):
@@ -1831,11 +2148,23 @@ def assemble_lofi_reel(
         # Alternate pan/zoom direction per scene (still slow ease)
         pan_sign = 1.0 if (idx % 2 == 0) else -1.0
         zoom_out = idx % 2 == 1
+        logo_pil = PILImage.fromarray(logo_layer) if logo_layer is not None else None
+        ui_cache: dict[Any, PILImage.Image] = {}
+        static_ui: PILImage.Image | None = None
+        if not fx["caption_fade"]:
+            cap_static = render_lofi_caption_layer(
+                str(caption),
+                engine_root=engine_root,
+                style=style,
+            )
+            if logo_pil is not None:
+                cap_static = PILImage.alpha_composite(cap_static, logo_pil)
+            static_ui = cap_static
 
         def _make_frame(
             t,
             _base=base,
-            _logo=logo_layer,
+            _logo_pil=logo_pil,
             _idx=idx,
             _caption=str(caption),
             _timings=timings,
@@ -1847,67 +2176,89 @@ def assemble_lofi_reel(
             _ov_get=overlay_getter,
             _ov_start=overlay_start,
             _ov_src=overlay_source_path,
+            _ui_cache=ui_cache,
+            _static_ui=static_ui,
+            _fx=fx,
         ):
-            # Ease-in-out across FULL scene duration — slow drift
-            u = max(0.0, min(1.0, t / max(_dur, 0.001)))
-            ease = _smootherstep01(u)
-            if _zoom_out:
-                zoom = z1 - (z1 - z0) * ease
-            else:
-                zoom = z0 + (z1 - z0) * ease
-            zoom = max(1.0, min(z_cap, zoom))
-            crop_w = int(w / zoom)
-            crop_h = int(h / zoom)
-            # Kinetic pan — same ease, subtle amplitude
-            if enable_pan:
-                pan_e = math.sin(ease * math.pi)
-                ox = int(_pan_sign * pan_amp_x * pan_e)
-                oy = int((-_pan_sign) * pan_amp_y * pan_e * 0.6)
-            else:
-                ox = oy = 0
-            x0 = (w - crop_w) // 2 + ox
-            y0 = (h - crop_h) // 2 + oy
-            x0 = max(0, min(w - crop_w, x0))
-            y0 = max(0, min(h - crop_h, y0))
-            cropped = _base[y0 : y0 + crop_h, x0 : x0 + crop_w]
-            frame = np.array(
-                PILImage.fromarray(cropped).resize((w, h), PILImage.LANCZOS)
-            )
             t_global = _t_offset + float(t)
+            if _fx["kenburns"]:
+                # Ease-in-out across FULL scene duration — slow drift
+                u = max(0.0, min(1.0, t / max(_dur, 0.001)))
+                ease = _smootherstep01(u)
+                if _zoom_out:
+                    zoom = z1 - (z1 - z0) * ease
+                else:
+                    zoom = z0 + (z1 - z0) * ease
+                zoom = max(1.0, min(z_cap, zoom))
+                crop_w = int(w / zoom)
+                crop_h = int(h / zoom)
+                # Kinetic pan — same ease, subtle amplitude
+                if enable_pan:
+                    pan_e = math.sin(ease * math.pi)
+                    ox = int(_pan_sign * pan_amp_x * pan_e)
+                    oy = int((-_pan_sign) * pan_amp_y * pan_e * 0.6)
+                else:
+                    ox = oy = 0
+                x0 = (w - crop_w) // 2 + ox
+                y0 = (h - crop_h) // 2 + oy
+                x0 = max(0, min(w - crop_w, x0))
+                y0 = max(0, min(h - crop_h, y0))
+                cropped = _base[y0 : y0 + crop_h, x0 : x0 + crop_w]
+                frame = np.array(
+                    PILImage.fromarray(cropped).resize((w, h), PILImage.LANCZOS)
+                )
+            else:
+                frame = _base
             # Picture stack only — overlay never after captions/logo
-            frame = apply_animated_light_pulse(frame, t=t_global, seed=3)
-            if bool(getattr(lofi_cfg, "ENABLE_PROCEDURAL_GRAIN", False)):
+            if _fx["pulse"]:
+                frame = apply_animated_light_pulse(frame, t=t_global, seed=3)
+            if _fx["grain"] and bool(getattr(lofi_cfg, "ENABLE_PROCEDURAL_GRAIN", False)):
                 frame = apply_film_grain(frame, seed=17, t=t_global)
-            frame = apply_vignette(frame)
+            if _fx["vignette"]:
+                frame = apply_vignette(frame)
             if bool(getattr(lofi_cfg, "ENABLE_DUST_PARTICLES", False)):
                 frame = apply_dust_particles(frame, t=t_global, seed=11)
-            frame = apply_caption_film_multiply(frame, seed=41, t=0.0)
-            frame = apply_dust_overlay_screen(
-                frame,
-                t=t_global,
-                overlay_getter=_ov_get,
-                start_offset_s=_ov_start,
-                fps=overlay_fps,
-                overlay_source=_ov_src,
-            )
+            if _fx["vignette"]:
+                frame = apply_caption_film_multiply(frame, seed=41, t=0.0)
+            if _fx["grain"]:
+                frame = apply_dust_overlay_screen(
+                    frame,
+                    t=t_global,
+                    overlay_getter=_ov_get,
+                    start_offset_s=_ov_start,
+                    fps=overlay_fps,
+                    overlay_source=_ov_src,
+                )
             # UI last: captions then logo, always above the grain overlay
-
-            cap_text = _caption
-            cap_timings = _timings
-            if _cycle:
-                cap_text, cap_timings, _span = active_caption_cycle(_cycle, float(t))
-            cap = render_lofi_caption_layer_word_fade(
-                cap_text,
-                cap_timings,
-                float(t),
-                engine_root=engine_root,
-                style=style,
-                scene_duration_s=_dur,
-            )
+            if _static_ui is not None:
+                ui = _static_ui
+            else:
+                cap_text = _caption
+                cap_timings = _timings
+                if _cycle:
+                    cap_text, cap_timings, _span = active_caption_cycle(_cycle, float(t))
+                if cap_timings:
+                    ui_key: Any = ("fade", cap_text, round(float(t), 4), round(_dur, 3))
+                else:
+                    ui_key = ("static", cap_text, float(t) >= 0.05)
+                ui = _ui_cache.get(ui_key)
+                if ui is None:
+                    cap = render_lofi_caption_layer_word_fade(
+                        cap_text,
+                        cap_timings,
+                        float(t),
+                        engine_root=engine_root,
+                        style=style,
+                        scene_duration_s=_dur,
+                    )
+                    if _logo_pil is not None:
+                        cap = PILImage.alpha_composite(cap, _logo_pil)
+                    ui = cap
+                    _ui_cache[ui_key] = ui
+                    if len(_ui_cache) > 48:
+                        _ui_cache.pop(next(iter(_ui_cache)))
             rgba = PILImage.fromarray(frame).convert("RGBA")
-            rgba = PILImage.alpha_composite(rgba, cap)
-            if _logo is not None:
-                rgba = PILImage.alpha_composite(rgba, PILImage.fromarray(_logo))
+            rgba = PILImage.alpha_composite(rgba, ui)
             return np.array(rgba.convert("RGB"))
 
         clip = VideoClip(frame_function=_make_frame, duration=float(this_dur))
@@ -1934,17 +2285,32 @@ def assemble_lofi_reel(
     if any(vp is not None for vp in scene_voice_paths):
         present = [i for i, vp in enumerate(scene_voice_paths) if vp is not None]
         last_present = present[-1] if present else -1
-        t_cursor = 0.0
-        for idx, vp in enumerate(scene_voice_paths):
+        # Audio is driven by the SAME per-scene slots as the video clips, so the
+        # VO of scene i starts at the exact instant its still/caption appears:
+        # aud/slot start[i] == t_offset[i] == cumsum(scene_durs[:i]).
+        #
+        # Historically the VO track was rebuilt by concatenating raw VO durations
+        # + an inter-line gap, so its cumulative clock (sum(vo_dur)+gaps) drifted
+        # from the video clock (sum(scene_durs)) — captions (locked to the video
+        # clock) then lagged the spoken audio by up to ~3s by the final beat. We
+        # now position every VO clip at its scene start over a full-length silent
+        # bed, making audio & captions share one frame-locked timeline.
+        scene_audio_starts: list[float] = []
+        _acc = 0.0
+        for _idx in range(len(scene_durs)):
+            scene_audio_starts.append(_acc)
+            _acc += float(scene_durs[_idx])
+        vo_layers: list[Any] = []
+        for idx, vp in enumerate(voice_paths):
+            slot = float(scene_durs[idx] if idx < len(scene_durs) else scene_duration_s)
+            t0 = float(scene_audio_starts[idx] if idx < len(scene_audio_starts) else 0.0)
             if vp is None or not Path(vp).is_file():
-                slot = float(
-                    scene_durs[idx] if idx < len(scene_durs) else scene_duration_s
-                )
+                # Empty scene: pad its slot with silence so the bed stays aligned.
                 try:
-                    silence = _silence_audio_clip(slot)
+                    silence = _silence_audio_clip(slot).with_start(t0)
                     vo_parts.append(silence)
+                    vo_layers.append(silence)
                     audio_clips_to_close.append(silence)
-                    t_cursor += float(silence.duration or 0)
                 except Exception:  # noqa: BLE001
                     continue
                 continue
@@ -1955,7 +2321,6 @@ def assemble_lofi_reel(
                 vac = _audio_clip_from_samples(pcm[0], pcm[1])
             audio_clips_to_close.append(vac)
             vdur = float(vac.duration or 0.0)
-            slot = float(scene_durs[idx] if idx < len(scene_durs) else scene_duration_s)
             never_trim = bool(getattr(lofi_cfg, "NEVER_TRIM_VOICEOVER", True))
             if vdur > slot + 0.05:
                 print(
@@ -1967,26 +2332,19 @@ def assemble_lofi_reel(
                 float(getattr(lofi_cfg, "LOFI_VOICE_VOLUME", 1.0))
             )
             vo_parts.append(vac)
-            t_cursor += vdur
-            visual_slot = float(
-                scene_durs[idx] if idx < len(scene_durs) else scene_duration_s
-            )
-            gap_s = max(0.0, visual_slot - vdur)
-            if idx < last_present and gap_s > 0.001:
-                silence = _silence_audio_clip(gap_s)
-                vo_parts.append(silence)
-                audio_clips_to_close.append(silence)
-                gap_windows.append(
-                    (
-                        round(t_cursor, 3),
-                        round(t_cursor + gap_s, 3),
+            vo_layers.append(vac.with_start(t0))
+            gap_s = max(0.0, slot - vdur)
+            # Duck window = the tail of this scene's slot (after the spoken VO,
+            # before the next scene's VO begins). BGM swells in those pauses.
+            if idx < last_present and gap_s >= 0.15 and vdur >= 0.0:
+                gap_lo = t0 + min(vdur, slot)
+                gap_hi = t0 + slot
+                if gap_hi - gap_lo >= 0.08:
+                    gap_windows.append((round(gap_lo, 3), round(gap_hi, 3)))
+                    print(
+                        f"[LOFI assemble] scene {idx + 1} pause {gap_s:.3f}s "
+                        f"duck={gap_windows[-1]}"
                     )
-                )
-                t_cursor += gap_s
-                print(
-                    f"[LOFI assemble] interline silence {gap_s:.3f}s "
-                    f"after scene {idx + 1} duck={gap_windows[-1]}"
-                )
 
     bgm = bgm_path or pick_library_bgm(
         engine_root,
@@ -2005,7 +2363,20 @@ def assemble_lofi_reel(
     bac = None
     vo_full = None
     if vo_parts:
-        vo_full = concatenate_audioclips(vo_parts)
+        # VO clips are now individually positioned at their scene start offsets.
+        # Overlay them on a full-length silent bed (duration == total_dur) so the
+        # VO clock == the video/caption clock frame-by-frame.
+        bed = None
+        try:
+            bed = _silence_audio_clip(total_dur)
+        except Exception:  # noqa: BLE001
+            bed = None
+        if bed is not None:
+            layers = [bed] + vo_layers
+            vo_full = CompositeAudioClip(layers).with_duration(total_dur)
+            audio_clips_to_close.append(bed)
+        else:
+            vo_full = concatenate_audioclips(vo_parts)
         audio_clips_to_close.append(vo_full)
     bgm_full_vol = float(getattr(lofi_cfg, "BGM_VOLUME", 0.38))
     if bgm is None or not Path(bgm).is_file():
@@ -2160,17 +2531,66 @@ def assemble_lofi_reel(
     output_mp4 = Path(output_mp4)
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
     _purge_moviepy_temp_audio()
-    try:
+    scratch = _local_moviepy_scratch()
+    local_mp4 = scratch / output_mp4.name
+    t_prep = time.perf_counter() - t_assemble0
+    print(
+        f"[LOFI assemble] stage=encode_start prep={t_prep:.1f}s "
+        f"codec=libx264 preset=fast crf=20 threads=0 "
+        f"scratch={local_mp4}"
+    )
+    t_enc0 = time.perf_counter()
+    cap = float(timeout_s) if timeout_s is not None else 0.0
+    if cap > 0:
+        print(f"[LOFI assemble] encode timeout={cap:.0f}s")
+
+    def _write_mp4() -> None:
         final.write_videofile(
-            str(output_mp4),
+            str(local_mp4),
             fps=lofi_cfg.REEL_FPS,
             codec="libx264",
             audio=audio_attached,
             audio_codec="aac" if audio_attached else None,
             preset="fast",
-            ffmpeg_params=["-crf", "20", "-pix_fmt", "yuv420p"],
+            ffmpeg_params=["-crf", "20", "-pix_fmt", "yuv420p", "-threads", "0"],
             logger=None,
-            temp_audiofile_path=moviepy_temp_audio_dir(),
+            temp_audiofile_path=str(scratch),
+        )
+
+    try:
+        if cap > 0:
+            from concurrent.futures import ThreadPoolExecutor
+            from concurrent.futures import TimeoutError as FutTimeout
+
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(_write_mp4)
+                try:
+                    fut.result(timeout=cap)
+                except FutTimeout as exc:
+                    killed = kill_descendant_ffmpeg()
+                    raise TimeoutError(
+                        f"LOFI encode exceeded {cap:.0f}s "
+                        f"(killed {killed} ffmpeg children)"
+                    ) from exc
+        else:
+            _write_mp4()
+        t_enc = time.perf_counter() - t_enc0
+        print(f"[LOFI assemble] stage=encode_done {t_enc:.1f}s")
+        if local_mp4.resolve() != output_mp4.resolve():
+            t_cp0 = time.perf_counter()
+            shutil.copy2(local_mp4, output_mp4)
+            try:
+                local_mp4.unlink()
+            except OSError:
+                pass
+            print(
+                f"[LOFI assemble] stage=copy_done "
+                f"{time.perf_counter() - t_cp0:.1f}s -> {output_mp4}"
+            )
+        print(
+            f"[LOFI assemble] stage=total "
+            f"{time.perf_counter() - t_assemble0:.1f}s "
+            f"(prep={t_prep:.1f}s encode={t_enc:.1f}s)"
         )
     finally:
         try:
@@ -2195,6 +2615,11 @@ def assemble_lofi_reel(
         if overlay_clip is not None:
             try:
                 overlay_clip.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if overlay_seq is not None:
+            try:
+                overlay_seq.close()
             except Exception:  # noqa: BLE001
                 pass
 

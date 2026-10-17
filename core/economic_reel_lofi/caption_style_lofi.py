@@ -40,6 +40,26 @@ def _letter_spacing() -> float:
     )
 
 
+# Import re lazily-inside helpers to keep module top clean for soft-fail.
+import re as _re  # noqa: E402
+
+
+def _clean_caption_text(text: str | None) -> str:
+    """Collapse stray whitespace so sub-word fragments never render as
+    ``"j ust"``. Some TTS alignment streams split a word across two tokens
+    (``"j"`` + ``"ust"``); the display layer must never inherit that.
+
+    Narrows runs of spaces/break chars to a single space and strips edges.
+    Leaves already-clean punctuation (apostrophes, dashes) untouched.
+    """
+    if not text:
+        return ""
+    value = str(text)
+    value = _re.sub(r"[\s\u00a0\u200b\u200c\u200d]+", " ", value)
+    value = value.replace("- ", "-").replace(" -", "-")
+    return value.strip()
+
+
 def _text_width_spaced(
     draw: ImageDraw.ImageDraw,
     text: str,
@@ -207,7 +227,7 @@ def wrap_lofi_caption(
     *,
     max_lines: int = 2,
 ) -> list[str]:
-    words = (text or "").split()
+    words = (_clean_caption_text(text) or "").split()
     if not words:
         return []
     lines: list[str] = []
@@ -363,7 +383,10 @@ def render_lofi_caption_layer_word_fade(
     Already-spoken words stay fully visible; the current word soft-fades in.
     Falls back to a static full caption when timings are missing.
     """
-    words = (text or "").split()
+    # Collapse stray internal whitespace (e.g. a TTS token ``"j ust"``) before
+    # any word splitting, then split on standard whitespace.
+    clean = _clean_caption_text(text)
+    words = (clean or "").split()
     if not words:
         return PILImage.new("RGBA", (width, height), (0, 0, 0, 0))
 

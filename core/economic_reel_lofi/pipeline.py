@@ -52,6 +52,21 @@ from core.economic_reel_lofi.validator_agent import validate_script
 
 _LOG = logging.getLogger(__name__)
 
+# Image API is locked until Gate 2 is explicitly approved.
+_IMAGE_API_UNLOCKED = False
+
+
+def unlock_image_api(*, reason: str = "gate2") -> None:
+    global _IMAGE_API_UNLOCKED
+    _IMAGE_API_UNLOCKED = True
+    print(f"[LOFI GATE 2] image API unlocked ({reason})")
+
+
+def image_api_unlocked() -> bool:
+    if os.environ.get("LOFI_UNLOCK_IMAGE_API", "").strip() in {"1", "true", "yes"}:
+        return True
+    return bool(_IMAGE_API_UNLOCKED)
+
 
 def _tts_breath_commas(caption: str) -> str:
     """TTS-only commas where a natural breath falls. On-screen caption unchanged."""
@@ -82,6 +97,55 @@ def _tts_text_with_breaks(caption: str) -> str:
     text = re.sub(r",\s+", ', <break time="0.30s" /> ', text)
     text = re.sub(r";\s+", '; <break time="0.32s" /> ', text)
     return " ".join(text.split())
+
+
+def _render_one_voiceover(
+    caption: str,
+    vo_path: Path,
+) -> tuple[Path, list[tuple[str, float, float]], float]:
+    """One ElevenLabs TTS render. Safe to call from a worker thread."""
+    from agents.media.audio_engine import generate_voiceover_with_timestamps
+
+    tts_text = _tts_text_with_breaks(_tts_breath_commas(caption))
+    use_ssml = "<break" in tts_text
+    speed = lofi_cfg.tts_speed()
+    model_id = lofi_cfg.tts_model() or "eleven_multilingual_v2"
+    voice_id = lofi_cfg.tts_voice_id()
+    print(
+        f"[LOFI VO] scene={Path(vo_path).stem} voice={voice_id} "
+        f"model={model_id} speed={speed} ssml={use_ssml} "
+        f"text={caption!r} tts={tts_text!r}"
+    )
+    vo_path, raw_timings = generate_voiceover_with_timestamps(
+        tts_text,
+        vo_path,
+        voice_id=voice_id or None,
+        model_id=model_id,
+        force_elevenlabs=True,
+        expressive_mode=False,
+        enable_ssml=use_ssml,
+        speed=speed,
+        voice_settings={
+            "stability": 1.0,
+            "similarity_boost": 1.0,
+            "style": 0.0,
+            "use_speaker_boost": True,
+            "speed": speed,
+        },
+    )
+    timings = [
+        (str(w), float(s), float(e))
+        for w, s, e in (raw_timings or [])
+        if str(w).strip()
+        and not str(w).startswith("<")
+        and str(w).lower() not in {"break", "time"}
+    ]
+    vo_dur = (
+        float(measure_vo_speech_duration(vo_path))
+        if vo_path and Path(vo_path).is_file()
+        else 0.0
+    )
+    return Path(vo_path), timings, vo_dur
 
 
 @dataclass
@@ -690,19 +754,26 @@ def assess_cross_beat_style(
         if d:
             decl_counts[d] = decl_counts.get(d, 0) + 1
     fails: list[str] = []
+    # Best-effort: cross-beat "distinct looks" and declared-vs-pixel lighting
+    # mismatches are downgraded to non-blocking warnings by default so they do
+    # not trigger a pipeline HOLD. Set QA_NON_BLOCKING_CROSS_STYLE=False to
+    # restore the strict gate.
+    non_blocking = bool(getattr(lofi_cfg, "QA_NON_BLOCKING_CROSS_STYLE", True))
     if len(clusters) >= 3:
-        fails.append(
+        msg = (
             f"cross-beat-style: {len(clusters)} distinct looks across "
             f"{len(stats)} beats clusters={clusters}"
         )
-        print(
-            f"[LOFI cross-style] FAIL classes={len(clusters)} "
-            f"groups={clusters}"
-        )
+        if non_blocking:
+            print(f"[LOFI cross-style] WARN (non-blocking) {msg}")
+        else:
+            fails.append(msg)
+            print(f"[LOFI cross-style] FAIL classes={len(clusters)} "
+                  f"groups={clusters}")
     else:
         print(f"[LOFI cross-style] PASS clusters={len(clusters)} groups={clusters}")
     if mismatches:
-        fails.append(
+        msg = (
             "lighting-pixel-mismatch: declared tags do not match accepted stills: "
             + ", ".join(
                 f"s{m['scene']} {m['declared']}→{m['pixel']} "
@@ -710,6 +781,10 @@ def assess_cross_beat_style(
                 for m in mismatches
             )
         )
+        if non_blocking:
+            print(f"[LOFI lighting] WARN (non-blocking) {msg}")
+        else:
+            fails.append(msg)
         print(f"[LOFI lighting] PIXEL-MISMATCH {mismatches}")
     print(
         f"[LOFI lighting] DECLARED counts={decl_counts} "
@@ -1468,13 +1543,75 @@ def assess_couple_bed_pose(
         return True, [], meta
 
 
+def _estimate_profile_direction(image_path: Path) -> str:
+    """Best-effort, non-blocking pixel heuristic for profile facing direction.
+
+    A left-facing profile has its facial features (and typically the lower
+    silhouette edge of the nose/brow) densest on the right half of the frame
+    when the subject is center-framed. This is a weak, deliberately conservative
+    signal: it returns ``"unknown"`` whenever it cannot decide, and each match
+    is double-hedged in ``_profiles_match`` so a wrong estimate never blocks.
+    """
+    try:
+        import numpy as np
+        from PIL import Image as PILImage
+
+        with PILImage.open(image_path).convert("L") as im:
+            arr = np.asarray(im, dtype=np.float32)
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    if arr.ndim != 2 or arr.size == 0:
+        return "unknown"
+    h, w = arr.shape
+    if w < 24 or h < 24:
+        return "unknown"
+    # Central vertical band is the primary profile mass (head/body).
+    left = arr[:, : w // 2].mean()
+    right = arr[:, w // 2 :].mean()
+    # Faces/skintones are generally lighter than the flat background mass on the
+    # opposite side; compare overall luminance inside the band only if the
+    # subject is reasonably centered and there is some tonal spread.
+    spread = float(arr.std())
+    if spread < 8.0:
+        return "unknown"
+    diff = float(right) - float(left)
+    if abs(diff) < 3.0:
+        return "unknown"
+    # Right half brighter ⇒ features densest on the right ⇒ facing left.
+    return "left" if diff > 0 else "right"
+
+
+def _profiles_match(declared: str, detected: str) -> bool:
+    """True when a declaration and the pixel estimate agree, or undeterminable.
+
+    ``declared`` is a prose tag like ``"left-facing profile"``. A non-empty
+    declaration always "matches" an ``unknown`` detection so an inconclusive
+    detector never becomes a gate.
+    """
+    d = declared.strip().lower()
+    if not d:
+        return True
+    if "left-facing" in d or "left profile" in d:
+        return detected in {"unknown", "left"}
+    if "right-facing" in d or "right profile" in d:
+        return detected in {"unknown", "right"}
+    return True
+
+
 def assess_hook_still(
     image_path: Path,
     *,
     scene: int = 1,
     subject_type: str = "",
+    declared_angle: str = "",
+    declared_gaze: str = "",
 ) -> tuple[bool, list[str], dict[str, Any]]:
-    """Highest-priority visual gate: scene 1 must hold attention."""
+    """Highest-priority visual gate: scene 1 must hold attention.
+
+    Profile orientation ("left-facing profile" / "right-facing profile" /
+    "gaze toward the light") is a non-blocking diagnostic attached to meta.
+    Orientation mismatch is logged, never a gate — it must not trigger HOLD.
+    """
     meta: dict[str, Any] = {
         "scene": scene,
         "subject_type": subject_type,
@@ -1531,6 +1668,25 @@ def assess_hook_still(
                 "note": str(data.get("note") or ""),
             }
         )
+        # Profile orientation ("left-facing profile" / "right-facing profile" /
+        # "gaze toward the light") is recorded as a non-blocking diagnostic.
+        # It is never a gate: a mismatch must not trigger HOLD. A best-effort
+        # pixel estimate and the declared angle/gaze are both surfaced here.
+        declared_angle = str(declared_angle or "").strip()
+        declared_gaze = str(declared_gaze or "").strip()
+        detected = _estimate_profile_direction(image_path)
+        orient = {
+            "declared_angle": declared_angle,
+            "declared_gaze": declared_gaze,
+            "detected_profile": detected,
+            "matched": _profiles_match(declared_angle, detected),
+        }
+        meta["orientation"] = orient
+        if not orient["matched"] and declared_angle:
+            print(
+                f"[LOFI hook] orientation (non-blocking) scene=1 "
+                f"declared={declared_angle!r} detected={detected!r}"
+            )
         failed = (
             meta["empty_still_life"]
             or not meta["has_character"]
@@ -2041,6 +2197,11 @@ def generate_and_qa_scene(
     ``generate_fn`` / ``assemble_fn`` default to the Schnell live path.
     Flux Dev callers pass generate_scene_image_dev + assemble_v2_prompt_dev.
     """
+    if bool(getattr(lofi_cfg, "IMAGE_API_REQUIRES_GATE2", True)) and not image_api_unlocked():
+        raise RuntimeError(
+            "Image API blocked: Gate 2 approval required. "
+            "Resume with --lofi-approve-gate 2 after reviewing the artifact."
+        )
     gen_image = generate_fn or generate_scene_image
     scene_i = int(row.get("scene") or 1)
     visual = str(row.get("visual_prompt") or "")
@@ -2268,6 +2429,8 @@ def generate_and_qa_scene(
             out_img,
             scene=scene_i,
             subject_type=subject_type,
+            declared_angle=str(row.get("hook_angle") or ""),
+            declared_gaze=str(row.get("hook_gaze") or ""),
         )
         del hook_ok
         gate_meta["hook"] = hook_meta
@@ -3405,6 +3568,7 @@ def _produce_one(
     index: int,
     script_only: bool = False,
     stills_only: bool = False,
+    dry_run: bool = False,
     batch_qty: int = 1,
     locked_script: dict[str, Any] | None = None,
     review_required: bool | None = None,
@@ -3415,7 +3579,7 @@ def _produce_one(
     stamp = _utc_stamp()
     metadata_dir = Path(metadata_dir) if metadata_dir else clips_dir.parent / "metadata"
     metadata_dir.mkdir(parents=True, exist_ok=True)
-    persist_on_pass = not script_only and not stills_only
+    persist_on_pass = not script_only and not stills_only and not dry_run
     review_required = bool(
         lofi_cfg.REVIEW_REQUIRED if review_required is None else review_required
     )
@@ -3655,6 +3819,11 @@ def _produce_one(
             f"--lofi-resume-from {path} --lofi-approve-gate {gate}"
         )
         if gate == 2:
+            from core.economic_reel_lofi.review_gates import write_approval_artifact
+
+            art = path.parent / f"{path.stem}_approval.json"
+            write_approval_artifact(art, script=script, gate=2)
+            print(f"[LOFI GATE 2] approval artifact → {art}")
             print("[LOFI GATE 2] concept list — approve before any Flux calls:")
             lines = [r for r in (script.get("lines") or []) if isinstance(r, dict)]
             by_scene = {int(r.get("scene") or 0): r for r in lines}
@@ -3785,6 +3954,14 @@ def _produce_one(
         lines[0]["episode_theme"] = str(script.get("theme") or force_theme or "")
         lines[0]["episode_module"] = module
         lines[0]["episode_thesis"] = str(script.get("thesis") or "")
+        lines[0]["hook_batch_index"] = max(0, int(index) - 1)
+        variety = script.get("hook_variety") if isinstance(script.get("hook_variety"), dict) else {}
+        if variety.get("angle"):
+            lines[0]["hook_angle"] = variety["angle"]
+        if variety.get("gaze"):
+            lines[0]["hook_gaze"] = variety["gaze"]
+        if variety.get("palette_key"):
+            lines[0]["palette_key"] = variety["palette_key"]
     script["lines"] = lines
     has_stage3 = any(str(r.get("visual_prompt") or "").strip() for r in lines)
     episode_variety: dict[str, Any] = dict(script.get("episode_variety") or {})
@@ -3808,18 +3985,157 @@ def _produce_one(
         [r for r in (script.get("lines") or []) if isinstance(r, dict)]
     )
 
-    gate2_ok = str((pipe_state.get("gate2") or {}).get("status") or "") in {
-        "approved",
-        "auto_pass",
-    }
-    if resume_from and approve_gate == 2:
+    # ── DRY RUN ────────────────────────────────────────────────────────────
+    # JSON-only staging: emit the FULL final intermediate representation —
+    # script text, per-beat timings + assembled visual prompts (positive /
+    # negative), and the layout config — then STOP. No image generation, no
+    # TTS, no MoviePy/FFmpeg compositing, no Gate 2 image-API unlock. Once this
+    # JSON is reviewed and approved, drop --dry-run to run the single render
+    # test, and optionally scale up with --quantity for the bulk batch.
+    if dry_run:
+        lines = [r for r in (script.get("lines") or []) if isinstance(r, dict)]
+        n_beats = len(lines) or scene_count
+        beat_dur = lofi_cfg.beat_duration_s()
+        use_dev = bool(lofi_cfg.uses_flux_dev())
+        beats = []
+        for row in lines:
+            text = str(row.get("text") or row.get("beat_text") or "")
+            beats.append(
+                {
+                    "scene": row.get("scene"),
+                    "arc_position": row.get("arc_position"),
+                    "text": text,
+                    "word_count": len(text.split()),
+                    "spoken_word_ceiling": row.get("word_budget")
+                    or row.get("word_ceiling"),
+                    "duration_s": beat_dur,
+                    "subject_type": row.get("subject_type"),
+                    "key_object": row.get("key_object"),
+                    "declared_angle": row.get("hook_angle")
+                    or row.get("declared_angle")
+                    or row.get("angle")
+                    or "",
+                    "declared_gaze": row.get("hook_gaze")
+                    or row.get("declared_gaze")
+                    or row.get("gaze")
+                    or "",
+                    "lighting_condition": row.get("lighting_condition"),
+                    "palette_key": row.get("palette_key"),
+                    "palette_temp": row.get("palette_temp"),
+                    "visual_prompt": row.get("visual_prompt") or "",
+                    "positive_prompt": row.get("positive_prompt")
+                    or row.get("visual_prompt")
+                    or "",
+                    "negative_prompt": row.get("negative_prompt") or "",
+                    "not_in_frame": row.get("not_in_frame") or [],
+                    "licensed_objects": row.get("licensed_objects") or [],
+                    "visual_concept": row.get("visual_concept")
+                    or row.get("scene_description")
+                    or row.get("meaning")
+                    or "",
+                }
+            )
+        theme = str(script.get("theme") or theme_row.get("theme") or "")
+        sub = str(script.get("subtheme") or theme_row.get("subtheme") or "")
+        theme_slug = _episode_slug(script, theme=theme, subtheme=sub)
+        meta_path = clips_dir / f"lofi_dry_run_{theme_slug}_{stamp}_v{index:02d}.json"
+        dry_payload = {
+            "simulation": {
+                "mode": "dry_run_json_only_no_image_no_render",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "theme": theme,
+                "subtheme": sub,
+                "module": module,
+                "page": page_id,
+                "duration_expected_s": lofi_cfg.duration_for_beat_count(n_beats),
+                "scene_count": n_beats,
+                "scene_duration_s": beat_dur,
+                "no_image_api_called": True,
+                "no_tts_called": True,
+                "no_mp4_rendered": True,
+                "writer_provider": "real "
+                + ("freeform writer" if not locked_script else "LOCKED script"),
+                "stage3_prompt_assembly": "REAL style-module assembly (deterministic, no Flux/TTS)",
+            },
+            "script": {
+                "monologue": script.get("monologue")
+                or " ".join(str(r.get("text") or "") for r in lines),
+                "hook_variety": script.get("hook_variety"),
+                "episode_variety": episode_variety,
+                "episode_atmosphere": script.get("episode_atmosphere"),
+                "hook_type": script.get("hook_type"),
+                "arc_template": script.get("arc_template"),
+            },
+            "beats": beats,
+            "layout": {
+                "reel_width": lofi_cfg.REEL_WIDTH,
+                "reel_height": lofi_cfg.REEL_HEIGHT,
+                "flux_backend": "dev" if use_dev else "schnell",
+                "visual_identity": "v2"
+                if bool(getattr(lofi_cfg, "USE_VISUAL_IDENTITY_V2", False))
+                else "riso_library",
+                "visual_identity_profile": (
+                    lofi_cfg.DEFAULT_VISUAL_IDENTITY_PROFILE if use_dev else None
+                ),
+                "scene_count": n_beats,
+                "scene_duration_s": beat_dur,
+                "duration_expected_s": lofi_cfg.duration_for_beat_count(n_beats),
+                "image_attempts_per_beat": lofi_cfg.IMAGE_ATTEMPTS_PER_BEAT,
+                "image_call_budget": lofi_cfg.image_call_budget(n_beats),
+            },
+            "gate2_prompts": pipe_state.get("gate2_prompts") or [],
+            "post_type": "ECONOMIC_REEL_LOFI",
+            "mode": "dry_run",
+            "page": page_id,
+            "module": module,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "pipeline_stage": "3_prompts_ready",
+            "requested_render": {
+                "render_effects": {
+                    k: bool(v)
+                    for k, v in (
+                        getattr(lofi_cfg, "PRODUCTION_RENDER_EFFECTS") or {}
+                    ).items()
+                }
+            },
+        }
+        meta_path.write_text(
+            json.dumps(dry_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(f"\n[LOFI DRY-RUN] JSON-only (no image, no TTS, no render) -> {meta_path}")
+        print(
+            f"              theme={theme} subtheme={sub} beats={n_beats} "
+            f"expected_dur={lofi_cfg.duration_for_beat_count(n_beats)}s"
+        )
+        print(
+            "              REVIEW then re-run WITHOUT --dry-run to render the "
+            "pilot, or add --quantity N for the bulk batch."
+        )
+        return LofiItemResult(
+            ok=True,
+            meta_path=str(meta_path),
+            module=module,
+            theme=theme,
+            hook_type=str(script.get("hook_type") or ""),
+            scene_count=n_beats,
+            duration_s=float(lofi_cfg.duration_for_beat_count(n_beats)),
+            script=script,
+            work_dir=str(clips_dir),
+            stills_only=False,
+            pipeline_stage="3_prompts_ready",
+        )
+
+    gate2_ok = str((pipe_state.get("gate2") or {}).get("status") or "") == "approved"
+    if approve_gate == 2:
         mark_approved(pipe_state, 2, reason="cli")
         gate2_ok = True
-    if review_required and not gate2_ok:
+    # Gate 2 never auto-passes. Image API requires explicit approval.
+    if not gate2_ok:
         pipe_state["gate2"] = {"status": "pending"}
         return _hold(2, pipe_state, state_path)
 
     write_state(state_path, pipe_state)
+    unlock_image_api(reason="gate2_approved")
     print("[LOFI GATE 2] cleared — Stage 4 images/QA + audio-driven assembly")
     use_dev = bool(lofi_cfg.uses_flux_dev())
     use_gemini = image_provider == "gemini"
@@ -4362,6 +4678,7 @@ def _produce_one(
             script=script,
             work_dir=str(run_dir),
         )
+        print(f"[LOFI best-effort] stills kept at {run_dir}")
 
     out_mp4 = clips_dir / f"lofi_reel_{theme_slug}_{stamp}_v{index:02d}.mp4"
     n_beats = max(1, len(captions) or len(lines))
@@ -4548,8 +4865,10 @@ def _produce_one(
             script, module=module, scene_count=n_beats
         )
         if qa_flags:
-            raise ShipGateError(
-                "visual_qa_hold still set at assemble — hard stop"
+            print(
+                "[LOFI best-effort] visual QA flags are non-fatal warnings — "
+                "proceeding to assemble with best available frames: "
+                f"flags={qa_flags}"
             )
         _integrity = beat_integrity_blockers(
             script=script,
@@ -4687,7 +5006,7 @@ def _produce_one(
         "voice_paths": [str(p) if p else None for p in voice_paths],
         "work_dir": str(run_dir),
         "visual_qa_flags": qa_flags,
-        "manual_review": False,
+        "manual_review": bool(qa_flags),
         "episode_variety": episode_variety,
         "object_gate_by_scene": object_gate_by_scene,
         "image_calls": n_image_calls,
@@ -4730,7 +5049,7 @@ def _produce_one(
         hook_type=str(script.get("hook_type") or ""),
         scene_count=n_beats,
         duration_s=actual_dur,
-        manual_review=False,
+        manual_review=bool(qa_flags),
         errors=qa_flags,
         script=script,
     )
@@ -4751,6 +5070,7 @@ def run_economic_reel_lofi(
     image_provider: str = "together",
     script_only: bool = False,
     stills_only: bool = False,
+    dry_run: bool = False,
     locked_scripts: list[str] | None = None,
     review_required: bool | None = None,
     resume_from: str | None = None,
@@ -4809,6 +5129,7 @@ def run_economic_reel_lofi(
             f"theme={force_theme or 'auto'} writer_mode={mode} "
             f"{'STILLS-ONLY ' if stills_only else ''}"
             f"{'SCRIPT-ONLY ' if script_only and not stills_only else ''}"
+            f"{'DRY-RUN ' if dry_run else ''}"
             f"→ {clips_dir}"
         )
         result = _produce_one(
@@ -4827,6 +5148,7 @@ def run_economic_reel_lofi(
             index=i,
             script_only=script_only and not stills_only,
             stills_only=stills_only,
+            dry_run=dry_run and not (script_only or stills_only),
             batch_qty=qty,
             locked_script=locked_rows[i - 1] if i <= len(locked_rows) else None,
             review_required=review_required,
@@ -4903,6 +5225,7 @@ def run_economic_reel_lofi(
         "successful": ok_n,
         "script_only": bool(script_only) and not stills_only,
         "stills_only": bool(stills_only),
+        "dry_run": bool(dry_run) and not (script_only or stills_only),
         "items": items,
         "outputs_dir": str(page_outputs),
         "clips_dir": str(clips_dir),

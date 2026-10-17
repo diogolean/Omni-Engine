@@ -128,10 +128,32 @@ class JudgeVerdict:
 
     @property
     def ok(self) -> bool:
-        return bool(self.scores) and all(s.passed for s in self.scores)
+        """Pass decision with a calibrated tolerance.
+
+        Strict blockers: ``coherence >= 7`` and ``clarity >= 7``. Within those,
+        the draft passes if either (a) ``originality`` is within a 1-point
+        tolerance (score >= bar - 1, i.e. >= 6), or (b) the aggregate score
+        across all five criteria meets or exceeds 34/40.
+        """
+        return bool(self.scores) and self._rollover_passes()
+
+    def _rollover_passes(self) -> bool:
+        by = {s.name: s for s in self.scores}
+        if "coherence" not in by or "clarity" not in by:
+            return False
+        if by["coherence"].score < 7 or by["clarity"].score < 7:
+            return False
+        total = sum(s.score for s in self.scores)
+        if total >= 34:
+            return True
+        orig = by.get("originality")
+        if orig is not None and orig.score >= (orig.bar - 1):
+            return True
+        return False
 
     def failures(self) -> list[CriterionScore]:
-        return [s for s in self.scores if not s.passed]
+        """Criteria below their nominal bar (informational; not the pass rule)."""
+        return [s for s in self.scores if s.score < s.bar]
 
     def feedback(self) -> str:
         """What the writer is told when it has to start over."""

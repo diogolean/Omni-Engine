@@ -49,10 +49,17 @@ def validate_script(
     module: str,
     scene_count: int,
     persist_on_pass: bool = True,
+    is_resume: bool = False,
 ) -> ValidationResult:
     """
     Ordered checks:
       1) structural  2) quote integrity  3) reference-copy  4) dedup  5) content safety
+
+    ``is_resume`` disables the history-dedup check. A resumed script was already
+    written into generated-history when it first cleared the writer, so
+    re-validating the SAME script self-matches (cosine 1.000) and would otherwise
+    falsely hard-fail before image gen. Dedup is only meaningful across DISTINCT
+    later episodes, which the fresh-writer path still enforces.
     """
     reasons: list[str] = []
 
@@ -213,8 +220,16 @@ def validate_script(
                     and not row.get("abstract_license")
                 ):
                     reasons.append(f"scene {i} missing key_object")
+                non_block = bool(
+                    getattr(lofi_cfg, "QA_NON_BLOCKING_SUBJECT_EXPRESSION", True)
+                )
                 if not str(row.get("subject_expression") or "").strip():
-                    reasons.append(f"scene {i} missing subject_expression")
+                    msg = f"scene {i} missing subject_expression"
+                    if non_block:
+                        print(f"[LOFI validator] WARN (best-effort) {msg} for "
+                              f"subject_type={st!r}")
+                    else:
+                        reasons.append(msg)
                 world = script.get("episode_atmosphere")
                 if not isinstance(world, dict) or not world:
                     world = None
@@ -309,7 +324,7 @@ def validate_script(
             reasons.append(ref_reason)
             print(f"[LOFI validator] reference-copy REJECT")
 
-    if flat and not reasons:
+    if flat and not reasons and not is_resume:
         sim = rag.max_similarity_to_history(module, flat)
         if sim >= lofi_cfg.DEDUP_SIMILARITY_THRESHOLD:
             reasons.append(

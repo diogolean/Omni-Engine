@@ -7,6 +7,7 @@ until a full render is approved.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -172,8 +173,57 @@ _HOOK_SOLID_SHAPE_EXACT = (
 _HOOK_NO_SKIN_EXACT = "flat opaque black with no skin"
 _HOOK_DOUBLE_EXPOSURE_MEDIUM = (
     "A richly detailed hand-painted illustration in vintage poster style, "
-    "visible canvas grain and heavy brush texture, muted sepia-and-teal duotone."
+    "visible canvas grain and heavy brush texture, {duotone}."
 )
+HOOK_ANGLES: tuple[str, ...] = (
+    "left-facing profile",
+    "right-facing profile",
+    "three-quarter view",
+)
+HOOK_GAZES: tuple[str, ...] = (
+    "gaze lowered",
+    "gaze out of frame",
+    "gaze toward the light",
+)
+HOOK_PALETTES: tuple[str, ...] = ("WARM", "COLD", "CONTRAST")
+HOOK_PALETTE_DUOTONE: dict[str, str] = {
+    "WARM": "muted sepia-and-amber duotone",
+    "COLD": "muted slate-and-teal duotone",
+    "CONTRAST": "muted sepia-and-teal duotone",
+}
+
+
+def pick_hook_variety(*, episode_key: str = "", batch_index: int = 0) -> dict[str, str]:
+    """Per-episode silhouette hook: angle × gaze × palette (27 combos)."""
+    seed = f"{episode_key}|{int(batch_index)}"
+    n = int(hashlib.sha1(seed.encode("utf-8")).hexdigest()[:8], 16)
+    combo = (n + int(batch_index) * 11) % 27
+    a, rest = divmod(combo, 9)
+    g, p = divmod(rest, 3)
+    pal = HOOK_PALETTES[p]
+    return {
+        "angle": HOOK_ANGLES[a],
+        "gaze": HOOK_GAZES[g],
+        "palette_key": pal,
+        "duotone": HOOK_PALETTE_DUOTONE[pal],
+    }
+
+
+def assign_distinct_hook_varieties(keys: list[str]) -> dict[str, dict[str, str]]:
+    """Force consecutive batch episodes onto different angle+gaze+palette triples."""
+    used: set[tuple[str, str, str]] = set()
+    out: dict[str, dict[str, str]] = {}
+    for i, key in enumerate(keys):
+        chosen: dict[str, str] | None = None
+        for bump in range(27):
+            v = pick_hook_variety(episode_key=str(key), batch_index=i + bump)
+            sig = (v["angle"], v["gaze"], v["palette_key"])
+            if sig not in used:
+                used.add(sig)
+                chosen = v
+                break
+        out[str(key)] = chosen or pick_hook_variety(episode_key=str(key), batch_index=i)
+    return out
 _PORTRAIT_SKIN_LIGHT_EXACT = (
     "Two distinct light sources: a warm tungsten amber lamp on one side of "
     "the face, a cool blue teal ambient source on the other. The skin itself "
@@ -481,11 +531,15 @@ def hook_silhouette_dissolve_scene(
     dissolve_element: str = "",
     orb: str = "",
     memory_overlay: str = "",
+    angle: str = "",
+    gaze: str = "",
+    palette_key: str = "",
 ) -> str:
-    """Locked hook grammar: profile silhouette + birds-from-head + memory overlay.
+    """Locked hook grammar: silhouette + birds-from-head + memory overlay.
 
-    Structure extracted from a working surreal reference. Overlay content
-    varies by episode. Orb is accepted for call-site compat.
+    Angle / gaze / palette rotate per episode so consecutive reels don't
+    share the same opening silhouette. Overlay content still varies by episode.
+    Orb is accepted for call-site compat.
     """
     del orb
     elem = " ".join(str(dissolve_element or "").split()) or (
@@ -495,10 +549,15 @@ def hook_silhouette_dissolve_scene(
         "a hazy indistinct room or landscape, soft and out of focus, "
         "like a fading memory"
     )
+    pal = str(palette_key or "CONTRAST").strip().upper() or "CONTRAST"
+    duotone = HOOK_PALETTE_DUOTONE.get(pal, HOOK_PALETTE_DUOTONE["CONTRAST"])
+    medium = _HOOK_DOUBLE_EXPOSURE_MEDIUM.format(duotone=duotone)
+    ang = " ".join(str(angle or "").split()) or "left-facing profile"
+    gaz = " ".join(str(gaze or "").split()) or "gaze lowered"
     return (
-        f"{_HOOK_DOUBLE_EXPOSURE_MEDIUM} "
-        "Close-up profile silhouette of a person's head and shoulders, "
-        "flat opaque black. "
+        f"{medium} "
+        f"Close-up {ang} silhouette of a person's head and shoulders, "
+        f"flat opaque black, {gaz}. "
         f"The silhouette edge at the head dissolves into {elem}. "
         "The silhouette is overlaid with a faded, blurred double-exposure of "
         f"{overlay} bleeding through the dark shape, soft and out of focus, "
@@ -512,8 +571,12 @@ def apply_hook_template(
     *,
     theme: str = "",
     thesis: str = "",
+    batch_index: int = 0,
 ) -> None:
-    """Beat 1: close-up profile, birds from the head, double-exposure memory."""
+    """Beat 1: silhouette + birds from the head + double-exposure memory.
+
+    Angle, gaze, and palette rotate per episode so consecutive openings differ.
+    """
     if not lines or not isinstance(lines[0], dict):
         return
     row = lines[0]
@@ -534,24 +597,40 @@ def apply_hook_template(
     overlay = str(row.get("hook_memory_overlay") or "").strip()
     if not overlay:
         overlay = pick_hook_memory_overlay(theme, thesis, meaning, motif)
+    variety = pick_hook_variety(
+        episode_key=f"{theme}|{thesis}|{meaning}",
+        batch_index=int(row.get("hook_batch_index") or batch_index or 0),
+    )
+    angle = str(row.get("hook_angle") or variety["angle"])
+    gaze = str(row.get("hook_gaze") or variety["gaze"])
+    pal = str(row.get("palette_key") or variety["palette_key"]).strip().upper()
+    if pal not in HOOK_PALETTE_DUOTONE:
+        pal = variety["palette_key"]
     row["hook_template"] = True
     row["dissolve_element"] = dissolve
     row["hook_memory_overlay"] = overlay
+    row["hook_angle"] = angle
+    row["hook_gaze"] = gaze
     row["subject_type"] = "silhouette"
     row["framing"] = "full_scene"
     row["close_variant"] = "silhouette"
     row["composition_type"] = "hook_double_exposure_memory"
-    row["palette_key"] = "CONTRAST"
+    row["palette_key"] = pal
+    row["palette_temp"] = _PALETTE_TEMP_LABEL.get(pal, pal.lower())
     desc = hook_silhouette_dissolve_scene(
-        dissolve_element=dissolve, memory_overlay=overlay
+        dissolve_element=dissolve,
+        memory_overlay=overlay,
+        angle=angle,
+        gaze=gaze,
+        palette_key=pal,
     )
     row["scene_description"] = desc
     row["visual_concept"] = desc
     row["negative_prompt"] = compose_hook_silhouette_negative()
     stamp_shot_type(row)
     print(
-        f"[LOFI hook] beat=1 dissolve={dissolve!r} overlay={overlay!r} "
-        f"neg_tokens_set=1"
+        f"[LOFI hook] beat=1 angle={angle!r} gaze={gaze!r} palette={pal} "
+        f"dissolve={dissolve!r} overlay={overlay!r} neg_tokens_set=1"
     )
 
 
@@ -2418,6 +2497,8 @@ def assign_palette_arc(lines: list[dict[str, Any]]) -> None:
         act = act_for_index(i, n)
         row["arc_position"] = act
         key = _EXPECTED_PALETTE_BY_ACT.get(act, "WARM")
+        if row.get("hook_template"):
+            key = str(row.get("palette_key") or key).strip().upper() or key
         if not str(row.get("palette_key") or "").strip():
             row["palette_key"] = key
         if not str(row.get("palette_temp") or "").strip():

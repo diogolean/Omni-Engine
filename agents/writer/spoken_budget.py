@@ -383,6 +383,153 @@ def enforce_spoken_budget(
     return draft, report
 
 
+_ABSTRACT_KEEP_KEYS = frozenset(
+    {
+        "silence",
+        "figure",
+        "light particles",
+        "open sky",
+        "empty ground",
+        "open sky and empty ground",
+        "light and shadow",
+        "light",
+        "shadow",
+    }
+)
+_KEEP_STOP = frozenset(
+    {
+        "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "at",
+        "his", "her", "your", "that", "this", "with", "from", "into",
+        "empty", "open", "closed",
+    }
+)
+
+
+def must_keep_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    stills_rows: list[dict[str, Any]] | None = None,
+) -> dict[int, list[str]]:
+    """Load-bearing spoken nouns per beat (key_object / licensed, if they appear)."""
+    extra = list(stills_rows or [])
+    keep: dict[int, list[str]] = {}
+    for i, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            keep[i] = []
+            continue
+        still = extra[i] if i < len(extra) and isinstance(extra[i], dict) else {}
+        text = str(row.get("text") or row.get("beat_text") or "")
+        terms: list[str] = []
+        keys = [
+            str(row.get("key_object") or "").strip(),
+            str(still.get("key_object") or "").strip(),
+        ]
+        licensed = list(row.get("licensed_objects") or still.get("licensed_objects") or [])
+        keys.extend(str(x).strip() for x in licensed if str(x).strip())
+        seen: set[str] = set()
+        for key in keys:
+            kl = key.lower()
+            if not key or kl in _ABSTRACT_KEEP_KEYS or kl in seen:
+                continue
+            if _term_in_text(text, key):
+                terms.append(key)
+                seen.add(kl)
+                continue
+            for tok in key.split():
+                tl = tok.lower().strip(".,;:—–")
+                if tl in _KEEP_STOP or len(tl) < 3:
+                    continue
+                if _term_in_text(text, tok) and tl not in seen:
+                    terms.append(tok)
+                    seen.add(tl)
+        keep[i] = terms
+    return keep
+
+
+def script_to_draft(script: dict[str, Any]) -> ScriptDraft:
+    rows = [r for r in (script.get("lines") or []) if isinstance(r, dict)]
+    lines = [str(r.get("text") or r.get("beat_text") or "").strip() for r in rows]
+    theme = str(script.get("theme") or "").strip() or "relationship"
+    brief = WriterBrief.from_theme(
+        theme=theme,
+        subtheme=str(script.get("subtheme") or ""),
+        module=str(script.get("module") or "relationship"),
+        meta={
+            "duration_s": float(
+                script.get("duration_requested_s")
+                or lofi_cfg.declared_duration_s(scene_count=max(1, len(lines)))
+            ),
+            "beat_duration_s": float(
+                script.get("scene_duration_s") or lofi_cfg.beat_duration_s()
+            ),
+        },
+    )
+    return ScriptDraft(
+        lines=lines,
+        human_situation=str(script.get("human_situation") or ""),
+        structure=str(script.get("writer_structure") or ""),
+        closing_tool=str(script.get("closing_tool") or ""),
+        brief=brief,
+        provider=str(script.get("writer") or ""),
+        meta=dict(brief.meta),
+    )
+
+
+def apply_draft_to_script(script: dict[str, Any], draft: ScriptDraft) -> dict[str, Any]:
+    from agents.writer.freeform_writer import split_long_line
+
+    max_w, max_c = lofi_cfg.thematic_caption_limits()
+    rows = [dict(r) if isinstance(r, dict) else {"scene": i + 1} for i, r in enumerate(script.get("lines") or [])]
+    while len(rows) < len(draft.lines):
+        rows.append({"scene": len(rows) + 1})
+    beat_s = float(script.get("scene_duration_s") or lofi_cfg.beat_duration_s())
+    ceiling = lofi_cfg.beat_word_ceiling(beat_s)
+    for i, text in enumerate(draft.lines):
+        row = rows[i]
+        slot = float(row.get("duration_s") or beat_s)
+        row["text"] = text
+        row["beat_text"] = text
+        row["caption_beats"] = split_long_line(text, max_w, max_c)
+        row["spoken_words"] = count_words(text)
+        row["spoken_word_ceiling"] = lofi_cfg.beat_word_ceiling(slot)
+        row["duration_s"] = slot
+        rows[i] = row
+    script["lines"] = rows
+    script["monologue"] = " ".join(draft.lines)
+    script["scene_duration_s"] = beat_s
+    script["spoken_word_ceiling"] = ceiling
+    return script
+
+
+def tighten_script_dict(
+    script: dict[str, Any],
+    *,
+    writer_provider: str | None = None,
+    must_keep: dict[int, list[str]] | None = None,
+    stills_rows: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Word-budget gate for any script dict. No script is 'written' until this passes."""
+    rows = [r for r in (script.get("lines") or []) if isinstance(r, dict)]
+    keep = must_keep if must_keep is not None else must_keep_from_rows(
+        rows, stills_rows=stills_rows
+    )
+    draft = script_to_draft(script)
+    draft, report = enforce_spoken_budget(
+        draft, writer_provider=writer_provider, must_keep=keep
+    )
+    apply_draft_to_script(script, draft)
+    script["spoken_budget"] = report
+    script["spoken_budget_ok"] = bool(report.get("ok"))
+    if not report.get("ok"):
+        script["script_ship_ok"] = False
+        errs = list(script.get("script_ship_errors") or [])
+        reason = str(report.get("reason") or "spoken-budget fail")
+        if reason not in errs:
+            errs.append(f"spoken_budget: {reason}")
+        script["script_ship_errors"] = errs
+    return script, report
+
+
 def rewrite_single_line(
     text: str,
     *,

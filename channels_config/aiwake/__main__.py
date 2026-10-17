@@ -53,6 +53,11 @@ def _resolution(value: str) -> tuple[int, int]:
     return width, height
 
 
+# Safety ceiling for `--quantity`: each run renders a full reel from scratch, so
+# a typo like `--quantity 99999` must fail fast instead of baking for days.
+_MAX_BATCH = 20
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="aiwake",
@@ -70,7 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=(
             "Produce N original videos. Each item gets a unique script; "
-            "prior scripts are never reused."
+            "prior scripts are never reused. Each run gets a fresh session id "
+            "and the BGM engine rotates to a different ambient track per run."
         ),
     )
     parser.add_argument(
@@ -278,7 +284,8 @@ def _print_model_table(settings) -> None:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns a shell exit code."""
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    args = build_parser().parse_args(raw_argv)
+    parser = build_parser()
+    args = parser.parse_args(raw_argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -378,6 +385,9 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc))
         return 2
 
+    if args.quantity > _MAX_BATCH:
+        raise SystemExit(f"--quantity capped at {_MAX_BATCH}; got {args.quantity}")
+
     long_form = bool(
         args.long_format
         or args.post_type == "long_format"
@@ -470,6 +480,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [{index}] topic   : {item.transcript.topic}")
             print(f"      status  : {item.end_reason} / {item.dialogue_end_reason}")
             print(f"      video   : {item.video_path or '(none)'}")
+        videos = [str(item.video_path) for item in batch.items if item.video_path]
+        if len(set(videos)) != len(videos):
+            print("some filenames collided!")
         return 0 if batch.complete else 1
 
     result = run_pipeline(**pipeline_kwargs)

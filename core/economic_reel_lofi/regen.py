@@ -41,6 +41,9 @@ def assemble_video_from_episode(
     *,
     output_mp4: Path | None = None,
     allow_qa_hold: bool = False,
+    render_effects: dict[str, bool] | None = None,
+    fast_preview: bool = False,
+    timeout_s: float | None = None,
 ) -> Path:
     """
     Re-render the MP4 from existing stills + VO. Does not regenerate
@@ -121,6 +124,9 @@ def assemble_video_from_episode(
             list(ln.get("caption_beats") or []) if isinstance(ln, dict) else []
             for ln in lines
         ],
+        render_effects=render_effects,
+        fast_preview=fast_preview,
+        timeout_s=timeout_s,
     )
 
 
