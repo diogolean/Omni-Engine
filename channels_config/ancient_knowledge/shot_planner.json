@@ -1,0 +1,39 @@
+{
+  "channel": "ancient_knowledge",
+  "enabled_flag": "REEL_SHOT_PLANNER",
+  "shot_types": ["macro", "close", "medium", "wide", "aerial", "over_shoulder"],
+  "hard_negatives": [
+    "text",
+    "watermark",
+    "logo",
+    "caption",
+    "letterboxing",
+    "illustration",
+    "sketch",
+    "cartoon",
+    "CGI",
+    "3D render",
+    "flat lighting",
+    "smartphone",
+    "modern clothing"
+  ],
+  "identity_negatives": [
+    "relationship",
+    "attachment",
+    "therapy",
+    "couple",
+    "graphite",
+    "wellness"
+  ],
+  "recency_tags": [
+    "pyramid",
+    "sphinx",
+    "doorway",
+    "archway",
+    "torchlight",
+    "hovering craft",
+    "wide ruins"
+  ],
+  "recency_window_episodes": 8,
+  "max_tag_uses_per_episode": 1
+}
