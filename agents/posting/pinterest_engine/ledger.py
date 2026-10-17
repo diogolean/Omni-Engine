@@ -68,12 +68,26 @@ class PinLedger:
         wanted_id = (post_id or "").strip()
         wanted_hash = (source_hash or "").strip()
         for row in self.rows:
+            if row.get("pin_recorded") is False:
+                continue
             if wanted_id and str(row.get("post_id") or "") == wanted_id:
                 return True
             if wanted_hash and str(row.get("source_hash") or "") == wanted_hash:
                 return True
             row_title = normalize_title(str(row.get("title") or ""))
             if wanted_title and row_title and row_title == wanted_title:
+                return True
+        return False
+
+    def facebook_exported(self, post_id: str) -> bool:
+        """True when this library post already has a Facebook Post Planner row."""
+        wanted = (post_id or "").strip()
+        if not wanted:
+            return False
+        for row in self.rows:
+            if str(row.get("post_id") or "") != wanted:
+                continue
+            if row.get("facebook_exported"):
                 return True
         return False
 
@@ -86,9 +100,43 @@ class PinLedger:
             "source_hash": str(row.get("source_hash") or ""),
             "article": str(row.get("article") or ""),
             "seeded": bool(row.get("seeded")),
+            "facebook_exported": bool(row.get("facebook_exported")),
             "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         self.rows.append(stored)
+        self._write()
+
+    def note_facebook_export(self, *, post_id: str, article: str = "") -> None:
+        """Remember a Facebook row without treating the pin as already published.
+
+        A dry run queues the sheet before the live pin exists. That note must
+        not make ``seen()`` skip the later publish.
+        """
+        wanted = (post_id or "").strip()
+        if not wanted:
+            return
+        touched = False
+        for row in self.rows:
+            if str(row.get("post_id") or "") == wanted:
+                row["facebook_exported"] = True
+                touched = True
+        if touched:
+            self._write()
+            return
+        self.rows.append(
+            {
+                "account": self.account_id,
+                "post_id": wanted,
+                "title": "",
+                "pin_id": "",
+                "source_hash": "",
+                "article": str(article or ""),
+                "seeded": False,
+                "facebook_exported": True,
+                "pin_recorded": False,
+                "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
         self._write()
 
     def seed_board_pins(self, pins: list[dict]) -> int:

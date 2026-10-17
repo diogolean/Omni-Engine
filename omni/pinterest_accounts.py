@@ -135,6 +135,13 @@ def _account_from_row(raw: dict[str, Any], index: int) -> Account:
             "true" if _as_bool(raw.get("use_featured_image"), default=True) else "false"
         ),
         "runner": _runner(raw.get("runner")),
+        "facebook_postplanner": (
+            "true" if _as_bool(raw.get("facebook_postplanner"), default=False) else "false"
+        ),
+        "facebook_page_name": str(
+            raw.get("facebook_page_name") or raw.get("display_name") or channel_id
+        ).strip(),
+        "facebook_caption_template": str(raw.get("facebook_caption_template") or "").strip(),
         "channel_id": channel_id,
         "display_name": str(raw.get("display_name") or channel_id).strip(),
         "legacy_token_env": "PINTEREST_ACCESS_TOKEN",

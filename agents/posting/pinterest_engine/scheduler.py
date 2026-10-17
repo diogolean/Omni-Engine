@@ -419,6 +419,7 @@ class PinterestScheduler:
 
         self._attach_article_links(data.get("entries") or [])
         ledger = self._load_ledger()
+        self._postplanner_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
         # Initialise tools. Method comes from the channel pack; default is the
         # original blurred-padding card (hook panel, gold divider, CTA bar).
@@ -555,6 +556,7 @@ class PinterestScheduler:
                     "  [DRY RUN] Would record '%s' in scheduled_history.txt.",
                     src_filename,
                 )
+                self._queue_facebook(entry, pin_bytes, ledger, record_note=True)
                 inv.mark_posted(data, post_id, "DRY_RUN_PIN_ID")
                 inv.save(data)
                 stats["published"] += 1
@@ -574,6 +576,9 @@ class PinterestScheduler:
 
                 if result:
                     pin_id = result.get("id", "unknown")
+                    exported = self._queue_facebook(
+                        entry, pin_bytes, ledger, record_note=False
+                    )
                     inv.mark_posted(data, post_id, pin_id)
                     inv.save(data)              # crash-safe: save after EVERY success
                     history.record(src_filename, post_id, pin_id, topic)
@@ -584,6 +589,7 @@ class PinterestScheduler:
                             "pin_id": pin_id,
                             "source_hash": source_hash,
                             "article": entry.get("target_url") or "",
+                            "facebook_exported": exported,
                         }
                     )
                     stats["published"] += 1
@@ -612,6 +618,54 @@ class PinterestScheduler:
             stats["skipped_by_history"], stats["errors"], stats["remaining"],
         )
         return stats
+
+    def _queue_facebook(self, entry: dict, pin_bytes: bytes, ledger, *, record_note: bool) -> bool:
+        """Append a Post Planner row for a card that was just committed.
+
+        A Facebook failure is logged and does not fail the pin. ``record_note``
+        is for dry runs, which do not append a published-pin ledger row.
+        """
+        post_id = str(entry.get("post_id") or "")
+        try:
+            from agents.posting.pinterest_engine.facebook_queue import (  # noqa: PLC0415
+                enqueue_facebook_card,
+                facebook_settings,
+            )
+
+            settings = facebook_settings(self.context)
+            if not settings["enabled"]:
+                return False
+            if ledger.facebook_exported(post_id):
+                log.info("  Facebook row already queued for %s.", post_id)
+                return True
+            queued = enqueue_facebook_card(
+                entry,
+                pin_bytes,
+                channel_id=str(settings["channel_id"] or cfg.CHANNEL_ID or ""),
+                page_name=str(settings["page_name"] or ""),
+                caption_template=str(settings["template"] or ""),
+                planner_dir=Path(self.outputs_dir) / "postplanner",
+                run_stamp=getattr(self, "_postplanner_stamp", "")
+                or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+                client=self.context.get("b2_client"),
+                bucket=self.context.get("b2_bucket"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.info(
+                "  Facebook Post Planner row failed for %s (%s).",
+                post_id,
+                type(exc).__name__,
+            )
+            return False
+        if queued and record_note:
+            try:
+                ledger.note_facebook_export(
+                    post_id=post_id,
+                    article=str(entry.get("target_url") or ""),
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.info("  Facebook ledger note failed for %s (%s).", post_id, type(exc).__name__)
+        return bool(queued)
 
     def _attach_article_links(self, entries: list[dict]) -> None:
         site = str(self.context.get("site_url") or cfg.TARGET_URL or "").strip()
