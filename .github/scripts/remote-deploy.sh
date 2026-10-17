@@ -29,6 +29,7 @@ printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${IMAGE_TAG}" >> releases.log
 
 # Deploy starts the engine only. The scheduler publishes pins, so it stays
 # stopped unless SCHEDULER_ENABLED is exactly 1/true/yes/on in .env.
+# The memory profile is not selected here, so Supermemory is not started.
 # Do not print .env.
 enabled=0
 if grep -qE '^SCHEDULER_ENABLED=(1|true|TRUE|yes|YES|on|ON)[[:space:]]*$' .env; then
