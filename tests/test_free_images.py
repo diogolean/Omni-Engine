@@ -538,7 +538,7 @@ def test_credit_line_is_reusable() -> None:
 def test_pin_template_composites_a_free_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_load(record, work_dir):
+    def fake_load(record, work_dir, **_kwargs):
         record["image_credit"] = 'Photo: "Stone" by Ada, CC BY — https://example.test/a'
         return Image.new("RGB", (1400, 2000), (12, 90, 40))
 
