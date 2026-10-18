@@ -30,7 +30,7 @@ That script pins `OMNI_IMAGE_TAG` and starts **engine only**. The scheduler is a
 
 ### Libraries and Backblaze B2
 
-Publishers read the channel library from Google Drive first (`drive.readonly`), then the local tree (the PC `G:` path), then B2. One file is downloaded when it is published. See [0007](decisions/0007-google-drive-library-source.md) and `docs/runbooks/google-drive.md`.
+Publishers read the channel library from Google Drive first (`drive.readonly`), then the local tree (the PC `G:` path), then B2. `DRIVE_OUTPUTS_FOLDER_ID` is the shared `outputs` folder, and keys resolve like `OUTPUT_PATH`. One file is downloaded when it is published. See [0007](decisions/0007-google-drive-library-source.md) and `docs/runbooks/google-drive.md`.
 
 B2 remains the publish ledger and the public URL store for Post Planner, which cannot fetch a Drive link. Nothing in the bucket is deleted. See [0001](decisions/0001-b2-on-demand.md) and [0003](decisions/0003-shared-b2-ledger-and-board-dedupe.md). A Drive-only Post Planner asset is uploaded once through the budgeted B2 client (Class A) and left in the bucket.
 

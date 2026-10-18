@@ -83,6 +83,23 @@ class Denied(Exception):
         self.content = b'{"error":{"errors":[{"reason":"forbidden"}]}}'
 
 
+def _query_name(query: str) -> str | None:
+    marker = "name = '"
+    if marker not in query:
+        return None
+    raw = query.split(marker, 1)[1]
+    return raw.split("'", 1)[0].replace("\\'", "'")
+
+
+def _listed_parents(fake: FakeDrive) -> list[str]:
+    parents: list[str] = []
+    for name, kwargs in fake.calls:
+        if name != "list":
+            continue
+        parents.append(str(kwargs.get("q") or "").split("'")[1])
+    return parents
+
+
 def _file(file_id: str, name: str, data: bytes, mime: str) -> dict:
     return {
         "id": file_id,
@@ -112,6 +129,33 @@ def _library_tree() -> dict:
     }
 
 
+def _outputs_tree() -> dict:
+    """Shared outputs folder: JSON lives in library/, the image lives in assets/."""
+    record = (
+        b'{"post_id":"post_one","topic":"Stones",'
+        b'"image_relative":"assets/stone.jpg"}\n'
+    )
+    return {
+        "outputs-root": [
+            _folder("ak", "ancient_knowledge"),
+            _folder("aw", "aiwake"),
+            _folder("mm", "master_mei"),
+        ],
+        "ak": [
+            _folder("ak-lib", "library"),
+            _folder("ak-assets", "assets"),
+        ],
+        "ak-lib": [
+            _file("json1", "post_one.json", record, "application/json"),
+            _file("json2", "post_two.json", b'{"post_id":"post_two"}\n', "application/json"),
+        ],
+        "ak-assets": [_file("asset1", "stone.jpg", _IMAGE, "image/jpeg")],
+        "aw": [_folder("aw-clips", "clips")],
+        "aw-clips": [_file("awvid", "reel.mp4", _VIDEO, "video/mp4")],
+        "mm": [_file("mm1", "note.txt", b"mei", "text/plain")],
+    }
+
+
 def _channel_tree() -> dict:
     return {
         "chan-ak": [
@@ -135,9 +179,13 @@ class FakeDrive:
 
     def list(self, **kwargs):
         self.calls.append(("list", kwargs))
-        parent = str(kwargs.get("q") or "").split("'")[1]
+        query = str(kwargs.get("q") or "")
+        parent = query.split("'")[1]
+        name = _query_name(query)
         files = []
         for item in self.tree.get(parent, []):
+            if name is not None and item["name"] != name:
+                continue
             row = {
                 "id": item["id"],
                 "name": item["name"],
@@ -598,6 +646,94 @@ def test_post_planner_uploads_a_drive_only_video(
     attach_b2_urls([{"video_path": _WIN_AIWAKE}], b2_client=client, bucket="Media")
     assert client.puts == ["reel.mp4"]
     assert fake.media == ["vid1"]
+
+
+def test_outputs_root_lists_only_the_library_prefix(
+    drive_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert drive_env.is_dir()
+    monkeypatch.delenv("DRIVE_LIBRARY_FOLDER_ID_ANCIENT_KNOWLEDGE", raising=False)
+    monkeypatch.setenv("DRIVE_OUTPUTS_FOLDER_ID", "outputs-root")
+    fake = FakeDrive(_outputs_tree())
+    keys = list_object_keys("ancient_knowledge/library/", client=fake)
+    assert keys == [
+        "ancient_knowledge/library/post_one.json",
+        "ancient_knowledge/library/post_two.json",
+    ]
+    parents = _listed_parents(fake)
+    assert "aw" not in parents
+    assert "ak-assets" not in parents
+    assert "mm" not in parents
+    assert parents.count("outputs-root") == 1
+    assert "ak-lib" in parents
+    _assert_drive_flags(fake)
+
+
+def test_outputs_root_resolves_an_asset_beside_the_library(
+    drive_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DRIVE_LIBRARY_FOLDER_ID_ANCIENT_KNOWLEDGE", raising=False)
+    monkeypatch.setenv("DRIVE_OUTPUTS_FOLDER_ID", "outputs-root")
+    fake = FakeDrive(_outputs_tree())
+    monkeypatch.setattr(drive_source, "build_drive_service", lambda: fake)
+    windows_asset = (
+        r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK"
+        r"\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
+        r"\Unified Multi-Page Factory\outputs"
+        r"\ancient_knowledge\assets\stone.jpg"
+    )
+    record = {
+        "image_relative": "assets/stone.jpg",
+        "image_path": "outputs/ancient_knowledge/assets/stone.jpg",
+        "local_image_path": windows_asset,
+    }
+    path, delete_after = materialize_image(
+        record,
+        prefix="ancient_knowledge/library/",
+        channel="ancient_knowledge",
+    )
+    assert delete_after is True
+    assert path is not None and path.read_bytes() == _IMAGE
+    assert "ak-lib" not in _listed_parents(fake)
+    assert "aw" not in _listed_parents(fake)
+    assert fake.media == ["asset1"]
+    _assert_drive_flags(fake)
+
+
+def test_image_refs_resolve_against_the_outputs_root() -> None:
+    from agents.posting.pinterest_engine.library_source import image_object_key
+
+    prefix = "ancient_knowledge/library/"
+    assert image_object_key({"image_relative": "assets/stone.jpg"}, prefix) == (
+        "ancient_knowledge/assets/stone.jpg"
+    )
+    assert image_object_key(
+        {"image_relative": "outputs/ancient_knowledge/assets/stone.jpg"},
+        prefix,
+    ) == "ancient_knowledge/assets/stone.jpg"
+    assert image_object_key({"image_relative": "images/one.jpg"}, prefix) == (
+        "ancient_knowledge/library/images/one.jpg"
+    )
+    assert image_object_key(
+        {"b2_image_key": "ancient_knowledge/library/images/one.jpg"},
+        prefix,
+    ) == "ancient_knowledge/library/images/one.jpg"
+    assert content_source.object_key_for_path(
+        "ancient_knowledge/clips/reel.mp4",
+        "ancient_knowledge",
+    ) == "ancient_knowledge/clips/reel.mp4"
+
+
+def test_per_channel_folder_overrides_the_outputs_root(
+    drive_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert drive_env.is_dir()
+    monkeypatch.setenv("DRIVE_OUTPUTS_FOLDER_ID", "outputs-root")
+    monkeypatch.setenv("DRIVE_LIBRARY_FOLDER_ID_ANCIENT_KNOWLEDGE", "chan-ak")
+    fake = FakeDrive({**_outputs_tree(), **_channel_tree()})
+    keys = list_object_keys("ancient_knowledge/library/", client=fake)
+    assert keys == ["ancient_knowledge/library/post_one.json"]
+    assert "outputs-root" not in _listed_parents(fake)
 
 
 def test_modules_do_not_call_delete() -> None:

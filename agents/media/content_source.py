@@ -45,7 +45,12 @@ def library_source_order() -> tuple[str, ...]:
 
 
 def object_key_for_path(path: str | Path, channel: str = "") -> str:
-    """Map a local or ``G:\\My Drive\\...\\outputs\\...`` path to an object key."""
+    """Map a local or ``G:\\My Drive\\...\\outputs\\...`` path to an object key.
+
+    The key is relative to the outputs root, the same way ``OUTPUT_PATH`` is.
+    ``images/...`` stays unresolved here so a library record can still join it
+    to ``<channel>/library/``.
+    """
     text = str(path or "").replace("\\", "/").strip()
     if not text or ".." in text.split("/"):
         return ""
@@ -53,15 +58,21 @@ def object_key_for_path(path: str | Path, channel: str = "") -> str:
     marker = "/outputs/"
     index = lower.rfind(marker)
     if index >= 0:
-        relative = text[index + len(marker) :].lstrip("/")
-        return relative
+        return text[index + len(marker) :].lstrip("/")
+    if lower.startswith("outputs/"):
+        return text[len("outputs/") :].lstrip("/")
     channel_slug = (channel or "").strip().lower()
     relative = text.lstrip("/")
+    if _is_windows_or_absolute(relative):
+        return ""
     if channel_slug and relative.lower().startswith(channel_slug + "/"):
         return relative
-    if relative.startswith(("library/", "clips/", "assets/")) and channel_slug:
-        return f"{channel_slug}/{relative}"
-    return ""
+    if not channel_slug or "/" not in relative:
+        return ""
+    head = relative.split("/", 1)[0].lower()
+    if head == "images":
+        return ""
+    return f"{channel_slug}/{relative}"
 
 
 def existing_local_file(key: str, channel: str = "") -> Path | None:
@@ -384,6 +395,12 @@ def _stop_for_source(exc: BaseException, source: str) -> bool:
     return isinstance(exc, DriveQuotaError) and source == "drive" and library_source_order() == (
         "drive",
     )
+
+
+def _is_windows_or_absolute(relative: str) -> bool:
+    if relative.startswith("/"):
+        return True
+    return len(relative) > 2 and relative[1] == ":"
 
 
 def _split(key: str) -> tuple[str, str]:

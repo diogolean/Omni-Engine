@@ -14,44 +14,52 @@ Deploy does not start the Pinterest scheduler. Nothing in this setup should run 
 4. On the VM, put the file in the credentials directory Compose already mounts:
 
 ```bash
-install -m 600 /dev/stdin /opt/omni-engine/credentials/google-drive-sa.json
+install -m 600 /dev/stdin /opt/omni-engine/credentials/google_drive_sa.json
 ```
 
 Paste the JSON, then `Ctrl-D`. Do not commit the file. `credentials/*.json` is git-ignored. Do not print the file, and do not paste it into chat or logs.
 
 5. Copy the service account email (`client_email` in the JSON). You will share folders with that address. Do not share the private key.
 
-## Share each library as Viewer
+## Share the outputs folder as Viewer
 
-The PC tree is `G:\My Drive\...\outputs\<channel>\`. Share that channel folder, or share only `outputs/<channel>/library` when the channel has no clips to publish.
+The PC tree and the Drive tree are the same shape: `outputs/<channel>/...` (`ancient_knowledge`, `aiwake`, `master_mei`, `anna_protocol`, `wonder_feed`, `endless_summer_paradise`, and the others). Share that one `outputs` folder. It lives in My Drive and is shared with the service account. It is not a Shared Drive.
 
-1. In Google Drive, open the folder.
+`outputs/<channel>/library/` holds `post_*.json` only. Images referenced by those records live beside the library (usually `outputs/<channel>/assets/`, or another subfolder). Paths in the JSON are resolved relative to the outputs root, the same way `OUTPUT_PATH` resolves them locally.
+
+1. In Google Drive, open the `outputs` folder.
 2. Share → add the service account email → **Viewer**.
-3. For a Shared Drive, add the service account as a Viewer member of the drive (or share the folder with it). The client sends `supportsAllDrives` and `includeItemsFromAllDrives` on every call.
-4. Copy the folder id from the URL: `https://drive.google.com/drive/folders/<folder id>`.
+3. Copy the folder id from the URL: `https://drive.google.com/drive/folders/<folder id>`.
 
-Viewer is enough. Do not grant Editor. The scope in code is `https://www.googleapis.com/auth/drive.readonly`.
+The verified outputs folder id is `1Fwc2YcdX-iMrmxqpHrUsmd6OtPe-4wU3`. Put that value in `.env`. Do not commit `.env`.
+
+Viewer is enough. Do not grant Editor. A service account has no Drive storage quota, so the client must stay read-only. The scope in code is `https://www.googleapis.com/auth/drive.readonly`. The client still sends `supportsAllDrives` and `includeItemsFromAllDrives`, which is what a My Drive share needs and what a Shared Drive share would need.
+
+A per-channel folder is optional. Share `outputs/<channel>` (or only `outputs/<channel>/library` when that channel has nothing beside the library) and set the override below.
 
 ## Environment
 
 In `/opt/omni-engine/.env` (mode 600, not in git):
 
 ```bash
-GOOGLE_DRIVE_SA_JSON=/opt/omni-engine/credentials/google-drive-sa.json
-DRIVE_LIBRARY_FOLDER_ID_ANCIENT_KNOWLEDGE=<folder id>
-# DRIVE_LIBRARY_FOLDER_ID_AIWAKE=<folder id>
+GOOGLE_DRIVE_SA_JSON=/opt/omni-engine/credentials/google_drive_sa.json
+DRIVE_OUTPUTS_FOLDER_ID=1Fwc2YcdX-iMrmxqpHrUsmd6OtPe-4wU3
+# Optional. Overrides the outputs root for one channel.
+# DRIVE_LIBRARY_FOLDER_ID_ANCIENT_KNOWLEDGE=<channel folder id>
 # LIBRARY_SOURCE=drive
 ```
 
-`DRIVE_LIBRARY_FOLDER_ID_<CHANNEL>` uses the channel id in upper case, with non-alphanumerics turned into underscores (`ancient_knowledge` → `ANCIENT_KNOWLEDGE`).
+`DRIVE_OUTPUTS_FOLDER_ID` is the shared outputs folder. Object keys are paths under it (`ancient_knowledge/library/post_….json`, `ancient_knowledge/assets/….jpg`), matching `OUTPUT_PATH / key` on disk. A listing walks only the requested prefix, so a library sync does not list every channel.
 
-The same id can live in channel config instead of the environment:
+`DRIVE_LIBRARY_FOLDER_ID_<CHANNEL>` is an optional override. The channel id is upper case, with non-alphanumerics turned into underscores (`ancient_knowledge` → `ANCIENT_KNOWLEDGE`). That folder is the channel tree, not the outputs root.
+
+The same per-channel id can live in channel config instead of the environment:
 
 - `drive_library_folder_id` on the branding in `config/brandings.yaml`
 - `drive_folder_id` on the account in `config/pinterest_accounts.yaml`
 - `DRIVE_LIBRARY_FOLDER_ID` in `channels_config/<channel>/page_config.py`
 
-The environment variable wins over those files.
+The per-channel environment variable wins over those files. Either one wins over `DRIVE_OUTPUTS_FOLDER_ID`.
 
 `LIBRARY_SOURCE` is optional:
 
@@ -90,7 +98,7 @@ If the mp4 or image exists only on Drive, the publisher downloads that one file 
 
 ## What not to do
 
-- Do not commit the service-account JSON or print it.
-- Do not widen the scope past `drive.readonly`.
+- Do not commit the service-account JSON or print it. Do not print the service account email from the key file.
+- Do not widen the scope past `drive.readonly`, and do not upload to Drive. The service account has no storage quota.
 - Do not point a publisher at a script that deletes Drive or B2 objects.
 - Do not start the scheduler as part of wiring Drive.

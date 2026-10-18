@@ -52,20 +52,50 @@ def ensure_local_library(
 
 
 def image_object_key(record: dict, prefix: str) -> str:
+    """Object key for a pin image, relative to the outputs root.
+
+    ``b2_image_key`` and ``image_key`` are used as stored. Other fields resolve
+    like a local path under ``outputs/``: a ``G:\\...\\outputs\\...`` path, an
+    ``outputs/<channel>/assets/...`` path, or a channel-relative ``assets/...``
+    path. ``images/...`` still joins the library prefix (FLUX photos).
+    """
     for field in ("b2_image_key", "image_key"):
         value = str(record.get(field) or "").strip().replace("\\", "/").lstrip("/")
-        if value:
+        if value and ".." not in value.split("/"):
             return value
-    rel = str(record.get("image_relative") or record.get("image_path") or "")
-    rel = rel.strip().replace("\\", "/")
-    if not rel:
+    channel = prefix.strip("/").split("/", 1)[0] if prefix.strip("/") else ""
+    for field in ("local_image_path", "image_path", "image_relative"):
+        raw = str(record.get(field) or "").strip()
+        if not raw:
+            continue
+        key = _image_ref_to_key(raw, channel=channel, prefix=prefix)
+        if key:
+            return key
+    return ""
+
+
+def _image_ref_to_key(raw: str, *, channel: str, prefix: str) -> str:
+    from agents.media.content_source import object_key_for_path  # noqa: PLC0415
+
+    key = object_key_for_path(raw, channel)
+    if key:
+        return key
+    rel = raw.replace("\\", "/").strip()
+    if not rel or ".." in rel.split("/") or _absolute_path(rel):
         return ""
-    if rel.startswith(prefix):
+    rel = rel.lstrip("/")
+    base = prefix if prefix.endswith("/") else f"{prefix}/"
+    if not base.strip("/"):
+        return ""
+    if rel.startswith(base):
         return rel
-    marker = "/library/"
-    if marker in rel:
-        rel = rel.split(marker, 1)[1]
-    return prefix + rel.lstrip("/")
+    return base + rel
+
+
+def _absolute_path(text: str) -> bool:
+    if text.startswith("/"):
+        return True
+    return len(text) > 2 and text[1] == ":"
 
 
 def materialize_image(

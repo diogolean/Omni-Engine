@@ -2,9 +2,13 @@
 """Read-only Google Drive library source.
 
 Same read interface the publishers use for B2: list a prefix, get a size,
-download one file. Listings and downloaded bytes are cached on the outputs
-volume. Nothing in Drive is deleted. The service account scope is
-``drive.readonly``.
+download one file. The shared Drive folder is the ``outputs`` tree
+(``DRIVE_OUTPUTS_FOLDER_ID``), matching the local ``OUTPUT_PATH``. A listing
+walks only the requested prefix. Listings and downloaded bytes are cached on
+the outputs volume.
+
+Service accounts have no Drive storage quota. This module never uploads,
+updates, or deletes. The service account scope is ``drive.readonly``.
 """
 
 from __future__ import annotations
@@ -100,8 +104,20 @@ def env_name_for_channel(channel: str) -> str:
     return f"DRIVE_LIBRARY_FOLDER_ID_{slug or 'UNKNOWN'}"
 
 
+def outputs_folder_id() -> str:
+    """Shared Drive folder that mirrors the local ``outputs/`` tree.
+
+    One id covers every channel (``outputs/<channel>/...``). Per-channel
+    folder ids stay optional overrides. An invalid value is ignored.
+    """
+    raw = (os.getenv("DRIVE_OUTPUTS_FOLDER_ID") or "").strip()
+    if _valid_folder_id(raw):
+        return raw
+    return ""
+
+
 def folder_id_for_channel(channel: str, *, override: str = "", root: Path | None = None) -> str:
-    """Folder id for one channel.
+    """Optional per-channel folder id. Empty when only the outputs root is set.
 
     Order: explicit override, ``DRIVE_LIBRARY_FOLDER_ID_<CHANNEL>``,
     ``DRIVE_LIBRARY_FOLDER_ID`` on the channel page config, then
@@ -157,23 +173,22 @@ def list_object_keys(
     client=None,
     folder_id: str | None = None,
 ) -> list[str]:
-    """Return object keys under *prefix*. Does not download file bodies."""
-    channel, _rest = _split_key(prefix)
+    """Return object keys under *prefix*. Does not download file bodies.
+
+    Only the requested prefix is listed. A library sync does not walk the
+    rest of the outputs tree.
+    """
+    channel, inside = _prefix_parts(prefix)
     if not channel:
         return []
-    resolved = folder_id_for_channel(channel, override=folder_id or "")
-    if not _valid_folder_id(resolved):
+    root_id, scoped = _root_for(channel, folder_id or "")
+    if not root_id:
         _log_missing_folder(channel)
         return []
-    rows = _cached_rows(resolved, client)
-    needle = prefix.replace("\\", "/").strip()
-    if needle and not needle.endswith("/"):
-        needle += "/"
-    keys: list[str] = []
-    for row in rows:
-        full = f"{channel}/{row['path']}"
-        if not needle or full.startswith(needle) or full == needle.rstrip("/"):
-            keys.append(full)
+    relative = inside if scoped else _join(channel, inside)
+    rows = _files_under(root_id, relative, client, library_fallback=scoped)
+    keys = [_object_key(channel, row["path"], scoped=scoped) for row in rows]
+    keys.sort()
     return keys
 
 
@@ -282,81 +297,161 @@ def _service(client):
     return build_drive_service()
 
 
-def _cached_rows(folder_id: str, client) -> list[dict]:
-    with _LOCK:
-        hit = _listings.get(folder_id)
-        if hit is not None and _fresh(float(hit.get("saved_at") or 0)):
-            return list(hit.get("files") or [])
-    disk = _read_disk(folder_id)
-    if disk is not None:
-        with _LOCK:
-            _listings[folder_id] = disk
-        return list(disk.get("files") or [])
-    service = _service(client)
-    if service is None:
-        return []
-    rows = _normalize_library(_walk(service, folder_id))
-    payload = {"saved_at": time.time(), "files": rows}
-    with _LOCK:
-        _listings[folder_id] = payload
-    _write_disk(folder_id, payload)
-    return rows
+def _root_for(channel: str, override: str) -> tuple[str, bool]:
+    """Return ``(folder_id, channel_scoped)``.
+
+    A channel-scoped folder is that channel's tree, or the library folder
+    itself. The shared outputs folder is not channel-scoped: keys are already
+    paths under ``outputs/``.
+    """
+    explicit = (override or "").strip()
+    if _valid_folder_id(explicit):
+        return explicit, True
+    scoped = folder_id_for_channel(channel)
+    if _valid_folder_id(scoped):
+        return scoped, True
+    shared = outputs_folder_id()
+    if shared:
+        return shared, False
+    return "", False
 
 
 def _row_for_key(key: str, *, client, folder_id: str | None) -> dict | None:
     channel, relative = _split_key(key)
     if not channel or not relative:
         return None
-    resolved = folder_id_for_channel(channel, override=folder_id or "")
-    if not _valid_folder_id(resolved):
+    root_id, scoped = _root_for(channel, folder_id or "")
+    if not root_id:
         _log_missing_folder(channel)
         return None
-    for row in _cached_rows(resolved, client):
-        if row.get("path") == relative:
+    inside = relative if scoped else _join(channel, relative)
+    wanted = key.replace("\\", "/").strip().strip("/")
+    for row in _files_under(root_id, inside, client, library_fallback=scoped):
+        if _object_key(channel, str(row.get("path") or ""), scoped=scoped) == wanted:
             return row
     return None
 
 
-def _walk(service, folder_id: str) -> list[dict]:
+def _files_under(root_id: str, relative: str, client, *, library_fallback: bool) -> list[dict]:
+    """Files under *relative* inside *root_id*. Sibling prefixes are not listed."""
+    relative = (relative or "").strip().strip("/")
+    if not relative and library_fallback and _is_library_root(root_id, client):
+        return _collect(root_id, client, prefix="library")
+    folder_id, path_prefix, file_row = _locate(
+        root_id,
+        relative,
+        client,
+        library_fallback=library_fallback,
+    )
+    if file_row is not None:
+        return [file_row]
+    if folder_id is None:
+        return []
+    rows = _collect(folder_id, client, prefix=path_prefix)
+    rows.sort(key=lambda row: row["path"])
+    return rows
+
+
+def _locate(
+    root_id: str,
+    relative: str,
+    client,
+    *,
+    library_fallback: bool,
+) -> tuple[str | None, str, dict | None]:
+    """Walk *relative* from *root_id*.
+
+    Returns ``(folder_id, path_prefix, file_row)``. ``file_row`` is set when
+    *relative* names a file. ``folder_id`` is the directory to list.
+    """
+    segments = [part for part in relative.split("/") if part] if relative else []
+    folder_id = root_id
+    walked: list[str] = []
+    index = 0
+    while index < len(segments):
+        segment = segments[index]
+        child = _child_named(folder_id, segment, client)
+        if child is None:
+            if (
+                library_fallback
+                and not walked
+                and segment == "library"
+                and _is_library_root(folder_id, client)
+            ):
+                segments = segments[index + 1 :]
+                index = 0
+                walked = ["library"]
+                library_fallback = False
+                continue
+            return None, "", None
+        if not child["folder"]:
+            if index != len(segments) - 1:
+                return None, "", None
+            path = "/".join([*walked, child["name"]])
+            return None, "", {**child, "path": path}
+        folder_id = str(child["id"])
+        walked.append(segment)
+        index += 1
+    return folder_id, "/".join(walked), None
+
+
+def _collect(folder_id: str, client, *, prefix: str) -> list[dict]:
     found: list[dict] = []
-    stack: list[tuple[str, str]] = [(folder_id, "")]
-    while stack:
-        current, prefix = stack.pop()
-        for item in _list_children(service, current):
-            name = str(item.get("name") or "").replace("/", "_").strip()
-            if not name or name in {".", ".."}:
-                continue
-            rel = name if not prefix else f"{prefix}/{name}"
-            mime = str(item.get("mimeType") or "")
-            if mime == _FOLDER_MIME:
-                child = str(item.get("id") or "")
-                if _valid_folder_id(child):
-                    stack.append((child, rel))
-                continue
-            if mime.startswith("application/vnd.google-apps."):
-                continue
-            try:
-                size = int(item.get("size") or 0)
-            except (TypeError, ValueError):
-                size = 0
-            found.append(
-                {
-                    "path": rel,
-                    "id": str(item.get("id") or ""),
-                    "size": size,
-                    "mime": mime,
-                }
-            )
+    for child in _complete_children(folder_id, client):
+        path = f"{prefix}/{child['name']}" if prefix else child["name"]
+        if child["folder"]:
+            found.extend(_collect(str(child["id"]), client, prefix=path))
+            continue
+        found.append({**child, "path": path})
     found.sort(key=lambda row: row["path"])
     return found
 
 
-def _list_children(service, folder_id: str) -> list[dict]:
+def _child_named(folder_id: str, name: str, client) -> dict | None:
+    """One child of *folder_id*. Uses a name query so siblings are not listed."""
+    cached = _cached_entry(folder_id)
+    if cached is not None:
+        for child in cached["children"]:
+            if child.get("name") == name:
+                return child
+        if cached["complete"]:
+            return None
+    service = _service(client)
+    if service is None:
+        return None
+    rows = _list_children(service, folder_id, name=name)
+    if not rows:
+        return None
+    _merge_child(folder_id, rows[0])
+    return rows[0]
+
+
+def _complete_children(folder_id: str, client) -> list[dict]:
+    cached = _cached_entry(folder_id)
+    if cached is not None and cached["complete"]:
+        return list(cached["children"])
+    service = _service(client)
+    if service is None:
+        return []
+    rows = _list_children(service, folder_id)
+    _store_children(folder_id, rows, complete=True)
+    return rows
+
+
+def _is_library_root(folder_id: str, client) -> bool:
+    return _looks_like_library_root(_complete_children(folder_id, client))
+
+
+def _list_children(service, folder_id: str, *, name: str | None = None) -> list[dict]:
     files: list[dict] = []
     token: str | None = None
+    safe_name = name.replace("\\", "\\\\").replace("'", "\\'") if name else None
     while True:
+        clauses = [f"'{folder_id}' in parents", "trashed = false"]
+        if safe_name is not None:
+            clauses.append(f"name = '{safe_name}'")
         kwargs: dict = {
-            "q": f"'{folder_id}' in parents and trashed = false",
+            "q": " and ".join(clauses),
             "fields": "nextPageToken, files(id, name, size, mimeType)",
             "pageSize": 1000,
             "supportsAllDrives": True,
@@ -369,11 +464,33 @@ def _list_children(service, folder_id: str) -> list[dict]:
             return service.files().list(**kwargs).execute()
 
         page = call_with_backoff(_call, what="list folder")
-        files.extend(page.get("files") or [])
+        for item in page.get("files") or []:
+            child = _child_from_item(item)
+            if child is not None:
+                files.append(child)
         token = page.get("nextPageToken")
         if not token:
             break
     return files
+
+
+def _child_from_item(item: dict) -> dict | None:
+    name = str(item.get("name") or "").replace("/", "_").strip()
+    if not name or name in {".", ".."}:
+        return None
+    mime = str(item.get("mimeType") or "")
+    file_id = str(item.get("id") or "")
+    if not _valid_folder_id(file_id):
+        return None
+    if mime == _FOLDER_MIME:
+        return {"name": name, "id": file_id, "size": 0, "mime": mime, "folder": True}
+    if mime.startswith("application/vnd.google-apps."):
+        return None
+    try:
+        size = int(item.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    return {"name": name, "id": file_id, "size": size, "mime": mime, "folder": False}
 
 
 def _stream_to(service, file_id: str, dest: Path, *, what: str) -> None:
@@ -404,32 +521,64 @@ def _stream_to(service, file_id: str, dest: Path, *, what: str) -> None:
         raise
 
 
-def _normalize_library(rows: list[dict]) -> list[dict]:
-    paths = [str(row.get("path") or "") for row in rows]
-    if not _looks_like_library_root(paths):
-        return rows
-    shifted: list[dict] = []
-    for row in rows:
-        copy = dict(row)
-        copy["path"] = "library/" + str(row.get("path") or "")
-        shifted.append(copy)
-    return shifted
-
-
-def _looks_like_library_root(paths: list[str]) -> bool:
-    """True when the shared folder is ``outputs/<channel>/library`` itself."""
-    if any(path == "library" or path.startswith("library/") for path in paths):
-        return False
-    if any(path == "clips" or path.startswith("clips/") for path in paths):
+def _looks_like_library_root(children: list[dict]) -> bool:
+    """True when a per-channel folder is ``outputs/<channel>/library`` itself."""
+    names = [str(child.get("name") or "") for child in children]
+    if any(name in {"library", "clips"} for name in names):
         return False
     suffixes = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-    for path in paths:
-        name = Path(path).name
+    for name in names:
         if name.startswith("post_") and name.endswith(".json"):
             return True
-        if Path(path).suffix.lower() in suffixes:
+        if Path(name).suffix.lower() in suffixes:
             return True
     return False
+
+
+def _object_key(channel: str, relative: str, *, scoped: bool) -> str:
+    if scoped:
+        return f"{channel}/{relative}" if relative else channel
+    return relative
+
+
+def _prefix_parts(prefix: str) -> tuple[str, str]:
+    return _split_key(prefix if str(prefix).endswith("/") else f"{prefix}/")
+
+
+def _join(channel: str, rest: str) -> str:
+    rest = (rest or "").strip("/")
+    if not rest:
+        return channel
+    return f"{channel}/{rest}"
+
+
+def _cached_entry(folder_id: str) -> dict | None:
+    with _LOCK:
+        hit = _listings.get(folder_id)
+        if hit is not None and _fresh(float(hit.get("saved_at") or 0)):
+            return hit
+    disk = _read_disk(folder_id)
+    if disk is None:
+        return None
+    with _LOCK:
+        _listings[folder_id] = disk
+    return disk
+
+
+def _store_children(folder_id: str, children: list[dict], *, complete: bool) -> None:
+    payload = {"saved_at": time.time(), "complete": complete, "children": children}
+    with _LOCK:
+        _listings[folder_id] = payload
+    _write_disk(folder_id, payload)
+
+
+def _merge_child(folder_id: str, child: dict) -> None:
+    cached = _cached_entry(folder_id)
+    children = list(cached["children"]) if cached else []
+    children = [row for row in children if row.get("name") != child.get("name")]
+    children.append(child)
+    complete = bool(cached and cached.get("complete"))
+    _store_children(folder_id, children, complete=complete)
 
 
 def _split_key(key: str) -> tuple[str, str]:
@@ -449,7 +598,10 @@ def _log_missing_folder(channel: str) -> None:
         if channel in _missing_logged:
             return
         _missing_logged.add(channel)
-    log.info("Drive library folder id is unset for %s.", channel)
+    log.info(
+        "Drive folder id is unset for %s. Set DRIVE_OUTPUTS_FOLDER_ID or a per-channel override.",
+        channel,
+    )
 
 
 def _fresh(saved_at: float) -> bool:
@@ -473,8 +625,8 @@ def _read_disk(folder_id: str) -> dict | None:
         return None
     if not isinstance(payload, dict) or not _fresh(float(payload.get("saved_at") or 0)):
         return None
-    files = payload.get("files")
-    if not isinstance(files, list):
+    children = payload.get("children")
+    if not isinstance(children, list):
         return None
     return payload
 
@@ -605,6 +757,7 @@ __all__ = [
     "env_name_for_channel",
     "folder_id_for_channel",
     "list_object_keys",
+    "outputs_folder_id",
     "object_size",
     "read_object_text",
     "reset_caches",
