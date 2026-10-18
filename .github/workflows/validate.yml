@@ -26,12 +26,18 @@ jobs:
         run: >
           ruff check omni modules/memory
           scripts/backup_supermemory.py
+          scripts/upload_clips_to_b2.py
+          agents/media/b2_budget.py
+          agents/media/b2_client.py
           tests/test_omni_config.py
           tests/test_omni_publisher.py
           tests/test_pinterest_vm.py
           tests/test_memory_client.py
           tests/test_supermemory_service.py
           tests/test_repo_root_layout.py
+          tests/test_b2_budget.py
+          tests/test_b2_direct_client_guard.py
+          tests/test_upload_clips_b2_budget.py
 
       - name: Test
         run: >
@@ -42,3 +48,6 @@ jobs:
           tests/test_memory_client.py
           tests/test_supermemory_service.py
           tests/test_repo_root_layout.py
+          tests/test_b2_budget.py
+          tests/test_b2_direct_client_guard.py
+          tests/test_upload_clips_b2_budget.py
