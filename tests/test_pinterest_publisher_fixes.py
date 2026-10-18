@@ -183,21 +183,21 @@ def test_claude_reads_text_blocks_and_opens_the_circuit(monkeypatch: pytest.Monk
 
     client = _Client()
     client.messages = client  # type: ignore[attr-defined]
-    good = _generate_ai("Oak Island", "The pit.", "", client, "claude-3-5-sonnet-latest", 0)
+    good = _generate_ai("Oak Island", "The pit.", "", client, "claude-sonnet-5-5", 0)
     assert good["pinterest_title"] == "Oak Island Money Pit"
     assert good["visual_hook"] == "Who dug the Oak Island pit"
     assert client.calls[0]["thinking"] == {"type": "disabled"}
     assert client.calls[0]["max_tokens"] >= 2048
 
     for _ in range(3):
-        assert _generate_ai("Giants", "Bones.", "", client, "claude-3-5-sonnet-latest", 0) == {}
+        assert _generate_ai("Giants", "Bones.", "", client, "claude-sonnet-5-5", 0) == {}
     before = len(client.calls)
-    assert _generate_ai("Tartaria", "Mud.", "", client, "claude-3-5-sonnet-latest", 0) == {}
+    assert _generate_ai("Tartaria", "Mud.", "", client, "claude-sonnet-5-5", 0) == {}
     assert len(client.calls) == before
     reset_ai_circuit()
 
 
-def test_claude_model_stays_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_claude_model_uses_env_or_the_newest_sonnet(monkeypatch: pytest.MonkeyPatch) -> None:
     from agents.posting.pinterest_engine.config import get_best_claude_model
 
     class _Model:
@@ -205,7 +205,12 @@ def test_claude_model_stays_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
             self.id = mid
 
     class _Listing:
-        data = [_Model("claude-sonnet-4-5-thinking"), _Model("claude-haiku-latest")]
+        # Models API order is newest first. The dry run resolved claude-sonnet-5-5.
+        data = [
+            _Model("claude-sonnet-5-5"),
+            _Model("claude-sonnet-4-5-thinking"),
+            _Model("claude-haiku-latest"),
+        ]
 
     class _Models:
         def list(self):
@@ -215,7 +220,10 @@ def test_claude_model_stays_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
         models = _Models()
 
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
-    assert get_best_claude_model(_Client()) == "claude-3-5-sonnet-latest"
+    assert get_best_claude_model(_Client()) == "claude-sonnet-5-5"
+    offline = get_best_claude_model(None)
+    assert offline == "claude-sonnet-5-5"
+    assert "3-5-sonnet" not in offline
     monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-5")
     assert get_best_claude_model(_Client()) == "claude-sonnet-4-5"
 
