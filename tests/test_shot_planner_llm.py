@@ -111,7 +111,11 @@ def test_invalid_json_is_retried_once_then_accepted() -> None:
     rendered = render_shot(closing)
     assert "corroded bronze gear fragments" not in rendered.positive.lower()
     assert "vague cosmic" not in rendered.positive.lower()
-    assert "manuscript" in rendered.positive.lower() or "book" in rendered.positive.lower()
+    assert "manuscript" not in rendered.positive.lower()
+    assert closing.scene_type in {
+        "landscape", "sea", "aerial", "detail", "golden", "fog", "ruins", "coast",
+        "establishing", "atmosphere",
+    }
     matched = shot_for_beat(plan, _SENTENCES[1])
     assert matched is not None and matched.entity_id == "antikythera_mechanism"
 

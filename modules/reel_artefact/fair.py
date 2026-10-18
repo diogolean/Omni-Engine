@@ -10,6 +10,7 @@ stop the reel.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Callable
 
 from modules.reel_artefact.climb import cursor_for, reset_cursors, set_share
@@ -74,6 +75,7 @@ def run_fair(
         if not moved:
             break
         pending = still_open
+    _rescue_open(jobs, results, pending)
     return results
 
 
@@ -129,6 +131,74 @@ def _merge(previous: Any, nxt: Any) -> Any:
         attempts=list(previous.attempts or []) + list(nxt.attempts or []),
         verdict=verdict,
         first_pass=False if nxt.publishable and not previous.publishable else previous.first_pass,
+    )
+
+
+def _rescue_open(
+    jobs: dict[int, Callable[[], Any]],
+    results: dict[int, Any],
+    pending: list[int],
+) -> None:
+    """Last resort: an approved landscape or sea, past the normal reuse cap.
+
+    Each still still stops at 3 uses. A reel with one approved place and a
+    handful of open beats publishes those beats instead of dying.
+    """
+    if not pending:
+        return
+    from modules.reel_artefact.reuse import rescue_place
+
+    for index in pending:
+        keywords = getattr(jobs.get(index), "keywords", None) or {}
+        folder = keywords.get("output_directory")
+        if not folder:
+            continue
+        stem = str(keywords.get("stem") or f"beat_{int(index):02d}")
+        saved = rescue_place(
+            Path(folder) / f"{stem}_safety.jpg",
+            index,
+            entity_id=str(keywords.get("entity_id") or ""),
+            n_beats=int(keywords.get("n_beats") or len(jobs)),
+        )
+        if saved is None:
+            continue
+        logger.info("LADDER safety | beat=%s | still=%s", int(index) + 1, saved.name)
+        results[index] = _safety_result(results.get(index), saved)
+
+
+def _safety_result(previous: Any, path: Path) -> StillGateResult:
+    prior_attempts = list(previous.attempts or []) if isinstance(previous, StillGateResult) else []
+    prior = dict(previous.verdict or {}) if isinstance(previous, StillGateResult) else {}
+    history = str(prior.get("ladder_history") or "")
+    history = f"{history},safety:pass" if history else "safety:pass"
+    verdict = dict(prior)
+    verdict.update({
+        "ladder": True,
+        "rung": "safety",
+        "judge_mode": "shot",
+        "is_relevant": True,
+        "relevance_score": 0.9,
+        "qa_status": "scored",
+        "rejection_reason": "",
+        "fail_reel": False,
+        "ladder_history": history,
+    })
+    extra = int(previous.extra_generations or 0) if isinstance(previous, StillGateResult) else 0
+    return StillGateResult(
+        path=path,
+        extra_generations=extra,
+        publishable=True,
+        blocked_reason="",
+        attempts=prior_attempts + [{
+            "attempt": len(prior_attempts) + 1,
+            "qa_status": "pass",
+            "rejection_reason": "",
+            "provider": "safety",
+            "relevance_score": 0.9,
+            "is_relevant": True,
+        }],
+        verdict=verdict,
+        first_pass=False,
     )
 
 

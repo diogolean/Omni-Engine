@@ -498,7 +498,8 @@ def test_replan_tries_a_new_concept_then_passes(
     assert result.replans == 1
     assert result.first_pass is False
     assert result.kept is False
-    assert "museum hall" in seen[-1].lower() or "display case" in seen[-1].lower()
+    assert "landscape" in seen[-1].lower() or "real place" in seen[-1].lower()
+    assert "museum hall" not in seen[-1].lower()
     assert "complete mechanism" in seen[-1].lower()
     assert "gold figurine" in seen[-1].lower()
 
@@ -633,7 +634,8 @@ def test_event_rungs_and_prompt_keep_the_artefact_out() -> None:
         "The mechanism fills the case.",
         name="Antikythera Mechanism",
     ).lower()
-    assert "museum hall" in context or "display case" in context
+    assert "landscape" in context or "real place" in context
+    assert "museum hall" not in context
     assert "clean brass gears" in context
     assert "gold figurine" in context
 
@@ -784,7 +786,9 @@ def test_flux_scenes_come_from_the_channel_style_guide() -> None:
     allowed = " ".join(policy["allowed"]).lower()
     forbidden = " ".join(policy["forbidden"]).lower()
     assert "landscape" in allowed
-    assert "manuscript" in allowed
+    assert "aerial" in allowed or "ruins" in allowed
+    assert "manuscript" not in allowed
+    assert "museum" not in allowed
     assert "sea" in allowed
     assert "named artefact" in forbidden
     assert "gear" in forbidden
@@ -826,7 +830,9 @@ def test_object_flux_is_a_context_scene_and_keeps_edit_negatives(tmp_path: Path)
     head = prompt.split("do not depict")[0]
     assert "gear" not in head
     assert "pendant" not in head
-    assert "museum hall" in prompt or "landscape" in prompt or "manuscript" in prompt
+    assert "landscape" in prompt or "aerial" in prompt or "coast" in prompt
+    assert "museum hall" not in prompt
+    assert "manuscript" not in prompt
     assert "never intact gears" in prompt
     assert "complete mechanism" in prompt
     assert "gold bird" in prompt

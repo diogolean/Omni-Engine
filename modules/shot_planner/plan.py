@@ -29,11 +29,13 @@ _SYSTEM = (
     "Copy each narration sentence verbatim. "
     "An era word plus a generic noun is not an entity: "
     "'2nd century BCE device' keeps the named artefact already introduced. "
+    "Every shot uses the topic entity. Another entity is allowed only when "
+    "the sentence names it, and the topic entity still wins if both appear. "
     "A closing line or an abstract claim — theories, legends, records, "
-    "lost knowledge, historians debating — is a Flux-safe picture: an old "
-    "manuscript with no readable text, a historian's hands, a museum archive "
-    "seen from afar, a map, the real place, or silhouettes. Never a close-up "
-    "of a named artefact, its gears, or its pendants. "
+    "lost knowledge, historians debating — is a place in that entity's "
+    "region: the landscape, the sea or coast, sky and weather, an aerial "
+    "view, rock or foliage, or the region's ruins. Never a manuscript, "
+    "hands, a museum hall, or a close-up of a named artefact. "
     "A commentary line is that same Flux-safe scene, or the real place. "
     "Never a library, sci-fi, steampunk, or a futuristic hangar. "
     "Quimbaya ornaments are small gold pendants, never a modern jet. "
@@ -65,11 +67,13 @@ def planner_prompt(topic: str, script: str, entities: list[Entity]) -> str:
         f"Knowledge base:\n{chr(10).join(cards)}\n\n"
         f"Sentences:\n{numbered}\n\n"
         "Do not invent an entity from an era word plus a generic noun. "
+        "Use the topic entity on every shot. Use another entity only when "
+        "that sentence names it. If the sentence names both, keep the topic. "
         "A closing line or abstract claim (theories, legends, records, "
-        "lost knowledge) is a Flux-safe scene: an old manuscript with no "
-        "readable text, hands without a detailed face, a museum archive "
-        "seen from afar, the real place, or a wide establishing shot. "
-        "Never a named artefact, its gears, or its pendants. "
+        "lost knowledge) is a place in that region: landscape, sea or coast, "
+        "sky, weather, aerial, rock, water, foliage, or regional ruins. "
+        "Never a manuscript, hands, a museum hall, a named artefact, its "
+        "gears, or its pendants. "
         "Commentary lines use that same Flux-safe scene. "
         "Never sci-fi, steampunk, a futuristic hangar, or a modern library. "
         "Quimbaya ornaments are small gold pendants, never a modern jet. "
@@ -119,7 +123,7 @@ def _accept(
     if sentences and len(shots) == len(sentences):
         for shot, sentence in zip(shots, sentences):
             shot.narration = sentence
-    normalized = normalize_shots(shots, entities)
+    normalized = normalize_shots(shots, entities, topic=topic)
     plan = ShotList(
         channel=channel,
         topic=topic or str(data.get("topic") or ""),

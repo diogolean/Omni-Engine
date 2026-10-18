@@ -25,13 +25,13 @@ _FORBID = (
 # Used when a channel has not copied the rule into its style guide yet.
 _ALLOWED = (
     "landscapes and the real place",
-    "the sea or underwater ambience",
-    "atmosphere such as sky, light, or fog",
-    "wide establishing shots",
-    "generic museum halls or archives seen from afar",
-    "silhouettes of people and hands without detailed faces",
-    "old books or manuscripts as props without readable text",
+    "the sea, the coast, or underwater ambience",
+    "sky, weather, fog, and golden-hour light",
+    "an aerial view of the real region",
+    "close natural detail: rock, water, or foliage",
+    "ruins or architecture of the real region",
 )
+_DROPPED_SCENES = {"museum_hall", "silhouette", "manuscript"}
 _FORBIDDEN = (
     "a named artefact",
     "parts of an artefact such as gears or pendants",
@@ -114,32 +114,57 @@ _SCENES: dict[str, tuple[str, str, str, str, str]] = {
         "the place seen from a distance",
         "wide",
     ),
-    "museum_hall": (
-        "a museum archive seen from afar",
-        "A generic museum hall or archive seen from across the room. "
-        "Cases are small and unreadable.",
-        "wide view from across the hall",
-        "a museum archive seen from across the hall",
+    "aerial": (
+        "the real place from the air",
+        "An aerial view of the real place. Ridges, valleys, and vegetation. "
+        "No named artefact.",
+        "high aerial, the ground fills the frame",
+        "the real place seen from the air",
+        "aerial",
+    ),
+    "detail": (
+        "rock, water, or foliage",
+        "A close natural detail of the real place: rock, water, or foliage. "
+        "No object, no hands.",
+        "close on stone, water, or leaves",
+        "the ground of the real place",
+        "close",
+    ),
+    "golden": (
+        "golden hour on the real place",
+        "Golden-hour light over the real place. Warm low sun, long shadows, "
+        "empty of objects.",
+        "wide view in golden hour",
+        "the real place at golden hour",
         "wide",
     ),
-    "silhouette": (
-        "hands without a detailed face",
-        "Silhouettes of people, or hands only, with no detailed faces.",
-        "hands and silhouettes, faces not visible",
-        "a work table, faces out of frame",
-        "medium",
+    "fog": (
+        "fog over the real place",
+        "Fog or soft weather over the real place. Diffused light, no objects.",
+        "wide view in fog",
+        "the real place in fog",
+        "wide",
     ),
-    "manuscript": (
-        "an old manuscript on a desk",
-        "An old book or manuscript used as a prop on a wooden desk. "
-        "The pages have no readable text.",
-        "medium view of a closed or blurred book",
-        "a wooden desk",
-        "medium",
+    "coast": (
+        "the coast",
+        "The coast of the real place. Water, rock, and sky. No boat, no artefact.",
+        "wide view of the coast",
+        "the coast of the real place",
+        "wide",
+    ),
+    "ruins": (
+        "ruins of the real region",
+        "Stone ruins or old architecture of the real region, seen in the "
+        "landscape. No named artefact, no display case.",
+        "wide view of regional ruins",
+        "ruins in the real region",
+        "wide",
     ),
 }
-_OBJECT_CYCLE = ("museum_hall", "landscape", "establishing", "manuscript")
-_ABSTRACT_CYCLE = ("manuscript", "silhouette", "museum_hall", "landscape")
+_INLAND = ("landscape", "aerial", "detail", "golden", "fog", "ruins")
+_COASTAL = ("landscape", "sea", "aerial", "coast", "detail", "golden", "fog", "ruins")
+_OBJECT_CYCLE = _INLAND
+_ABSTRACT_CYCLE = _INLAND
 
 
 def _mentions(text: str, words: tuple[str, ...]) -> bool:
@@ -215,15 +240,20 @@ def choose_scene(
     if _mentions(low, ("sea", "underwater", "shipwreck", "diver", "divers", "wreck")):
         return "sea" if coastal else "landscape"
     slot = max(1, int(attempt)) - 1
-    if kind == "object":
-        return _OBJECT_CYCLE[slot % len(_OBJECT_CYCLE)]
-    if is_abstract_claim(narration):
-        return _ABSTRACT_CYCLE[slot % len(_ABSTRACT_CYCLE)]
-    if _mentions(low, ("sky", "fog", "light", "dusk", "atmosphere")):
-        return "atmosphere"
-    if _mentions(low, ("landscape", "region", "map")):
+    cycle = _COASTAL if coastal else _INLAND
+    if kind == "object" or is_abstract_claim(narration):
+        return cycle[slot % len(cycle)]
+    if _mentions(low, ("sky", "fog", "weather", "mist")):
+        return "fog"
+    if _mentions(low, ("golden", "dusk", "sunset")):
+        return "golden"
+    if _mentions(low, ("aerial", "from above", "from the air")):
+        return "aerial"
+    if _mentions(low, ("ruin", "ruins", "temple", "architecture")):
+        return "ruins"
+    if _mentions(low, ("landscape", "region", "place", "highland")):
         return "landscape"
-    return ("establishing", "landscape", "museum_hall", "silhouette")[slot % 4]
+    return cycle[slot % len(cycle)]
 
 
 def _coastal(entity: Any) -> bool:
@@ -268,17 +298,68 @@ def _place_copy(
             f"Calm sea along {place}. Light in the water, uncluttered.",
             place,
         )
+    if scene == "aerial":
+        return (
+            place,
+            f"An aerial view of {place}. Ridges, valleys, and vegetation. No named artefact.",
+            place,
+        )
+    if scene == "detail":
+        return (
+            place,
+            f"A close natural detail of {place}: rock, water, or foliage. No object, no hands.",
+            place,
+        )
+    if scene == "golden":
+        return (
+            place,
+            f"Golden-hour light over {place}. Warm low sun, long shadows, empty of objects.",
+            place,
+        )
+    if scene == "fog":
+        return (
+            place,
+            f"Fog or soft weather over {place}. Diffused light, no objects.",
+            place,
+        )
+    if scene == "coast":
+        return (
+            place,
+            f"The coast of {place}. Water, rock, and sky. No boat, no artefact.",
+            place,
+        )
+    if scene == "ruins":
+        return (
+            place,
+            f"Stone ruins or old architecture of {place}, in the landscape. No named artefact.",
+            place,
+        )
     return subject, visual, setting
+
+
+def _cycle(coastal: bool) -> tuple[str, ...]:
+    return _COASTAL if coastal else _INLAND
 
 
 def fields_for_scene(scene: str, entity: Any = None) -> dict[str, str]:
     """Subject, camera, and setting for one allowed Flux scene type."""
+    coastal = _coastal(entity)
     key = scene if scene in _SCENES else "landscape"
-    if key == "sea" and not _coastal(entity):
+    if key in _DROPPED_SCENES or key not in _cycle(coastal) and key not in {"establishing", "atmosphere"}:
+        key = _cycle(coastal)[0]
+    if key == "sea" and not coastal:
+        key = "landscape"
+    if key == "coast" and not coastal:
         key = "landscape"
     subject, visual, camera, setting, shot_type = _SCENES[key]
     geography = str(getattr(entity, "geography", "") or "") if entity is not None else ""
     subject, visual, setting = _place_copy(key, subject, visual, setting, geography)
+    if key == "golden":
+        light = "golden hour, warm low sun"
+    elif key == "fog":
+        light = "fog, soft diffused light"
+    else:
+        light = "natural daylight, documentary"
     return {
         "scene": key,
         "subject": subject,
@@ -286,18 +367,13 @@ def fields_for_scene(scene: str, entity: Any = None) -> dict[str, str]:
         "shot_type": shot_type,
         "camera": camera,
         "setting": setting,
-        "lighting": "natural daylight, documentary",
+        "lighting": light,
     }
 
 
 def next_scene(scene: str, *, coastal: bool = True) -> str:
-    """A different allowed scene, used when two beats already used this one."""
-    order = ["manuscript", "silhouette", "museum_hall", "landscape", "establishing", "atmosphere"]
-    if coastal:
-        order = [
-            "manuscript", "silhouette", "museum_hall", "landscape",
-            "sea", "establishing", "atmosphere",
-        ]
+    """The next place treatment. Wide, aerial, detail, light, then ruins."""
+    order = list(_cycle(coastal))
     if scene not in order:
         return order[0]
     return order[(order.index(scene) + 1) % len(order)]
@@ -317,8 +393,8 @@ def scene_fields(
         scene = "sea" if coastal else "landscape"
     elif any(word in low for word in ("real place", "highland", "landscape", "region")):
         scene = "landscape"
-    elif any(word in low for word in ("historian", "debate", "archive", "researcher")):
-        scene = "museum_hall"
+    elif any(word in low for word in ("historian", "debate", "archive", "researcher", "theory", "legend")):
+        scene = _cycle(coastal)[(max(1, int(index)) - 1) % len(_cycle(coastal))]
     elif (
         entity is not None
         and str(getattr(entity, "kind", "") or "") in {"place", "site"}
@@ -417,10 +493,14 @@ def safe_flux_prompt(
     ``scene`` is the planned scene. ``variant`` walks to the next allowed
     scene on a retry. ``geography`` is the real place from the entity file.
     """
-    chosen = scene if scene in _SCENES else choose_scene(
+    chosen = scene if scene in _SCENES and scene not in _DROPPED_SCENES else choose_scene(
         narration, attempt=attempt, event=event, kind=kind, coastal=coastal,
     )
-    if chosen == "sea" and not coastal:
+    if chosen in _DROPPED_SCENES:
+        chosen = choose_scene(
+            narration, attempt=attempt, event=event, kind=kind, coastal=coastal,
+        )
+    if chosen in {"sea", "coast"} and not coastal:
         chosen = "landscape"
     for _step in range(max(0, int(variant or 0))):
         chosen = next_scene(chosen, coastal=coastal)

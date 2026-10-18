@@ -214,10 +214,20 @@ def note_original(path: str, key: str) -> None:
         return
     with _LOCK:
         if resolved and resolved in _SEEN_PATHS:
+            # The ladder already reserved this file under its content hash.
+            # The reuse key still has to count the published original, or a
+            # later copy thinks the still has never been used.
+            if int(_STILL_USES.get(token, 0)) == 0:
+                _STILL_USES[token] = 1
             return
         if resolved:
             _SEEN_PATHS.add(resolved)
         _STILL_USES[token] = _STILL_USES.get(token, 0) + 1
+
+
+def safety_room(key: str) -> bool:
+    """The last-resort copy may pass the normal cap, and stops at 3 uses."""
+    return still_uses(key) < 3
 
 
 def reuse_room(key: str, n_beats: int) -> tuple[bool, str]:
@@ -229,6 +239,26 @@ def reuse_room(key: str, n_beats: int) -> tuple[bool, str]:
         if beats > 0 and (_REUSE_BEATS + 1) / beats > reuse_max_fraction() + 1e-9:
             return False, "fraction"
     return True, ""
+
+
+def release_noted_reuse(path: str, key: str) -> None:
+    """Undo a reuse reservation when the judge rejects the copy."""
+    resolved = str(path or "")
+    token = key or resolved
+    if not token:
+        return
+    global _REUSE_BEATS
+    with _LOCK:
+        if resolved:
+            _SEEN_PATHS.discard(resolved)
+        uses = int(_STILL_USES.get(token, 0))
+        if uses <= 0:
+            return
+        _REUSE_BEATS = max(0, _REUSE_BEATS - 1)
+        if uses == 1:
+            _STILL_USES.pop(token, None)
+        else:
+            _STILL_USES[token] = uses - 1
 
 
 def note_reuse(path: str, key: str) -> None:

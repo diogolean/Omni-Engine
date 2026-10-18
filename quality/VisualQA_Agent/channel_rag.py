@@ -342,12 +342,11 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
         "flux_scenes": {
             "allowed": [
                 "landscapes and the real place",
-                "the sea or underwater ambience",
-                "atmosphere such as sky, light, or fog",
-                "wide establishing shots",
-                "generic museum halls or archives seen from afar",
-                "silhouettes of people and hands without detailed faces",
-                "old books or manuscripts as props without readable text",
+                "the sea, the coast, or underwater ambience",
+                "sky, weather, fog, and golden-hour light",
+                "an aerial view of the real region",
+                "close natural detail: rock, water, or foliage",
+                "ruins or architecture of the real region",
             ],
             "forbidden": [
                 "a named artefact",
@@ -430,11 +429,11 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
             "filmable_lines": (
                 "Each spoken line pairs with one concrete picture. Abstract "
                 "claims (theories, legends, records, lost knowledge) use a "
-                "Flux-safe scene: an old manuscript with no readable text, "
-                "hands without a detailed face, a museum archive seen from "
-                "afar, the real place, the sea, or sky and light. Never ask "
-                "a generated still to depict a named artefact, its gears, "
-                "or its pendants."
+                "Flux-safe scene of the real region: the landscape, the sea "
+                "or coast, sky and weather, an aerial view, close natural "
+                "detail of rock water or foliage, golden hour or fog, or "
+                "ruins of that region. Never a manuscript, hands, a museum "
+                "hall, or a named artefact, its gears, or its pendants."
             ),
         },
         # ── motion_rules ────────────────────────────────────────────────

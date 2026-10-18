@@ -204,6 +204,31 @@ def _alias_at(folded: str, alias: str) -> int:
     return match.start() if match else -1
 
 
+def entity_for_line(
+    narration: str,
+    entities: list[Entity],
+    *,
+    topic: str = "",
+    proposed_id: str = "",
+) -> Entity | None:
+    """The reel's topic entity, unless this line names a different one.
+
+    A model id is not evidence. Göbekli Tepe is used only when the spoken
+    line says Göbekli Tepe. If the line also names the topic, the topic wins.
+    """
+    by_id = {entity.id: entity for entity in entities}
+    named = entities_in_text(narration, entities)
+    topic_hits = entities_in_text(topic, entities) if topic else []
+    topic_ent = topic_hits[0] if topic_hits else None
+    if topic_ent is not None:
+        if any(item.id == topic_ent.id for item in named) or not named:
+            return topic_ent
+        return named[0]
+    if named:
+        return named[0]
+    return by_id.get(proposed_id or "")
+
+
 def entities_in_text(text: str, entities: list[Entity]) -> list[Entity]:
     """Entities named in *text*, earliest first. Longer aliases win overlaps."""
     folded = _fold(text)

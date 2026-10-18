@@ -2,12 +2,19 @@
 """Ken Burns reuse of a still that already passed the judge."""
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
 from PIL import Image
 
-from modules.reel_artefact.budget import note_original, note_reuse, reuse_room
+from modules.reel_artefact.budget import (
+    note_original,
+    note_reuse,
+    reuse_room,
+    safety_room,
+    still_uses,
+)
 from modules.reel_artefact.crop import anchor_for, prepare_reel_frame
 from modules.reel_artefact.logbook import note_source
 from modules.reel_artefact.motion import profile_for, write_motion_sidecar
@@ -74,24 +81,33 @@ def reuse_into(
     source: Path | str | None = None,
     kind: str | None = None,
     n_beats: int = 0,
+    safety: bool = False,
 ) -> Path | None:
     """Copy an approved still, with a new crop and a different Ken Burns move.
 
     Returns None when this still or this reel is already at the reuse cap.
+    ``safety`` is the last resort: it ignores the per-reel fraction and the
+    normal per-still cap, and stops at 3 uses of that still.
     """
     origin = Path(source) if source else approved_still(kind)
     if origin is None or not origin.is_file():
         return None
     key = reuse_key_for(origin)
-    allowed, reason = reuse_room(key, n_beats)
-    if not allowed:
-        note_source(f"reuse:skip-{reason}", entity_id, int(beat_index) + 1)
-        return None
+    if safety:
+        if not safety_room(key):
+            note_source("reuse:skip-safety", entity_id, int(beat_index) + 1)
+            return None
+    else:
+        allowed, reason = reuse_room(key, n_beats)
+        if not allowed:
+            note_source(f"reuse:skip-{reason}", entity_id, int(beat_index) + 1)
+            return None
     target = Path(dest)
     target.parent.mkdir(parents=True, exist_ok=True)
     if origin.resolve() != target.resolve():
-        _write_crop(origin, target, int(beat_index))
-    write_motion_sidecar(target, profile=profile_for(int(beat_index)))
+        anchor = _rescue_anchor(origin, int(beat_index)) if safety else ""
+        _write_crop(origin, target, int(beat_index), anchor=anchor)
+    write_motion_sidecar(target, profile=_rescue_profile(origin, int(beat_index)))
     previous = source_meta(origin)
     write_source_sidecar(
         target,
@@ -116,12 +132,120 @@ def reuse_into(
     return target
 
 
-def _write_crop(origin: Path, target: Path, beat_index: int) -> None:
+_PLACE = {
+    "",
+    "scene",
+    "landscape",
+    "sea",
+    "aerial",
+    "detail",
+    "golden",
+    "fog",
+    "ruins",
+    "coast",
+    "establishing",
+    "atmosphere",
+}
+
+
+def _is_place(path: Path) -> bool:
+    meta = source_meta(path)
+    kind = str(meta.get("still_kind") or "")
+    if kind in {"object", "event"}:
+        return False
+    scene = str(meta.get("scene_type") or "")
+    return scene in _PLACE
+
+
+def approved_place_stills() -> list[Path]:
+    """Approved landscapes, seas, and the other place scenes from this reel."""
+    with _LOCK:
+        rows = list(_APPROVED)
+    found: list[Path] = []
+    for label, image in rows:
+        if label != "scene" or not image.is_file() or not _is_place(image):
+            continue
+        found.append(image)
+    return found
+
+
+def rescue_place(
+    dest: Path | str,
+    beat_index: int,
+    *,
+    entity_id: str = "",
+    n_beats: int = 0,
+) -> Path | None:
+    """Reuse one approved place still past the normal cap, at most 3 times."""
+    ranked: list[tuple[int, str, Path]] = []
+    for image in approved_place_stills():
+        key = reuse_key_for(image)
+        if not safety_room(key):
+            continue
+        ranked.append((still_uses(key), key, image))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: (row[0], row[1]))
+    _uses, _key, origin = ranked[0]
+    return reuse_into(
+        dest,
+        beat_index,
+        entity_id=entity_id,
+        source=origin,
+        kind="scene",
+        n_beats=n_beats,
+        safety=True,
+    )
+
+
+def _origin_index(path: Path) -> int | None:
+    match = re.search(r"ladder_(\d+)", path.name)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _rescue_profile(origin: Path, beat_index: int) -> str:
+    """A Ken Burns move that is not the one already on the source still."""
+    from modules.reel_artefact.motion import motion_sidecar_path
+
+    current = ""
+    path = motion_sidecar_path(origin)
+    if path.is_file():
+        try:
+            import json
+
+            current = str(json.loads(path.read_text(encoding="utf-8")).get("profile") or "")
+        except (OSError, json.JSONDecodeError, ValueError):
+            current = ""
+    if not current:
+        origin_index = _origin_index(origin)
+        if origin_index is not None:
+            current = profile_for(origin_index)
+    profile = profile_for(int(beat_index))
+    if profile == current:
+        profile = profile_for(int(beat_index) + 1)
+    return profile
+
+
+def _rescue_anchor(origin: Path, beat_index: int) -> str:
+    """A crop window that is not the one the source beat already used."""
+    anchor = anchor_for(int(beat_index))
+    origin_index = _origin_index(origin)
+    if origin_index is not None and anchor == anchor_for(origin_index):
+        anchor = anchor_for(int(beat_index) + 1)
+    return anchor
+
+
+def _write_crop(origin: Path, target: Path, beat_index: int, anchor: str = "") -> None:
     try:
         with Image.open(origin) as opened:
             frame, _how = prepare_reel_frame(
                 opened.convert("RGB"),
-                anchor=anchor_for(beat_index),
+                anchor=anchor or anchor_for(beat_index),
             )
         frame.save(target, format="JPEG", quality=92)
     except (OSError, ValueError):

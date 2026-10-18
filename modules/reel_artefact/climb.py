@@ -22,7 +22,7 @@ from modules.reel_qa.relevance import (
     evaluate_chunk_relevance,
     evaluate_with_technical_retry,
 )
-from modules.shot_planner.entities import Entity, entities_in_text, load_entities
+from modules.shot_planner.entities import Entity, entity_for_line, load_entities
 
 logger = logging.getLogger(__name__)
 
@@ -273,16 +273,17 @@ def _entity(
     narration: str,
     episode_subject: str,
 ) -> Entity | None:
+    """The topic entity, unless this spoken line names a different one."""
     try:
         rows = load_entities(channel or "ancient_knowledge")
     except Exception:  # noqa: BLE001
         return None
-    if entity_id:
-        for item in rows:
-            if item.id == entity_id:
-                return item
-    hits = entities_in_text(narration or "", rows) or entities_in_text(episode_subject or "", rows)
-    return hits[0] if hits else None
+    return entity_for_line(
+        narration or "",
+        rows,
+        topic=episode_subject or "",
+        proposed_id=entity_id or "",
+    )
 
 
 def _real(entity: Entity | None, channel: str, beat_index: int):
@@ -394,7 +395,7 @@ def _flux(
         logger.info(
             "FLUX prompt | beat=%s | attempt=%s | %s",
             int(ctx.beat_index) + 1,
-            int(ctx.replan or ctx.attempt or 1),
+            int(ctx.replan or 0) or (int(ctx.attempt) + 1),
             text,
         )
         call = {key: value for key, value in kwargs.items() if key in _FLUX_KEYS}

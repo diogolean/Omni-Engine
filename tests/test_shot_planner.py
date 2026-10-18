@@ -79,10 +79,14 @@ def test_abstract_close_is_a_flux_safe_scene_not_the_artefact() -> None:
     assert closing.entity_id == "antikythera_mechanism"
     assert closing.image_role == "flux"
     visual = closing.canonical_visual.lower()
-    assert "manuscript" in visual or "book" in visual or "archive" in visual
+    assert closing.scene_type in {
+        "landscape", "sea", "aerial", "detail", "golden", "fog", "ruins", "coast",
+        "establishing", "atmosphere",
+    }
+    assert "manuscript" not in visual
+    assert "museum" not in visual
     assert "museum hero" not in closing.camera
     assert "corroded bronze gear fragments" not in rendered.positive.lower()
-    assert "readable text" in visual
 
 
 def test_normalize_rewrites_a_model_invented_bce_device_and_a_vague_close() -> None:
@@ -226,7 +230,12 @@ def test_commentary_stays_a_documentary_still_and_quimbaya_is_a_pendant() -> Non
     debate = shots[3]
     assert debate.entity_id == "quimbaya_ornaments"
     assert "spaceship" not in debate.setting.lower()
-    assert "museum" in debate.setting.lower() or "museum" in debate.camera.lower()
+    assert debate.image_role == "flux"
+    assert debate.scene_type in {
+        "landscape", "aerial", "detail", "golden", "fog", "ruins", "coast", "sea",
+    }
+    assert "manuscript" not in debate.canonical_visual.lower()
+    assert "museum hall" not in debate.setting.lower()
     rendered = render_shot(debate)
     positive = rendered.positive.lower()
     assert "photoreal documentary photograph" in positive
@@ -261,9 +270,11 @@ def test_three_debate_lines_do_not_share_one_scene() -> None:
     )
     scenes = [shot.scene_type for shot in shots]
     assert all(shot.image_role == "flux" for shot in shots)
-    assert scenes[0] == scenes[1]
-    assert scenes[2] != scenes[1]
+    assert scenes[0] != scenes[1]
+    assert scenes[1] != scenes[2]
     assert scenes[2]
+    assert "manuscript" not in scenes
+    assert "museum_hall" not in scenes
 
 
 def test_schema_rejects_a_shot_with_no_visual() -> None:
@@ -282,4 +293,5 @@ def test_offline_report_prints_the_shot_list_and_the_prompts() -> None:
     assert "NEGATIVE:" in text
     assert "EXPECTED SUBJECT: BCE device" not in text
     assert '"subject": "BCE device"' not in text
-    assert "manuscript" in text.lower() or "old book" in text.lower()
+    assert "manuscript" not in text.lower()
+    assert "sea" in text.lower() or "landscape" in text.lower()

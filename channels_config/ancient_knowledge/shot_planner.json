@@ -33,12 +33,11 @@
   "flux_scenes": {
     "allowed": [
       "landscapes and the real place",
-      "the sea or underwater ambience",
-      "atmosphere such as sky, light, or fog",
-      "wide establishing shots",
-      "generic museum halls or archives seen from afar",
-      "silhouettes of people and hands without detailed faces",
-      "old books or manuscripts as props without readable text"
+      "the sea, the coast, or underwater ambience",
+      "sky, weather, fog, and golden-hour light",
+      "an aerial view of the real region",
+      "close natural detail: rock, water, or foliage",
+      "ruins or architecture of the real region"
     ],
     "forbidden": [
       "a named artefact",

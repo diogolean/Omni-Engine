@@ -502,11 +502,27 @@ def _climb(
     budget = beat_budget_usd()
 
     begin = max(0, int(start_rung or 0))
+    flux_used = False
     for attempt, rung in enumerate(order):
         if attempt < begin:
             continue
         if only_rung and rung != only_rung:
             continue
+        # Pass 1 and each later share take one Flux image. The second Flux
+        # rung is the next share's variant, not a second image in this climb.
+        if rung == "flux" and once and flux_used:
+            return _judged_stop(
+                history=history,
+                verdict=last_verdict,
+                spend=spend,
+                kind=ctx.kind,
+                beat_spent=beat_spent,
+                replan=replan,
+                reason="one-flux",
+                next_rung=attempt,
+            )
+        if rung == "flux":
+            flux_used = True
         ctx.attempt = attempt
         stem = f"ladder_{int(beat_index):02d}_{rung}_{attempt:02d}"
         if replan:
@@ -567,6 +583,17 @@ def _climb(
                 "LADDER | beat=%s | rung=%s | status=fail | cost=%.4f | %s",
                 int(beat_index) + 1, rung, cost, type(exc).__name__,
             )
+            if once and rung == "flux":
+                return _judged_stop(
+                    history=history,
+                    verdict=last_verdict,
+                    spend=spend,
+                    kind=ctx.kind,
+                    beat_spent=beat_spent,
+                    replan=replan,
+                    reason=type(exc).__name__,
+                    next_rung=attempt + 1,
+                )
             continue
         path = Path(made) if made else None
         if path is None or not path.is_file():
@@ -578,6 +605,19 @@ def _climb(
                 beat_spent = max(0.0, beat_spent - cost)
                 charged = False
             history.append(RungAttempt(rung=rung, status="fail", reason="missing"))
+            # Pass 1 is one Flux image. A missing file does not unlock the
+            # second Flux rung in the same climb.
+            if once and rung == "flux":
+                return _judged_stop(
+                    history=history,
+                    verdict=last_verdict,
+                    spend=spend,
+                    kind=ctx.kind,
+                    beat_spent=beat_spent,
+                    replan=replan,
+                    reason="missing",
+                    next_rung=attempt + 1,
+                )
             continue
         shown = _shown_rung(rung, path)
         if charged and (shown == "reuse" or _already_paid(path)):
@@ -595,6 +635,17 @@ def _climb(
             history.append(RungAttempt(
                 rung=shown, status="skip", reason="still", path=str(path),
             ))
+            if once and rung == "flux":
+                return _judged_stop(
+                    history=history,
+                    verdict=last_verdict,
+                    spend=spend,
+                    kind=ctx.kind,
+                    beat_spent=beat_spent,
+                    replan=replan,
+                    reason="still",
+                    next_rung=attempt + 1,
+                )
             continue
         if charged:
             key = _bill_key(shown, path)
@@ -814,13 +865,17 @@ def _reserve(path: Path, n_beats: int) -> bool:
 
 
 def _release(path: Path) -> None:
-    from modules.reel_artefact.budget import release_still
+    from modules.reel_artefact.budget import release_noted_reuse, release_still
+    from modules.reel_artefact.source import source_meta
 
     try:
         target = str(path.resolve())
     except OSError:
         target = str(path)
+    meta = source_meta(path)
     release_still(target, _content_key(path))
+    if str(meta.get("provider") or "") == "reuse":
+        release_noted_reuse(target, str(meta.get("reuse_key") or ""))
 
 
 def _diverse(path: Path) -> bool:

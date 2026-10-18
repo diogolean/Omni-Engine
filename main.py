@@ -4420,7 +4420,7 @@ def _produce_variant_worker(
                             "visual_role": _doc_role,
                         },
                         episode_subject=str(
-                            resolved_subject_for_beat or resolved_subject or ""
+                            resolved_subject or resolved_subject_for_beat or ""
                         ),
                         banned_subjects=list(_act_banned or []) or None,
                         is_cta=bool(_sr_act_meta[_act_i]["is_cta"]),

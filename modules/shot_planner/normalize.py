@@ -13,6 +13,7 @@ from modules.reel_artefact.role import image_role_for, is_event
 from modules.shot_planner.entities import (
     Entity,
     entities_in_text,
+    entity_for_line,
     is_abstract_close,
     is_commentary,
     is_era_generic,
@@ -91,10 +92,12 @@ def _fill(
     recap: bool,
     others: list[Entity],
     index: int = 1,
+    force_place: bool = False,
 ) -> Shot:
     event = is_event(shot.narration, camera=shot.camera, setting=shot.setting)
     abstract = (
-        is_abstract_claim(shot.narration)
+        force_place
+        or is_abstract_claim(shot.narration)
         or is_abstract_close(shot.narration)
         or (
             is_commentary(shot.narration)
@@ -235,16 +238,27 @@ def _default_light(entity: Entity) -> str:
     return "soft documentary light on the subject"
 
 
-def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
+def normalize_shots(
+    shots: list[Shot],
+    entities: list[Entity],
+    *,
+    topic: str = "",
+) -> list[Shot]:
     """Drop era-generic inventions and pin abstract closings to the main artefact.
 
     The knowledge-base canonical visual wins for a known entity. A geology
     line about the Coso artifact keeps that entity and shows the concretion.
+    When ``topic`` is set, every shot stays on that entity unless the line
+    names a different one.
     """
     by_id = {entity.id: entity for entity in entities}
-    bound: list[tuple[Shot, Entity | None, bool, bool]] = []
+    bound: list[tuple[Shot, Entity | None, bool, bool, bool]] = []
     previous: Entity | None = None
     introduced: list[Entity] = []
+    # A topic string that names no entity ("Lost OOPArts") keeps the old
+    # inheritance. The lock is the entity the reel is about.
+    topic_hits = entities_in_text(topic, entities) if (topic or "").strip() else []
+    locked = bool(topic_hits)
     for shot in shots:
         named = entities_in_text(shot.narration, entities)
         named_ent = named[0] if named else None
@@ -253,7 +267,14 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
         )
         commentary = is_commentary(shot.narration)
         abstract = is_abstract_close(shot.narration) and named_ent is None
-        if named_ent is not None:
+        if locked:
+            entity = entity_for_line(
+                shot.narration,
+                entities,
+                topic=topic,
+                proposed_id=shot.entity_id,
+            )
+        elif named_ent is not None:
             entity = named_ent
         elif era_bad or abstract:
             entity = previous
@@ -263,16 +284,23 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
             entity = by_id[shot.entity_id]
         else:
             entity = previous
+        # A line that names no entity and no object is a place, not a photo
+        # of whichever artefact the model wrote into entity_id.
+        force_place = bool(
+            locked
+            and not named
+            and not is_physical_object_line(shot.narration)
+        )
         inherit = abstract or era_bad or (commentary and named_ent is None)
         if entity is not None and not inherit and entity not in introduced:
             introduced.append(entity)
         if entity is not None and not inherit:
             previous = entity
-        bound.append((shot, entity, abstract or commentary, abstract))
+        bound.append((shot, entity, abstract or commentary, abstract, force_place))
     main = introduced[0] if introduced else previous
     output: list[Shot] = []
-    for index, (shot, entity, recap, pin_main) in enumerate(bound, start=1):
-        if pin_main and main is not None:
+    for index, (shot, entity, recap, pin_main, force_place) in enumerate(bound, start=1):
+        if pin_main and main is not None and not locked:
             entity = main
         if not shot.id:
             shot = Shot(
@@ -291,7 +319,12 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
                 kb_miss=shot.kb_miss,
             )
         output.append(_fill(
-            shot, entity, recap=recap, others=introduced, index=index,
+            shot,
+            entity,
+            recap=recap,
+            others=introduced,
+            index=index,
+            force_place=force_place,
         ))
     by_id = {entity.id: entity for entity in entities}
     output = _fit_topic(output, by_id)
@@ -307,11 +340,13 @@ def _scene_name(shot: Shot) -> str:
         return ""
     blob = f"{shot.subject} {shot.setting} {shot.canonical_visual}".lower()
     for name, words in (
-        ("manuscript", ("manuscript", "old book")),
-        ("museum_hall", ("museum archive", "museum hall", "from afar")),
-        ("silhouette", ("silhouette", "without a detailed face")),
-        ("sea", ("calm sea", "open sea", "underwater")),
-        ("atmosphere", ("sky and light", "open sky")),
+        ("sea", ("calm sea", "open sea", "along the coast")),
+        ("coast", ("the coast",)),
+        ("aerial", ("from the air", "aerial")),
+        ("detail", ("rock", "foliage", "close on the water")),
+        ("golden", ("golden hour",)),
+        ("fog", ("fog",)),
+        ("ruins", ("ruins", "architecture")),
         ("landscape", ("landscape", "the real place")),
         ("establishing", ("establishing",)),
     ):
@@ -344,7 +379,7 @@ def _with_scene(shot: Shot, scene: str, entity: Entity | None = None) -> Shot:
 
 
 def _vary_scenes(shots: list[Shot], by_id: dict[str, Entity] | None = None) -> list[Shot]:
-    """No more than two flux beats in a row may share a scene type."""
+    """Consecutive Flux beats use a different place treatment."""
     known = by_id or {}
     varied: list[Shot] = []
     previous = ""
@@ -353,11 +388,14 @@ def _vary_scenes(shots: list[Shot], by_id: dict[str, Entity] | None = None) -> l
         entity = known.get(shot.entity_id)
         coastal = bool(getattr(entity, "coastal", False)) if entity is not None else True
         scene = _scene_name(shot)
+        event = is_event(shot.narration, camera=shot.camera, setting=shot.setting)
         if shot.image_role == "flux" and scene and scene == previous:
             run += 1
         else:
             run = 1 if scene else 0
-        if shot.image_role == "flux" and scene and run > 2:
+        # Abstract lines alternate. A wreck and the divers that follow it
+        # both stay on the sea.
+        if (not event) and shot.image_role == "flux" and scene and run > 1:
             scene = next_scene(previous, coastal=coastal)
             shot = _with_scene(shot, scene, entity)
             run = 1
@@ -397,7 +435,10 @@ def _fit_topic(shots: list[Shot], by_id: dict[str, Entity]) -> list[Shot]:
         scene = _scene_name(shot)
         if scene == "sea" and not coastal:
             shot = _with_scene(shot, "landscape", entity)
-        elif scene in {"landscape", "establishing", "atmosphere", "sea"} and entity.geography:
+        elif scene in {
+            "landscape", "establishing", "atmosphere", "sea",
+            "aerial", "detail", "golden", "fog", "ruins", "coast",
+        } and entity.geography:
             shot = _with_scene(shot, scene or "landscape", entity)
         fitted.append(shot)
     return fitted

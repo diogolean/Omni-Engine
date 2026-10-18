@@ -63,7 +63,7 @@ def build_shot_list(
             lighting="",
             negatives=[],
         ))
-    normalized = normalize_shots(shots, entities)
+    normalized = normalize_shots(shots, entities, topic=topic)
     narration = " ".join(shot.narration for shot in normalized)
     plan = ShotList(
         channel=channel,
