@@ -1840,6 +1840,7 @@ class CaptionEngine:
         batch_angle_block: str = "",
         uniqueness_rejection: str = "",
         previously_generated_hooks: "list[str] | None" = None,
+        asset_captions: "list[str] | None" = None,
     ) -> str:
         """
         Generate a full-length documentary narration script for SEQUENCE_REEL TTS.
@@ -1915,6 +1916,7 @@ class CaptionEngine:
             uniqueness_rejection=uniqueness_rejection,
             channel_name=_rag_channel_name,
             angle_block=_angle_block,
+            asset_captions=asset_captions,
         )
 
         # Append CTA instruction so the single voice script ends with the follow call.

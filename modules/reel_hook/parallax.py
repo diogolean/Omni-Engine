@@ -328,6 +328,7 @@ def _render(in_path: Path, out_path: Path, p: Preset, *, seconds: float, fps: in
         _ffmpeg_exe() or "ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
         "-s", f"{w_out}x{h_out}", "-r", str(fps), "-i", "-", "-c:v", "libx264",
         "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p",
+        "-color_range", "tv",
         "-movflags", "+faststart", str(out_path),
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)

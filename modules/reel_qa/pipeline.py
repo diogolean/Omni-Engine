@@ -91,6 +91,12 @@ def seal_compiled_reel(
         video = Path(video_path) if video_path else None
         if video is not None and str(video):
             cues = cues_from_word_timings(word_timings) or cues_from_beats(rows)
+            narration_end = 0.0
+            for row in word_timings or []:
+                try:
+                    narration_end = max(narration_end, float(row[2]))
+                except (TypeError, ValueError, IndexError):
+                    continue
             mp4 = gate_final_mp4(
                 video,
                 cues,
@@ -99,6 +105,7 @@ def seal_compiled_reel(
                 frame_fn=frame_fn,
                 work_dir=(Path(output_dir) / f"{stem}_frames") if output_dir else None,
                 beats=rows,
+                narration_end_s=narration_end or None,
             )
         else:
             mp4 = _fail_mp4(blocked_reason or "missing_video")

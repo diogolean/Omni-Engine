@@ -334,6 +334,10 @@ def decide_mp4_gate(
         reasons.append(err)
     if duration < floor:
         reasons.append("duration_below_minimum")
+    narration_end = (probe or {}).get("narration_end_s")
+    if narration_end is not None and float(narration_end) > 0.5:
+        if duration < float(narration_end) - 0.3:
+            reasons.append("narration_truncated")
     if not (probe or {}).get("has_audio"):
         reasons.append("audio_missing")
     else:
@@ -507,6 +511,7 @@ def gate_final_mp4(
     frame_fn: Callable[[Path, float, Path], Path | None] | None = None,
     work_dir: Path | str | None = None,
     beats: list[dict[str, Any]] | None = None,
+    narration_end_s: float | None = None,
 ) -> dict[str, Any]:
     """Sample frames at subtitle midpoints and score them with the still rubric.
 
@@ -515,7 +520,9 @@ def gate_final_mp4(
     receives the reference photograph.
     """
     video = Path(video_path)
-    probe = (probe_fn or probe_media)(video)
+    probe = dict((probe_fn or probe_media)(video) or {})
+    if narration_end_s is not None and float(narration_end_s) > 0.5:
+        probe["narration_end_s"] = float(narration_end_s)
     chosen = select_cues(list(cues or []))
     frames: list[dict[str, Any]] = []
     if not chosen:

@@ -40,6 +40,7 @@ jobs:
           tests/test_reel_hook_parallax.py
           tests/test_smoke16_reel.py
           tests/test_smoke17_reel.py
+          tests/test_asset_pool.py
           tests/test_omni_publisher.py
           tests/test_pinterest_vm.py
           tests/test_memory_client.py
@@ -69,3 +70,4 @@ jobs:
           tests/test_reel_hook_parallax.py
           tests/test_smoke16_reel.py
           tests/test_smoke17_reel.py
+          tests/test_asset_pool.py

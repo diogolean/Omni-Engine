@@ -348,6 +348,90 @@ def _commons_search(query: str, client: HttpClient) -> list[Candidate]:
     return found
 
 
+def commons_subcategories(category: str, client: HttpClient) -> list[str]:
+    """One level of Commons subcategories. Titles only; files come next."""
+    title = category if category.lower().startswith("category:") else f"Category:{category}"
+    response = _commons_get(
+        client,
+        {
+            "action": "query",
+            "format": "json",
+            "list": "categorymembers",
+            "cmtitle": title,
+            "cmtype": "subcat",
+            "cmlimit": "8",
+        },
+    )
+    if response is None or not response.ok:
+        logger.info("Commons subcategories | category=%s | n=0", title)
+        return []
+    try:
+        members = ((response.json().get("query") or {}).get("categorymembers") or [])
+    except Exception:  # noqa: BLE001
+        return []
+    found = [
+        str(row.get("title") or "")
+        for row in members
+        if isinstance(row, dict) and str(row.get("title") or "").lower().startswith("category:")
+    ]
+    logger.info(
+        "Commons subcategories | category=%s | n=%d | titles=%s",
+        title,
+        len(found),
+        found[:8],
+    )
+    return found
+
+
+def search_topic_images(
+    queries: list[str],
+    categories: list[str],
+    client: HttpClient,
+    *,
+    openverse_floor: int = 8,
+) -> list[Candidate]:
+    """Commons search, the topic category, and one level of subcategories.
+
+    Openverse runs only when Commons returned fewer than ``openverse_floor``
+    licensed photographs. Museum and site photos stay; the caller judges them.
+    """
+    found: list[Candidate] = []
+    seen: set[str] = set()
+
+    def add(items: list[Candidate]) -> None:
+        for item in items:
+            if not item.download_url or not _bitmap(item):
+                continue
+            if license_allowed(item.license_raw) is None:
+                continue
+            key = (item.download_url or item.title).split("?")[0].lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            found.append(item)
+
+    for query in [item for item in queries if str(item).strip()][:8]:
+        add(_commons_search(query, client))
+    for category in [item for item in categories if str(item).strip()]:
+        add(_commons_category(str(category), client))
+        for sub in commons_subcategories(str(category), client)[:6]:
+            add(_commons_category(sub, client))
+    if len(found) < int(openverse_floor):
+        for query in [item for item in queries if str(item).strip()][:3]:
+            add(_openverse_search(query, client))
+    logger.info(
+        "Topic images | n=%d | titles=%s",
+        len(found),
+        [item.title for item in found][:12],
+    )
+    return found
+
+
+def download_candidate_bytes(candidate: Candidate, client: HttpClient) -> bytes | None:
+    """Thumbnail first, then the original. None when the file is not an image."""
+    return _download(candidate, client)
+
+
 def _commons_category(category: str, client: HttpClient) -> list[Candidate]:
     title = category if category.lower().startswith("category:") else f"Category:{category}"
     response = _commons_get(

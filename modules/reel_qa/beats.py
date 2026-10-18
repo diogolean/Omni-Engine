@@ -85,16 +85,24 @@ def _attach_leading_fragments(
     return out
 
 
+class TimelineError(ValueError):
+    """The picture cuts do not match the voice."""
+
+
 def beats_from_timestamps(
     script: str,
     word_timings: list[tuple] | None,
     *,
     narration_s: float = 0.0,
+    audio_end: float | None = None,
 ) -> list[tuple[str, float, float]]:
-    """One beat per sentence, timed by word timestamps.
+    """One beat per sentence. The still stays up through the pause that follows.
 
-    A sentence longer than 12 seconds splits on a clause. Timings come from
-    the alignment, not from a 3–5 second pack.
+    Beat 0 starts at 0, so a leading hook silence stays on the first picture.
+    Each later cut is that sentence's first word. The last beat runs through
+    ``audio_end`` (narration plus the silence before the CTA, or the whole
+    voice when there is no CTA). A long sentence stays one beat: an extra
+    clause cut would no longer land on a sentence start.
     """
     sentences = split_sentences(script)
     if not sentences:
@@ -104,8 +112,11 @@ def beats_from_timestamps(
         for word, start, end in (word_timings or [])
         if str(word or "").strip() and float(end) > float(start)
     ]
+    end_at = float(audio_end if audio_end is not None else 0.0)
+    if end_at <= 0.0:
+        end_at = float(narration_s or 0.0)
     if not words:
-        duration = float(narration_s or 0.0) or max(1.0, len(sentences) * 4.0)
+        duration = end_at or max(1.0, len(sentences) * 4.0)
         weights = [max(1, len(sentence.split())) for sentence in sentences]
         total = float(sum(weights)) or 1.0
         cursor = 0.0
@@ -114,54 +125,102 @@ def beats_from_timestamps(
             span = duration * weight / total
             rows.append((sentence, cursor, cursor + span))
             cursor += span
+        if rows and end_at > rows[-1][2]:
+            text, start, _end = rows[-1]
+            rows[-1] = (text, start, end_at)
         return rows
     cursor_i = 0
-    beats: list[tuple[str, float, float]] = []
+    aligned: list[tuple[str, float]] = []
     for sentence in sentences:
         if cursor_i >= len(words):
             break
         need = max(1, len(sentence.split()))
         start = words[cursor_i][1]
-        end = words[cursor_i][2]
         taken = 0
         while cursor_i < len(words) and taken < need:
-            token, _start, token_end = words[cursor_i]
-            end = token_end
+            token, _start, _token_end = words[cursor_i]
             cursor_i += 1
             taken += 1
             stripped = token.rstrip("\"'")
             if stripped.endswith((".", "!", "?")):
                 break
-        beats.append((sentence, start, max(start + 0.2, end)))
-    if beats and cursor_i < len(words):
-        text, start, _end = beats[-1]
-        beats[-1] = (text, start, words[-1][2])
-    expanded: list[tuple[str, float, float]] = []
-    for text, start, end in beats:
-        expanded.extend(_split_timed_sentence(text, start, end))
-    return expanded or beats
+        aligned.append((sentence, float(start)))
+    if not aligned:
+        return []
+    if end_at <= 0.0:
+        end_at = float(words[-1][2])
+    cuts = [0.0]
+    for _text, start in aligned[1:]:
+        nxt = float(start)
+        if nxt < cuts[-1] + 0.05:
+            nxt = cuts[-1] + 0.05
+        cuts.append(nxt)
+    if end_at < cuts[-1] + 0.05:
+        end_at = cuts[-1] + 0.2
+    points = cuts + [end_at]
+    return [
+        (text, points[index], points[index + 1])
+        for index, (text, _start) in enumerate(aligned)
+    ]
 
 
-def _split_timed_sentence(
-    sentence: str,
-    start: float,
-    end: float,
-) -> list[tuple[str, float, float]]:
-    duration = max(0.2, float(end) - float(start))
-    if duration <= 12.0:
-        return [(sentence, start, end)]
-    clauses = [part.strip() for part in _CLAUSE.split(sentence) if part.strip()]
-    if len(clauses) < 2:
-        return [(sentence, start, end)]
-    weights = [max(1, len(part.split())) for part in clauses]
-    total = float(sum(weights))
-    rows: list[tuple[str, float, float]] = []
-    cursor = float(start)
-    for part, weight in zip(clauses, weights):
-        span = duration * weight / total
-        rows.append((part, cursor, cursor + span))
-        cursor += span
-    return rows
+def check_timeline(
+    durations: list[float],
+    sentence_starts: list[float],
+    audio_len: float,
+    *,
+    tolerance: float = 0.3,
+) -> None:
+    """Fail unless the video matches the voice and cuts land on the sentences.
+
+    The first cut is 0 (the hook silence belongs to the first still). Each
+    later narration cut is that sentence's first word. A CTA beat may follow
+    the narration cuts; it is part of ``audio_len`` and is not a sentence.
+    """
+    durs = [float(item) for item in durations]
+    starts = [float(item) for item in sentence_starts]
+    if not durs or not starts:
+        raise TimelineError("empty timeline")
+    total = float(sum(durs))
+    limit = float(tolerance)
+    if abs(total - float(audio_len)) >= limit:
+        raise TimelineError(
+            f"video {total:.3f}s vs audio {float(audio_len):.3f}s"
+        )
+    cursor = 0.0
+    for index, start in enumerate(starts):
+        if index >= len(durs):
+            raise TimelineError(f"missing beat for sentence {index}")
+        if abs(cursor - start) >= limit:
+            raise TimelineError(
+                f"beat {index} cut {cursor:.3f}s vs sentence {start:.3f}s"
+            )
+        cursor += durs[index]
+
+
+def seal_sentence_timeline(
+    snippets: list[str],
+    durations: list[float],
+    sentence_starts: list[float],
+    audio_len: float,
+    cta_text: str = "",
+) -> tuple[list[str], list[float]]:
+    """Append the CTA through the end of the voice, then require a match.
+
+    Narration beats already tile ``[0, narration + silence]``. The CTA beat
+    is whatever is left until ``audio_len``, so the closing line is not
+    peeled off the last narration still.
+    """
+    snips = [str(item or "") for item in snippets]
+    durs = [float(item) for item in durations]
+    text = " ".join((cta_text or "").split())
+    already = bool(snips) and " ".join(snips[-1].split()) == text
+    remain = float(audio_len) - sum(durs)
+    if text and not already and remain > 0.05:
+        snips.append(text)
+        durs.append(remain)
+    check_timeline(durs, sentence_starts, audio_len)
+    return snips, durs
 
 
 def pack_sentences(

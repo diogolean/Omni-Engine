@@ -148,6 +148,8 @@ def ken_burns_filter(
     )
     if flicker:
         chain += f",eq=brightness='0.04*sin(2*PI*t*1.7+{int(act_index)})':eval=frame"
+    # Limited-range 4:2:0. zoompan on a JPEG otherwise tags the file yuvj420p.
+    chain += ",format=yuv420p"
     return chain
 
 
@@ -220,9 +222,9 @@ WrapStyle: 0
 
 [V4+ Styles]
 {style}
-Style: Sub,DejaVu Sans,56,&H0000E6FF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,2,0,2,40,40,280,1
-Style: Hook,DejaVu Sans,72,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,3,0,8,40,40,220,1
-Style: Cta,DejaVu Sans,56,&H0000E6FF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,2,0,2,40,40,280,1
+Style: Sub,DejaVu Sans,56,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
+Style: Hook,DejaVu Sans,72,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,8,40,40,220,1
+Style: Cta,DejaVu Sans,56,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -259,6 +261,10 @@ def _encode(duration_s: float, preset: str) -> list[str]:
         "-maxrate", enc["maxrate"],
         "-bufsize", enc["bufsize"],
         "-pix_fmt", "yuv420p",
+        "-color_range", "tv",
+        "-colorspace", "bt709",
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
         "-r", str(_FPS),
         "-fps_mode", "cfr",
         "-video_track_timescale", "90000",
@@ -304,7 +310,8 @@ def _render_beat(
         cmd += ["-i", str(video)]
         video_chain = (
             f"scale={_W}:{_H}:force_original_aspect_ratio=increase,crop={_W}:{_H},"
-            f"fps={rate},tpad=stop_mode=clone:stop=-1,trim=duration={dur:.3f},setpts=PTS-STARTPTS"
+            f"fps={rate},tpad=stop_mode=clone:stop=-1,trim=duration={dur:.3f},"
+            f"setpts=PTS-STARTPTS,format=yuv420p"
         )
     else:
         cmd += ["-loop", "1", "-i", str(image)]
@@ -326,7 +333,7 @@ def _render_beat(
         labelled = "base"
     # ass= needs a filename. Colons in the path are escaped for the filter.
     ass_arg = str(ass_path).replace("\\", "/").replace(":", "\\:")
-    chain += f";[{labelled}]ass='{ass_arg}'[out]"
+    chain += f";[{labelled}]ass='{ass_arg}',format=yuv420p[out]"
     cmd += [
         "-filter_complex", chain,
         "-map", "[out]",

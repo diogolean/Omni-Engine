@@ -54,6 +54,36 @@ def _pattern(path: Path, shift: int, color: tuple[int, int, int] = (220, 40, 40)
     image.save(path, quality=85)
 
 
+def _media_duration(path: Path) -> float:
+    import subprocess
+
+    proc = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "csv=p=0", str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return float((proc.stdout or "0").strip() or 0.0)
+
+
+def _pix_fmt(path: Path) -> str:
+    import subprocess
+
+    proc = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return (proc.stdout or "").strip()
+
+
 def _stills(folder: Path) -> list[Path]:
     frames = []
     for index, color in enumerate(((120, 80, 40), (40, 90, 140))):
@@ -118,8 +148,9 @@ def test_sentence_beats_follow_the_spoken_line() -> None:
     assert len(beats) == 2
     assert beats[0][0].startswith("The hills")
     assert "Farmers" in beats[1][0]
+    assert beats[0][1] == 0.0
     assert beats[0][2] <= beats[1][1] + 0.05
-    assert beats[1][2] > beats[1][1]
+    assert abs((beats[1][2] - beats[0][1]) - t) < 0.05
 
 
 def test_soft_ceiling_does_not_cut_the_opening_sentence() -> None:
@@ -316,16 +347,28 @@ def test_offline_reel_compiles_with_voice_and_no_adjacent_dupes(tmp_path: Path) 
     from core.reel_ffmpeg_render import output_has_audio
     from core.reel_sequence_engine import compile_sequence_reel
     from modules.reel_artefact.diversity import claim_diverse, reset_diversity
-    from modules.reel_qa.beats import beats_from_timestamps
+    from modules.reel_qa.beats import beats_from_timestamps, check_timeline
 
     script = "Limestone hills face the farmland. The river plain holds date palms."
     words = []
-    t = 0.0
-    for token in script.split():
-        words.append((token, t, t + 0.1))
-        t += 0.1
-    beats = beats_from_timestamps(script, words, narration_s=t)
+    clock = 0.8
+    sentence_starts = [0.0]
+    first = True
+    for sentence in ("Limestone hills face the farmland.", "The river plain holds date palms."):
+        if not first:
+            sentence_starts.append(clock)
+        first = False
+        for token in sentence.split():
+            words.append((token, clock, clock + 0.25))
+            clock += 0.25
+        clock += 0.6
+    audio_len = words[-1][2]
+    beats = beats_from_timestamps(script, words, narration_s=audio_len, audio_end=audio_len)
     assert len(beats) == 2
+    assert beats[0][1] == 0.0
+    assert abs(beats[1][1] - sentence_starts[1]) < 0.3
+    durations = [end - start for _text, start, end in beats]
+    check_timeline(durations, [start for _text, start, _end in beats], audio_len)
     reset_diversity()
     frames = []
     colors = ((90, 110, 60), (40, 70, 140))
@@ -336,14 +379,14 @@ def test_offline_reel_compiles_with_voice_and_no_adjacent_dupes(tmp_path: Path) 
         frames.append(path)
         assert beat[0]
     voice = tmp_path / "voice.wav"
-    _tone(voice, 440.0, max(0.8, t))
+    _tone(voice, 440.0, audio_len)
     out = tmp_path / "compiled.mp4"
     compile_sequence_reel(
         frames,
         "",
         voice_audio=voice,
         output_path=out,
-        act_durations=[max(0.4, beat[2] - beat[1]) for beat in beats],
+        act_durations=durations,
         strict_act_durations=True,
         word_timings=words,
         page_id="offline",
@@ -353,6 +396,8 @@ def test_offline_reel_compiles_with_voice_and_no_adjacent_dupes(tmp_path: Path) 
     assert output_has_audio(out) is True
     assert _band_energy(out, 440.0) > 20.0
     assert len(frames) == len(beats)
+    assert abs(_media_duration(out) - audio_len) < 0.3
+    assert _pix_fmt(out) == "yuv420p"
 
 
 def test_moviepy_fallback_keeps_the_voice(
@@ -379,3 +424,97 @@ def test_moviepy_fallback_keeps_the_voice(
     assert out.is_file()
     assert output_has_audio(out) is True
     assert _band_energy(out, 440.0) > 10.0
+
+
+def test_pauses_stay_on_the_sentence_and_the_cta_reaches_the_voice() -> None:
+    from modules.reel_qa.beats import (
+        beats_from_timestamps,
+        check_timeline,
+        seal_sentence_timeline,
+    )
+
+    words = []
+    clock = 0.7
+    second = 0.0
+    for index, sentence in enumerate((
+        "The hills roll toward the farmland.",
+        "Farmers work the limestone fields.",
+    )):
+        if index == 1:
+            second = clock
+        for token in sentence.split():
+            words.append((token, clock, clock + 0.3))
+            clock += 0.3
+        clock += 0.6
+    narr_end = words[-1][2]
+    silence = 1.0
+    cta = 1.4
+    full = narr_end + silence + cta
+    beats = beats_from_timestamps(
+        "The hills roll toward the farmland. Farmers work the limestone fields.",
+        words,
+        narration_s=narr_end,
+        audio_end=narr_end + silence,
+    )
+    assert beats[0][1] == 0.0
+    assert abs(beats[1][1] - second) < 0.05
+    durations = [end - start for _text, start, end in beats]
+    snippets, durations = seal_sentence_timeline(
+        [text for text, _s, _e in beats],
+        durations,
+        [start for _text, start, _end in beats],
+        full,
+        "Follow for the next find.",
+    )
+    assert snippets[-1] == "Follow for the next find."
+    assert abs(sum(durations) - full) < 0.05
+    check_timeline(durations, [start for _t, start, _e in beats], full)
+    from modules.reel_qa.beats import TimelineError
+
+    with pytest.raises(TimelineError):
+        check_timeline([1.0, 1.0], [0.0, 1.0], 4.0)
+
+
+def test_a_short_picture_is_rejected(tmp_path: Path) -> None:
+    from core.reel_sequence_engine import compile_sequence_reel
+
+    voice = tmp_path / "voice.wav"
+    _tone(voice, 440.0, 2.0)
+    with pytest.raises(RuntimeError, match="timeline mismatch"):
+        compile_sequence_reel(
+            [_stills(tmp_path)[0]],
+            "",
+            voice_audio=voice,
+            output_path=tmp_path / "short.mp4",
+            act_durations=[0.4],
+            strict_act_durations=True,
+            page_id="offline",
+            enable_hook_text=False,
+        )
+
+
+def test_final_qa_rejects_a_truncated_narration() -> None:
+    from modules.reel_qa.mp4_gate import decide_mp4_gate
+
+    probe = {
+        "error": "",
+        "duration_s": 20.0,
+        "has_audio": True,
+        "mean_volume_db": -16.0,
+        "narration_end_s": 30.0,
+    }
+    frames = [{"passed": True, "text": "farmland"}]
+    cut = decide_mp4_gate(probe, frames)
+    assert "narration_truncated" in cut["reasons"]
+    held = decide_mp4_gate({**probe, "narration_end_s": 19.8}, frames)
+    assert "narration_truncated" not in held["reasons"]
+
+
+def test_yellow_captions_sit_in_a_dark_box() -> None:
+    from core.reel_ffmpeg_render import ass_document, ken_burns_filter
+
+    script = ass_document([("Sub", 0.0, 1.0, "the jar")])
+    assert "&H0000E6FF" in script
+    assert "&H80000000" in script
+    assert ",3,14,1," in script
+    assert ken_burns_filter(0, 8).endswith("format=yuv420p")

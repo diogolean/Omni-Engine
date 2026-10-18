@@ -3182,6 +3182,11 @@ def _produce_variant_worker(
     _narr_dur = 0.0
     _narr_word_timings: list = []
     _ak_act_durs: "list[float] | None" = None
+    _sentence_starts: list = []
+    _timeline_audio = 0.0
+    _asset_pool: list = []
+    _asset_assignments: list = []
+    _pool_geography = ""
     _beat_qa_rows: list = []
     _reel_qa_block_compile = False
     _image_bill: dict[str, int] = {}
@@ -3407,8 +3412,58 @@ def _produce_variant_worker(
         # seen in the 10-reel batch log.
         if caption_engine is not None:
             try:
+                if (
+                    page_ctx
+                    and (page_ctx.page_id or "").lower() == "ancient_knowledge"
+                ):
+                    from modules.reel_artefact.policy import (
+                        artefact_images_enabled as _pool_flag,
+                    )
+
+                    if _pool_flag():
+                        from modules.reel_artefact.asset_pool import (
+                            build_topic_pool as _build_topic_pool,
+                        )
+
+                        _asset_pool = _build_topic_pool(
+                            str(resolved_subject or ""),
+                            "ancient_knowledge",
+                            _reel_img_dir / "pool",
+                        )
+                        _LOG.info(
+                            "ASSET POOL | n=%d | %s",
+                            len(_asset_pool),
+                            " | ".join(
+                                str(getattr(item, "caption", "") or "")[:40]
+                                for item in _asset_pool[:6]
+                            ),
+                        )
+                        try:
+                            from modules.shot_planner.entities import (
+                                entity_for_line as _pool_entity,
+                            )
+                            from modules.shot_planner.entities import (
+                                load_entities as _pool_entities,
+                            )
+
+                            _pool_rows = _pool_entities("ancient_knowledge")
+                            _pool_ent = _pool_entity(
+                                str(resolved_subject or ""),
+                                _pool_rows,
+                                topic=str(resolved_subject or ""),
+                            )
+                            _pool_geography = (
+                                _pool_ent.geography if _pool_ent is not None else ""
+                            )
+                        except Exception:  # noqa: BLE001
+                            _pool_geography = ""
                 _seq_reject = ""
                 _hooks_for_seq = list(generated_hooks_cache or [])
+                _asset_captions = [
+                    str(getattr(item, "caption", "") or "")
+                    for item in _asset_pool
+                    if str(getattr(item, "caption", "") or "").strip()
+                ]
                 for _seq_attempt in range(1, MAX_UNIQUENESS_RETRIES + 1):
                     _early_seq_script = caption_engine.generate_sequence_voiceover(
                         resolved_subject,
@@ -3428,6 +3483,7 @@ def _produce_variant_worker(
                         batch_angle_block=_batch_angle_block,
                         uniqueness_rejection=_seq_reject,
                         previously_generated_hooks=_hooks_for_seq,
+                        asset_captions=_asset_captions or None,
                     ) or ""
                     if _early_seq_script:
                         _LOG.info(
@@ -3582,17 +3638,36 @@ def _produce_variant_worker(
                                 beats_from_timestamps,
                             )
 
+                            _cta_len = float(_cta_audio_dur or 0.0)
+                            _silence = (
+                                float(_cta_silence_s or 0.0) if _cta_len > 0.05 else 0.0
+                            )
+                            _timeline_audio = float(
+                                locals().get("_ak_total_audio") or 0.0
+                            )
+                            if _timeline_audio <= 0.5:
+                                _timeline_audio = (
+                                    float(_narr_dur or 0.0) + _silence + _cta_len
+                                )
+                            _tile_end = (
+                                float(_narr_dur or 0.0) + _silence
+                                if _cta_len > 0.05
+                                else _timeline_audio
+                            )
                             _rows = beats_from_timestamps(
                                 _early_seq_script or resolved_subject,
                                 _narr_word_timings,
                                 narration_s=float(_narr_dur or 0.0),
+                                audio_end=_tile_end,
                             )
                             if _rows:
                                 _audio_first_scenes = []
                                 _ak_act_durs = []
+                                _sentence_starts = []
                                 for _i, (_text, _start, _end) in enumerate(_rows):
-                                    _dur = max(0.4, float(_end) - float(_start))
+                                    _dur = max(0.05, float(_end) - float(_start))
                                     _ak_act_durs.append(_dur)
+                                    _sentence_starts.append(float(_start))
                                     _audio_first_scenes.append(_sentence_scene(
                                         _text,
                                         float(_start),
@@ -3600,11 +3675,6 @@ def _produce_variant_worker(
                                         index=_i,
                                         inherited={"domain_anchors": resolved_subject},
                                     ))
-                                _cta_hold = float(_cta_audio_dur or 0.0) + float(
-                                    _cta_silence_s or 1.0
-                                )
-                                if _ak_act_durs:
-                                    _ak_act_durs[-1] += _cta_hold
                                 _spoken_snippets = [
                                     str(s.get("spoken_text") or resolved_subject)
                                     for s in _audio_first_scenes
@@ -3630,6 +3700,7 @@ def _produce_variant_worker(
                                 _chunk_exc,
                             )
                             _audio_first_scenes = []
+                            _sentence_starts = []
                     if not _audio_first_scenes:
                         _bucket_kwargs: dict = {}
                         _t1_body_local = locals().get("_tier1_body_target", None)
@@ -3698,10 +3769,27 @@ def _produce_variant_worker(
             and _spoken_snippets
             and _ak_act_durs
         ):
+            _cta_line = (page_ctx.reel_cta_text or "").strip()
+            if _sentence_starts and float(_timeline_audio or 0.0) > 0.5:
+                from modules.reel_qa.beats import seal_sentence_timeline as _seal_tl
+
+                _spoken_snippets, _ak_act_durs = _seal_tl(
+                    list(_spoken_snippets),
+                    list(_ak_act_durs),
+                    list(_sentence_starts),
+                    float(_timeline_audio),
+                    cta_text=_cta_line,
+                )
+                _seq_n = len(_spoken_snippets)
+                _LOG.info(
+                    "TIMELINE | beats=%d video=%.2fs audio=%.2fs",
+                    len(_ak_act_durs),
+                    sum(_ak_act_durs),
+                    float(_timeline_audio),
+                )
             try:
                 from modules.reel_qa.cta_beat import with_cta_beat as _with_cta
 
-                _cta_line = (page_ctx.reel_cta_text or "").strip()
                 _cta_hold = float(locals().get("_cta_audio_dur") or 0.0) + float(
                     locals().get("_cta_silence_s") or 1.0
                 )
@@ -3721,6 +3809,25 @@ def _produce_variant_worker(
                     )
             except Exception as _cta_beat_exc:  # noqa: BLE001
                 _LOG.warning("CTA beat skipped (%s)", _cta_beat_exc)
+
+        if _asset_pool and _spoken_snippets:
+            try:
+                from modules.reel_artefact.asset_pool import assign_shots as _assign_shots
+
+                _asset_assignments = _assign_shots(
+                    list(_spoken_snippets),
+                    list(_asset_pool),
+                    geography=_pool_geography,
+                    flux_max=6,
+                )
+                _LOG.info(
+                    "ASSET SHOTS | n=%d flux=%d",
+                    len(_asset_assignments),
+                    sum(1 for item in _asset_assignments if item.mode == "flux"),
+                )
+            except Exception as _assign_exc:  # noqa: BLE001
+                _LOG.warning("ASSET SHOTS skipped (%s)", _assign_exc)
+                _asset_assignments = []
 
         # Act 1: timestamp-bound generation for AK; cover reuse only as fallback.
         # Master Mei regenerates Scene 1 via FLUX (never graphite raw_bg).
@@ -4313,7 +4420,22 @@ def _produce_variant_worker(
                     if (page_ctx.page_id or "").lower() != "master_mei"
                     else None
                 )
-                if _ladder_on:
+                if _asset_assignments and _act_i < len(_asset_assignments):
+                    from modules.reel_artefact.asset_pool import make_pool_job as _make_pool_job
+
+                    if _act_i == _sr_act_start:
+                        _LOG.info(
+                            "ASSET POOL | stills from the pool | ladder rounds skipped"
+                        )
+                    _sr_act_jobs[_act_i] = _make_pool_job(
+                        _asset_assignments[_act_i],
+                        _reel_img_dir / f"{stem}_act{_act_i + 1:02d}.jpg",
+                        list(_asset_pool),
+                        adapter.generate,
+                        _pool_geography,
+                        _act_i,
+                    )
+                elif _ladder_on:
                     from modules.reel_artefact.orchestrate import make_climb_job as _make_climb_job
 
                     _sr_act_jobs[_act_i] = _make_climb_job(

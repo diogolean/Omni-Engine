@@ -1174,6 +1174,7 @@ def build_sequence_script_prompt(
     uniqueness_rejection: str = "",
     channel_name: str = "",
     angle_block: str = "",
+    asset_captions: "list[str] | None" = None,
 ) -> str:
     """
     Build an LLM prompt that produces an N-act spoken script.
@@ -1330,9 +1331,11 @@ STRICT RULES:
 {anti_repeat_block}
 Write the complete {n_acts}-act script now:"""
 
+    from modules.reel_artefact.asset_pool import asset_prompt_block
     from modules.reel_artefact.flux_policy import script_filmable_rule
 
     _filmable = script_filmable_rule()
+    _asset_block = asset_prompt_block(asset_captions)
     return f"""You are writing a compelling {duration_s:.0f}-second documentary-style voiceover script.
 
 TOPIC: {topic}
@@ -1355,6 +1358,7 @@ STRICT RULES:
 9. FILMABLE PICTURES: {_filmable}
 10. DATE: The first two sentences must state the topic's date in the topic's own words, such as "2nd century BC" or "600-1000 AD". Do not leave the date until later in the narration.
 {anti_repeat_block}
+{_asset_block}
 Write the complete {n_acts}-act script now:"""
 
 
@@ -2546,6 +2550,11 @@ def compile_sequence_reel(
                 act_video_paths = list(act_video_paths)[:_pair]
             n_acts = _pair
         total_duration = float(sum(_act_durs))
+        if _voice_actual_dur > 0.5 and abs(total_duration - _voice_actual_dur) >= 0.3:
+            raise RuntimeError(
+                "timeline mismatch | "
+                f"video={total_duration:.2f}s voice={_voice_actual_dur:.2f}s"
+            )
         # Derive CTA visual t0 from the plan: everything up to the last still.
         _cta_visual_t0 = float(sum(_act_durs[:-1])) if len(_act_durs) > 1 else 0.0
         logger.info(
@@ -3351,6 +3360,10 @@ def compile_sequence_reel(
                 "-maxrate", _enc["maxrate"],
                 "-bufsize", _enc["bufsize"],
                 "-pix_fmt", "yuv420p",
+                "-color_range", "tv",
+                "-colorspace", "bt709",
+                "-color_primaries", "bt709",
+                "-color_trc", "bt709",
                 "-ar", str(_AUDIO_SAMPLE_RATE),
             ],
             logger      = None,
