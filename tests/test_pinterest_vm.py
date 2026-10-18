@@ -889,7 +889,7 @@ def test_dry_run_renders_library_photo_and_links_the_article(
     card = Image.open(cards[0])
     assert card.size == (1000, 1500)
     assert not (tmp_path / "ancient_knowledge" / "master_inventory.json").exists()
-    assert stats["pins"][0]["target_url"] == f"{_SITE}/baalbek"
+    assert stats["pins"][0]["target_url"] == f"{_SITE}/baalbek/"
     assert "Practical Guide" not in stats["pins"][0]["title"]
     assert "pinterest/ledger/ancient_knowledge.jsonl" not in client.objects
     assert not (tmp_path / "ancient_knowledge" / "_tmp").exists() or not any(

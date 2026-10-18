@@ -6,4 +6,13 @@
 #
 ancient_knowledge:
   baalbek-trilithon: baalbek
+  # subject_slug -> article slug. Used when the topic sentence does not match.
+  oak-island: oak-island
+  giants: giants
+  tartaria: tartaria
+  tartaria-mudflood: tartaria
+  underwater-cities: underwater-cities
+  underwater-city: underwater-cities
+  easter-island: easter-island-moai
+  easter-island-moai: easter-island-moai
   # giants-tomb-sardinia: skip
