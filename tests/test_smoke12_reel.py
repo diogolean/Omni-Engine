@@ -66,10 +66,11 @@ def test_smoke12_reel_through_the_main_entry(tmp_path: Path, monkeypatch) -> Non
         assert "cloud forest" in blob or "quindío" in blob or "quindio" in blob
         assert "mesa" not in blob
 
-    # 4. Object beats cannot outnumber real photos plus the Nano Banana cap.
-    # Quimbaya has 0 usable photographs, so the cap is 4.
+    # 4. Object beats stay within the supply: each real photo twice, and
+    # four Nano Banana edits each reused once. Quimbaya has no usable
+    # photograph on file, so the cap is 8.
     photos = [shot for shot in quimbaya_plan.shots if shot.image_role == "photo"]
-    assert len(photos) <= 4
+    assert len(photos) <= 8
 
     # The model itself asked for a calm sea. The planner entry rewrites it.
     monkeypatch.setenv("REEL_SHOT_PLANNER", "1")
@@ -96,7 +97,7 @@ def test_smoke12_reel_through_the_main_entry(tmp_path: Path, monkeypatch) -> Non
     wreck = anti_plan.shots[0]
     assert wreck.scene_type == "sea"
     assert "aegean" in wreck.canonical_visual.lower() or "kythira" in wreck.canonical_visual.lower()
-    assert len([shot for shot in anti_plan.shots if shot.image_role == "photo"]) <= 6 + 4
+    assert len([shot for shot in anti_plan.shots if shot.image_role == "photo"]) <= (6 + 4) * 2
 
     # The run uses the same job builder and the same pool main.py calls.
     logs: list[str] = []

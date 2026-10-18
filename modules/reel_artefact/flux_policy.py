@@ -187,12 +187,63 @@ def is_abstract_claim(text: str) -> bool:
     return any(cue in low for cue in _ABSTRACT)
 
 
-def is_physical_object_line(text: str) -> bool:
-    """The line is about the object itself, not a story about it."""
+# Spoken features of the artefact. These lines are photographs, not landscapes.
+_FEATURE_WORDS = (
+    "gear", "gears", "cog", "cogs",
+    "wing", "wings", "tailfin", "tailfins",
+    "stabilizer", "stabilizers", "rudder", "rudders",
+    "pendant", "pendants", "ornament", "ornaments",
+    "figurine", "figurines",
+    "fragment", "fragments",
+    "celestial", "eclipse", "eclipses",
+    "aerodynamic",
+    "corroded",
+)
+_FEATURE_PHRASES = (
+    "the mechanism",
+    "this mechanism",
+    "tail fin",
+    "tail fins",
+    "delta wing",
+    "golden object",
+    "golden objects",
+    "museum drawer",
+    "in its case",
+    "on display",
+)
+# Weaker object references. Used to fill a reel up toward the object share.
+_MENTION_PHRASES = (
+    "relics",
+    "these shapes",
+    "their forms",
+    "its design",
+    "precise geometry",
+    "the artefact",
+    "the artifact",
+)
+
+
+def object_line_strength(text: str) -> int:
+    """2 when the line names a feature, 1 when it names the object, else 0.
+
+    A feature wins even if the same sentence also debates or theorizes.
+    ``the mechanism`` does not match the proper name ``Antikythera Mechanism``.
+    """
     low = " ".join((text or "").lower().split())
-    if not any(cue in low for cue in _PHYSICAL):
-        return False
-    return not any(cue in low for cue in _ABSTRACT_HARD)
+    if not low:
+        return 0
+    if _mentions(low, _FEATURE_WORDS) or any(phrase in low for phrase in _FEATURE_PHRASES):
+        return 2
+    if _mentions(low, ("relic",)) or any(phrase in low for phrase in _MENTION_PHRASES):
+        return 1
+    if any(cue in low for cue in _PHYSICAL) and not any(cue in low for cue in _ABSTRACT_HARD):
+        return 2
+    return 0
+
+
+def is_physical_object_line(text: str) -> bool:
+    """The line names the object or a feature of it."""
+    return object_line_strength(text) >= 1
 
 
 def script_filmable_rule() -> str:

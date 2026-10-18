@@ -98,7 +98,13 @@ def climb_act(
     folder.mkdir(parents=True, exist_ok=True)
     safe = bool(entity and entity.text_only_safe) and kind == "object"
     shape = canonical_shape or (entity.canonical_shape if entity else "")
-    event = (not is_cta) and is_event(narration, camera=camera, setting=setting)
+    # A line that names the object stays on the photograph ladder, even when
+    # it also mentions the wreck the object came from.
+    event = (
+        (not is_cta)
+        and kind != "object"
+        and is_event(narration, camera=camera, setting=setting)
+    )
     kwargs = dict(generate_kwargs or {})
     kwargs.pop("visual_role", None)
     producers = {

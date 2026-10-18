@@ -2,11 +2,14 @@
 """Make a shot list obey the entity rules before it is rendered."""
 from __future__ import annotations
 
+import re
+
 from modules.reel_artefact.flux_policy import (
     fields_for_scene,
     is_abstract_claim,
     is_physical_object_line,
     next_scene,
+    object_line_strength,
     scene_fields,
 )
 from modules.reel_artefact.role import image_role_for, is_event
@@ -93,23 +96,25 @@ def _fill(
     others: list[Entity],
     index: int = 1,
     force_place: bool = False,
+    force_object: bool = False,
 ) -> Shot:
     event = is_event(shot.narration, camera=shot.camera, setting=shot.setting)
+    object_line = force_object or is_physical_object_line(shot.narration)
     abstract = (
         force_place
         or is_abstract_claim(shot.narration)
         or is_abstract_close(shot.narration)
         or (
             is_commentary(shot.narration)
-            and not is_physical_object_line(shot.narration)
+            and not object_line
         )
     )
     geology = entity is not None and entity.id == "coso_artifact" and any(
         cue in shot.narration.lower() for cue in _GEOLOGY
     )
-    if (not geology) and (
-        event or (abstract and not is_physical_object_line(shot.narration))
-    ):
+    # A feature of the object is a photograph. The wreck discovery, with no
+    # feature named, stays the event. Abstract lines stay a place.
+    if (not geology) and not object_line and (event or abstract):
         fields = scene_fields(
             shot.narration, entity=entity, index=index, event=event,
         )
@@ -203,12 +208,14 @@ def _fill(
         negatives=negatives,
         kb_miss=False,
         canonical_shape=entity.canonical_shape or entity.canonical_visual,
-        image_role=image_role_for(
-            entity,
-            shot_type=shot_type,
-            narration=shot.narration,
-            camera=camera,
-            setting=setting,
+        image_role=(
+            "photo" if force_object else image_role_for(
+                entity,
+                shot_type=shot_type,
+                narration=shot.narration,
+                camera=camera,
+                setting=setting,
+            )
         ),
     )
 
@@ -328,7 +335,7 @@ def normalize_shots(
         ))
     by_id = {entity.id: entity for entity in entities}
     output = _fit_topic(output, by_id)
-    output = _cap_objects(output, by_id)
+    output = _balance_objects(output, by_id, locked=locked)
     output = _vary_scenes(output, by_id)
     return _fit_topic(output, by_id)
 
@@ -444,48 +451,138 @@ def _fit_topic(shots: list[Shot], by_id: dict[str, Entity]) -> list[Shot]:
     return fitted
 
 
-def _cap_objects(shots: list[Shot], by_id: dict[str, Entity]) -> list[Shot]:
-    """Do not plan more object photographs than real photos plus the Nano cap.
+_HARD_ABSTRACT = (
+    "legend",
+    "theor",
+    "debate",
+    "historian",
+    "researcher",
+    "record",
+    "wonder",
+    "question",
+    "what if",
+    "according to",
+    "scholar",
+    "lost knowledge",
+    "lost blueprint",
+    "enigma",
+    "impossible",
+    "commentary",
+)
 
-    The extra beats become Flux-safe scenes at planning time, so the ladder
-    is not asked for a photograph it cannot have.
+
+def _to_place(shot: Shot, entity: Entity | None, index: int) -> Shot:
+    fields = scene_fields(shot.narration, entity=entity, index=index, event=False)
+    shot_type = fields["shot_type"] if fields["shot_type"] in SHOT_TYPES else "wide"
+    return Shot(
+        id=shot.id,
+        narration=shot.narration,
+        entity_id=shot.entity_id,
+        subject=fields["subject"],
+        canonical_visual=fields["canonical_visual"],
+        shot_type=shot_type,
+        camera=fields["camera"],
+        setting=fields["setting"],
+        era=shot.era,
+        mood=shot.mood,
+        lighting=fields["lighting"],
+        negatives=list(shot.negatives),
+        kb_miss=shot.kb_miss,
+        canonical_shape="",
+        image_role="flux",
+        scene_type=fields.get("scene") or "",
+    )
+
+
+def _object_supply(entity: Entity | None) -> int:
+    """Real photos twice each, plus up to four Nano Banana edits twice each."""
+    from modules.reel_artefact.budget import nano_cap, real_max_per_photo, reuse_max_per_still
+
+    photos = int(getattr(entity, "usable_photos", 0) or 0) if entity is not None else 0
+    return photos * real_max_per_photo() + nano_cap() * reuse_max_per_still()
+
+
+def _promotable(shot: Shot) -> bool:
+    """A line that still refers to the object, and is not pure atmosphere."""
+    if shot.image_role == "photo" or is_event(shot.narration):
+        return False
+    low = " ".join(shot.narration.lower().split())
+    if any(cue in low for cue in _HARD_ABSTRACT):
+        return False
+    return bool(re.search(r"\b(its|their|these)\b", low))
+
+
+def _balance_objects(
+    shots: list[Shot],
+    by_id: dict[str, Entity],
+    *,
+    locked: bool,
+) -> list[Shot]:
+    """Feature lines stay photographs. A locked reel aims at about 30–40%.
+
+    Supply is the cap: each real photo twice, and four Nano Banana edits
+    each reused once. Atmosphere lines are not promoted to fill the share.
     """
-    from modules.reel_artefact.budget import nano_cap
-
+    balanced = list(shots)
     groups: dict[str, list[int]] = {}
-    for index, shot in enumerate(shots):
+    for index, shot in enumerate(balanced):
         if shot.image_role != "photo" or not shot.entity_id:
             continue
         groups.setdefault(shot.entity_id, []).append(index)
-    capped = list(shots)
     for entity_id, indexes in groups.items():
         entity = by_id.get(entity_id)
-        photos = int(getattr(entity, "usable_photos", 0) or 0) if entity is not None else 0
-        slots = max(0, photos + nano_cap())
-        for nth, index in enumerate(indexes):
-            if nth < slots:
-                continue
-            shot = capped[index]
-            fields = scene_fields(
-                shot.narration, entity=entity, index=nth + 1, event=False,
-            )
-            shot_type = fields["shot_type"] if fields["shot_type"] in SHOT_TYPES else "wide"
-            capped[index] = Shot(
-                id=shot.id,
-                narration=shot.narration,
-                entity_id=shot.entity_id,
-                subject=fields["subject"],
-                canonical_visual=fields["canonical_visual"],
-                shot_type=shot_type,
-                camera=fields["camera"],
-                setting=fields["setting"],
-                era=shot.era,
-                mood=shot.mood,
-                lighting=fields["lighting"],
-                negatives=list(shot.negatives),
-                kb_miss=shot.kb_miss,
-                canonical_shape="",
-                image_role="flux",
-                scene_type=fields.get("scene") or "",
-            )
-    return capped
+        slots = _object_supply(entity)
+        # Weakest lines lose the slot first. A named feature keeps it.
+        ranked = sorted(
+            indexes,
+            key=lambda index: (object_line_strength(balanced[index].narration), -index),
+        )
+        for index in ranked[: max(0, len(ranked) - slots)]:
+            balanced[index] = _to_place(balanced[index], entity, index + 1)
+    if not locked or not balanced:
+        return balanced
+    # One topic entity. Fill toward 30% from lines that still point at it,
+    # and drop only the promoted lines if that would pass 40%.
+    entity = next((by_id.get(shot.entity_id) for shot in balanced if shot.entity_id in by_id), None)
+    if entity is None:
+        return balanced
+    n = len(balanced)
+    floor = max(1, round(n * 0.30))
+    ceiling = max(floor, round(n * 0.40))
+    slots = _object_supply(entity)
+
+    def _photos() -> list[int]:
+        return [index for index, shot in enumerate(balanced) if shot.image_role == "photo"]
+
+    promoted: list[int] = []
+    seen: set[int] = set()
+    while len(_photos()) < min(floor, slots):
+        candidate = next(
+            (
+                index for index, shot in enumerate(balanced)
+                if index not in seen
+                and _promotable(shot)
+                and shot.entity_id == entity.id
+            ),
+            None,
+        )
+        if candidate is None:
+            break
+        seen.add(candidate)
+        balanced[candidate] = _fill(
+            balanced[candidate],
+            entity,
+            recap=False,
+            others=[],
+            index=candidate + 1,
+            force_object=True,
+        )
+        promoted.append(candidate)
+    photos = _photos()
+    if len(photos) > ceiling:
+        extra = [index for index in promoted if index in photos]
+        for index in extra:
+            if len([i for i, shot in enumerate(balanced) if shot.image_role == "photo"]) <= ceiling:
+                break
+            balanced[index] = _to_place(balanced[index], entity, index + 1)
+    return balanced

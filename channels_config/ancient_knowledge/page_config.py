@@ -163,7 +163,7 @@ REEL_DURATION: float = 85.0          # planning target (= video_length default)
 PACING_SEQUENCE: list = [3, 3, 4, 4]  # legacy fallback shape only — AK now uses plan_bucket_act_durations (self-calibrating body weights, no slack absorption)
 REUSE_EXISTING_IMAGES: bool = True
 ENABLE_SUBTITLE_PADDING: bool = True
-ENCODING_PRESET: str = "ultrafast"
+ENCODING_PRESET: str = "veryfast"
 # Shared pacing engine (core/scene_pacing.py). CLI --scene-duration wins.
 SCENE_DURATION: str = "progressive"
 SCENE_PROGRESSIVE_START_S: float = 4.0

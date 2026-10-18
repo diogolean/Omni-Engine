@@ -84,7 +84,7 @@ def test_flux_dev_is_not_on_the_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REEL_LADDER", "real,flux-dev,nb-ref,flux,reuse")
     assert rung_names() == ["real", "nb-ref", "flux", "reuse"]
     assert "flux-dev" not in rung_names()
-    assert rungs_for("scene") == ["flux", "flux", "reuse"]
+    assert rungs_for("scene") == ["flux", "reuse"]
 
 
 def test_a_beat_fails_every_rung_until_reuse(
@@ -357,9 +357,9 @@ def test_scene_ladder_never_calls_real_or_nano(
         judge=_judge,
     )
     assert result.passed is True
-    assert result.rung == "flux"
-    assert called == ["flux", "flux"]
-    assert history_text(result.history) == "flux:fail,flux:pass"
+    assert result.rung == "reuse"
+    assert called == ["flux", "reuse"]
+    assert history_text(result.history) == "flux:fail,reuse:pass"
 
 
 def test_ak_flux_prompts_have_no_cyberpunk_anchor() -> None:
@@ -617,7 +617,7 @@ def test_cached_edit_is_reuse_and_a_third_copy_is_a_new_angle(
 def test_event_rungs_and_prompt_keep_the_artefact_out() -> None:
     from modules.reel_artefact.prompts import context_flux_prompt, event_flux_prompt
 
-    assert rungs_for("scene", event=True) == ["event", "flux", "flux", "reuse"]
+    assert rungs_for("scene", event=True) == ["event", "flux", "reuse"]
     text = event_flux_prompt(
         "In 1901, divers raised the shipwreck off Antikythera.",
         name="Antikythera Mechanism",

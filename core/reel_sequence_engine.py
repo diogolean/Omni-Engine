@@ -1353,6 +1353,7 @@ STRICT RULES:
 7. NO headers, NO bullet points, NO markdown — pure spoken prose only.
 8. Output ONLY the script with [ACT N] markers. No preamble, no labels, no meta commentary.
 9. FILMABLE PICTURES: {_filmable}
+10. DATE: The first two sentences must state the topic's date in the topic's own words, such as "2nd century BC" or "600-1000 AD". Do not leave the date until later in the narration.
 {anti_repeat_block}
 Write the complete {n_acts}-act script now:"""
 
@@ -1516,6 +1517,65 @@ def _sanitize_subtitle_timings(
 # ---------------------------------------------------------------------------
 # Per-act clip builder
 # ---------------------------------------------------------------------------
+
+def ken_burns_window(
+    base_rgb: "np.ndarray",
+    *,
+    scale: float,
+    max_scale: float,
+    pan_x: int = 0,
+    pan_y: int = 0,
+    width: int = _REEL_WIDTH,
+    height: int = _REEL_HEIGHT,
+) -> "np.ndarray":
+    """One 1080×1920 frame from a buffer that was scaled once.
+
+    The source is not resized again at a larger size. A closer scale is a
+    smaller numpy window, then one bilinear downsample when the window is
+    not already the reel size.
+    """
+    base_h, base_w = base_rgb.shape[:2]
+    safe_scale = max(0.05, float(scale))
+    ceiling = max(safe_scale, float(max_scale))
+    crop_w = int(round(width * ceiling / safe_scale))
+    crop_h = int(round(height * ceiling / safe_scale))
+    crop_w = min(base_w, max(2, crop_w))
+    crop_h = min(base_h, max(2, crop_h))
+    mapped_x = int(round(pan_x * ceiling / safe_scale))
+    mapped_y = int(round(pan_y * ceiling / safe_scale))
+    left = max(0, min((base_w - crop_w) // 2 + mapped_x, base_w - crop_w))
+    top = max(0, min((base_h - crop_h) // 2 + mapped_y, base_h - crop_h))
+    window = base_rgb[top:top + crop_h, left:left + crop_w]
+    if window.shape[0] == height and window.shape[1] == width:
+        return window
+    frame = Image.fromarray(window, mode="RGB").resize((width, height), Image.BILINEAR)
+    return np.asarray(frame)
+
+
+def sequence_encode_params(duration_s: float, preset: str = "") -> dict[str, str]:
+    """H.264 settings for a 1080×1920 reel under 60 MB.
+
+    ``veryfast`` is the default. ``superfast`` and ``ultrafast`` stay, because
+    they are faster. Anything slower is brought up to ``veryfast``. The rate
+    cap is about 8 Mbps on a one-minute reel and lower on a longer one, so
+    an 80-second file still fits.
+    """
+    chosen = (preset or "").strip().lower()
+    if chosen not in {"ultrafast", "superfast", "veryfast"}:
+        chosen = "veryfast"
+    seconds = max(1.0, float(duration_s or 0.0))
+    video_budget = 52 * 1024 * 1024
+    kbps = int(video_budget * 8 / seconds / 1000)
+    kbps = max(2500, min(8000, kbps))
+    return {
+        "preset": chosen,
+        "crf": "22",
+        "maxrate": f"{kbps}k",
+        "bufsize": f"{kbps * 2}k",
+        "width": "1080",
+        "height": "1920",
+    }
+
 
 def _build_act_clip(
     image_path: Path,
@@ -1737,6 +1797,19 @@ def _build_act_clip(
         _mp_rev        = -1 if _mp["reverse_dir"] else 1
         _pan_dir = _PAN_DIRS[act_index % len(_PAN_DIRS)]
 
+    # Scale the still once, to the closest this act will get. Each frame is a
+    # crop of that buffer. The old path called LANCZOS on a larger image for
+    # every frame, which is what made an 80-second reel take about 19 minutes.
+    _max_scale = max(float(_mp_zoom_start), float(_mp_zoom_end), 1.0)
+    _base = img.resize(
+        (
+            max(1, int(round(img.width * _max_scale))),
+            max(1, int(round(img.height * _max_scale))),
+        ),
+        Image.BILINEAR,
+    )
+    _base_rgb = np.asarray(_base.convert("RGB"))
+
     # ── Frame renderer ────────────────────────────────────────────────────────
     def _make_frame(t: float) -> np.ndarray:
         # ── 1. Continuous ease-motion zoom + coupled diagonal pan ─────────────
@@ -1758,22 +1831,16 @@ def _build_act_clip(
         drift_x = int(_DRIFT_AMP_X * math.sin(2 * math.pi * _DRIFT_FREQ_X * t + act_index * 1.3))
         drift_y = int(_DRIFT_AMP_Y * math.cos(2 * math.pi * _DRIFT_FREQ_Y * t + act_index * 0.9))
 
-        # ── 3. Scale, crop with compound offset ──────────────────────────────
-        scaled_w = int(img.width  * _scale)
-        scaled_h = int(img.height * _scale)
-        scaled   = img.resize((scaled_w, scaled_h), Image.LANCZOS)
-        cx = max(0, min(
-            (scaled_w - _REEL_WIDTH)  // 2 + pan_x_total + drift_x,
-            scaled_w - _REEL_WIDTH,
-        ))
-        _headroom_bias = -int(scaled_h * 0.04) if protect_headroom else 0
-        cy = max(0, min(
-            (scaled_h - _REEL_HEIGHT) // 2 + pan_y_total + drift_y + _headroom_bias,
-            scaled_h - _REEL_HEIGHT,
-        ))
-        cropped = scaled.crop((cx, cy, cx + _REEL_WIDTH, cy + _REEL_HEIGHT))
-
-        arr = np.array(cropped.convert("RGB"), dtype=np.float32)
+        # ── 3. Crop the pre-scaled buffer. No per-frame upscale. ────────────
+        _headroom_bias = -int(_REEL_HEIGHT * 0.04) if protect_headroom else 0
+        window = ken_burns_window(
+            _base_rgb,
+            scale=_scale,
+            max_scale=_max_scale,
+            pan_x=pan_x_total + drift_x,
+            pan_y=pan_y_total + drift_y + _headroom_bias,
+        )
+        arr = window.astype(np.float32)
 
         # ── 4. Dark overlay ───────────────────────────────────────────────────
         arr *= (1.0 - overlay_opacity)
@@ -3142,16 +3209,30 @@ def compile_sequence_reel(
     logger.info("Writing sequence reel → %s (audio_fps=%d)", output_path, _AUDIO_SAMPLE_RATE)
     os.makedirs(os.path.dirname(str(output_path)), exist_ok=True)
     try:
-        _enc_preset = (ffmpeg_preset or "medium").strip() or "medium"
+        _enc = sequence_encode_params(total_duration, ffmpeg_preset)
+        logger.info(
+            "Sequence encode | %sx%s | preset=%s | crf=%s | maxrate=%s",
+            _enc["width"],
+            _enc["height"],
+            _enc["preset"],
+            _enc["crf"],
+            _enc["maxrate"],
+        )
         final_video.write_videofile(
             str(output_path),
             fps         = fps,
             codec       = "libx264",
             audio_codec = "aac",
             audio_fps   = _AUDIO_SAMPLE_RATE,
-            preset      = _enc_preset,
+            preset      = _enc["preset"],
             threads     = 8,
-            ffmpeg_params=["-ar", str(_AUDIO_SAMPLE_RATE), "-preset", _enc_preset],
+            ffmpeg_params=[
+                "-crf", _enc["crf"],
+                "-maxrate", _enc["maxrate"],
+                "-bufsize", _enc["bufsize"],
+                "-pix_fmt", "yuv420p",
+                "-ar", str(_AUDIO_SAMPLE_RATE),
+            ],
             logger      = None,
             temp_audiofile_path=moviepy_temp_audio_dir(),
         )

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from PIL import Image
+
 from modules.reel_qa.config import frame_samples, min_duration_s, min_mean_volume_db
 from modules.reel_qa.relevance import verdict_passed
 
@@ -343,8 +345,21 @@ def decide_mp4_gate(
     frame_rows = list(frames or [])
     if not frame_rows:
         reasons.append("no_frame_samples")
-    elif any(not row.get("passed") for row in frame_rows):
-        reasons.append("frame_subtitle_mismatch")
+    else:
+        technical = {"black", "flat", "glitch", "overlay"}
+        semantic = False
+        for row in frame_rows:
+            if row.get("passed"):
+                continue
+            reason = str(row.get("reason") or "")
+            if reason in technical:
+                label = f"frame_{reason}"
+                if label not in reasons:
+                    reasons.append(label)
+            else:
+                semantic = True
+        if semantic:
+            reasons.append("frame_subtitle_mismatch")
     unique: list[str] = []
     for reason in reasons:
         if reason and reason not in unique:
@@ -361,25 +376,102 @@ def decide_mp4_gate(
     }
 
 
-def _frame_hamming_limit() -> int:
-    import os
-
-    raw = (os.getenv("REEL_FRAME_HAMMING") or "").strip()
-    try:
-        return max(0, int(raw)) if raw else 20
-    except ValueError:
-        return 20
-
-
 def _same_approved_still(frame: Path, still: str) -> bool:
-    """True when the compiled frame is the beat's still, not a transition."""
-    from modules.reel_artefact.diversity import dhash
+    """True when the compiled frame is the beat's still, Ken Burns included.
 
-    left = dhash(frame)
-    right = dhash(still)
-    if left is None or right is None:
+    A push-in, a darker grade, and the subtitle crop change the pixels.
+    The match drops the average brightness and tries the whole still, its
+    upper area, and a mild inset. A different picture stays below the line.
+    """
+    left = _center_luma(frame)
+    if left is None:
         return False
-    return (left ^ right).bit_count() <= _frame_hamming_limit()
+    scores = []
+    samples = (
+        _center_luma(still),
+        _center_luma(still, box=(0.0, 0.0, 1.0, 0.76)),
+        _center_luma(still, box=(0.08, 0.06, 0.92, 0.90)),
+    )
+    for sample in samples:
+        if sample is None:
+            continue
+        scores.append(_correlated(left, sample))
+    return bool(scores) and max(scores) >= 0.68
+
+
+def _center_luma(
+    path: Path | str,
+    box: tuple[float, float, float, float] | None = None,
+) -> list[int] | None:
+    try:
+        with Image.open(path) as opened:
+            image = opened.convert("L")
+    except (OSError, ValueError):
+        return None
+    width, height = image.size
+    if width < 8 or height < 8:
+        return None
+    if box is not None:
+        left, top, right, bottom = box
+        image = image.crop((
+            int(width * left),
+            int(height * top),
+            max(int(width * left) + 8, int(width * right)),
+            max(int(height * top) + 8, int(height * bottom)),
+        ))
+    # The whole frame, tiny. A Ken Burns crop of the same still stays
+    # correlated. A different photograph does not.
+    sample = image.resize((16, 16), Image.Resampling.BILINEAR)
+    return list(sample.getdata())
+
+
+def _correlated(left: list[int], right: list[int]) -> float:
+    count = min(len(left), len(right))
+    if count == 0:
+        return 0.0
+    mean_left = sum(left[:count]) / count
+    mean_right = sum(right[:count]) / count
+    numer = 0.0
+    left_energy = 0.0
+    right_energy = 0.0
+    for index in range(count):
+        a = left[index] - mean_left
+        b = right[index] - mean_right
+        numer += a * b
+        left_energy += a * a
+        right_energy += b * b
+    if left_energy < 1.0 or right_energy < 1.0:
+        return 1.0 if abs(mean_left - mean_right) < 12 else 0.0
+    return numer / ((left_energy ** 0.5) * (right_energy ** 0.5))
+
+
+def frame_fault(path: Path | str) -> str:
+    """``black``, ``flat``, ``glitch``, or ``overlay`` when the frame is unusable."""
+    try:
+        with Image.open(path) as opened:
+            image = opened.convert("RGB")
+    except (OSError, ValueError):
+        return "glitch"
+    width, height = image.size
+    if width < 8 or height < 8:
+        return "glitch"
+    small = image.resize((32, 32), Image.Resampling.BOX)
+    pixels = list(small.getdata())
+    if not pixels:
+        return "glitch"
+    luma = [((red + green + blue) / 3.0) for red, green, blue in pixels]
+    mean = sum(luma) / len(luma)
+    variance = sum((value - mean) ** 2 for value in luma) / len(luma)
+    if mean < 10 or (variance < 8 and mean < 18):
+        return "black"
+    extremes = sum(1 for value in luma if value < 2 or value > 253)
+    if extremes / len(luma) > 0.45:
+        return "glitch"
+    # A solid band across the middle is an overlay, not the photograph.
+    row = luma[16 * 32: 17 * 32]
+    if row and max(row) - min(row) < 4 and abs((sum(row) / len(row)) - mean) > 40:
+        return "overlay"
+    return ""
 
 
 def beat_for_cue(cue: SubtitleCue, beats: list[dict[str, Any]] | None) -> dict[str, Any] | None:
@@ -472,23 +564,25 @@ def gate_final_mp4(
             and Path(still).is_file()
         )
         if approved and _same_approved_still(clean, still):
+            fault = frame_fault(clean)
             frames.append(
                 {
                     "index": i,
                     "text": text,
                     "at_s": round(cue.midpoint_s, 3),
-                    "passed": True,
+                    "passed": not fault,
                     "score": (beat or {}).get("score"),
-                    "reason": "beat-approved",
-                    "qa_status": "beat-approved",
+                    "reason": fault or "beat-approved",
+                    "qa_status": fault or "beat-approved",
                     "frame_path": str(shot),
                     "beat_index": beat_index,
                 }
             )
             _LOG.info(
-                "MP4 frame | t=%.2f beat=%s | same-still | trusted",
+                "MP4 frame | t=%.2f beat=%s | same-still | %s",
                 cue.midpoint_s,
                 beat_index,
+                fault or "trusted",
             )
             continue
         if approved:

@@ -25,9 +25,14 @@ from modules.reel_qa.relevance import verdict_passed
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT = ("real", "nb-ref", "nb-text", "flux", "reuse")
+# Reuse an approved object still before a landscape. A missed photograph
+# should stay a photograph, with a different crop, while a real photo or a
+# Nano Banana edit is still available.
+_DEFAULT = ("real", "nb-ref", "nb-text", "reuse", "flux")
 _NANO = 0.0336
-_SCENE = ("flux", "flux", "reuse")
+# One Flux image, then a different crop of a still that already passed.
+# A second Flux rung in this list was a second image inside pass 1.
+_SCENE = ("flux", "reuse")
 
 Producer = Callable[["RungContext"], Path | str | None]
 Judge = Callable[[Path, "RungContext"], dict]
@@ -67,7 +72,7 @@ def rungs_for(kind: str, *, event: bool = False) -> list[str]:
     An event beat looks for an archival photograph before Flux.
     """
     if event:
-        return ["event", "flux", "flux", "reuse"]
+        return ["event", "flux", "reuse"]
     if kind == "scene":
         return list(_SCENE)
     return rung_names()

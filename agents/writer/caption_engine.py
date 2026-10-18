@@ -2171,6 +2171,9 @@ class CaptionEngine:
             clean = inject_philosophical_breaks(clean)
         else:
             clean = _metrics_script(raw)
+            from modules.reel_artefact.script_date import ensure_topic_date
+
+            clean = ensure_topic_date(clean, topic)
         logger.info(
             "generate_sequence_voiceover | final script %d words / %d chars "
             "(target_words=%d min_words=%d) [Gemini-only]",
