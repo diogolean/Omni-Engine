@@ -17,6 +17,19 @@ def grounding_enabled() -> bool:
     return _on("REEL_VISUAL_GROUNDING", True)
 
 
+def grounding_enabled_for(channel: str) -> bool:
+    """Grounding for this page. Ancient Knowledge only unless
+    ``REEL_VISUAL_GROUNDING_CHANNELS`` lists more (comma-separated).
+
+    Master Mei and the other sequence pages keep their own prompts and style.
+    """
+    if not grounding_enabled():
+        return False
+    raw = os.getenv("REEL_VISUAL_GROUNDING_CHANNELS") or "ancient_knowledge"
+    allowed = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    return (channel or "").strip().lower() in allowed
+
+
 def memory_enabled() -> bool:
     """Read and write the per-topic QA ledger. On by default."""
     return _on("REEL_VISUAL_MEMORY", True)

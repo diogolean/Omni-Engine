@@ -4173,7 +4173,20 @@ def _produce_variant_worker(
                 from modules.reel_artefact.ladder import rung_names as _rung_names
                 from modules.reel_artefact.policy import artefact_images_enabled as _ladder_flag
 
-                _ladder_on = bool(_ladder_flag())
+                # The ladder is an Ancient Knowledge feature. Master Mei and
+                # other sequence pages keep their Flux path even when the
+                # container sets REEL_ARTIFACT_IMAGES=1 for AK.
+                _ladder_pages = {
+                    part.strip().lower()
+                    for part in (
+                        os.getenv("REEL_ARTIFACT_IMAGES_CHANNELS") or "ancient_knowledge"
+                    ).split(",")
+                    if part.strip()
+                }
+                _ladder_on = bool(_ladder_flag()) and (
+                    str((page_ctx.page_id if page_ctx else "") or "").strip().lower()
+                    in _ladder_pages
+                )
                 if _ladder_on:
                     _reel_checkpoint = _ReelCkpt.for_reel(
                         str((page_ctx.page_id if page_ctx else "") or "ancient_knowledge"),
@@ -4192,6 +4205,10 @@ def _produce_variant_worker(
                 _LOG.warning("LADDER setup skipped (%s)", _ladder_exc)
                 _ladder_on = False
                 _reel_checkpoint = None
+            from modules.reel_grounding.config import (
+                grounding_enabled_for as _grounding_for_channel,
+            )
+
             for _act_i in range(_sr_act_start, _seq_n):
                 _snippet = (
                     _spoken_snippets[_act_i]
@@ -4306,6 +4323,11 @@ def _produce_variant_worker(
                     if _rendered.negative:
                         _act_neg = _rendered.negative
                     resolved_subject_for_beat = _rendered.subject
+                elif not _grounding_for_channel(
+                    str((page_ctx.page_id if page_ctx else "") or "")
+                ):
+                    # Master Mei and other sequence pages keep their own prompt.
+                    resolved_subject_for_beat = str(resolved_subject or "")
                 else:
                     try:
                         from modules.reel_grounding.prompt import assemble_beat
@@ -4556,7 +4578,8 @@ def _produce_variant_worker(
 
                         _passed_judge = bool(_verdict_row.get("is_relevant"))
                         if (
-                            artefact_images_enabled()
+                            _ladder_on
+                            and artefact_images_enabled()
                             and _passed_judge
                             and not _verdict_row.get("kept")
                         ):
@@ -4589,7 +4612,11 @@ def _produce_variant_worker(
 
                     # The ladder already judged reuse. A second unjudged copy
                     # is what filled a reel with one Nano Banana still.
-                    if artefact_images_enabled() and not _verdict_row.get("ladder"):
+                    if (
+                        _ladder_on
+                        and artefact_images_enabled()
+                        and not _verdict_row.get("ladder")
+                    ):
                         _meta_row_reuse = _sr_act_meta.get(_idx) or {}
                         _entity_id = str(_meta_row_reuse.get("artefact_kwargs", {}).get(
                             "artefact_entity_id", ""
@@ -4732,7 +4759,7 @@ def _produce_variant_worker(
                 try:
                     from modules.reel_artefact.policy import artefact_images_enabled
 
-                    if artefact_images_enabled() and _image_bill:
+                    if _ladder_on and artefact_images_enabled() and _image_bill:
                         for _bill_key, _bill_n in _image_bill.items():
                             if int(_bill_n) > 0:
                                 cost_tracker.track_image(
