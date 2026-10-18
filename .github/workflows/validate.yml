@@ -25,6 +25,9 @@ jobs:
       - name: Lint
         run: >
           ruff check omni modules/memory
+          agents/media/drive_source.py
+          agents/media/content_source.py
+          agents/posting/pinterest_engine/library_source.py
           scripts/backup_supermemory.py
           scripts/upload_clips_to_b2.py
           agents/media/b2_budget.py
@@ -38,6 +41,7 @@ jobs:
           tests/test_b2_budget.py
           tests/test_b2_direct_client_guard.py
           tests/test_upload_clips_b2_budget.py
+          tests/test_drive_source.py
 
       - name: Test
         run: >
@@ -51,3 +55,4 @@ jobs:
           tests/test_b2_budget.py
           tests/test_b2_direct_client_guard.py
           tests/test_upload_clips_b2_budget.py
+          tests/test_drive_source.py

@@ -142,6 +142,7 @@ def _account_from_row(raw: dict[str, Any], index: int) -> Account:
             raw.get("facebook_page_name") or raw.get("display_name") or channel_id
         ).strip(),
         "facebook_caption_template": str(raw.get("facebook_caption_template") or "").strip(),
+        "drive_folder_id": str(raw.get("drive_folder_id") or "").strip(),
         "channel_id": channel_id,
         "display_name": str(raw.get("display_name") or channel_id).strip(),
         "legacy_token_env": "PINTEREST_ACCESS_TOKEN",

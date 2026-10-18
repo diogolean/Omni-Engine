@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Library records from the PC disk or the same tree in B2.
+"""Library records from Drive, the PC disk, or the same tree in B2.
 
-Local ``outputs/<channel>/library/post_*.json`` wins when it exists.
-Otherwise the JSON files under ``<channel>/library/`` are copied down.
-The image for the pin being published is downloaded on its own and the
-caller deletes that temp file. Nothing in B2 is deleted.
+An existing local ``outputs/<channel>/library/post_*.json`` tree wins.
+Otherwise records are copied from Drive, the local ``G:`` tree, then B2
+(``LIBRARY_SOURCE`` selects one of those). The image for the pin being
+published is downloaded on its own and the caller deletes that temp file.
+Nothing in Drive or B2 is deleted.
 """
 
 from __future__ import annotations
@@ -32,43 +33,22 @@ def ensure_local_library(
     prefix: str,
     client: Any | None = None,
     bucket: str | None = None,
+    folder_id: str | None = None,
 ) -> int:
-    """Copy missing ``post_*.json`` records from B2. Returns how many were written.
+    """Copy missing ``post_*.json`` records. Returns how many were written.
 
-    When the local library already has records, B2 is not listed.
+    When the local library already has records, remote sources are not listed.
+    Images are not downloaded here.
     """
-    library = outputs_dir / "library"
-    library.mkdir(parents=True, exist_ok=True)
-    if any(library.glob("post_*.json")):
-        return 0
-    try:
-        from agents.media.b2_client import list_object_keys, read_object_text  # noqa: PLC0415
-    except Exception as exc:  # noqa: BLE001
-        log.info("B2 library unavailable (%s).", type(exc).__name__)
-        return 0
-    try:
-        keys = list_object_keys(prefix, client=client, bucket=bucket)
-    except Exception as exc:  # noqa: BLE001
-        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+    from agents.media.content_source import sync_library_records  # noqa: PLC0415
 
-        if isinstance(exc, B2DailyCapError):
-            raise
-        log.info("B2 library list failed (%s).", type(exc).__name__)
-        return 0
-    written = 0
-    for key in keys:
-        name = Path(key).name
-        if not (name.startswith("post_") and name.endswith(".json")):
-            continue
-        text = read_object_text(key, client=client, bucket=bucket)
-        if not text:
-            continue
-        dest = library / name
-        dest.write_text(text, encoding="utf-8")
-        written += 1
-    if written:
-        log.info("Copied %d library record(s) from %s", written, prefix)
-    return written
+    return sync_library_records(
+        outputs_dir,
+        prefix=prefix,
+        client=client,
+        bucket=bucket,
+        folder_id=folder_id,
+    )
 
 
 def image_object_key(record: dict, prefix: str) -> str:
@@ -95,29 +75,37 @@ def materialize_image(
     channel: str,
     client: Any | None = None,
     bucket: str | None = None,
+    folder_id: str | None = None,
 ) -> tuple[Path | None, bool]:
     """Return ``(path, delete_after)`` for the one image this pin needs."""
+    from agents.media.content_source import existing_local_file, materialize_key  # noqa: PLC0415
+    from utils.pipeline_paths import temp_path  # noqa: PLC0415
+
     local = str(record.get("local_image_path") or "")
     if local and Path(local).is_file():
         return Path(local), False
     key = image_object_key(record, prefix)
+    if not key and local:
+        key = image_object_key({"image_path": local}, prefix)
     if not key or Path(key).suffix.lower() not in _IMAGE_SUFFIXES:
         return None, False
-    from agents.media.b2_client import download_object  # noqa: PLC0415
-    from utils.pipeline_paths import temp_path  # noqa: PLC0415
-
+    on_disk = existing_local_file(key, channel)
+    if on_disk is not None:
+        return on_disk, False
     dest = temp_path(channel, "pinterest", Path(key).name)
-    try:
-        download_object(key, dest, client=client, bucket=bucket)
-    except Exception as exc:  # noqa: BLE001
-        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-
+    found, source = materialize_key(
+        key,
+        dest,
+        channel=channel,
+        client=client,
+        bucket=bucket,
+        folder_id=folder_id,
+        hinted=local,
+    )
+    if found is None:
         dest.unlink(missing_ok=True)
-        if isinstance(exc, B2DailyCapError):
-            raise
-        log.info("Library image download failed for %s (%s).", key, type(exc).__name__)
         return None, False
-    return dest, True
+    return found, source != "local"
 
 
 def upload_library_tree(

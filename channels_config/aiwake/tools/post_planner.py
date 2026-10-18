@@ -321,8 +321,14 @@ def attach_b2_urls(
     entries: list[dict[str, Any]],
     *,
     upload: bool = True,
+    b2_client: Any | None = None,
+    bucket: str | None = None,
 ) -> dict[str, str]:
-    """Upload each unique local MP4 to B2 and stamp ``b2_url`` on every row."""
+    """Upload each unique local MP4 to B2 and stamp ``b2_url`` on every row.
+
+    A file that exists only on Drive is downloaded once and uploaded to B2
+    (Class A). The sheet still receives the B2 public URL. Nothing is deleted.
+    """
     uploaded: dict[str, str] = {}
     if not entries:
         return uploaded
@@ -338,7 +344,9 @@ def attach_b2_urls(
 
     for entry in entries:
         path = Path(str(entry.get("video_path") or ""))
-        name = path.name.lower()
+        # Library rows store Windows G: paths. On Linux those backslashes are
+        # not separators, so take the name from the slash-normalized path.
+        name = Path(str(path).replace("\\", "/")).name.lower()
         existing = str(entry.get("b2_url") or "").strip()
         if is_public_media_url(existing):
             uploaded[name] = existing
@@ -349,7 +357,31 @@ def attach_b2_urls(
             entry["media_url"] = uploaded[name]
             continue
         url = ""
-        if upload and uploader is not None and path.is_file():
+        if upload and not path.is_file():
+            from agents.media.content_source import (  # noqa: PLC0415
+                ensure_b2_public_url,
+                materialize_publish_file,
+            )
+
+            found = materialize_publish_file(path, channel=CHANNEL_ID)
+            if found is not None and found.is_file():
+                try:
+                    url = ensure_b2_public_url(
+                        found,
+                        key=found.name,
+                        client=b2_client,
+                        bucket=bucket,
+                        content_type="video/mp4",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning(
+                        "B2 upload failed for %s (%s)",
+                        found.name,
+                        type(exc).__name__,
+                    )
+                    print(f"[B2] FAIL {found.name}: {type(exc).__name__}")
+                    url = ""
+        elif upload and uploader is not None and path.is_file():
             try:
                 url = str(uploader.upload(path) or "").strip()
             except Exception as exc:  # noqa: BLE001
