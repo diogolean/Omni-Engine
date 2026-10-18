@@ -65,10 +65,13 @@ def build_shot_list(
         ))
     normalized = normalize_shots(shots, entities)
     narration = " ".join(shot.narration for shot in normalized)
-    return ShotList(
+    plan = ShotList(
         channel=channel,
         topic=" ".join((topic or "").split()),
         narration=narration,
         shots=normalized,
         source={"kind": "topic", "ref": "", "title": ""},
     )
+    from modules.shot_planner.fit import review_plan
+
+    return review_plan(plan)

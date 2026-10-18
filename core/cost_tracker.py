@@ -651,7 +651,7 @@ def image_cost_lines(cats: dict | None) -> list[str]:
         lines.append(
             f"  - Image Gen (FLUX Schnell):".ljust(42)
             + f"${float(row.get('image_flux_cost') or 0):.4f}  "
-            f"({flux_n} generation{'s' if flux_n != 1 else ''}, including retries)"
+            f"({flux_n} attempt{'s' if flux_n != 1 else ''})"
         )
     if real_n:
         lines.append(
@@ -681,6 +681,7 @@ def print_cost_summary(
     tts_chars: int = 0,
     audio_label: str = "",
     categories: dict | None = None,
+    reel_stills: int | None = None,
 ) -> None:
     """Print per-slot cost, then batch totals when more than one slot exists."""
     try:
@@ -712,6 +713,8 @@ def print_cost_summary(
                 f"  Visual Assets: {imgs} AI Image{'s' if imgs != 1 else ''} "
                 f"({pt})"
             )
+        elif is_econ_reel and reel_stills is not None:
+            asset_line = f"  Stills in reel: {max(0, int(reel_stills))}"
         elif is_econ_reel:
             asset_line = (
                 f"  Visual Assets: {imgs} AI Image{'s' if imgs != 1 else ''} "

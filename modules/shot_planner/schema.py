@@ -39,6 +39,7 @@ class Shot:
     kb_miss: bool = False
     canonical_shape: str = ""
     image_role: str = ""
+    scene_type: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +58,7 @@ class Shot:
             "kb_miss": self.kb_miss,
             "canonical_shape": self.canonical_shape,
             "image_role": self.image_role,
+            "scene_type": self.scene_type,
         }
 
 
@@ -106,6 +108,7 @@ def shot_from_dict(raw: dict[str, Any]) -> Shot:
         kb_miss=bool(raw.get("kb_miss")),
         canonical_shape=_as_str(raw.get("canonical_shape")),
         image_role=_as_str(raw.get("image_role")).lower(),
+        scene_type=_as_str(raw.get("scene_type")).lower(),
     )
 
 

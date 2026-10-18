@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import re
 from pathlib import Path
@@ -31,7 +32,22 @@ from modules.shot_planner.entities import Entity
 
 logger = logging.getLogger(__name__)
 
-_STOP = {"file", "category", "with", "from", "that", "this", "wreck"}
+_STOP = {"file", "category", "with", "from", "that", "this"}
+# Tokens that mark the event itself. A museum photo of the object matches
+# the entity name and still loses to a diver, a ship, or the year.
+_EVENT_HINTS = (
+    "diver",
+    "divers",
+    "diving",
+    "ship",
+    "shipwreck",
+    "wreck",
+    "sponge",
+    "1900",
+    "1901",
+    "dress",
+    "helmet",
+)
 
 
 def _queries(entity: Entity | None) -> list[str]:
@@ -74,14 +90,82 @@ def _usable(candidate: Candidate, tokens: set[str], *, from_category: bool) -> b
     return any(token in title for token in tokens)
 
 
-def _collect(entity: Entity, client) -> list[tuple[Candidate, bool]]:
+def _event_tokens(entity: Entity | None) -> set[str]:
+    period = str(getattr(entity, "event_period", "") or "")
+    blob = " ".join(_queries(entity)) + " " + period
+    found = {
+        token
+        for token in re.findall(r"[a-z0-9]{4,}", blob.lower())
+        if token not in _STOP
+    }
+    found.update(_EVENT_HINTS)
+    return found
+
+
+def _event_score(candidate: Candidate, tokens: set[str]) -> int:
+    """How well the title is the event, not the object in a gallery."""
+    title = (candidate.title or "").lower()
+    score = 0
+    for token in tokens:
+        if token and token in title:
+            score += 4
+    if any(word in title for word in ("fragment", "statue", "museum", "gallery")):
+        if score < 8:
+            score -= 3
+    return score
+
+
+def _object_photo_keys(cache: Path) -> set[str]:
+    """Titles and URLs already used as the object photograph."""
+    keys: set[str] = set()
+    if not cache.is_dir():
+        return keys
+    for side in cache.glob("*.source.json"):
+        try:
+            payload = json.loads(side.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        title = " ".join(str(payload.get("title") or "").lower().split())
+        url = str(payload.get("source_url") or "").split("?")[0].lower()
+        ref = str(payload.get("reference_image") or "").split("?")[0].lower()
+        if title:
+            keys.add(title)
+        if url:
+            keys.add(url)
+        if ref:
+            keys.add(ref)
+    return keys
+
+
+def _is_object_photo(candidate: Candidate, keys: set[str]) -> bool:
+    if not keys:
+        return False
+    title = " ".join((candidate.title or "").lower().split())
+    url = (candidate.source_url or "").split("?")[0].lower()
+    download = (candidate.download_url or "").split("?")[0].lower()
+    return bool(title and title in keys) or bool(url and url in keys) or bool(
+        download and download in keys
+    )
+
+
+def _collect(entity: Entity, client, *, object_keys: set[str] | None = None) -> list[tuple[Candidate, bool]]:
     found: list[tuple[Candidate, bool]] = []
     seen: set[str] = set()
     tokens = _tokens(entity)
+    banned = object_keys or set()
 
     def add(items: list[Candidate], *, from_category: bool) -> None:
         for item in items:
             if not _usable(item, tokens, from_category=from_category):
+                continue
+            if _is_object_photo(item, banned):
+                logger.info(
+                    "event skip object photo | entity=%s | %s",
+                    entity.id,
+                    item.title,
+                )
                 continue
             key = (item.download_url or item.title).split("?")[0].lower()
             if not key or key in seen:
@@ -93,6 +177,8 @@ def _collect(entity: Entity, client) -> list[tuple[Candidate, bool]]:
         add(_commons_category(category, client), from_category=True)
     for query in _queries(entity):
         add(_commons_search(query, client), from_category=False)
+    event_tokens = _event_tokens(entity)
+    found.sort(key=lambda row: _event_score(row[0], event_tokens), reverse=True)
     return found
 
 
@@ -109,9 +195,11 @@ def acquire_event_photo(
     if entity is None or (not _queries(entity) and not _categories(entity)):
         return None
     http = client or RequestsClient(timeout=20.0)
-    folder = artefact_cache_dir(channel or "ancient_knowledge", entity.id) / "events"
+    cache = artefact_cache_dir(channel or "ancient_knowledge", entity.id)
+    folder = cache / "events"
     folder.mkdir(parents=True, exist_ok=True)
-    for index, (candidate, _category) in enumerate(_collect(entity, http)):
+    object_keys = _object_photo_keys(cache)
+    for index, (candidate, _category) in enumerate(_collect(entity, http, object_keys=object_keys)):
         raw = folder / f"event_{index:02d}.jpg"
         if raw.is_file() and _reject_file(raw, entity.id):
             raw.unlink(missing_ok=True)

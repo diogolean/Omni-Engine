@@ -47,6 +47,8 @@ _ABSTRACT = (
     "theor",
     "legend",
     "ancient record",
+    "record",
+    "real place",
     "lost knowledge",
     "lost blueprint",
     "blueprint",
@@ -220,6 +222,29 @@ def choose_scene(
     return ("establishing", "landscape", "museum_hall", "silhouette")[slot % 4]
 
 
+def fields_for_scene(scene: str) -> dict[str, str]:
+    """Subject, camera, and setting for one allowed Flux scene type."""
+    key = scene if scene in _SCENES else "landscape"
+    subject, visual, camera, setting, shot_type = _SCENES[key]
+    return {
+        "scene": key,
+        "subject": subject,
+        "canonical_visual": visual,
+        "shot_type": shot_type,
+        "camera": camera,
+        "setting": setting,
+        "lighting": "natural daylight, documentary",
+    }
+
+
+def next_scene(scene: str) -> str:
+    """A different allowed scene, used when two beats already used this one."""
+    order = ("manuscript", "silhouette", "museum_hall", "landscape", "sea", "establishing", "atmosphere")
+    if scene not in order:
+        return order[0]
+    return order[(order.index(scene) + 1) % len(order)]
+
+
 def scene_fields(
     narration: str,
     *,
@@ -231,6 +256,8 @@ def scene_fields(
     low = " ".join((narration or "").lower().split())
     if event:
         scene = "sea"
+    elif any(word in low for word in ("real place", "highland", "landscape", "region")):
+        scene = "landscape"
     elif any(word in low for word in ("historian", "debate", "archive", "researcher")):
         scene = "museum_hall"
     elif (
@@ -239,6 +266,7 @@ def scene_fields(
     ):
         place = str(getattr(entity, "setting", "") or "the real place")
         return {
+            "scene": "landscape",
             "subject": "the real place",
             "canonical_visual": (
                 f"A wide landscape of {place}. No named artefact in the frame."
@@ -250,15 +278,60 @@ def scene_fields(
         }
     else:
         scene = choose_scene(narration, attempt=index, event=event, kind="scene")
-    subject, visual, camera, setting, shot_type = _SCENES[scene]
-    return {
-        "subject": subject,
-        "canonical_visual": visual,
-        "shot_type": shot_type,
-        "camera": camera,
-        "setting": setting,
-        "lighting": "natural daylight, documentary",
-    }
+    return fields_for_scene(scene)
+
+
+_PART_WORDS = (
+    "gear",
+    "gears",
+    "gearwheel",
+    "gear wheel",
+    "pendant",
+    "pendants",
+    "ornament",
+    "ornaments",
+    "figurine",
+    "figurines",
+    "mechanism",
+    "fragment",
+    "fragments",
+    "gold bird",
+    "silver disc",
+    "brass dial",
+)
+
+
+def acceptable_flux_concept(
+    text: str,
+    *,
+    name: str = "",
+    aliases: tuple[str, ...] | list[str] = (),
+) -> bool:
+    """False when a re-plan names the entity, a part, or a specific object.
+
+    Ban lines (``do not depict``, ``no gears``) are ignored. The scene
+    description that remains has to stay inside the Flux policy.
+    """
+    kept = _without_bans(text)
+    if not kept:
+        return False
+    needles = [str(name or "").strip().lower(), *[str(item).strip().lower() for item in aliases]]
+    needles.extend(_PART_WORDS)
+    for needle in needles:
+        if len(needle) < 3:
+            continue
+        if needle in kept:
+            return False
+    return True
+
+
+def _without_bans(text: str) -> str:
+    low = " ".join((text or "").lower().split())
+    return re.sub(
+        r"\b(?:do not depict|don't depict|never depict|no|without|not)\b[^.]{0,140}",
+        " ",
+        low,
+    ).strip()
 
 
 def safe_flux_prompt(

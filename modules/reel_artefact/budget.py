@@ -65,13 +65,18 @@ _REPLAN_USED = 0
 
 
 def flux_max_per_reel() -> int:
-    """Most Flux generations one reel may start, on top of the dollar cap."""
-    return _count("REEL_FLUX_MAX_PER_REEL", 18)
+    """Most Flux generations one reel may start, on top of the dollar cap.
+
+    A 19–20 beat reel needs one still each, then a retry wave. Flux Schnell
+    is $0.003, so the dollar budget stays the real limit and this count
+    only stops a runaway.
+    """
+    return _count("REEL_FLUX_MAX_PER_REEL", 40)
 
 
 def replan_max_per_reel() -> int:
-    """Most re-plans one reel may start, on top of the per-beat limit."""
-    return _count("REEL_REPLAN_MAX_PER_REEL", 6)
+    """Most re-plans one reel may start, after every beat has had an attempt."""
+    return _count("REEL_REPLAN_MAX_PER_REEL", 20)
 
 
 def take_flux_slot() -> bool:

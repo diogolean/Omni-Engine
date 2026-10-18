@@ -2,13 +2,16 @@
 """Run one beat up the fallback ladder and return a still-gate result."""
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
+import re
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
 from modules.reel_artefact.events import acquire_event_photo
-from modules.reel_artefact.flux_policy import safe_flux_prompt
+from modules.reel_artefact.flux_policy import acceptable_flux_concept, safe_flux_prompt
 from modules.reel_artefact.ladder import LadderResult, run_ladder
 from modules.reel_artefact.logbook import note_accepted
 from modules.reel_artefact.reuse import remember_approved
@@ -22,6 +25,14 @@ from modules.reel_qa.relevance import (
 from modules.shot_planner.entities import Entity, entities_in_text, load_entities
 
 logger = logging.getLogger(__name__)
+
+# The fair scheduler sets this before a wave. "full" is the single-beat climb
+# the tests use. "first" and "retry" judge one still and stop.
+_SHARE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "reel_ladder_share", default="full",
+)
+_CURSOR: dict[int, int] = {}
+_CURSOR_LOCK = threading.Lock()
 
 _FLUX_KEYS = {
     "negative_prompt",
@@ -53,6 +64,8 @@ def climb_act(
     shot_type: str = "",
     camera: str = "",
     setting: str = "",
+    shot_subject: str = "",
+    shot_era: str = "",
 ) -> StillGateResult:
     """One beat. Flag-off callers keep using generate_and_gate instead."""
     entity = _entity(channel, entity_id, narration, episode_subject)
@@ -82,24 +95,45 @@ def climb_act(
     def _judge(path: Path, ctx) -> dict:
         reference = ""
         found_shape = shape
+        provider = ""
         try:
             from modules.reel_artefact.source import source_meta
 
             meta = source_meta(path)
             reference = str(meta.get("reference_image") or "")
             found_shape = str(meta.get("canonical_shape") or shape)
+            provider = str(meta.get("provider") or "")
         except Exception:  # noqa: BLE001
             reference = ""
+        fluxish = _flux_still(ctx.prompt, provider)
+        planned = shot_subject or _planned_subject(ctx.prompt)
+        if fluxish:
+            judge_prompt = ctx.prompt
+            against = "shot"
+            judged_shape = ""
+            judged_ref = ""
+        else:
+            judge_prompt = _judge_prompt(ctx.prompt, episode_subject)
+            against = "narration"
+            judged_shape = found_shape
+            judged_ref = reference
         return evaluate_with_technical_retry(
             evaluate_chunk_relevance,
             path,
             ctx.narration,
-            _judge_prompt(ctx.prompt, episode_subject),
+            judge_prompt,
             banned_subjects,
-            reference_image=reference,
-            canonical_shape=found_shape,
+            reference_image=judged_ref,
+            canonical_shape=judged_shape,
+            score_against=against,
+            shot_subject=planned,
+            shot_setting=setting,
+            shot_era=shot_era,
         )
 
+    share = _SHARE.get()
+    start = cursor_for(beat_index) if share == "retry" else 0
+    once = share in {"first", "retry"}
     result = run_ladder(
         beat_index=beat_index,
         narration=narration,
@@ -117,7 +151,11 @@ def climb_act(
         period=str(getattr(entity, "event_period", "") or "") if entity else "",
         negatives=_flux_negatives(entity),
         llm=_gemini_reprompt if _llm_allowed() else None,
+        once=once,
+        start_rung=start,
     )
+    if once:
+        save_cursor(beat_index, result.next_rung)
     if result.passed and not result.resumed:
         note_accepted(result.rung or "flux")
     if result.passed and result.path is not None and not result.resumed:
@@ -137,6 +175,42 @@ def climb_act(
             except Exception as exc:  # noqa: BLE001
                 logger.info("LADDER checkpoint skipped (%s)", type(exc).__name__)
     return _gate(result, stem=stem)
+
+
+def set_share(mode: str) -> None:
+    """``full``, ``first``, or ``retry``. Workers copy this at submit time."""
+    _SHARE.set(mode if mode in {"full", "first", "retry"} else "full")
+
+
+def reset_cursors() -> None:
+    with _CURSOR_LOCK:
+        _CURSOR.clear()
+
+
+def cursor_for(beat_index: int) -> int:
+    with _CURSOR_LOCK:
+        return int(_CURSOR.get(int(beat_index), 0))
+
+
+def save_cursor(beat_index: int, nxt: int) -> None:
+    with _CURSOR_LOCK:
+        _CURSOR[int(beat_index)] = max(0, int(nxt))
+
+
+def _flux_still(prompt: str, provider: str) -> bool:
+    """A generated scene is scored against the plan, not the spoken object."""
+    if provider in {
+        "commons", "met", "smithsonian", "openverse", "europeana", "wikimedia", "reuse",
+    }:
+        return False
+    return "do not depict a named artefact" in (prompt or "").lower()
+
+
+def _planned_subject(prompt: str) -> str:
+    match = re.search(r"EXPECTED SUBJECT:\s*([^.]+)", prompt or "", flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return " ".join(match.group(1).split())
 
 
 def _entity(
@@ -236,11 +310,22 @@ def _flux(generate: Callable[..., Any], kwargs: dict, entity: Entity | None):
             kind="object" if ctx.kind == "object" and not ctx.event else "scene",
             rejection=ctx.rejection or "",
         )
-        if ctx.concept:
-            text = ctx.concept
-            if "do not depict" not in text.lower():
-                text = f"{text} {safe_flux_prompt(ctx.narration, name=name, negatives=negatives)}"
+        aliases = tuple(getattr(entity, "aliases", ()) or ())
+        if ctx.concept and acceptable_flux_concept(ctx.concept, name=name, aliases=aliases):
+            # The safe scene stays the subject. A clean variation may follow it.
+            text = f"{text} Variation: {ctx.concept}"
+        elif ctx.concept:
+            logger.info(
+                "FLUX replan rejected | beat=%s | concept names a forbidden object",
+                int(ctx.beat_index) + 1,
+            )
         ctx.prompt = text
+        logger.info(
+            "FLUX prompt | beat=%s | attempt=%s | %s",
+            int(ctx.beat_index) + 1,
+            int(ctx.replan or ctx.attempt or 1),
+            text,
+        )
         call = {key: value for key, value in kwargs.items() if key in _FLUX_KEYS}
         call["output_stem"] = ctx.dest.stem
         call["output_directory"] = ctx.dest.parent

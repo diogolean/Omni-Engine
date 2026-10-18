@@ -1975,6 +1975,7 @@ def _print_video_cost_summary(
     batch_cost_usd: float | None = None,
     post_type: str = "ECONOMIC_REEL",
     audio_label: str = "",
+    reel_stills: int | None = None,
 ) -> None:
     """Print this-reel cost, then running batch total (never mix the two)."""
     from core.cost_tracker import image_cost_lines, print_cost_summary
@@ -2007,6 +2008,7 @@ def _print_video_cost_summary(
         tts_chars=int(cats.get("tts_chars") or 0),
         audio_label=str(audio_label or ""),
         categories=cats,
+        reel_stills=reel_stills,
     )
     # The compact "FLUX Schnell N generations" line counted every compiled
     # still, including reused frames, and contradicted the provider split.
@@ -4436,6 +4438,8 @@ def _produce_variant_worker(
                         shot_type=_shot_type,
                         camera=_shot_camera,
                         setting=_shot_setting,
+                        shot_subject=str(getattr(_plan_shot, "subject", "") or ""),
+                        shot_era=str(getattr(_plan_shot, "era", "") or ""),
                     )
                 else:
                     _sr_act_jobs[_act_i] = functools.partial(
@@ -4496,7 +4500,12 @@ def _produce_variant_worker(
                 },
             )
 
-            _sr_act_results = _run_acts_parallel(_sr_act_jobs)
+            if _ladder_on:
+                from modules.reel_artefact.fair import run_fair as _run_fair
+
+                _sr_act_results = _run_fair(_sr_act_jobs)
+            else:
+                _sr_act_results = _run_acts_parallel(_sr_act_jobs)
 
             _ok_acts = 0
             from modules.reel_qa.models import StillGateResult
@@ -6100,9 +6109,13 @@ def _produce_variant_worker(
             if batch_cost_tracker is not None:
                 _batch_cats = batch_cost_tracker.category_totals()
                 _batch_usd = float(_batch_cats.get("total") or 0.0) + _reel_cost
+            _reel_stills = len([
+                _still for _still in (_sequence_image_paths or []) if _still
+            ])
             _print_video_cost_summary(
                 cost_tracker,
                 image_count=_api_imgs,
+                reel_stills=_reel_stills,
                 image_model_label="FLUX Schnell",
                 variant_index=variant + 1,
                 total_variants=qty,

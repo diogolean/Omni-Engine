@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from modules.reel_artefact.flux_policy import safe_flux_prompt
+from modules.reel_artefact.flux_policy import acceptable_flux_concept, safe_flux_prompt
 
 
 def replan_limit() -> int:
@@ -55,6 +55,12 @@ def next_concept(
     if not isinstance(text, str) or len(text.strip()) <= 40:
         return fallback
     cleaned = text.strip()
+    # The model line is kept only when it does not name the entity or a part.
+    # A rejected concept is dropped. The safe scene is the whole prompt.
+    if not acceptable_flux_concept(cleaned, name=name):
+        return fallback
     if "do not depict" not in cleaned.lower():
-        cleaned = f"{cleaned} {fallback}"
+        cleaned = f"{cleaned} Do not depict {name}." if name else cleaned
+        if not acceptable_flux_concept(cleaned, name=name):
+            return fallback
     return cleaned

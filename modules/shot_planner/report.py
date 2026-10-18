@@ -28,7 +28,8 @@ def _format(plan: ShotList, heading: str) -> str:
     ]
     for shot in plan.shots:
         rendered = render_shot(shot, config, channel=plan.channel)
-        lines.append(f"--- {shot.id} {shot.subject}")
+        scene = shot.scene_type or shot.image_role or "object"
+        lines.append(f"--- {shot.id} scene={scene} {shot.subject}")
         lines.append(rendered.positive)
         lines.append(f"NEGATIVE: {rendered.negative}")
         lines.append("")

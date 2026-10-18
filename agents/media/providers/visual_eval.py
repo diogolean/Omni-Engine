@@ -64,13 +64,14 @@ def _cfg(name: str, default: str | None = None) -> str:
     return env or (default or "")
 
 
-def _eval_timeout_s(default: float = 10.0) -> float:
-    raw = _cfg("VISUAL_EVAL_TIMEOUT_S")
+def _eval_timeout_s(default: float = 25.0) -> float:
+    """Judge HTTP timeout. The reel knob wins, then ``VISUAL_EVAL_TIMEOUT_S``."""
+    raw = _cfg("REEL_QA_JUDGE_TIMEOUT") or _cfg("VISUAL_EVAL_TIMEOUT_S")
     try:
         val = float(raw) if raw else default
     except (TypeError, ValueError):
         val = default
-    return max(1.0, min(val, 30.0))
+    return max(1.0, min(val, 90.0))
 
 
 def _engine_debug() -> bool:

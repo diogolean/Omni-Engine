@@ -55,6 +55,12 @@ def _pass(score: float = 0.91) -> dict:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_artefact_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Event downloads must not land in the channel's real artefact cache."""
+    monkeypatch.setenv("REEL_ARTEFACT_CACHE_DIR", str(tmp_path / "artefact-cache"))
+
+
+@pytest.fixture(autouse=True)
 def _clean_reel_counters() -> None:
     reset_nano_budget()
     reset_spend()
@@ -1097,7 +1103,242 @@ def _bar(path: Path, *, horizontal: bool) -> None:
     image.save(path, format="JPEG")
 
 
+def test_once_stops_after_the_first_judged_still(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REEL_LADDER", "flux,flux,reuse")
+    monkeypatch.setenv("REEL_REPLAN_MAX", "2")
+    calls = {"n": 0}
+
+    def _flux(ctx: RungContext) -> Path:
+        calls["n"] += 1
+        return _jpeg(ctx.dest, (30, 40, calls["n"]))
+
+    result = run_ladder(
+        beat_index=0,
+        narration="Cicero called it a lost blueprint.",
+        prompt="manuscript",
+        dest_dir=tmp_path,
+        kind="scene",
+        producers={"flux": _flux},
+        judge=lambda _path, _ctx: _fail(),
+        once=True,
+    )
+    assert calls["n"] == 1
+    assert result.passed is False
+    assert result.next_rung == 1
+    assert result.replans == 0
+
+
+def test_fair_wave_gives_every_beat_one_attempt_before_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from functools import partial
+
+    from modules.reel_artefact.climb import climb_act, reset_cursors
+    from modules.reel_artefact.fair import run_fair
+
+    monkeypatch.setenv("REEL_FLUX_MAX_PER_REEL", "2")
+    monkeypatch.setenv("REEL_REPLAN_MAX_PER_REEL", "0")
+    monkeypatch.setenv("REEL_LADDER_LLM", "0")
+    reset_cursors()
+    calls: list[int] = []
+
+    def _generate(text: str, **kwargs: object) -> Path:
+        del text
+        stem = str(kwargs.get("output_stem") or "still")
+        dest = Path(str(kwargs.get("output_directory"))) / f"{stem}.jpg"
+        calls.append(1)
+        return _jpeg(dest, (20, 30, len(calls) + 3))
+
+    monkeypatch.setattr(
+        "modules.reel_artefact.climb.evaluate_chunk_relevance",
+        lambda *args, **kwargs: _fail(),
+    )
+    lines = (
+        "Cicero called it a lost blueprint.",
+        "Scholars disagree about the ancient record.",
+    )
+    jobs = {
+        index: partial(
+            climb_act,
+            beat_index=index,
+            narration=line,
+            prompt="a manuscript",
+            output_directory=tmp_path / f"b{index}",
+            stem=f"act{index}",
+            channel="ancient_knowledge",
+            flux_generate=_generate,
+            n_beats=2,
+            shot_type="wide",
+            camera="wide view",
+            setting="a museum archive",
+            shot_subject="an old manuscript on a desk",
+            shot_era="Hellenistic",
+        )
+        for index, line in enumerate(lines)
+    }
+
+    def _sequential(batch: dict) -> dict:
+        return {key: batch[key]() for key in sorted(batch)}
+
+    results = run_fair(jobs, runner=_sequential)
+    assert len(calls) == 2
+    assert results[0].publishable is False
+    assert results[1].publishable is False
+
+
+def test_event_photo_prefers_the_dive_over_the_statue(
+    tmp_path: Path,
+) -> None:
+    from agents.media.free_images.http import HttpResponse
+    from modules.reel_artefact.events import acquire_event_photo
+    from modules.shot_planner.entities import Entity
+
+    entity = Entity(
+        id="antikythera_mechanism",
+        name="Antikythera Mechanism",
+        aliases=("antikythera",),
+        kind="artifact",
+        canonical_visual="fragments",
+        era="Hellenistic",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        event_search=("Antikythera wreck sponge divers 1901",),
+        event_categories=("Category:Antikythera wreck",),
+        event_period="1900-1901",
+    )
+    pages = {
+        "File:NAMA Antikythera mechanism fragment.jpg": {
+            "title": "File:NAMA Antikythera mechanism fragment.jpg",
+            "imageinfo": [{
+                "url": "https://example.test/statue.jpg",
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:Statue.jpg",
+                "width": 1600,
+                "height": 1200,
+                "mime": "image/jpeg",
+                "extmetadata": {
+                    "ObjectName": {"value": "Antikythera mechanism fragment Giovanni Dall'Orto"},
+                    "LicenseShortName": {"value": "Public domain"},
+                    "Artist": {"value": "Giovanni Dall'Orto"},
+                },
+            }],
+        },
+        "File:Anticythera shipwreck. Standard diving dress.jpg": {
+            "title": "File:Anticythera shipwreck. Standard diving dress.jpg",
+            "imageinfo": [{
+                "url": "https://example.test/dress.jpg",
+                "descriptionurl": "https://commons.wikimedia.org/wiki/File:Dress.jpg",
+                "width": 1600,
+                "height": 1200,
+                "mime": "image/jpeg",
+                "extmetadata": {
+                    "ObjectName": {"value": "Anticythera shipwreck standard diving dress 1901"},
+                    "LicenseShortName": {"value": "Public domain"},
+                    "Artist": {"value": "Unknown"},
+                },
+            }],
+        },
+    }
+
+    class _Client:
+        def get(self, url, params=None, headers=None):
+            del headers
+            params = params or {}
+            if "dress.jpg" in url or "statue.jpg" in url:
+                return HttpResponse(200, _jpeg_bytes())
+            if params.get("list") == "categorymembers":
+                body = {"query": {"categorymembers": [
+                    {"title": "File:NAMA Antikythera mechanism fragment.jpg"},
+                    {"title": "File:Anticythera shipwreck. Standard diving dress.jpg"},
+                ]}}
+                return HttpResponse(200, json.dumps(body).encode())
+            title = str(params.get("titles") or "")
+            chosen = [pages[name] for name in title.split("|") if name in pages]
+            if not chosen:
+                chosen = [pages["File:Anticythera shipwreck. Standard diving dress.jpg"]]
+            body = {
+                "query": {
+                    "pages": {
+                        str(index): page for index, page in enumerate(chosen, start=1)
+                    },
+                },
+            }
+            return HttpResponse(200, json.dumps(body).encode())
+
+    made = acquire_event_photo(
+        entity,
+        tmp_path / "event.jpg",
+        channel="ancient_knowledge",
+        beat_index=0,
+        n_beats=8,
+        client=_Client(),
+    )
+    assert made is not None
+    side = json.loads(Path(str(made) + ".source.json").read_text(encoding="utf-8"))
+    assert "diving" in side["title"].lower()
+    store = Path("channels_config/ancient_knowledge/store/artefact_cache")
+    assert not (store / "antikythera_mechanism" / "events" / "event_00.jpg").is_file()
+
+
+def test_a_checkerboard_is_not_a_photograph() -> None:
+    import io
+
+    from modules.reel_artefact.pixels import image_defect
+
+    raw = _checker_bytes()
+    with Image.open(io.BytesIO(raw)) as opened:
+        assert image_defect(opened.convert("RGB"), nbytes=len(raw)) in {
+            "checkerboard",
+            "synthetic",
+        }
+
+
+def test_a_replan_that_names_the_object_is_dropped() -> None:
+    from modules.reel_artefact.flux_policy import acceptable_flux_concept
+    from modules.reel_artefact.replan import next_concept
+
+    assert acceptable_flux_concept(
+        "A gold ornament lying on an open book.",
+        name="Quimbaya golden ornaments",
+    ) is False
+    assert acceptable_flux_concept(
+        "An old manuscript on a wooden desk. Pages have no readable text.",
+        name="Antikythera Mechanism",
+    ) is True
+    text = next_concept(
+        "Cicero called it a lost blueprint.",
+        kind="scene",
+        event=False,
+        name="Antikythera Mechanism",
+        llm=lambda *_args: "Clean brass gears on an open book.",
+    )
+    assert "brass gears on" not in text.lower()
+    assert "do not depict" in text.lower()
+
+
 def _jpeg_bytes() -> bytes:
+    """A noisy frame. Event tests must not publish a synthetic pattern."""
+    import io
+    import random
+
+    rng = random.Random(4)
+    image = Image.new("RGB", (320, 240))
+    pixels = image.load()
+    for y in range(240):
+        for x in range(320):
+            pixels[x, y] = (
+                rng.randrange(20, 220),
+                rng.randrange(30, 180),
+                rng.randrange(40, 160),
+            )
+    buf = io.BytesIO()
+    image.resize((1600, 1200), Image.Resampling.NEAREST).save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _checker_bytes() -> bytes:
     import io
 
     buf = io.BytesIO()

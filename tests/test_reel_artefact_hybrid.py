@@ -21,15 +21,26 @@ from modules.shot_planner.schema import Shot
 
 
 def _jpeg(width: int, height: int) -> bytes:
+    import random
+
     buf = io.BytesIO()
     color = (180, 140, 40)
-    tile = Image.new("RGB", (16, 16), color)
-    pixels = tile.load()
-    for y in range(16):
-        for x in range(16):
-            shift = 36 if (x + y) % 2 == 0 else 0
-            pixels[x, y] = tuple(min(255, channel + shift) for channel in color)
-    tile.resize((width, height), Image.Resampling.NEAREST).save(buf, format="JPEG")
+    rng = random.Random(7)
+    image = Image.new("RGB", (width, height), color)
+    pixels = image.load()
+    step = max(1, min(width, height) // 40)
+    for y in range(0, height, step):
+        for x in range(0, width, step):
+            shift = rng.randrange(-60, 60)
+            tone = tuple(max(0, min(255, channel + shift)) for channel in color)
+            for dy in range(step):
+                if y + dy >= height:
+                    break
+                for dx in range(step):
+                    if x + dx >= width:
+                        break
+                    pixels[x + dx, y + dy] = tone
+    image.save(buf, format="JPEG")
     return buf.getvalue()
 
 

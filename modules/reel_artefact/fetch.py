@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -187,10 +188,17 @@ def artefact_cache_dir(channel: str, entity_id: str) -> Path:
     """Permanent reference cache: ``channels_config/<channel>/store/artefact_cache/``.
 
     A Commons file is downloaded once. ``_tmp`` is scratch and must not hold it.
+    Tests set ``REEL_ARTEFACT_CACHE_DIR`` so a fixture never lands in the
+    channel store.
     """
+    slug = re.sub(r"[^a-z0-9_-]+", "_", (entity_id or "entity").strip().lower()).strip("_")
+    override = (os.getenv("REEL_ARTEFACT_CACHE_DIR") or "").strip()
+    if override:
+        folder = Path(override) / (slug or "entity")
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
     from utils.pipeline_paths import channel_store_dir
 
-    slug = re.sub(r"[^a-z0-9_-]+", "_", (entity_id or "entity").strip().lower()).strip("_")
     root = channel_store_dir(channel or "ancient_knowledge", create=True)
     return root / "artefact_cache" / (slug or "entity")
 

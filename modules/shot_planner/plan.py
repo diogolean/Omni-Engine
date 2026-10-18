@@ -249,6 +249,9 @@ def plan_for_reel(
     if plan is None:
         _LOG.warning("[ShotPlanner] fell back to resolver: %s", reason)
         return None
+    from modules.shot_planner.fit import review_plan
+
+    plan = review_plan(plan)
     _LOG.warning("[ShotPlanner] used planner (%d shots)", len(plan.shots))
     return plan
 

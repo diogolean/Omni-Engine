@@ -45,6 +45,60 @@ When the spoken beat is abstract and names no object, the picture must still sho
 subject, as a photoreal documentary photograph, in a setting the beat allows.
 """
 
+_SHOT_PROMPT = """You are a strict documentary still judge. You are shown the IMAGE.
+Score the picture against the PLANNED SHOT. The planner already chose this
+picture for the spoken line. Do not fail the picture because the spoken line
+names an object the planned shot deliberately leaves out.
+Return STRICT JSON only — no markdown, no commentary:
+{{
+  "image_description": string,
+  "shows_expected_subject": boolean,
+  "anachronism": boolean,
+  "non_photoreal": boolean,
+  "anatomy_defect": boolean,
+  "setting_contradicts_beat": boolean,
+  "contains_forbidden_object": boolean,
+  "is_relevant": boolean,
+  "relevance_score": float,
+  "detected_subjects": [string],
+  "rejection_reason": string
+}}
+image_description is a literal caption of the picture: place, objects, whether it is a
+photograph or CGI or a miniature or an illustration, and any anatomy you can see.
+Set anachronism true for a modern, sci-fi, steampunk, or futuristic object, unless
+the planned shot itself asks for that object.
+Set non_photoreal true for CGI, a 3D render, an illustration, a cartoon, or a miniature
+or clay-model look.
+Set anatomy_defect true for a mangled, fused, or extra limb.
+Set setting_contradicts_beat true only when the place contradicts the planned setting.
+Set contains_forbidden_object true when the picture shows a named artefact, gears,
+pendants, a gold ornament, a figurine, or any other specific object.
+Set shows_expected_subject true when the planned subject is visible in the planned setting.
+is_relevant is true only when every flag above is false and the planned subject is visible.
+relevance_score is 0.0–1.0. rejection_reason is null only when is_relevant is true
+and relevance_score >= {threshold:.2f}.
+PLANNED SHOT
+Subject: {shot_subject}
+Setting: {shot_setting}
+Era: {shot_era}
+Spoken line, context only, not the subject: {chunk_text}
+Image prompt: {prompt}
+"""
+
+# A Flux scene must not contain these. An object photograph may.
+_FORBIDDEN_CAPTION = (
+    "gear wheel",
+    "gears",
+    "gear",
+    "pendant",
+    "gold ornament",
+    "golden ornament",
+    "gold bird",
+    "figurine",
+    "corroded fragment",
+    "bronze fragment",
+)
+
 
 def _unavailable(reason: str) -> dict[str, Any]:
     return {
@@ -78,6 +132,20 @@ def _as_bool(value: Any) -> bool:
     return value is True
 
 
+def _caption_forbidden(description: str) -> bool:
+    """True when a Flux still's caption names an object the scene must not show."""
+    caption = " ".join((description or "").lower().split())
+    if not caption:
+        return False
+    for phrase in _FORBIDDEN_CAPTION:
+        if phrase in caption:
+            prefix = caption[max(0, caption.find(phrase) - 16):caption.find(phrase)]
+            if prefix.rstrip().endswith(("no", "not", "without", "never")):
+                continue
+            return True
+    return False
+
+
 def _verdict_from_payload(
     data: dict[str, Any],
     *,
@@ -86,6 +154,7 @@ def _verdict_from_payload(
     banned_subjects: list[str] | None,
     provider: str,
     model_id: str,
+    score_against: str = "narration",
 ) -> dict[str, Any]:
     from modules.reel_qa.documentary import documentary_failures
     from modules.reel_visual_qa import apply_banned_subject_gate
@@ -112,6 +181,11 @@ def _verdict_from_payload(
     ):
         if _as_bool(data.get(key)) and label not in defects:
             defects.append(label)
+    if score_against == "shot" and (
+        _as_bool(data.get("contains_forbidden_object")) or _caption_forbidden(described)
+    ):
+        if "contains_forbidden_object" not in defects:
+            defects.append("contains_forbidden_object")
     relevant = bool(data.get("is_relevant")) and score >= threshold and not defects
     reason = data.get("rejection_reason")
     if defects:
@@ -194,6 +268,10 @@ def evaluate_chunk_relevance(
     providers: list[str] | None = None,
     reference_image: str | Path | None = None,
     canonical_shape: str = "",
+    score_against: str = "narration",
+    shot_subject: str = "",
+    shot_setting: str = "",
+    shot_era: str = "",
 ) -> dict[str, Any]:
     """Score one still against one spoken beat.
 
@@ -208,11 +286,22 @@ def evaluate_chunk_relevance(
 
     chain = list(providers or model_chain())
     threshold = relevance_threshold()
-    prompt = _GATE_PROMPT.format(
-        threshold=threshold,
-        chunk_text=(current_chunk_text or "").strip()[:400],
-        prompt=(image_generation_prompt or "").strip()[:400],
-    )
+    against = (score_against or "narration").strip().lower()
+    if against == "shot":
+        prompt = _SHOT_PROMPT.format(
+            threshold=threshold,
+            shot_subject=(shot_subject or "the planned subject").strip()[:240],
+            shot_setting=(shot_setting or "the planned setting").strip()[:240],
+            shot_era=(shot_era or "the planned era").strip()[:120],
+            chunk_text=(current_chunk_text or "").strip()[:400],
+            prompt=(image_generation_prompt or "").strip()[:800],
+        )
+    else:
+        prompt = _GATE_PROMPT.format(
+            threshold=threshold,
+            chunk_text=(current_chunk_text or "").strip()[:400],
+            prompt=(image_generation_prompt or "").strip()[:400],
+        )
     images: list[Path] = [path]
     labels = ["candidate"]
     reference = Path(reference_image) if reference_image else None
@@ -249,6 +338,7 @@ def evaluate_chunk_relevance(
             banned_subjects=banned_subjects,
             provider=provider_name,
             model_id=model_id,
+            score_against=against,
         )
 
     reason = "qa_unavailable:" + ",".join(errors or ["no_provider"])
@@ -265,6 +355,10 @@ def evaluate_with_technical_retry(
     *,
     reference_image: str | Path | None = None,
     canonical_shape: str = "",
+    score_against: str = "narration",
+    shot_subject: str = "",
+    shot_setting: str = "",
+    shot_era: str = "",
 ) -> dict[str, Any]:
     """Score one still. Retry the judge on timeout or an invalid reply.
 
@@ -286,6 +380,10 @@ def evaluate_with_technical_retry(
                     banned_subjects=banned_subjects,
                     reference_image=reference_image or "",
                     canonical_shape=canonical_shape,
+                    score_against=score_against,
+                    shot_subject=shot_subject,
+                    shot_setting=shot_setting,
+                    shot_era=shot_era,
                 )
                 or {}
             )

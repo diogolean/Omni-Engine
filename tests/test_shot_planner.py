@@ -238,6 +238,34 @@ def test_commentary_stays_a_documentary_still_and_quimbaya_is_a_pendant() -> Non
         assert foreign not in rendered.negative.lower()
 
 
+def test_three_debate_lines_do_not_share_one_scene() -> None:
+    entities = load_entities("ancient_knowledge")
+    shots = normalize_shots(
+        [
+            _blank(
+                "Historians debate the first record.",
+                id="s01",
+                entity_id="antikythera_mechanism",
+                subject="Antikythera Mechanism",
+            ),
+            _blank(
+                "Researchers debate the same record.",
+                id="s02",
+            ),
+            _blank(
+                "Scholars debate what the record implies.",
+                id="s03",
+            ),
+        ],
+        entities,
+    )
+    scenes = [shot.scene_type for shot in shots]
+    assert all(shot.image_role == "flux" for shot in shots)
+    assert scenes[0] == scenes[1]
+    assert scenes[2] != scenes[1]
+    assert scenes[2]
+
+
 def test_schema_rejects_a_shot_with_no_visual() -> None:
     plan = build_shot_list("Lost OOPArts", _BCE)
     raw = plan.to_dict()

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from modules.reel_artefact.flux_policy import (
+    fields_for_scene,
     is_abstract_claim,
     is_physical_object_line,
+    next_scene,
     scene_fields,
 )
 from modules.reel_artefact.role import image_role_for, is_event
@@ -132,6 +134,7 @@ def _fill(
             kb_miss=entity is None,
             canonical_shape="",
             image_role="flux",
+            scene_type=fields.get("scene") or "",
         )
     if entity is None:
         subject = shot.subject
@@ -290,4 +293,86 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
         output.append(_fill(
             shot, entity, recap=recap, others=introduced, index=index,
         ))
-    return output
+    return _vary_scenes(output)
+
+
+def _scene_name(shot: Shot) -> str:
+    if shot.scene_type:
+        return shot.scene_type
+    if shot.image_role != "flux":
+        return ""
+    blob = f"{shot.subject} {shot.setting} {shot.canonical_visual}".lower()
+    for name, words in (
+        ("manuscript", ("manuscript", "old book")),
+        ("museum_hall", ("museum archive", "museum hall", "from afar")),
+        ("silhouette", ("silhouette", "without a detailed face")),
+        ("sea", ("calm sea", "open sea", "underwater")),
+        ("atmosphere", ("sky and light", "open sky")),
+        ("landscape", ("landscape", "the real place")),
+        ("establishing", ("establishing",)),
+    ):
+        if any(word in blob for word in words):
+            return name
+    return ""
+
+
+def _with_scene(shot: Shot, scene: str) -> Shot:
+    fields = fields_for_scene(scene)
+    shot_type = fields["shot_type"] if fields["shot_type"] in SHOT_TYPES else shot.shot_type
+    return Shot(
+        id=shot.id,
+        narration=shot.narration,
+        entity_id=shot.entity_id,
+        subject=fields["subject"],
+        canonical_visual=fields["canonical_visual"],
+        shot_type=shot_type or "wide",
+        camera=fields["camera"],
+        setting=fields["setting"],
+        era=shot.era,
+        mood=shot.mood,
+        lighting=fields["lighting"],
+        negatives=list(shot.negatives),
+        kb_miss=shot.kb_miss,
+        canonical_shape=shot.canonical_shape,
+        image_role=shot.image_role or "flux",
+        scene_type=fields["scene"],
+    )
+
+
+def _vary_scenes(shots: list[Shot]) -> list[Shot]:
+    """No more than two flux beats in a row may share a scene type."""
+    varied: list[Shot] = []
+    previous = ""
+    run = 0
+    for shot in shots:
+        scene = _scene_name(shot)
+        if shot.image_role == "flux" and scene and scene == previous:
+            run += 1
+        else:
+            run = 1 if scene else 0
+        if shot.image_role == "flux" and scene and run > 2:
+            scene = next_scene(previous)
+            shot = _with_scene(shot, scene)
+            run = 1
+        previous = scene or previous
+        if shot.image_role == "flux" and scene and not shot.scene_type:
+            shot = Shot(
+                id=shot.id,
+                narration=shot.narration,
+                entity_id=shot.entity_id,
+                subject=shot.subject,
+                canonical_visual=shot.canonical_visual,
+                shot_type=shot.shot_type,
+                camera=shot.camera,
+                setting=shot.setting,
+                era=shot.era,
+                mood=shot.mood,
+                lighting=shot.lighting,
+                negatives=list(shot.negatives),
+                kb_miss=shot.kb_miss,
+                canonical_shape=shot.canonical_shape,
+                image_role=shot.image_role,
+                scene_type=scene,
+            )
+        varied.append(shot)
+    return varied

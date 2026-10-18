@@ -6,7 +6,10 @@ import os
 
 RELEVANCE_THRESHOLD: float = 0.70
 MAX_ATTEMPTS: int = 3
-MODEL_CHAIN: tuple[str, ...] = ("qwen", "gemini")
+# Gemini answers inside the window more often than Qwen. Qwen stays the
+# fallback when Gemini is down.
+MODEL_CHAIN: tuple[str, ...] = ("gemini", "qwen")
+JUDGE_TIMEOUT_S: float = 25.0
 GEMINI_MODEL: str = "models/gemini-2.5-flash"
 MIN_SECONDS_PER_IMAGE: float = 4.0
 MAX_SECONDS_PER_IMAGE: float = 5.0
@@ -115,3 +118,8 @@ def frame_samples() -> int:
 def judge_retries() -> int:
     """How many extra judge calls to spend on a technical failure."""
     return _int("REEL_QA_JUDGE_RETRIES", JUDGE_RETRIES, low=0, high=4)
+
+
+def judge_timeout_s() -> float:
+    """Seconds one vision judge call may take. ``REEL_QA_JUDGE_TIMEOUT`` wins."""
+    return _float("REEL_QA_JUDGE_TIMEOUT", JUDGE_TIMEOUT_S, low=1.0, high=90.0)

@@ -114,6 +114,9 @@ class LadderResult:
     kind: str = "object"
     beat_spent: float = 0.0
     replans: int = 0
+    # Next rung index a later share should start at. A fair reel uses this
+    # so the retry wave does not repeat the attempt this beat already had.
+    next_rung: int = 0
 
 
 def history_text(history: list[RungAttempt]) -> str:
@@ -222,6 +225,8 @@ def run_ladder(
     period: str = "",
     negatives: tuple[str, ...] | list[str] = (),
     llm: Callable[..., str | None] | None = None,
+    once: bool = False,
+    start_rung: int = 0,
 ) -> LadderResult:
     """Climb until one still passes. Do not lower the 0.70 judge.
 
@@ -229,9 +234,34 @@ def run_ladder(
     beat budget can still pay for another Flux still, the concept is
     re-planned up to ``REEL_REPLAN_MAX`` times (default 2), and only while
     ``REEL_REPLAN_MAX_PER_REEL`` still has room.
+
+    ``once`` stops after the first judged still. The fair scheduler uses
+    that so every beat gets an attempt before any beat is retried.
+    ``start_rung`` skips rungs this beat already judged.
     """
     del entity_id
     from modules.reel_artefact.replan import next_concept, replan_limit
+
+    order = rungs_for(kind, event=bool(event))
+    begin = max(0, int(start_rung or 0))
+    if once and begin >= len(order):
+        return _one_replan(
+            beat_index=beat_index,
+            narration=narration,
+            prompt=prompt,
+            dest_dir=dest_dir,
+            kind=kind,
+            text_only_safe=text_only_safe,
+            n_beats=n_beats,
+            producers=producers,
+            judge=judge,
+            event=event,
+            name=name,
+            period=period,
+            negatives=negatives,
+            llm=llm,
+            start_rung=begin,
+        )
 
     result = _climb(
         beat_index=beat_index,
@@ -245,8 +275,10 @@ def run_ladder(
         judge=judge,
         checkpoint=checkpoint,
         event=event,
+        once=once,
+        start_rung=begin,
     )
-    if result.passed or result.resumed:
+    if result.passed or result.resumed or once:
         return result
     history = list(result.history)
     spent = result.beat_spent
@@ -333,6 +365,76 @@ def run_ladder(
     )
 
 
+def _one_replan(
+    *,
+    beat_index: int,
+    narration: str,
+    prompt: str,
+    dest_dir: Path | str,
+    kind: str,
+    text_only_safe: bool,
+    n_beats: int,
+    producers: dict[str, Producer] | None,
+    judge: Judge | None,
+    event: bool,
+    name: str,
+    period: str,
+    negatives: tuple[str, ...] | list[str],
+    llm: Callable[..., str | None] | None,
+    start_rung: int,
+) -> LadderResult:
+    """One re-planned Flux still, after this beat has used every rung."""
+    from modules.reel_artefact.replan import next_concept
+
+    if not take_replan_slot():
+        logger.info("LADDER | beat=%s | replan=skip-cap", int(beat_index) + 1)
+        return LadderResult(
+            passed=False,
+            fail_reel=True,
+            kept=False,
+            reason="replan_cap",
+            kind=kind or "object",
+            next_rung=start_rung,
+        )
+    concept = next_concept(
+        narration,
+        kind=kind,
+        event=event,
+        name=name,
+        period=period,
+        rejection="",
+        attempt=max(1, start_rung),
+        negatives=negatives,
+        llm=llm,
+    )
+    logger.info(
+        "LADDER | beat=%s | replan=share | concept=%.80s",
+        int(beat_index) + 1,
+        concept,
+    )
+    made = _climb(
+        beat_index=beat_index,
+        narration=narration,
+        prompt=concept,
+        dest_dir=dest_dir,
+        kind=kind,
+        text_only_safe=text_only_safe,
+        n_beats=n_beats,
+        producers=producers,
+        judge=judge,
+        checkpoint=None,
+        event=event,
+        concept=concept,
+        replan=1,
+        once=True,
+        only_rung="flux",
+    )
+    made.next_rung = start_rung + 1
+    made.replans = 1 if made.spend else made.replans
+    made.first_pass = False
+    return made
+
+
 def _climb(
     *,
     beat_index: int,
@@ -349,6 +451,9 @@ def _climb(
     concept: str = "",
     replan: int = 0,
     beat_spent_in: float = 0.0,
+    once: bool = False,
+    start_rung: int = 0,
+    only_rung: str = "",
 ) -> LadderResult:
     folder = Path(dest_dir)
     ctx = RungContext(
@@ -396,7 +501,12 @@ def _climb(
     order = rungs_for(ctx.kind, event=bool(event))
     budget = beat_budget_usd()
 
+    begin = max(0, int(start_rung or 0))
     for attempt, rung in enumerate(order):
+        if attempt < begin:
+            continue
+        if only_rung and rung != only_rung:
+            continue
         ctx.attempt = attempt
         stem = f"ladder_{int(beat_index):02d}_{rung}_{attempt:02d}"
         if replan:
@@ -423,6 +533,17 @@ def _climb(
         if rung == "flux":
             if not take_flux_slot():
                 _skip(history, rung, "flux-cap", int(beat_index) + 1)
+                if once:
+                    return _judged_stop(
+                        history=history,
+                        verdict=last_verdict,
+                        spend=spend,
+                        kind=ctx.kind,
+                        beat_spent=beat_spent,
+                        replan=replan,
+                        reason="flux-cap",
+                        next_rung=attempt,
+                    )
                 continue
             flux_slot = True
         if cost > 0:
@@ -518,6 +639,18 @@ def _climb(
                     int(beat_index) + 1,
                     shown,
                 )
+                if once:
+                    return _judged_stop(
+                        history=history,
+                        verdict=verdict,
+                        spend=spend,
+                        kind=ctx.kind,
+                        beat_spent=beat_spent,
+                        replan=replan,
+                        reason="near-duplicate",
+                        next_rung=attempt + 1,
+                        score=_score(verdict),
+                    )
                 continue
             first = not saw_scored_fail
             passed_row = RungAttempt(
@@ -537,6 +670,7 @@ def _climb(
                 kind=ctx.kind,
                 beat_spent=beat_spent,
                 replans=int(replan or 0),
+                next_rung=attempt + 1,
             )
         if scored:
             saw_scored_fail = True
@@ -555,6 +689,18 @@ def _climb(
             cost if charged else 0.0,
             ctx.rejection or "rejected",
         )
+        if once:
+            return _judged_stop(
+                history=history,
+                verdict=last_verdict,
+                spend=spend,
+                kind=ctx.kind,
+                beat_spent=beat_spent,
+                replan=replan,
+                reason=str(last_verdict.get("rejection_reason") or "rejected"),
+                next_rung=attempt + 1,
+                score=_score(last_verdict),
+            )
 
     _finish_log(beat_index, history, True, beat_spent, kept=False)
     return LadderResult(
@@ -572,6 +718,39 @@ def _climb(
         kind=ctx.kind,
         beat_spent=beat_spent,
         replans=int(replan or 0),
+        next_rung=len(order),
+    )
+
+
+def _judged_stop(
+    *,
+    history: list[RungAttempt],
+    verdict: dict,
+    spend: dict[str, int],
+    kind: str,
+    beat_spent: float,
+    replan: int,
+    reason: str,
+    next_rung: int,
+    score: float | None = None,
+) -> LadderResult:
+    """One share is over. The still is not published."""
+    return LadderResult(
+        path=None,
+        passed=False,
+        rung="",
+        history=history,
+        verdict=verdict,
+        fail_reel=True,
+        kept=False,
+        first_pass=False,
+        score=score if score is not None else _score(verdict),
+        reason=reason or "rejected",
+        spend=spend,
+        kind=kind,
+        beat_spent=beat_spent,
+        replans=int(replan or 0),
+        next_rung=next_rung,
     )
 
 
