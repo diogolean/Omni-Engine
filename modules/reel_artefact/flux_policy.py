@@ -198,6 +198,9 @@ _FEATURE_WORDS = (
     "celestial", "eclipse", "eclipses",
     "aerodynamic",
     "corroded",
+    "relief", "reliefs",
+    "pillar", "pillars",
+    "carved", "carving", "carvings",
 )
 _FEATURE_PHRASES = (
     "the mechanism",
@@ -314,6 +317,15 @@ def _coastal(entity: Any) -> bool:
     return bool(getattr(entity, "coastal", False))
 
 
+def _arid_place(geography: str) -> bool:
+    low = (geography or "").lower()
+    tokens = (
+        "arid", "dry limestone", "no lake", "mesopotamia",
+        "desert plateau", "no river",
+    )
+    return any(token in low for token in tokens)
+
+
 def _place_copy(
     scene: str,
     subject: str,
@@ -325,23 +337,25 @@ def _place_copy(
     place = " ".join((geography or "").split())
     if not place:
         return subject, visual, setting
+    dry = _arid_place(place)
+    dry_line = " Dry ground only. No lake, no river, no sea." if dry else ""
     if scene == "landscape":
         return (
             place,
             f"A wide landscape of {place}. The real ground, ridges, and vegetation. "
-            "No named artefact.",
+            f"No named artefact.{dry_line}",
             place,
         )
     if scene == "establishing":
         return (
             place,
-            f"A wide establishing shot of {place}. The location is the subject.",
+            f"A wide establishing shot of {place}. The location is the subject.{dry_line}",
             place,
         )
     if scene == "atmosphere":
         return (
             place,
-            f"Sky, light, or fog over {place}. Empty of objects.",
+            f"Sky, light, or fog over {place}. Empty of objects.{dry_line}",
             place,
         )
     if scene == "sea":
@@ -353,25 +367,32 @@ def _place_copy(
     if scene == "aerial":
         return (
             place,
-            f"An aerial view of {place}. Ridges, valleys, and vegetation. No named artefact.",
+            f"An aerial view of {place}. Ridges, valleys, and vegetation. "
+            f"No named artefact.{dry_line}",
             place,
         )
     if scene == "detail":
+        detail = (
+            "dry limestone, dust, and stone. No water, no object, no hands."
+            if dry
+            else "rock, water, or foliage. No object, no hands."
+        )
         return (
             place,
-            f"A close natural detail of {place}: rock, water, or foliage. No object, no hands.",
+            f"A close natural detail of {place}: {detail}{dry_line}",
             place,
         )
     if scene == "golden":
         return (
             place,
-            f"Golden-hour light over {place}. Warm low sun, long shadows, empty of objects.",
+            f"Golden-hour light over {place}. Warm low sun, long shadows, "
+            f"empty of objects.{dry_line}",
             place,
         )
     if scene == "fog":
         return (
             place,
-            f"Fog or soft weather over {place}. Diffused light, no objects.",
+            f"Fog or soft weather over {place}. Diffused light, no objects.{dry_line}",
             place,
         )
     if scene == "coast":
@@ -383,7 +404,8 @@ def _place_copy(
     if scene == "ruins":
         return (
             place,
-            f"Stone ruins or old architecture of {place}, in the landscape. No named artefact.",
+            f"Stone ruins or old architecture of {place}, in the landscape. "
+            f"No named artefact.{dry_line}",
             place,
         )
     return subject, visual, setting

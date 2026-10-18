@@ -309,8 +309,12 @@
       "ancient_knowledge"
     ],
     "canonical_shape": "T-shaped limestone pillars in a buried circular enclosure",
+    "geography": "an arid dry limestone plateau near Şanlıurfa in southeastern Turkey, no lake and no river",
+    "coastal": false,
     "commons_search": [
-      "Göbekli Tepe"
+      "Göbekli Tepe",
+      "Göbekli Tepe pillars",
+      "Göbekli Tepe enclosure"
     ],
     "commons_titles": []
   },
@@ -392,6 +396,8 @@
       "File:Ironie pile Bagdad.jpg"
     ],
     "text_only_safe": true,
+    "geography": "the arid alluvial plain of Mesopotamia near Baghdad, dry ground, no lake",
+    "coastal": false,
     "edit_negatives": []
   },
   {

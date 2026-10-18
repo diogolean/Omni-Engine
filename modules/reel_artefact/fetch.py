@@ -27,7 +27,7 @@ from urllib.parse import unquote
 from PIL import Image
 
 from agents.media.free_images.attribution import credit_line, write_sidecar
-from agents.media.free_images.http import USER_AGENT, HttpClient, RequestsClient
+from agents.media.free_images.http import USER_AGENT, HttpClient, HttpResponse, RequestsClient
 from agents.media.free_images.licenses import license_allowed
 from agents.media.free_images.models import Attribution, Candidate
 from agents.media.free_images.providers import parse_wikimedia
@@ -147,7 +147,7 @@ def fetch_artefact(
             _publish(best, dest, entity)
             return _point_at(best, dest)
         return best
-    http = client or RequestsClient(timeout=20.0)
+    http = client or RequestsClient(timeout=12.0)
     saved = _download_gallery(entity, folder, http)
     if not saved:
         return None
@@ -174,13 +174,13 @@ def fetch_gallery(
     single = _read_cache(folder)
     if single is not None:
         return [single]
-    http = client or RequestsClient(timeout=20.0)
+    http = client or RequestsClient(timeout=12.0)
     return _download_gallery(entity, folder, http)
 
 
 def list_candidates(entity: Entity, client: HttpClient | None = None) -> list[Candidate]:
     """Licensed search hits with sizes. Does not download bytes."""
-    http = client or RequestsClient(timeout=20.0)
+    http = client or RequestsClient(timeout=12.0)
     return _collect(entity, http)
 
 
@@ -234,14 +234,19 @@ def _collect(entity: Entity, client: HttpClient) -> list[Candidate]:
                 found.append(item)
 
     add(_title_candidates(entity, client), title_lock=True)
-    for query in _queries(entity):
+    queries = _queries(entity)
+    for query in queries:
         add(_commons_search(query, client), title_lock=False)
-        add(_openverse_search(query, client), title_lock=False)
         add(_met_search(query, client), title_lock=False)
         add(_smithsonian_search(query, client), title_lock=False)
         add(_europeana_search(query, client), title_lock=False)
     for category in getattr(entity, "commons_categories", ()) or ():
         add(_commons_category(str(category), client), title_lock=False)
+    # Openverse timed out over and over when Commons already had the file.
+    # Ask it only after Commons, and only when nothing was accepted.
+    if not locked and not found:
+        for query in queries[:2]:
+            add(_openverse_search(query, client), title_lock=False)
     def rank(item: Candidate) -> tuple[int, float]:
         return (_usable_rank(item), _score(item, entity))
 
@@ -269,6 +274,25 @@ def _queries(entity: Entity) -> list[str]:
     return queries[:6]
 
 
+def _commons_get(client: HttpClient, params: dict) -> HttpResponse | None:
+    """Commons API, with two retries on a timeout or a dropped connection."""
+    last = "error"
+    for attempt in range(3):
+        try:
+            response = client.get(
+                _COMMONS,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+            )
+        except Exception as exc:  # noqa: BLE001
+            last = type(exc).__name__
+            logger.info("Commons request failed (%s) attempt %s", last, attempt + 1)
+            continue
+        return response
+    logger.info("Commons request gave up (%s)", last)
+    return None
+
+
 def _title_candidates(entity: Entity, client: HttpClient) -> list[Candidate]:
     titles = [
         item if item.startswith("File:") else f"File:{item}"
@@ -276,9 +300,9 @@ def _title_candidates(entity: Entity, client: HttpClient) -> list[Candidate]:
     ]
     if not titles:
         return []
-    response = client.get(
-        _COMMONS,
-        params={
+    response = _commons_get(
+        client,
+        {
             "action": "query",
             "format": "json",
             "titles": "|".join(titles[:8]),
@@ -286,32 +310,28 @@ def _title_candidates(entity: Entity, client: HttpClient) -> list[Candidate]:
             "iiprop": "url|size|mime|extmetadata",
             "iiurlwidth": _THUMB_WIDTH,
         },
-        headers={"User-Agent": USER_AGENT},
     )
-    if not response.ok:
+    if response is None or not response.ok:
         return []
     return parse_wikimedia(response.json())
 
 
 def _commons_search(query: str, client: HttpClient) -> list[Candidate]:
-    try:
-        response = client.get(
-            _COMMONS,
-            params={
-                "action": "query",
-                "format": "json",
-                "generator": "search",
-                "gsrsearch": f"filetype:bitmap {query}",
-                "gsrnamespace": "6",
-                "gsrlimit": "8",
-                "prop": "imageinfo",
-                "iiprop": "url|size|mime|extmetadata",
-                "iiurlwidth": _THUMB_WIDTH,
-            },
-            headers={"User-Agent": USER_AGENT},
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.info("Commons search failed (%s)", type(exc).__name__)
+    response = _commons_get(
+        client,
+        {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": f"filetype:bitmap {query}",
+            "gsrnamespace": "6",
+            "gsrlimit": "8",
+            "prop": "imageinfo",
+            "iiprop": "url|size|mime|extmetadata",
+            "iiurlwidth": _THUMB_WIDTH,
+        },
+    )
+    if response is None:
         return []
     if not response.ok:
         logger.warning("Commons search failed | status=%s | query=%s", response.status, query)
@@ -321,21 +341,18 @@ def _commons_search(query: str, client: HttpClient) -> list[Candidate]:
 
 def _commons_category(category: str, client: HttpClient) -> list[Candidate]:
     title = category if category.lower().startswith("category:") else f"Category:{category}"
-    try:
-        response = client.get(
-            _COMMONS,
-            params={
-                "action": "query",
-                "format": "json",
-                "list": "categorymembers",
-                "cmtitle": title,
-                "cmtype": "file",
-                "cmlimit": "10",
-            },
-            headers={"User-Agent": USER_AGENT},
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.info("Commons category failed (%s)", type(exc).__name__)
+    response = _commons_get(
+        client,
+        {
+            "action": "query",
+            "format": "json",
+            "list": "categorymembers",
+            "cmtitle": title,
+            "cmtype": "file",
+            "cmlimit": "10",
+        },
+    )
+    if response is None:
         return []
     if not response.ok:
         logger.warning("Commons category failed | status=%s | category=%s", response.status, title)
@@ -353,22 +370,18 @@ def _commons_category(category: str, client: HttpClient) -> list[Candidate]:
     ]
     if not titles:
         return []
-    try:
-        info = client.get(
-            _COMMONS,
-            params={
-                "action": "query",
-                "format": "json",
-                "titles": "|".join(titles[:8]),
-                "prop": "imageinfo",
-                "iiprop": "url|size|mime|extmetadata",
-                "iiurlwidth": _THUMB_WIDTH,
-            },
-            headers={"User-Agent": USER_AGENT},
-        )
-    except Exception:  # noqa: BLE001
-        return []
-    if not info.ok:
+    info = _commons_get(
+        client,
+        {
+            "action": "query",
+            "format": "json",
+            "titles": "|".join(titles[:8]),
+            "prop": "imageinfo",
+            "iiprop": "url|size|mime|extmetadata",
+            "iiurlwidth": _THUMB_WIDTH,
+        },
+    )
+    if info is None or not info.ok:
         return []
     return parse_wikimedia(info.json())
 

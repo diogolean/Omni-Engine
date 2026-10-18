@@ -11,7 +11,11 @@ from PIL import Image
 from modules.reel_artefact.budget import (
     note_original,
     note_reuse,
+    note_safety_use,
+    release_noted_reuse,
+    release_safety_use,
     reuse_room,
+    safety_reel_room,
     safety_room,
     still_uses,
 )
@@ -22,11 +26,38 @@ from modules.reel_artefact.source import source_meta, write_source_sidecar
 
 _LOCK = threading.Lock()
 _APPROVED: list[tuple[str, Path]] = []
+_BEAT_KEYS: dict[int, str] = {}
 
 
 def reset_approved() -> None:
     with _LOCK:
         _APPROVED.clear()
+        _BEAT_KEYS.clear()
+
+
+def note_beat_key(beat_index: int, key: str) -> None:
+    """Remember which still a beat published, so the next beat can avoid it."""
+    token = str(key or "")
+    if not token:
+        return
+    with _LOCK:
+        _BEAT_KEYS[int(beat_index)] = token
+
+
+def forget_beat_key(beat_index: int) -> None:
+    """Drop the key when the copy is rejected and the beat stays empty."""
+    with _LOCK:
+        _BEAT_KEYS.pop(int(beat_index), None)
+
+
+def adjacent_same_still(beat_index: int, key: str) -> bool:
+    """True when the previous or next beat already shows this still."""
+    token = str(key or "")
+    if not token:
+        return False
+    index = int(beat_index)
+    with _LOCK:
+        return _BEAT_KEYS.get(index - 1) == token or _BEAT_KEYS.get(index + 1) == token
 
 
 def reuse_key_for(path: Path | str | None) -> str:
@@ -93,8 +124,11 @@ def reuse_into(
     if origin is None or not origin.is_file():
         return None
     key = reuse_key_for(origin)
+    if adjacent_same_still(int(beat_index), key):
+        note_source("reuse:skip-adjacent", entity_id, int(beat_index) + 1)
+        return None
     if safety:
-        if not safety_room(key):
+        if not safety_reel_room() or not safety_room(key):
             note_source("reuse:skip-safety", entity_id, int(beat_index) + 1)
             return None
     else:
@@ -128,6 +162,22 @@ def reuse_into(
         },
     )
     note_reuse(str(target.resolve()), key)
+    if safety:
+        note_safety_use()
+    note_beat_key(int(beat_index), key)
+    from modules.reel_artefact.diversity import claim_diverse
+
+    if not claim_diverse(target, source_key=key):
+        release_noted_reuse(str(target.resolve()), key)
+        if safety:
+            release_safety_use()
+        forget_beat_key(int(beat_index))
+        note_source("reuse:skip-phash", entity_id, int(beat_index) + 1)
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        return None
     note_source("reuse:approved", entity_id, int(beat_index) + 1)
     return target
 
@@ -178,9 +228,11 @@ def rescue_place(
 ) -> Path | None:
     """Reuse one approved place still past the normal cap, at most 3 times."""
     ranked: list[tuple[int, str, Path]] = []
+    if not safety_reel_room():
+        return None
     for image in approved_place_stills():
         key = reuse_key_for(image)
-        if not safety_room(key):
+        if not safety_room(key) or adjacent_same_still(int(beat_index), key):
             continue
         ranked.append((still_uses(key), key, image))
     if not ranked:

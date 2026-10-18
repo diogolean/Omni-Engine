@@ -2406,8 +2406,6 @@ def compile_sequence_reel(
         Slow-moving warm-gold Gaussian light beam column sweeping across the
         canvas.  Default: False.
     """
-    from moviepy import AudioFileClip, concatenate_videoclips  # type: ignore[import]
-
     if not image_paths:
         raise ValueError("compile_sequence_reel: image_paths must not be empty.")
     if (page_id or "").strip().lower() == "ancient_knowledge":
@@ -2466,13 +2464,24 @@ def compile_sequence_reel(
     _voice_actual_dur: float = 0.0
     if voice_audio and voice_audio.is_file():
         try:
-            _tmp_ac = AudioFileClip(str(voice_audio))
-            _voice_actual_dur = _tmp_ac.duration
-            _tmp_ac.close()
+            from core.reel_ffmpeg_render import media_duration_s
+
+            _voice_actual_dur = media_duration_s(Path(voice_audio))
             total_duration = _voice_actual_dur
-        except Exception as _ae:
-            logger.warning("Could not read voice audio duration: %s — using floor", _ae)
-            total_duration = _configured_dur
+        except Exception as _probe_exc:  # noqa: BLE001
+            try:
+                from moviepy import AudioFileClip  # type: ignore[import]
+
+                _tmp_ac = AudioFileClip(str(voice_audio))
+                _voice_actual_dur = float(_tmp_ac.duration)
+                _tmp_ac.close()
+                total_duration = _voice_actual_dur
+            except Exception as _ae:  # noqa: BLE001
+                logger.warning(
+                    "Could not read voice audio duration: %s / %s — using floor",
+                    _probe_exc, _ae,
+                )
+                total_duration = _configured_dur
     else:
         total_duration = _configured_dur
 
@@ -2683,6 +2692,64 @@ def compile_sequence_reel(
         )
     except Exception as _hook_exc:  # noqa: BLE001
         logger.warning("HOOK parallax skipped (%s) — Ken Burns hook.", _hook_exc)
+
+    from core.reel_ffmpeg_render import attempt_ffmpeg, compile_ffmpeg_reel
+
+    def _render_with_ffmpeg() -> Path:
+        dest = _resolve_sequence_mp4_path(
+            output_path, page_id=page_id, episode_dir=episode_dir,
+        )
+        os.makedirs(os.path.dirname(str(dest)) or ".", exist_ok=True)
+        _voice_gain = (
+            float(voice_volume_gain)
+            if voice_volume_gain is not None
+            else _VOICE_VOLUME_GAIN
+        )
+        _bed_vol = (
+            float(ambient_volume) if ambient_volume is not None else _AMBIENT_VOLUME
+        )
+        _duck = (
+            float(ambient_duck_ratio)
+            if ambient_duck_ratio is not None
+            else _AMBIENT_DUCK_RATIO_DEFAULT
+        )
+        _duck_until = (
+            float(ambient_duck_until_s)
+            if ambient_duck_until_s is not None
+            else float(_voice_actual_dur or total_duration)
+        )
+        videos = [Path(item) if item else None for item in _video_override]
+        return compile_ffmpeg_reel(
+            image_paths=[Path(item) for item in image_paths],
+            act_durations=list(_act_durs),
+            output_path=dest,
+            word_timings=wt,
+            hook_text=hook_text,
+            enable_hook_text=enable_hook_text,
+            cta_text=cta_text,
+            cta_start_s=_resolved_cta_t0,
+            act_video_paths=videos,
+            logo_path=Path(logo_image_path) if logo_image_path else None,
+            fps=int(fps),
+            enable_flicker=bool(enable_flicker),
+            grain_intensity=float(grain_intensity or 0.0),
+            vignette_strength=float(vignette_strength or 0.0),
+            ffmpeg_preset=ffmpeg_preset or "veryfast",
+            voice_audio=Path(voice_audio) if voice_audio else None,
+            ambient_audio=Path(ambient_audio) if ambient_audio else None,
+            voice_volume_gain=_voice_gain,
+            ambient_volume=_bed_vol,
+            ambient_duck_ratio=_duck,
+            ambient_duck_until_s=_duck_until,
+            words_per_phrase=int(words_per_phrase or 4),
+        )
+
+    _ffmpeg_out = attempt_ffmpeg(_render_with_ffmpeg)
+    if _ffmpeg_out is not None:
+        logger.info("Sequence reel ffmpeg path → %s", _ffmpeg_out)
+        return _ffmpeg_out
+    from moviepy import concatenate_videoclips  # type: ignore[import]
+
     for i, img_path in enumerate(image_paths):
         _this_act_dur = float(_act_durs[i]) if i < len(_act_durs) else act_duration_locked
         act_wt: list = []

@@ -106,6 +106,35 @@ def take_replan_slot() -> bool:
         return True
 
 
+def flux_slots_left() -> int:
+    with _LOCK:
+        return max(0, flux_max_per_reel() - _FLUX_USED)
+
+
+def scene_regen_allowed(kind: str) -> bool:
+    """A landscape beat may keep generating after the replan cap.
+
+    The cap is what stopped smoke 16 at round 4 with nine beats still open.
+    Flux for a place is cheap, so a scene beat spends the dollar budget and
+    the Flux cap instead of copying one landscape onto the rest of the reel.
+    A cap of 0 still means no replan: that is how a test forces the safety net.
+    """
+    if (kind or "") != "scene":
+        return False
+    cap = replan_max_per_reel()
+    if cap <= 0:
+        return False
+    with _LOCK:
+        if _REPLAN_USED < cap:
+            return False
+        slots = flux_max_per_reel() - _FLUX_USED
+    if slots <= 0:
+        return False
+    from modules.reel_artefact.pricing import FLUX_USD
+
+    return reel_spent() + float(FLUX_USD) <= reel_budget_usd() + 1e-9
+
+
 def reset_spend() -> None:
     global _REEL_SPENT, _FLUX_USED, _REPLAN_USED
     with _LOCK:
@@ -166,16 +195,47 @@ _REAL_USES: dict[str, int] = {}
 _STILL_USES: dict[str, int] = {}
 _SEEN_PATHS: set[str] = set()
 _REUSE_BEATS = 0
+_SAFETY_BEATS = 0
+
+
+def safety_max_per_reel() -> int:
+    """How many beats in one reel may be a last-resort safety copy."""
+    return _count("REEL_SAFETY_MAX_PER_REEL", 3)
+
+
+def safety_uses() -> int:
+    with _LOCK:
+        return _SAFETY_BEATS
+
+
+def safety_reel_room() -> bool:
+    """The whole reel, not one still, stops at three safety copies."""
+    with _LOCK:
+        return _SAFETY_BEATS < safety_max_per_reel()
+
+
+def note_safety_use() -> None:
+    global _SAFETY_BEATS
+    with _LOCK:
+        _SAFETY_BEATS += 1
+
+
+def release_safety_use() -> None:
+    """Give a safety slot back when the copy is rejected after it was counted."""
+    global _SAFETY_BEATS
+    with _LOCK:
+        _SAFETY_BEATS = max(0, _SAFETY_BEATS - 1)
 
 
 def reset_uses() -> None:
     """Clear per-reel photo and reuse counters. Call beside the nano reset."""
-    global _REUSE_BEATS
+    global _REUSE_BEATS, _SAFETY_BEATS
     with _LOCK:
         _REAL_USES.clear()
         _STILL_USES.clear()
         _SEEN_PATHS.clear()
         _REUSE_BEATS = 0
+        _SAFETY_BEATS = 0
 
 
 def real_uses(key: str) -> int:

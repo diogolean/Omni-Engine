@@ -149,7 +149,7 @@ def test_smoke13_flux_scenes_are_regional_places() -> None:
 def test_smoke13_first_pass_is_one_flux_and_a_landscape_finishes_the_reel(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """Pass 1 is one Flux image per beat. An approved place then fills open beats, at most 3 uses."""
+    """Pass 1 is one Flux image per beat. The next beat cannot reuse it."""
     monkeypatch.setenv("REEL_PLAN_CHECK", "off")
     monkeypatch.setenv("REEL_LADDER_LLM", "0")
     monkeypatch.setenv("REEL_ARTIFACT_IMAGES", "1")
@@ -210,24 +210,25 @@ def test_smoke13_first_pass_is_one_flux_and_a_landscape_finishes_the_reel(
         assert "museum archive" not in low
         assert "museum hall" not in low
 
-    # The approved valley is copied onto the next two open beats, then stops at 3 uses.
+    # The approved valley cannot sit on the next beat. One later beat may
+    # take it. The reel does not fill every open beat with that still.
     assert results[0].publishable
     assert str((results[0].verdict or {}).get("rung") or "") == "flux"
     origin = results[0].path
     assert origin is not None and origin.is_file()
     origin_move = profile_for(0)
-    for index in (1, 2):
-        saved = results[index]
-        assert saved.publishable
-        assert (saved.verdict or {}).get("rung") == "safety"
-        assert saved.attempts[-1]["provider"] == "safety"
-        assert saved.path is not None and saved.path.is_file()
-        assert Image.open(saved.path).size == (1080, 1920)
-        side = json.loads(motion_sidecar_path(saved.path).read_text(encoding="utf-8"))
-        assert side["profile"] != origin_move
-        assert side["profile"] in {"slow_push", "slow_pull", "pan_left", "pan_right"}
+    assert not results[1].publishable
+    saved = results[2]
+    assert saved.publishable
+    assert (saved.verdict or {}).get("rung") == "safety"
+    assert saved.attempts[-1]["provider"] == "safety"
+    assert saved.path is not None and saved.path.is_file()
+    assert Image.open(saved.path).size == (1080, 1920)
+    side = json.loads(motion_sidecar_path(saved.path).read_text(encoding="utf-8"))
+    assert side["profile"] != origin_move
+    assert side["profile"] in {"slow_push", "slow_pull", "pan_left", "pan_right"}
     assert not results[3].publishable
-    assert still_uses(reuse_key_for(origin)) == 3
+    assert still_uses(reuse_key_for(origin)) == 2
 
 
 def _foreign_plan(prompt: str) -> str:

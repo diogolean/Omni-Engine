@@ -32,8 +32,9 @@ _SYSTEM = (
     "Every shot uses the topic entity. Another entity is allowed only when "
     "the sentence names it, and the topic entity still wins if both appear. "
     "A sentence that names the object or a feature of it — gears, wings, "
-    "stabilizers, rudders, pendants, fragments, celestial motion, eclipses — "
-    "is a photograph of the topic object. "
+    "stabilizers, rudders, pendants, fragments, celestial motion, eclipses, "
+    "pillars, reliefs, or carved stone — "
+    "is a photograph of the topic object, not a dune and not a cave. "
     "A closing line or an abstract claim — theories, legends, records, "
     "lost knowledge, historians debating — is a place in that entity's "
     "region: the landscape, the sea or coast, sky and weather, an aerial "
@@ -74,7 +75,8 @@ def planner_prompt(topic: str, script: str, entities: list[Entity]) -> str:
         "that sentence names it. If the sentence names both, keep the topic. "
         "A sentence that names the object or its features (gears, wings, "
         "stabilizers, rudders, pendants, fragments, celestial motion, "
-        "eclipses) is a photograph of the topic object. "
+        "eclipses, pillars, reliefs, carved stone) is a photograph of the "
+        "topic object, not a dune and not a cave. "
         "A closing line or abstract claim (theories, legends, records, "
         "lost knowledge) is a place in that region: landscape, sea or coast, "
         "sky, weather, aerial, rock, water, foliage, or regional ruins. "
@@ -261,7 +263,7 @@ def plan_for_reel(
         return None
     from modules.shot_planner.fit import review_plan
 
-    plan = review_plan(plan)
+    plan = review_plan(plan, ask_llm=False)
     _LOG.warning("[ShotPlanner] used planner (%d shots)", len(plan.shots))
     return plan
 

@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 _MAX_ROUNDS = 6
 
 
+def _round_limit() -> int:
+    """Six fair waves, then a few more while a landscape can still be generated."""
+    try:
+        from modules.reel_artefact.budget import flux_max_per_reel, replan_max_per_reel
+    except Exception:  # noqa: BLE001
+        return _MAX_ROUNDS
+    if replan_max_per_reel() <= 0:
+        return _MAX_ROUNDS
+    return _MAX_ROUNDS + min(8, flux_max_per_reel())
+
+
 def run_fair(
     jobs: dict[int, Callable[[], Any]],
     *,
@@ -45,7 +56,11 @@ def run_fair(
         if not _passed(results.get(index))
     ]
     rounds = 0
-    while pending and rounds < _MAX_ROUNDS:
+    # Past the first six waves, a scene beat may still spend Flux while the
+    # dollar budget and the Flux cap have room. The loop stops when a wave
+    # changes nothing, which is what happens once those caps are spent.
+    limit = _round_limit()
+    while pending and rounds < limit:
         rounds += 1
         before = {index: cursor_for(index) for index in pending}
         set_share("retry")
@@ -142,10 +157,10 @@ def _rescue_open(
     results: dict[int, Any],
     pending: list[int],
 ) -> None:
-    """Last resort: an approved landscape or sea, past the normal reuse cap.
+    """Last resort: an approved landscape, past the normal reuse cap.
 
-    Each still still stops at 3 uses. A reel with one approved place and a
-    handful of open beats publishes those beats instead of dying.
+    The whole reel stops at three safety copies. The same still never lands
+    on the beat beside the one that already shows it.
     """
     if not pending:
         return

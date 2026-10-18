@@ -9,7 +9,9 @@ from pathlib import Path
 from PIL import Image
 
 _LOCK = threading.Lock()
-_FRAMES: list[int] = []
+# (hash, reuse key). A deliberate crop of a still already on the reel shares
+# the key and is allowed. A different picture within the Hamming limit is not.
+_FRAMES: list[tuple[int, str]] = []
 
 
 def reset_diversity() -> None:
@@ -47,19 +49,29 @@ def _hamming(left: int, right: int) -> int:
     return (left ^ right).bit_count()
 
 
-def claim_diverse(path: Path | str) -> bool:
+def claim_diverse(path: Path | str, *, source_key: str = "") -> bool:
     """True when ``path`` is different enough from accepted frames.
 
     The hash is recorded on success so a parallel beat sees it immediately.
+    ``source_key`` is the still being cropped again. A different window of
+    that same still is allowed. An identical hash, or a different still
+    inside the Hamming limit, is not.
     """
     digest = dhash(path)
     if digest is None:
         return True
     limit = hamming_limit()
+    token = str(source_key or "")
     with _LOCK:
-        if any(_hamming(digest, prev) <= limit for prev in _FRAMES):
-            return False
-        _FRAMES.append(digest)
+        for prev, prev_key in _FRAMES:
+            distance = _hamming(digest, prev)
+            # A new crop of a still already on the reel is the same picture
+            # on purpose. A different still inside the Hamming limit is not.
+            if token and prev_key == token:
+                continue
+            if distance <= limit:
+                return False
+        _FRAMES.append((digest, token))
         return True
 
 
@@ -69,5 +81,4 @@ def forget_diverse(path: Path | str) -> None:
     if digest is None:
         return
     with _LOCK:
-        if digest in _FRAMES:
-            _FRAMES.remove(digest)
+        _FRAMES[:] = [row for row in _FRAMES if row[0] != digest]

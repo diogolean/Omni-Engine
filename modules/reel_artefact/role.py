@@ -67,6 +67,12 @@ _OBJECT = (
     "fragments of the",
     "in its case",
     "the object",
+    "pillar",
+    "pillars",
+    "relief",
+    "reliefs",
+    "carved",
+    "carving",
 )
 
 
@@ -86,6 +92,15 @@ def image_role_for(
     """
     if entity is None:
         return "flux"
+    try:
+        from modules.reel_artefact.flux_policy import object_line_strength
+
+        # Pillars, reliefs, and carved stone are the photograph, even when
+        # the camera line also says "landscape".
+        if object_line_strength(narration) >= 2:
+            return "photo"
+    except Exception:  # noqa: BLE001
+        pass
     blob = " ".join((narration, camera, setting, shot_type)).lower()
     hero = shot_type in {"macro", "close"} or any(phrase in blob for phrase in _HERO)
     generic = any(cue in blob for cue in _GENERIC)

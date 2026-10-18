@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -129,6 +130,76 @@ Era: {shot_era}
 Setting: {shot_setting}
 """
 
+_SITE_PROMPT = """You are a strict documentary still judge. You are shown a REAL PHOTOGRAPH
+of an archaeological site. Score the site itself: the stones, the enclosure,
+the pillars, or the ground. Modern conservation at a dig is expected.
+Return STRICT JSON only — no markdown, no commentary:
+{{
+  "image_description": string,
+  "shows_expected_subject": boolean,
+  "anachronism": boolean,
+  "non_photoreal": boolean,
+  "anatomy_defect": boolean,
+  "setting_contradicts_beat": boolean,
+  "is_relevant": boolean,
+  "relevance_score": float,
+  "detected_subjects": [string],
+  "rejection_reason": string
+}}
+image_description is a literal caption of the photograph.
+A protective roof, a walkway, a shelter, a fence, a canopy, or scaffolding
+over the ancient stones is conservation. Do not set anachronism for those.
+Set anachronism true for scuba, a wetsuit, a smartphone, a car, or an airplane.
+Set non_photoreal true for CGI, a render, or an illustration.
+Set setting_contradicts_beat true when the photograph is a different place,
+or when it shows a lake, river, or sea and the geography is arid.
+is_relevant is true only when every flag above is false.
+relevance_score is 0.0–1.0. rejection_reason is null only when is_relevant is true
+and relevance_score >= {threshold:.2f}.
+Do not score artefact shape. A site photograph is not an object still.
+Site: {chunk_text}
+Topic: {topic}
+Geography: {geography}
+Era: {shot_era}
+Setting: {shot_setting}
+"""
+
+_HARD_MODERN = re.compile(
+    r"\b(?:scuba|wetsuit|smartphone|cell phone|mobile phone|automobile|"
+    r"airplane|aeroplane|helicopter|car)\b"
+)
+_CONSERVATION = re.compile(
+    r"\b(?:roofs?|walkways?|shelters?|fences?|canop(?:y|ies)|boardwalks?|"
+    r"scaffold(?:ing)?|conservation|railings?)\b"
+)
+_ARID_GEO = re.compile(
+    r"arid|dry limestone|no lake|mesopotamia|desert plateau|no river"
+)
+_WATER = re.compile(
+    r"\b(?:lakes?|rivers?|seas?|oceans?|waterfalls?|oasis|ponds?|shorelines?)\b"
+)
+
+
+def arid_water_conflict(description: str, geography: str) -> bool:
+    """True when an arid region template is illustrated with open water."""
+    if not _ARID_GEO.search((geography or "").lower()):
+        return False
+    text = (description or "").lower()
+    for match in _WATER.finditer(text):
+        prefix = text[max(0, match.start() - 16):match.start()]
+        if re.search(r"\b(?:no|not|without|never)\s*$", prefix):
+            continue
+        return True
+    return False
+
+
+def _conservation_only(description: str) -> bool:
+    """A modern roof or walkway at a dig, with no hard modern object."""
+    text = (description or "").lower()
+    if _HARD_MODERN.search(text):
+        return False
+    return _CONSERVATION.search(text) is not None
+
 # A Flux scene must not contain these. An object photograph may.
 _FORBIDDEN_CAPTION = (
     "gear wheel",
@@ -199,6 +270,7 @@ def _verdict_from_payload(
     provider: str,
     model_id: str,
     score_against: str = "narration",
+    geography: str = "",
 ) -> dict[str, Any]:
     from modules.reel_qa.documentary import documentary_failures
     from modules.reel_visual_qa import apply_banned_subject_gate
@@ -225,6 +297,15 @@ def _verdict_from_payload(
     ):
         if _as_bool(data.get(key)) and label not in defects:
             defects.append(label)
+    if (
+        score_against in {"event", "site"}
+        and "anachronism" in defects
+        and _conservation_only(described)
+    ):
+        defects = [item for item in defects if item != "anachronism"]
+    if arid_water_conflict(described, geography) and score_against != "event":
+        if "setting_contradicts_beat" not in defects:
+            defects.append("setting_contradicts_beat")
     if score_against == "shot" and (
         _as_bool(data.get("contains_forbidden_object")) or _caption_forbidden(described)
     ):
@@ -357,6 +438,15 @@ def evaluate_chunk_relevance(
             shot_setting=(shot_setting or "the event").strip()[:240],
             shot_era=(shot_era or "the event period").strip()[:120],
         )
+    elif against == "site":
+        prompt = _SITE_PROMPT.format(
+            threshold=threshold,
+            chunk_text=(current_chunk_text or "").strip()[:400],
+            topic=(topic or "this episode").strip()[:180],
+            geography=(geography or shot_setting or "the site").strip()[:240],
+            shot_setting=(shot_setting or "the site").strip()[:240],
+            shot_era=(shot_era or "the site period").strip()[:120],
+        )
     else:
         prompt = _GATE_PROMPT.format(
             threshold=threshold,
@@ -400,6 +490,7 @@ def evaluate_chunk_relevance(
             provider=provider_name,
             model_id=model_id,
             score_against=against,
+            geography=geography,
         )
 
     reason = "qa_unavailable:" + ",".join(errors or ["no_provider"])

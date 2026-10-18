@@ -3269,6 +3269,8 @@ def _produce_variant_worker(
     # Early voiceover script → segment into N spoken snippets → one Gemini
     # image per snippet → Phase D TTS + compile (act_dur = audio / N).
     _sequence_image_paths: list = []
+    _early_music_thread = None
+    _early_music_box: dict = {}
     _early_seq_script: str = ""
     _ak_voice_ready = False
     _voice_path = None
@@ -4507,6 +4509,70 @@ def _produce_variant_worker(
                 },
             )
 
+            if (
+                _early_music_thread is None
+                and page_ctx
+                and app_config.ELEVENLABS_API_KEY
+            ):
+                _clips_early = Path(app_config.PAGE_OUTPUTS_DIR) / "clips"
+                _clips_early.mkdir(parents=True, exist_ok=True)
+                _use_v2_early = bool(getattr(page_ctx, "use_music_v2_bed", False))
+                _style_early = page_ctx.ambient_music_style or "mystery"
+                _dur_early = float(page_ctx.reel_duration or 105.0)
+                _stem_early = f"{stem}_v{variant + 1:02d}"
+                _topic_early = str(resolved_subject or "")
+                _directive_early = page_ctx.music_prompt_directive_path
+                _channel_early = page_ctx.page_id or ""
+                _sfx_prompt_early = page_ctx.ambient_sfx_prompt or None
+
+                def _early_music() -> None:
+                    try:
+                        if _use_v2_early:
+                            _min = 40.0
+                            try:
+                                _cfg = getattr(page_ctx, "page_cfg", None) or {}
+                                _min = float(_cfg.get("MUSIC_V2_MIN_SECONDS", 40.0) or 40.0)
+                            except Exception:
+                                _min = 40.0
+                            bed, _impact = generate_master_mei_soundscape(
+                                _clips_early,
+                                stem=_stem_early,
+                                duration_seconds=max(_min, _dur_early),
+                                include_impact_sfx=False,
+                                topic=_topic_early,
+                                directive_path=_directive_early,
+                                style_profile=_style_early,
+                                channel_name=_channel_early,
+                            )
+                            sfx = generate_ambient_track(
+                                _clips_early / f"{_stem_early}_atmosphere_sfx.mp3",
+                                duration_seconds=10.0,
+                                prompt=_sfx_prompt_early,
+                            )
+                            _early_music_box["bed"] = bed
+                            _early_music_box["sfx"] = sfx
+                            _early_music_box["mode"] = "v2"
+                        else:
+                            ambient = generate_ambient_track(
+                                _clips_early / f"{_stem_early}_ambient.mp3",
+                                duration_seconds=min(12.0, _dur_early),
+                                prompt=_sfx_prompt_early,
+                            )
+                            _early_music_box["ambient"] = ambient
+                            _early_music_box["mode"] = "ambient"
+                    except Exception as _music_exc:  # noqa: BLE001
+                        _LOG.warning("early music bed failed (%s)", _music_exc)
+                        _early_music_box["mode"] = "failed"
+
+                _early_music_thread = threading.Thread(
+                    target=_early_music, name="reel-music-bed", daemon=True,
+                )
+                _early_music_thread.start()
+                _LOG.info(
+                    "ECONOMIC_REEL | music bed started during image judging | mode=%s",
+                    "v2" if _use_v2_early else "ambient",
+                )
+
             if _ladder_on:
                 from modules.reel_artefact.orchestrate import run_reel_stills as _run_reel_stills
 
@@ -5561,6 +5627,11 @@ def _produce_variant_worker(
         # -- Three-channel mix: VO + atmosphere SFX loop + music_v2 BGM --------
         # Topology ported from master_mei; enabled via page USE_MUSIC_V2_BED.
         # NO transient impact SFX — atmosphere drone + BGM bed only.
+        # The bed is started before image judging. Join it here and skip a
+        # second generate when that thread already wrote the files.
+        if _early_music_thread is not None:
+            _early_music_thread.join()
+        _early_mode = str(_early_music_box.get("mode") or "")
         _impact_sfx_path: "Path | None" = None
         _sfx_loop_path: "Path | None" = None
         _target_dur = page_ctx.reel_duration if page_ctx else 105.0
@@ -5583,16 +5654,20 @@ def _produce_variant_worker(
             _music_dir = (
                 page_ctx.music_prompt_directive_path if page_ctx else None
             )
-            _music_bed, _impact_sfx_path = generate_master_mei_soundscape(
-                _reel_dir,
-                stem=f"{stem}_v{variant + 1:02d}",
-                duration_seconds=max(_music_min, float(_target_dur)),
-                include_impact_sfx=False,  # kill dual/secondary impact overlap
-                topic=str(resolved_subject or ""),
-                directive_path=_music_dir,
-                style_profile=_music_style,
-                channel_name=(page_ctx.page_id or "") if page_ctx else "",
-            )
+            if _early_mode == "v2":
+                _music_bed = _early_music_box.get("bed")
+                _sfx_loop_path = _early_music_box.get("sfx")
+            else:
+                _music_bed, _impact_sfx_path = generate_master_mei_soundscape(
+                    _reel_dir,
+                    stem=f"{stem}_v{variant + 1:02d}",
+                    duration_seconds=max(_music_min, float(_target_dur)),
+                    include_impact_sfx=False,  # kill dual/secondary impact overlap
+                    topic=str(resolved_subject or ""),
+                    directive_path=_music_dir,
+                    style_profile=_music_style,
+                    channel_name=(page_ctx.page_id or "") if page_ctx else "",
+                )
             _impact_sfx_path = None  # hard disable regardless of return
             if _music_bed is not None:
                 _ambient_path = _music_bed
@@ -5615,11 +5690,12 @@ def _produce_variant_worker(
             # Continuous 10s atmosphere tile → looped 100% of video
             _sfx_out = _reel_dir / f"{stem}_v{variant + 1:02d}_atmosphere_sfx.mp3"
             _sfx_prompt = page_ctx.ambient_sfx_prompt if page_ctx else ""
-            _sfx_loop_path = generate_ambient_track(
-                _sfx_out,
-                duration_seconds=10.0,
-                prompt=_sfx_prompt or None,
-            )
+            if _early_mode != "v2":
+                _sfx_loop_path = generate_ambient_track(
+                    _sfx_out,
+                    duration_seconds=10.0,
+                    prompt=_sfx_prompt or None,
+                )
             if _sfx_loop_path is not None:
                 _LOG.info(
                     "%s | Atmosphere SFX 10s → %s (loop 100%%)",
@@ -5628,8 +5704,18 @@ def _produce_variant_worker(
                 )
                 if (
                     cost_tracker is not None
+                    and _early_mode != "v2"
                     and Path(_sfx_loop_path).resolve() == Path(_sfx_out).resolve()
                 ):
+                    cost_tracker.track_sfx(calls=1)
+                elif cost_tracker is not None and _early_mode == "v2":
+                    cost_tracker.track_sfx(calls=1)
+        elif app_config.ELEVENLABS_API_KEY and _early_mode == "ambient":
+            _ambient_path = _early_music_box.get("ambient")
+            _ambient_out = _reel_dir / f"{stem}_v{variant + 1:02d}_ambient.mp3"
+            if _ambient_path is not None and Path(_ambient_path).is_file():
+                _sfx_loop_path = Path(_ambient_path)
+                if cost_tracker is not None:
                     cost_tracker.track_sfx(calls=1)
         elif app_config.ELEVENLABS_API_KEY:
             _ambient_out = _reel_dir / f"{stem}_v{variant + 1:02d}_ambient.mp3"

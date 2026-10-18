@@ -242,8 +242,8 @@ AMBIENT_MUSIC_STYLE: str = "mystery"  # music_prompt soft-enforce profile
 # ---------------------------------------------------------------------------
 # SEQUENCE_REEL — visual identity layer
 # ---------------------------------------------------------------------------
-VIGNETTE_STRENGTH: float = 0.60      # dark corner vignette (0 = off, 1 = full black corners)
-GRAIN_INTENSITY: float = 22.0        # film grain amplitude in pixel value units (default 18)
+VIGNETTE_STRENGTH: float = 0.0       # off: a heavy vignette made the frames murky
+GRAIN_INTENSITY: float = 0.0         # off: film grain was hiding the still
 ENABLE_TOP_HOOK_TEXT: bool = False   # do not burn headline at top; only lower-third subtitles
 ENABLE_FLICKER: bool = True          # ±5 % torch/flame brightness oscillation — archival atmosphere
 ENABLE_LIGHT_RAYS: bool = True       # warm-gold volumetric beam sweeping across each scene

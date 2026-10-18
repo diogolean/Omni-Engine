@@ -257,7 +257,7 @@ def test_reuse_cap_is_two_uses_including_the_original(tmp_path: Path) -> None:
     remember_approved(origin, kind="object")
     key = str(origin.resolve())
     assert still_uses(key) == 1
-    first = reuse_into(tmp_path / "copy1.jpg", 1, source=origin, kind="object", n_beats=20)
+    first = reuse_into(tmp_path / "copy1.jpg", 2, source=origin, kind="object", n_beats=20)
     assert first is not None and Path(first).is_file()
     assert still_uses(key) == 2
     second = reuse_into(tmp_path / "copy2.jpg", 2, source=origin, kind="object", n_beats=20)
@@ -272,10 +272,11 @@ def test_reuse_fraction_blocks_the_fourth_copy(
     monkeypatch.setenv("REEL_REUSE_MAX_FRACTION", "0.30")
     origin = _jpeg(tmp_path / "origin.jpg")
     made = []
-    for index in range(4):
+    # Non-adjacent beats. The same still is not allowed on the beat beside it.
+    for index, beat in enumerate((0, 2, 4, 6)):
         copied = reuse_into(
             tmp_path / f"copy{index}.jpg",
-            index,
+            beat,
             source=origin,
             kind="scene",
             n_beats=10,

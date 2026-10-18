@@ -17,8 +17,12 @@ from modules.shot_planner.schema import SHOT_TYPES, Shot, ShotList
 _LOG = logging.getLogger(__name__)
 
 
-def review_plan(plan: ShotList) -> ShotList:
-    """Repair a flux shot that names an object, then optionally ask a model."""
+def review_plan(plan: ShotList, *, ask_llm: bool = True) -> ShotList:
+    """Repair a flux shot that names an object, then optionally ask a model.
+
+    The reel planner already spent one Gemini call on the shot list. It
+    passes ``ask_llm=False`` so the check does not make a second call.
+    """
     shots = [_repair(shot, index) for index, shot in enumerate(plan.shots, start=1)]
     reviewed = ShotList(
         channel=plan.channel,
@@ -33,7 +37,7 @@ def review_plan(plan: ShotList) -> ShotList:
         _LOG.info("shot plan check | %s", "; ".join(notes))
     else:
         _LOG.info("shot plan check | %d shots fit", len(reviewed.shots))
-    if _llm_enabled():
+    if ask_llm and _llm_enabled():
         _ask_once(reviewed)
     return reviewed
 

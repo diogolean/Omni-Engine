@@ -14,7 +14,7 @@ from modules.reel_artefact.events import acquire_event_photo
 from modules.reel_artefact.flux_policy import acceptable_flux_concept, safe_flux_prompt
 from modules.reel_artefact.ladder import LadderResult, run_ladder
 from modules.reel_artefact.logbook import note_accepted
-from modules.reel_artefact.reuse import remember_approved
+from modules.reel_artefact.reuse import note_beat_key, remember_approved, reuse_key_for
 from modules.reel_artefact.role import beat_kind, is_event
 from modules.reel_artefact.route import acquire_photo
 from modules.reel_qa.models import StillGateResult
@@ -142,8 +142,16 @@ def climb_act(
         fluxish = _flux_still(ctx.prompt, provider)
         # An event photograph is the divers or the boat, never the artefact.
         archival_event = ctx.event and provider in _ARCHIVAL and still_kind != "object"
+        place_photo = (
+            provider in _ARCHIVAL
+            and str(getattr(entity, "kind", "") or "") in {"place", "site"}
+        )
         if still_kind == "event" or archival_event:
             judge_mode = "event"
+        elif place_photo:
+            # A real site photograph. Roofs and walkways are conservation,
+            # not a reason to throw the picture out.
+            judge_mode = "site"
         elif fluxish or (kind == "scene" and still_kind != "object" and provider not in _ARCHIVAL):
             judge_mode = "shot"
         else:
@@ -164,6 +172,11 @@ def climb_act(
         elif judge_mode == "event":
             judge_prompt = ctx.prompt
             against = "event"
+            judged_shape = ""
+            judged_ref = ""
+        elif judge_mode == "site":
+            judge_prompt = ctx.prompt
+            against = "site"
             judged_shape = ""
             judged_ref = ""
         else:
@@ -221,6 +234,7 @@ def climb_act(
         note_accepted(result.rung or "flux")
     if result.passed and result.path is not None and not result.resumed:
         remember_approved(result.path, kind=kind)
+        note_beat_key(int(beat_index), reuse_key_for(result.path))
         if checkpoint is not None:
             try:
                 checkpoint.save_beat(

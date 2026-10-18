@@ -392,14 +392,22 @@ def _one_replan(
     from modules.reel_artefact.replan import next_concept
 
     if not take_replan_slot():
-        logger.info("LADDER | beat=%s | replan=skip-cap", int(beat_index) + 1)
-        return LadderResult(
-            passed=False,
-            fail_reel=True,
-            kept=False,
-            reason="replan_cap",
-            kind=kind or "object",
-            next_rung=start_rung,
+        from modules.reel_artefact.budget import scene_regen_allowed
+
+        if not scene_regen_allowed(kind):
+            logger.info("LADDER | beat=%s | replan=skip-cap", int(beat_index) + 1)
+            return LadderResult(
+                passed=False,
+                fail_reel=True,
+                kept=False,
+                reason="replan_cap",
+                kind=kind or "object",
+                next_rung=start_rung,
+            )
+        logger.info(
+            "LADDER | beat=%s | replan=budget | kind=%s",
+            int(beat_index) + 1,
+            kind,
         )
     concept = next_concept(
         narration,
@@ -478,9 +486,14 @@ def _climb(
         if saved and Path(str(saved.get("path") or "")).is_file():
             path = Path(str(saved["path"]))
             if _reserve(path, ctx.n_beats) and _diverse(path):
-                from modules.reel_artefact.reuse import remember_approved
+                from modules.reel_artefact.reuse import (
+                    note_beat_key,
+                    remember_approved,
+                    reuse_key_for,
+                )
 
                 remember_approved(path, kind=str(saved.get("kind") or kind or "object"))
+                note_beat_key(int(beat_index), reuse_key_for(path))
                 logger.info(
                     "LADDER | beat=%s | history=resume:pass | fail_reel=False | spent_beat=0",
                     int(beat_index) + 1,
@@ -885,8 +898,9 @@ def _release(path: Path) -> None:
 
 def _diverse(path: Path) -> bool:
     from modules.reel_artefact.diversity import claim_diverse
+    from modules.reel_artefact.reuse import reuse_key_for
 
-    return claim_diverse(path)
+    return claim_diverse(path, source_key=reuse_key_for(path))
 
 
 def _score(verdict: dict) -> float | None:
