@@ -354,6 +354,7 @@ def run_pipeline(
     resolution: tuple[int, int] | None = None,
     target_duration_s: float | None = None,
     generate_thumbnail: bool | None = None,
+    first_seat: str | None = None,
 ) -> PipelineResult:
     """Run a debate and (optionally) produce the video.
 
@@ -390,6 +391,11 @@ def run_pipeline(
         left_puppet: Optional orchestrator puppet ID override.
         right_puppet: Optional target puppet ID override.
         duration_override: Optional verification-render cap in seconds.
+        first_seat: Screen side of the first speaker in dynamic animation:
+            ``left``, ``right`` or ``random`` (the default, ``None``). Gemini
+            is always left and Llama always right, so a pair that includes
+            either has one legal side. Only Claude, GPT-4o and DeepSeek pairs
+            are actually randomised.
 
     Returns:
         A :class:`PipelineResult`. Partial runs still return their transcript
@@ -461,6 +467,18 @@ def run_pipeline(
         _LOG.info("memory reset")
 
     room = DebateRoom(cfg, topic=topic)
+    seat_of_first_speaker = "left"
+    if dynamic_animation and not offline:
+        from .seating import choose_first_seat  # noqa: PLC0415
+
+        seat_of_first_speaker = choose_first_seat(
+            cfg.spec_for("orchestrator").model,
+            cfg.spec_for("target").model,
+            requested=first_seat,
+        )
+        # Persisted with the transcript so the guard and re-renders agree.
+        room.transcript.metadata["first_seat"] = seat_of_first_speaker
+        _LOG.info("first speaker seat: %s", seat_of_first_speaker)
     from utils.pipeline_paths import coerce_outputs_path  # noqa: PLC0415
 
     channel_dir = resolve_outputs_dir(cfg)
@@ -487,6 +505,7 @@ def run_pipeline(
                 cfg.spec_for("target").model,
                 left_puppet=left_puppet,
                 right_puppet=right_puppet,
+                first_seat=seat_of_first_speaker,
             )
             left_id = seated["orchestrator"]
             right_id = seated["target"]
@@ -621,6 +640,7 @@ def run_pipeline(
                         skin=animation_skin,
                         left_puppet=left_puppet,
                         right_puppet=right_puppet,
+                        first_seat=seat_of_first_speaker,
                         audio_config=cfg.audio,
                         enable_cta=enable_cta,
                         duration_override=duration_override,
@@ -768,6 +788,7 @@ def run_bulk_pipeline(
     resolution: tuple[int, int] | None = None,
     target_duration_s: float | None = None,
     generate_thumbnail: bool | None = None,
+    first_seat: str | None = None,
 ) -> BulkPipelineResult:
     """Produce ``quantity`` original videos. Never reprints a prior script.
 
@@ -793,6 +814,22 @@ def run_bulk_pipeline(
         if random_matchups
         else ()
     )
+    # A random first seat is planned for the whole batch, so about half the
+    # episodes open on the right instead of leaving it to per-item luck.
+    seat_plan: tuple[str, ...] = ()
+    if dynamic_animation and not offline and (first_seat or "random") == "random":
+        planned_pairs = (
+            tuple(matchup_schedule)
+            if matchup_schedule
+            else ((orchestrator_model, target_model),) * qty
+            if orchestrator_model and target_model
+            else ()
+        )
+        if planned_pairs:
+            from .seating import plan_first_seats  # noqa: PLC0415
+
+            seat_plan = plan_first_seats(planned_pairs, seed=matchup_seed)
+            _LOG.info("bulk first seats: %s", ",".join(seat_plan))
     topics_by_target: dict[str, list[str]] = {}
 
     def _used_topics_for(model_alias: str | None) -> list[str]:
@@ -834,12 +871,15 @@ def run_bulk_pipeline(
         "resolution": resolution,
         "target_duration_s": target_duration_s,
         "generate_thumbnail": generate_thumbnail,
+        "first_seat": first_seat,
     }
 
     for index in range(qty):
         accepted: PipelineResult | None = None
         item_topic = topic
         item_shared = dict(shared)
+        if seat_plan:
+            item_shared["first_seat"] = seat_plan[index]
         item_target_model = target_model
         if matchup_schedule:
             item_orchestrator, item_target_model = matchup_schedule[index]

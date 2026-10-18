@@ -13,7 +13,7 @@ import imageio_ffmpeg
 import numpy as np
 from PIL import Image
 
-from channels_config.aiwake.avatars import facing_for, model_family, render_manifest
+from channels_config.aiwake.avatars import facing_for, model_family, render_manifest, seat_of_role
 
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 _TEMPLATES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "nameplates"
@@ -294,6 +294,20 @@ def _jsonl(session_id: str, transcripts: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def read_first_seat(session_id: str, transcripts: Path) -> str:
+    """Seat of the first speaker, stored in the transcript metadata. Older episodes: left."""
+    path = transcripts / f"{session_id}.json"
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {}
+        seat = str(((payload or {}).get("metadata") or {}).get("first_seat") or "")
+        if seat in {"left", "right"}:
+            return seat
+    return "left"
+
+
 def turn_visual_reason(expected: str, samples: list[dict[str, Any]], seat: str) -> str:
     """A missed or slightly off-center plate is not a failure.
 
@@ -347,8 +361,9 @@ def guard_video(
     """Check nameplates, duration, and silence. Returns a quality_review body."""
     reasons: list[str] = []
     turns = _jsonl(session_id, transcripts)
+    first_seat = read_first_seat(session_id, transcripts)
     try:
-        manifest = render_manifest(turns) if turns else {"turns": []}
+        manifest = render_manifest(turns, first_seat=first_seat) if turns else {"turns": []}
     except ValueError as exc:
         manifest = {"turns": [], "error": str(exc)}
         reasons.append("avatar_mismatch")
@@ -384,7 +399,7 @@ def guard_video(
     for index, turn in enumerate(turns):
         expected = model_family(str(turn.get("model_slug") or turn.get("speaker_name") or ""))
         role = str(turn.get("role") or "")
-        seat = str((seated.get(index) or {}).get("seat") or ("left" if role == "orchestrator" else "right"))
+        seat = str((seated.get(index) or {}).get("seat") or seat_of_role(role, first_seat))
         facing = ""
         try:
             facing = facing_for(expected, seat) if expected else ""
