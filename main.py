@@ -7822,6 +7822,15 @@ def cli() -> None:
         ),
     )
     parser.add_argument(
+        "--hook-parallax",
+        action="store_true",
+        help=(
+            "Render the first scene as a 2.5D depth-parallax clip instead of "
+            "Ken Burns. Needs torch (CPU) and transformers; falls back to Ken "
+            "Burns without them. Same as REEL_HOOK_PARALLAX=1."
+        ),
+    )
+    parser.add_argument(
         "--quantity", "--count", "-n",
         dest="quantity",
         type=int,
@@ -8491,6 +8500,8 @@ def cli() -> None:
         os.environ["REEL_CHECKPOINT"] = "clear"
     elif getattr(args, "ignore_reel_checkpoints", False):
         os.environ["REEL_CHECKPOINT"] = "ignore"
+    if getattr(args, "hook_parallax", False):
+        os.environ["REEL_HOOK_PARALLAX"] = "1"
     if getattr(args, "deepinfra_flux2dev", False):
         os.environ["LOFI_FLUX_BACKEND"] = "flux2-dev"
     # True CLI value before page locks (master_mei/anna) mutate args.avatar.

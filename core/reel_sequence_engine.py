@@ -2008,6 +2008,7 @@ def _build_wan_video_act_clip(
     subtitle_fill: tuple,
     subtitle_stroke_width: int,
     subtitle_stroke_fill: "tuple | None",
+    hold_last_frame: bool = False,
 ):
     """
     Wrap a pre-generated Wan mp4 as a reel act: cover-crop to 9:16, match hold
@@ -2065,8 +2066,9 @@ def _build_wan_video_act_clip(
         return ""
 
     def _src_t(t: float) -> float:
-        if src_dur >= act_duration:
-            return min(max(0.0, t), src_dur - 0.001)
+        if src_dur >= act_duration or hold_last_frame:
+            # The parallax hook eases to a stop; hold that frame, never loop.
+            return min(max(0.0, t), src_dur - 0.05)
         # Loop short Wan clips to fill the narration hold.
         return max(0.0, float(t) % src_dur)
 
@@ -2370,6 +2372,9 @@ def compile_sequence_reel(
     # Optional per-act Wan (or other) video files. ``None`` / missing file →
     # Ken Burns still via ``_build_act_clip``. ECONOMIC_REEL leaves this unset.
     act_video_paths: "list[Path | None] | None" = None,
+    # Optional 2.5D depth-parallax clip for act 0 (the hook). None → read
+    # REEL_HOOK_PARALLAX (default off). Any failure keeps the Ken Burns hook.
+    hook_parallax: "bool | None" = None,
 ) -> Path:
     """
     Compile an N-image sequence reel from a list of background images.
@@ -2657,6 +2662,27 @@ def compile_sequence_reel(
     clips: list = []
     _wan_src_clips: list = []
     _video_override = list(act_video_paths) if act_video_paths else []
+    _hold_first = False
+    try:
+        from modules.reel_hook.parallax import hook_video_override  # noqa: PLC0415
+
+        if episode_dir:
+            _hook_dir = Path(episode_dir) / "hook"
+        elif output_path:
+            _hook_dir = Path(output_path).parent / "hook"
+        else:
+            _hook_dir = Path(tempfile.gettempdir()) / "omni_hook_parallax"
+        _video_override, _hold_first = hook_video_override(
+            list(image_paths),
+            _video_override,
+            act_duration=float(_act_durs[0]) if _act_durs else act_duration_locked,
+            out_dir=_hook_dir,
+            enabled=hook_parallax,
+            size=(_REEL_WIDTH, _REEL_HEIGHT),
+            fps=int(fps),
+        )
+    except Exception as _hook_exc:  # noqa: BLE001
+        logger.warning("HOOK parallax skipped (%s) — Ken Burns hook.", _hook_exc)
     for i, img_path in enumerate(image_paths):
         _this_act_dur = float(_act_durs[i]) if i < len(_act_durs) else act_duration_locked
         act_wt: list = []
@@ -2689,6 +2715,7 @@ def compile_sequence_reel(
                     subtitle_fill=subtitle_fill,
                     subtitle_stroke_width=subtitle_stroke_width,
                     subtitle_stroke_fill=subtitle_stroke_fill,
+                    hold_last_frame=bool(_hold_first and i == 0),
                 )
                 src_keep = getattr(clip, "_wan_src_clip", None)
                 if src_keep is not None:
