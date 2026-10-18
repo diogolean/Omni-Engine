@@ -2,9 +2,14 @@
 """Feature flag for real-artefact stills.
 
 Unset means today's Flux path. ``REEL_ARTIFACT_IMAGES=1`` turns the hybrid
-on. The provider then defaults to ``chain``: a Commons photograph, then
-Nano Banana conditioned on that photograph. ``REEL_ARTIFACT_IMAGE_PROVIDER``
-can force ``commons``, ``nanobanana``, ``flux``, or ``chain``.
+on. The provider then defaults to ``chain``: a real photograph when one
+is usable, otherwise one cheap Nano Banana edit inside
+``REEL_NANOBANANA_MAX_PER_REEL`` (default 4). Text-only generation is
+used only for entities marked safe, and only when no reference exists.
+With the flag on, each beat climbs a judged ladder and resumes approved
+stills from a manifest. Scene and CTA beats use documentary Flux Schnell.
+``REEL_ARTIFACT_IMAGE_PROVIDER`` can force ``commons``, ``nanobanana``,
+``flux``, or ``chain``.
 """
 from __future__ import annotations
 

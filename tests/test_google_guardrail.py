@@ -34,7 +34,7 @@ class GuardrailTests(unittest.TestCase):
 
     def test_image_pricing(self) -> None:
         os.environ["GEMINI_IMAGE_SIZE"] = "1K"
-        self.assertAlmostEqual(gg.image_unit_cost_usd("models/gemini-2.5-flash-image"), 0.005)
+        self.assertAlmostEqual(gg.image_unit_cost_usd("models/gemini-2.5-flash-image"), 0.039)
         self.assertAlmostEqual(gg.image_unit_cost_usd("models/gemini-3-pro-image-preview"), 0.03)
         self.assertAlmostEqual(gg.image_unit_cost_usd("imagen-3.0-generate"), 0.03)
         os.environ["GEMINI_IMAGE_SIZE"] = "2K"
@@ -42,7 +42,7 @@ class GuardrailTests(unittest.TestCase):
 
     def test_preflight_hard_cap(self) -> None:
         os.environ["GEMINI_IMAGE_SIZE"] = "1K"
-        os.environ["MAX_GOOGLE_COST_PER_RUN_USD"] = "0.008"
+        os.environ["MAX_GOOGLE_COST_PER_RUN_USD"] = "0.050"
         tracker = gg.get_google_cost_tracker()
         tracker.record(
             model="models/gemini-2.5-flash-image",
@@ -50,10 +50,10 @@ class GuardrailTests(unittest.TestCase):
             images=1,
             source="test",
         )
-        self.assertAlmostEqual(tracker.total_usd(), 0.005)
+        self.assertAlmostEqual(tracker.total_usd(), 0.039)
         with self.assertRaises(gg.GoogleBudgetExceededError):
             tracker.preflight(
-                0.005,
+                0.039,
                 model="models/gemini-2.5-flash-image",
                 kind="image",
                 source="test",
@@ -158,7 +158,7 @@ class AuditorTests(unittest.TestCase):
 
     def test_image_vs_text_cost(self) -> None:
         self.assertAlmostEqual(
-            _estimate_cost("models/gemini-2.5-flash-image", "image", 0, 0, 1), 0.005
+            _estimate_cost("models/gemini-2.5-flash-image", "image", 0, 0, 1), 0.039
         )
         self.assertAlmostEqual(
             _estimate_cost("models/gemini-3-pro-image-preview", "image", 0, 0, 1), 0.03

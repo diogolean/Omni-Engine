@@ -98,6 +98,7 @@ def seal_compiled_reel(
                 evaluate_fn=evaluate_fn,
                 frame_fn=frame_fn,
                 work_dir=(Path(output_dir) / f"{stem}_frames") if output_dir else None,
+                beats=rows,
             )
         else:
             mp4 = _fail_mp4(blocked_reason or "missing_video")

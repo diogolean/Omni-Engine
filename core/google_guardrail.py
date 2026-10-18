@@ -11,7 +11,7 @@ Wraps every billed Google API call with:
 Pricing used for estimates (USD, official Gemini list as of 2026-09):
 
 * ``gemini-2.5-flash`` text: $0.075 / 1M input tokens, $0.30 / 1M output tokens
-* ``gemini-*-flash-image``: $0.03 / image (1K)
+* ``gemini-2.5-flash-image`` (Nano Banana): $0.039 / image, or the pricing table
 * ``gemini-*-pro-image`` / Imagen: $0.134 / image (2K standard)
 
 Environment
@@ -33,13 +33,24 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Planner and other reel calls attribute cost to the reel channel. The
-# process default (ACTIVE_PAGE) stays anna_protocol when a local .env says so.
+# A reel binds its page once for the whole process. A .env ACTIVE_PAGE of
+# anna_protocol must not relabel ancient_knowledge calls, including work
+# that runs on another thread after the planner clears its own override.
 _COST_CHANNEL = threading.local()
+_RUN_CHANNEL = ""
+_RUN_LOCK = threading.Lock()
+
+
+def bind_run_channel(channel: str | None) -> None:
+    """Process-wide page for every Google cost line."""
+    global _RUN_CHANNEL
+    name = (channel or "").strip()
+    with _RUN_LOCK:
+        _RUN_CHANNEL = name
 
 
 def bind_cost_channel(channel: str | None) -> None:
-    """Attribute Google cost lines on this thread to ``channel``."""
+    """Thread-local override. None clears it and leaves the run channel."""
     name = (channel or "").strip()
     _COST_CHANNEL.name = name or None
 
@@ -48,7 +59,7 @@ FLASH_INPUT_USD_PER_1M: float = 0.075
 FLASH_OUTPUT_USD_PER_1M: float = 0.30
 
 # Official Gemini / Imagen image list prices (USD / image) — 1K is the factory default
-IMAGE_FLASH_1K_USD: float = 0.005
+IMAGE_FLASH_1K_USD: float = 0.039
 IMAGE_1K_USD: float = 0.03          # Pro / Imagen at 1K
 IMAGE_2K_USD: float = 0.134         # Pro 2K (opt-in only; never the default)
 
@@ -119,6 +130,10 @@ def active_channel() -> str:
     override = getattr(_COST_CHANNEL, "name", None)
     if override:
         return str(override)
+    with _RUN_LOCK:
+        run = _RUN_CHANNEL
+    if run:
+        return run
     env = (os.getenv("ACTIVE_PAGE") or "").strip()
     if env:
         return env
@@ -157,6 +172,8 @@ def classify_model(model_id: str | None) -> str:
     low = (model_id or "").lower()
     if "imagen" in low:
         return "imagen"
+    if "nano-banana" in low or "nanobanana" in low:
+        return "gemini-flash-image"
     if "image" in low and "pro" in low:
         return "gemini-pro-image"
     if "image" in low:
@@ -190,8 +207,23 @@ def image_unit_cost_usd(model_id: str | None) -> float:
     if kind in {"imagen", "gemini-pro-image"}:
         return IMAGE_2K_USD if size == "2K" else IMAGE_1K_USD
     if kind == "gemini-flash-image":
-        return IMAGE_FLASH_1K_USD
+        return _flash_image_usd(model_id)
     return 0.0
+
+
+def _flash_image_usd(model_id: str | None) -> float:
+    """Nano Banana list price. Unknown flash-image ids use the 1K default."""
+    try:
+        from modules.reel_artefact.pricing import NANOBANANA_USD
+    except Exception:
+        return IMAGE_FLASH_1K_USD
+    key = (model_id or "").strip()
+    bare = key.split("/")[-1]
+    if key in NANOBANANA_USD:
+        return float(NANOBANANA_USD[key])
+    if bare in NANOBANANA_USD:
+        return float(NANOBANANA_USD[bare])
+    return IMAGE_FLASH_1K_USD
 
 
 def text_cost_usd(

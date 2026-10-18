@@ -71,4 +71,14 @@ def render_shot(shot: Shot, config: dict | None = None, *, channel: str = "") ->
         ),
     ))
     negative = ", ".join(_negative_list(shot, cfg))
+    if shot.image_role == "flux":
+        try:
+            from modules.reel_artefact.policy import artefact_images_enabled
+            from modules.reel_artefact.route import generic_flux_prompt
+
+            if artefact_images_enabled():
+                positive = generic_flux_prompt(positive)
+                subject = "a documentary scene"
+        except Exception:  # noqa: BLE001
+            pass
     return RenderedPrompt(positive=positive, negative=negative, subject=subject)

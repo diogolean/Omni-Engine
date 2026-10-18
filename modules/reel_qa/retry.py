@@ -82,6 +82,19 @@ def _blocked(
     )
 
 
+def _artefact_reference(path: Path, kwargs: dict[str, Any]) -> tuple[str, str]:
+    """Reference photo and shape stored beside a Commons or Nano Banana still."""
+    try:
+        from modules.reel_artefact.source import source_meta
+    except Exception:  # noqa: BLE001
+        return "", str(kwargs.get("canonical_shape") or "")
+    meta = source_meta(path)
+    return (
+        str(meta.get("reference_image") or ""),
+        str(meta.get("canonical_shape") or kwargs.get("canonical_shape") or ""),
+    )
+
+
 def _prompt_for_judge(prompt: str, episode_subject: str) -> str:
     """Put the beat's object where the judge's 400-character window can see it.
 
@@ -191,12 +204,15 @@ def generate_and_gate(
             )
             continue
         last_path = path
+        reference_image, shape = _artefact_reference(path, kwargs)
         verdict = evaluate_with_technical_retry(
             judge,
             path,
             chunk_text,
             _prompt_for_judge(current_prompt, episode_subject),
             banned_subjects=banned_subjects,
+            reference_image=reference_image,
+            canonical_shape=shape,
         )
         verdict = dict(verdict or {})
         verdict["attempt"] = attempt + 1

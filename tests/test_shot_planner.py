@@ -54,10 +54,16 @@ def test_era_words_plus_a_generic_noun_are_not_an_entity() -> None:
     assert not is_era_generic("Antikythera Mechanism")
     assert not is_era_generic("Coso artifact")
     plan = build_shot_list("Lost OOPArts", _BCE)
-    assert [shot.subject for shot in plan.shots[:4]] == ["Antikythera Mechanism"] * 4
-    for shot in plan.shots[:4]:
+    wreck, divers, fragments, gears = plan.shots[:4]
+    for shot in (wreck, divers):
         assert shot.entity_id == "antikythera_mechanism"
+        assert shot.image_role == "flux"
+        assert "sea" in shot.canonical_visual.lower()
+        assert "gear" not in shot.canonical_visual.lower()
         assert "bce" not in shot.subject.lower()
+    for shot in (fragments, gears):
+        assert shot.subject == "Antikythera Mechanism"
+        assert shot.entity_id == "antikythera_mechanism"
         rendered = render_shot(shot)
         assert rendered.positive.lower().startswith("expected subject: antikythera mechanism.")
         assert "corroded bronze gear fragments in a museum case" in rendered.positive.lower()
@@ -66,17 +72,17 @@ def test_era_words_plus_a_generic_noun_are_not_an_entity() -> None:
         assert "bce device" not in rendered.positive.lower()
 
 
-def test_abstract_close_is_a_museum_hero_of_the_main_artefact() -> None:
+def test_abstract_close_is_a_flux_safe_scene_not_the_artefact() -> None:
     plan = build_shot_list("Lost OOPArts", _BCE)
     closing = plan.shots[-1]
     rendered = render_shot(closing)
-    assert closing.subject == "Antikythera Mechanism"
     assert closing.entity_id == "antikythera_mechanism"
-    assert "museum hero shot" in closing.camera
-    assert "museum hero shot" in rendered.positive.lower()
-    assert "corroded bronze gear fragments" in rendered.positive.lower()
-    assert rendered.positive.lower().index("antikythera") < 400
-    assert rendered.subject == "Antikythera Mechanism"
+    assert closing.image_role == "flux"
+    visual = closing.canonical_visual.lower()
+    assert "manuscript" in visual or "book" in visual or "archive" in visual
+    assert "museum hero" not in closing.camera
+    assert "corroded bronze gear fragments" not in rendered.positive.lower()
+    assert "readable text" in visual
 
 
 def test_normalize_rewrites_a_model_invented_bce_device_and_a_vague_close() -> None:
@@ -106,8 +112,11 @@ def test_normalize_rewrites_a_model_invented_bce_device_and_a_vague_close() -> N
     )
     assert shots[1].entity_id == "antikythera_mechanism"
     assert "bce" not in shots[1].subject.lower()
-    assert shots[2].subject == "Antikythera Mechanism"
-    assert "museum hero shot" in shots[2].camera
+    assert shots[1].image_role == "flux"
+    assert "sea" in shots[1].canonical_visual.lower()
+    assert shots[2].image_role == "flux"
+    assert "museum hero" not in shots[2].camera
+    assert "gear" not in shots[2].canonical_visual.lower()
 
 
 def test_four_object_episode_switches_subject_per_segment() -> None:
@@ -245,4 +254,4 @@ def test_offline_report_prints_the_shot_list_and_the_prompts() -> None:
     assert "NEGATIVE:" in text
     assert "EXPECTED SUBJECT: BCE device" not in text
     assert '"subject": "BCE device"' not in text
-    assert "museum hero shot" in text
+    assert "manuscript" in text.lower() or "old book" in text.lower()

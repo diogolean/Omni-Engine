@@ -31,6 +31,8 @@ jobs:
           tests/test_shot_planner_llm.py
           tests/test_reel_judge_documentary.py
           tests/test_reel_artefact.py
+          tests/test_reel_artefact_hybrid.py
+          tests/test_reel_ladder.py
           tests/test_omni_publisher.py
           tests/test_pinterest_vm.py
           tests/test_memory_client.py
@@ -55,3 +57,5 @@ jobs:
           tests/test_shot_planner_llm.py
           tests/test_reel_judge_documentary.py
           tests/test_reel_artefact.py
+          tests/test_reel_artefact_hybrid.py
+          tests/test_reel_ladder.py

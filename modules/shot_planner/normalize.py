@@ -2,7 +2,12 @@
 """Make a shot list obey the entity rules before it is rendered."""
 from __future__ import annotations
 
-from modules.reel_artefact.role import image_role_for
+from modules.reel_artefact.flux_policy import (
+    is_abstract_claim,
+    is_physical_object_line,
+    scene_fields,
+)
+from modules.reel_artefact.role import image_role_for, is_event
 from modules.shot_planner.entities import (
     Entity,
     entities_in_text,
@@ -77,7 +82,57 @@ def _documentary_frame(entity: Entity, *, recap: bool) -> tuple[str, str, str, s
     )
 
 
-def _fill(shot: Shot, entity: Entity | None, *, recap: bool, others: list[Entity]) -> Shot:
+def _fill(
+    shot: Shot,
+    entity: Entity | None,
+    *,
+    recap: bool,
+    others: list[Entity],
+    index: int = 1,
+) -> Shot:
+    event = is_event(shot.narration, camera=shot.camera, setting=shot.setting)
+    abstract = (
+        is_abstract_claim(shot.narration)
+        or is_abstract_close(shot.narration)
+        or (
+            is_commentary(shot.narration)
+            and not is_physical_object_line(shot.narration)
+        )
+    )
+    geology = entity is not None and entity.id == "coso_artifact" and any(
+        cue in shot.narration.lower() for cue in _GEOLOGY
+    )
+    if (not geology) and (
+        event or (abstract and not is_physical_object_line(shot.narration))
+    ):
+        fields = scene_fields(
+            shot.narration, entity=entity, index=index, event=event,
+        )
+        extra = list(getattr(entity, "edit_negatives", ()) or ()) if entity else []
+        negatives = _uniq(
+            list(shot.negatives)
+            + (list(entity.confusions) if entity else [])
+            + extra
+            + list(_DOC_NEGATIVES)
+            + [other.name for other in others if entity is None or other.id != entity.id]
+        )
+        return Shot(
+            id=shot.id,
+            narration=shot.narration,
+            entity_id=(entity.id if entity else shot.entity_id) or "unknown",
+            subject=fields["subject"],
+            canonical_visual=fields["canonical_visual"],
+            shot_type=fields["shot_type"] if fields["shot_type"] in SHOT_TYPES else "wide",
+            camera=fields["camera"],
+            setting=fields["setting"],
+            era=shot.era or (entity.era if entity else "") or "unspecified",
+            mood=shot.mood or "quiet, investigative",
+            lighting=fields["lighting"],
+            negatives=negatives,
+            kb_miss=entity is None,
+            canonical_shape="",
+            image_role="flux",
+        )
     if entity is None:
         subject = shot.subject
         if is_era_generic(subject):
@@ -123,6 +178,7 @@ def _fill(shot: Shot, entity: Entity | None, *, recap: bool, others: list[Entity
     negatives = _uniq(
         list(shot.negatives)
         + list(entity.confusions)
+        + list(getattr(entity, "edit_negatives", ()) or ())
         + extra
         + [other.name for other in others if other.id != entity.id]
     )
@@ -231,5 +287,7 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
                 negatives=list(shot.negatives),
                 kb_miss=shot.kb_miss,
             )
-        output.append(_fill(shot, entity, recap=recap, others=introduced))
+        output.append(_fill(
+            shot, entity, recap=recap, others=introduced, index=index,
+        ))
     return output

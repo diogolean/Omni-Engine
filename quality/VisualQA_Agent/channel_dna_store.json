@@ -158,7 +158,8 @@
         "you won't believe",
         "one weird trick",
         "ancient civilizations were more advanced than we thought"
-      ]
+      ],
+      "filmable_lines": "Each spoken line pairs with one concrete picture. Abstract claims (theories, legends, records, lost knowledge) use a Flux-safe scene: an old manuscript with no readable text, hands without a detailed face, a museum archive seen from afar, the real place, the sea, or sky and light. Never ask a generated still to depict a named artefact, its gears, or its pendants."
     },
     "motion_rules": {
       "motion_cadence": "Every act cycles through 4 motion profiles indexed by ``act_index % 4``: (0) Rapid Push-In 1.00→1.42 zoom, 1.65× pan; (1) Wide Pull-Out Reveal 1.48→1.02, 1.00× pan reversed; (2) Sweeping Lateral Parallax 1.10→1.32, 4.60× pan; (3) Overhead Crane Sweep 1.18→1.40, 2.30× pan reversed. Base pan amplitudes: X=60 px, Y=42 px. No static slow-zooms — every still moves.",
@@ -178,6 +179,27 @@
         "orchestral triumph",
         "EDM drop",
         "meditation bell loop"
+      ]
+    },
+    "flux_scenes": {
+      "allowed": [
+        "landscapes and the real place",
+        "the sea or underwater ambience",
+        "atmosphere such as sky, light, or fog",
+        "wide establishing shots",
+        "generic museum halls or archives seen from afar",
+        "silhouettes of people and hands without detailed faces",
+        "old books or manuscripts as props without readable text"
+      ],
+      "forbidden": [
+        "a named artefact",
+        "parts of an artefact such as gears or pendants",
+        "any specific object",
+        "a complete mechanism",
+        "clean brass gears",
+        "an invented gold figurine, gold bird, or silver disc",
+        "readable text",
+        "detailed faces"
       ]
     }
   }
