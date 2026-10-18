@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import io
 import logging
-import textwrap
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
@@ -59,8 +58,6 @@ _DIVIDER_COLOUR = _DEFAULT_THEME["divider"]
 
 # Layout zones (fractions of PIN_H)
 _HOOK_ZONE_TOP_FRAC = 0.04
-_HOOK_ZONE_BOT_FRAC = 0.30
-_BUTTON_ZONE_TOP_FRAC = 0.83
 
 def _button_label() -> str:
     from agents.posting.pinterest_engine.pin_copy import card_cta_label  # noqa: PLC0415
@@ -203,52 +200,120 @@ def _blurred_padding(img: Image.Image, w: int, h: int) -> Image.Image:
     return bg
 
 
-def _draw_hook_zone(
-    canvas: Image.Image,
+_HOOK_MAX_LINES = 3
+_DOMAIN_FONT_SIZE = 36
+
+
+def _hook_lines(hook_text: str) -> list[str]:
+    """At most 8 words and 3 lines, so the hook cannot cover the subject."""
+    from agents.posting.pinterest_engine.pin_copy import short_hook  # noqa: PLC0415
+
+    words = short_hook(hook_text).upper().split()
+    if not words:
+        return []
+    if len(words) <= 3:
+        return [" ".join(words)]
+    if len(words) <= 6:
+        mid = (len(words) + 1) // 2
+        return [" ".join(words[:mid]), " ".join(words[mid:])]
+    chunk = (len(words) + _HOOK_MAX_LINES - 1) // _HOOK_MAX_LINES
+    lines = [
+        " ".join(words[index : index + chunk])
+        for index in range(0, len(words), chunk)
+    ]
+    return [line for line in lines if line][:_HOOK_MAX_LINES]
+
+
+def _focal_in_upper_band(image: Image.Image) -> bool:
+    """True when the photo's detail sits in the top band, so the hook should drop."""
+    small = image.convert("L").resize((32, 48))
+    pixels = list(small.getdata())
+    width, height = small.size
+    if not pixels or width <= 0:
+        return False
+    mean = sum(pixels) / len(pixels)
+    upper = 0.0
+    lower = 0.0
+    split = max(1, int(height * 0.4))
+    for index, value in enumerate(pixels):
+        energy = abs(value - mean)
+        row = index // width
+        if row < split:
+            upper += energy
+        elif row >= height - split:
+            lower += energy
+    return upper > lower * 1.25 and upper > 0
+
+
+def _footer_content() -> tuple[str, str, int]:
+    """Label, domain, and a bar only as tall as that text. No empty strip."""
+    label = _button_label()
+    url = _card_domain()
+    if not label and not url:
+        return "", "", 0
+    height = 36
+    if label:
+        height += 48
+    if url:
+        height += 52
+    return label, url, height
+
+
+def _draw_hook_lines(
     draw: ImageDraw.ImageDraw,
-    hook_text: str,
+    lines: list[str],
+    *,
+    top: int,
 ) -> None:
-    """Overlay dark vignette + centered hook text in the top zone."""
-    zone_top = int(PIN_H * _HOOK_ZONE_TOP_FRAC)
-    zone_bot = int(PIN_H * _HOOK_ZONE_BOT_FRAC)
-    zone_h = zone_bot - zone_top
-
-    vignette = _theme_color("vignette")
     hook_text_colour = _theme_color("hook_text")
-    divider = _theme_color("divider")
-
-    # Semi-transparent dark panel
-    panel = Image.new("RGBA", (PIN_W, zone_h), vignette)
-    # Fade out at the bottom 60px of the panel
-    for row in range(max(0, zone_h - 60), zone_h):
-        fade = int(vignette[3] * (1 - (row - (zone_h - 60)) / 60))
-        for col in range(PIN_W):
-            panel.putpixel((col, row), (*vignette[:3], fade))
-
-    canvas.paste(panel, (0, zone_top), panel)
-
-    # Hook text wrapped to ~22 chars per line
-    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
-
-    hook_clean = normalize_pin_text(hook_text).upper()
-    lines = textwrap.wrap(hook_clean, width=22) or [hook_clean[:22]]
-
-    font_large = _find_font(_SERIF_CANDIDATES, 64)
-    line_height = 78
-    total_h = len(lines) * line_height
-    cursor_y = zone_top + (zone_h - total_h) // 2
-
+    font_large = _find_font(_SERIF_CANDIDATES, 54)
+    line_height = 64
+    cursor_y = top
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font_large)
         text_w = bbox[2] - bbox[0]
         x = (PIN_W - text_w) // 2
-        # Drop shadow
         draw.text((x + 2, cursor_y + 2), line, font=font_large, fill=(0, 0, 0, 180))
         draw.text((x, cursor_y), line, font=font_large, fill=hook_text_colour)
         cursor_y += line_height
 
-    # Gold divider line
-    div_y = zone_bot - 2
+
+def _draw_hook_zone(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    hook_text: str,
+    *,
+    anchor: str = "top",
+    footer_h: int = 0,
+) -> None:
+    """Short hook on a panel that is only as tall as the lines."""
+    lines = _hook_lines(hook_text)
+    if not lines:
+        return
+    vignette = _theme_color("vignette")
+    divider = _theme_color("divider")
+    line_height = 64
+    zone_h = 28 + len(lines) * line_height + 18
+    if anchor == "bottom":
+        zone_top = max(0, PIN_H - footer_h - zone_h - 8)
+    else:
+        zone_top = int(PIN_H * _HOOK_ZONE_TOP_FRAC)
+
+    panel = Image.new("RGBA", (PIN_W, zone_h), vignette)
+    fade = _fade_mask(PIN_W, min(48, zone_h), vignette[3], top=(anchor != "bottom"))
+    if anchor == "bottom":
+        panel.paste(Image.new("RGBA", (PIN_W, fade.height), (0, 0, 0, 0)), (0, 0))
+        # Keep a solid bar and fade only its top edge into the photo.
+        edge = Image.new("RGBA", (PIN_W, fade.height), vignette)
+        edge.putalpha(fade)
+        panel.paste(edge, (0, 0))
+    else:
+        edge = Image.new("RGBA", (PIN_W, fade.height), vignette)
+        edge.putalpha(fade)
+        panel.paste(edge, (0, zone_h - fade.height))
+    canvas.paste(panel, (0, zone_top), panel)
+    _draw_hook_lines(draw, lines, top=zone_top + 16)
+    div_y = zone_top + zone_h - 2
     draw.line([(60, div_y), (PIN_W - 60, div_y)], fill=divider[:3], width=2)
 
 
@@ -260,40 +325,36 @@ def _fade_mask(width: int, height: int, max_alpha: int, *, top: bool) -> Image.I
     return ramp.point(lambda value: int(value * max_alpha / 255))
 
 
-def _draw_cover_hook(canvas: Image.Image, hook_text: str) -> None:
-    """Hook text on a top gradient. The photo still fills the frame."""
-    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
-
-    fade_h = int(PIN_H * 0.38)
-    mask = _fade_mask(PIN_W, fade_h, 185, top=True)
+def _draw_cover_hook(
+    canvas: Image.Image,
+    hook_text: str,
+    *,
+    anchor: str = "top",
+    footer_h: int = 0,
+) -> None:
+    """Short hook on a gradient, opposite the photo's focal band when needed."""
+    lines = _hook_lines(hook_text)
+    if not lines:
+        return
+    fade_h = 36 + len(lines) * 64 + 28
+    top = 0 if anchor != "bottom" else max(0, PIN_H - footer_h - fade_h)
+    mask = _fade_mask(PIN_W, fade_h, 185, top=(anchor != "bottom"))
     overlay = Image.new("RGBA", (PIN_W, fade_h), (8, 12, 14, 0))
     overlay.putalpha(mask)
-    canvas.paste(overlay, (0, 0), overlay)
-
-    hook_clean = normalize_pin_text(hook_text).upper()
-    lines = textwrap.wrap(hook_clean, width=18) or [hook_clean[:18]]
-    font_large = _find_font(_SERIF_CANDIDATES, 64)
-    line_height = 74
-    total_h = len(lines) * line_height
-    cursor_y = max(36, (fade_h - total_h) // 3)
-    draw = ImageDraw.Draw(canvas)
-    hook_text_colour = _theme_color("hook_text")
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font_large)
-        text_w = bbox[2] - bbox[0]
-        x = (PIN_W - text_w) // 2
-        draw.text((x + 2, cursor_y + 2), line, font=font_large, fill=(0, 0, 0, 160))
-        draw.text((x, cursor_y), line, font=font_large, fill=hook_text_colour)
-        cursor_y += line_height
+    canvas.paste(overlay, (0, top), overlay)
+    cursor = 28 if anchor != "bottom" else top + fade_h - (len(lines) * 64) - 8
+    _draw_hook_lines(ImageDraw.Draw(canvas), lines, top=cursor)
 
 
 def _draw_button_zone(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
-) -> None:
-    """Overlay the dark CTA button strip at the bottom of the pin."""
-    zone_top = int(PIN_H * _BUTTON_ZONE_TOP_FRAC)
-    zone_h = PIN_H - zone_top
+) -> int:
+    """Slim footer for the CTA and a larger domain. Returns the bar height."""
+    label, url, zone_h = _footer_content()
+    if zone_h <= 0:
+        return 0
+    zone_top = PIN_H - zone_h
     button_bg = _theme_color("button_bg")
     button_text = _theme_color("button_text")
     url_text = _theme_color("url_text")
@@ -301,50 +362,31 @@ def _draw_button_zone(
 
     btn_panel = Image.new("RGBA", (PIN_W, zone_h), button_bg)
     canvas.paste(btn_panel, (0, zone_top), btn_panel)
-
-    font_btn = _find_font(_SERIF_CANDIDATES, 36)
-
-    # Top border line
     draw.line([(0, zone_top), (PIN_W, zone_top)], fill=divider[:3], width=3)
 
-    label = _button_label()
-    url = _card_domain()
-
-    # Skip CTA chrome entirely when the channel defines neither label nor URL.
-    if not label and not url:
-        return
-
-    btn_y = zone_top + 28
+    cursor = zone_top + 16
     if label:
+        font_btn = _find_font(_SERIF_CANDIDATES, 34)
         bbox = draw.textbbox((0, 0), label, font=font_btn)
         btn_w = bbox[2] - bbox[0]
-        draw.text(
-            ((PIN_W - btn_w) // 2, btn_y),
-            label,
-            font=font_btn,
-            fill=button_text,
-        )
+        draw.text(((PIN_W - btn_w) // 2, cursor), label, font=font_btn, fill=button_text)
+        cursor += 48
 
     if url:
-        # Left side of the bar. The bottom-right stays empty for Pinterest's own chrome.
         margin_left = 48
         margin_right = 180
         max_w = PIN_W - margin_left - margin_right
-        size = 20
+        size = _DOMAIN_FONT_SIZE
         font_url = _find_font(_SANS_CANDIDATES, size)
         url_box = draw.textbbox((0, 0), url, font=font_url)
         url_w = url_box[2] - url_box[0]
-        while url_w > max_w and size > 12:
+        while url_w > max_w and size > 22:
             size -= 1
             font_url = _find_font(_SANS_CANDIDATES, size)
             url_box = draw.textbbox((0, 0), url, font=font_url)
             url_w = url_box[2] - url_box[0]
-        draw.text(
-            (margin_left, btn_y + (52 if label else 28)),
-            url,
-            font=font_url,
-            fill=url_text,
-        )
+        draw.text((margin_left, cursor), url, font=font_url, fill=url_text)
+    return zone_h
 
 
 # ---------------------------------------------------------------------------
@@ -517,9 +559,12 @@ class PinTransformer:
 
     def _compose(self, source: Image.Image, visual_hook: str) -> Image.Image:
         """Assemble the final 1000x1500 canvas."""
+        anchor = "bottom" if _focal_in_upper_band(source) else "top"
+        _label, _url, footer_h = _footer_content()
         if self.method == "cover":
             canvas = _center_crop_to_size(source, PIN_W, PIN_H).convert("RGBA")
-            _draw_cover_hook(canvas, visual_hook)
+            _draw_cover_hook(canvas, visual_hook, anchor=anchor, footer_h=footer_h)
+            _draw_button_zone(canvas, ImageDraw.Draw(canvas))
             return canvas.convert("RGB")
 
         if self.method == "center_crop":
@@ -530,7 +575,7 @@ class PinTransformer:
         canvas = canvas.convert("RGBA")
         draw = ImageDraw.Draw(canvas)
 
-        _draw_hook_zone(canvas, draw, visual_hook)
+        _draw_hook_zone(canvas, draw, visual_hook, anchor=anchor, footer_h=footer_h)
         _draw_button_zone(canvas, draw)
 
         return canvas.convert("RGB")

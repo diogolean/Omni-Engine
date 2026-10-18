@@ -485,26 +485,46 @@ def print_dotenv_bootstrap() -> None:
     print(f"[bootstrap] ai prompt     : {'set' if AI_SYSTEM_PROMPT else '(none)'}")
 
 
+# Used only when the Models API cannot be listed and CLAUDE_MODEL is unset.
+# The 3.5 Sonnet family is retired. The dry run resolved claude-sonnet-5-5.
+_SONNET_LIST_FALLBACK = "claude-sonnet-5-5"
+
+
 def get_best_claude_model(anthropic_client: object | None = None) -> str:
-    """Resolve a Claude model id for optional AI metadata generation."""
-    fallback = (os.getenv("CLAUDE_MODEL") or "claude-3-5-sonnet-latest").strip()
+    """Newest listed Sonnet, unless ``CLAUDE_MODEL`` is set.
+
+    The Models API lists newest ids first; the dry run took ``claude-sonnet-5-5``.
+    Pin copy disables extended thinking and reads text blocks only, so a
+    thinking Sonnet does not crash the JSON parse.
+    """
+    pinned = (os.getenv("CLAUDE_MODEL") or "").strip()
+    if pinned:
+        return pinned
+    discovered = _listed_claude_model(anthropic_client)
+    return discovered or _SONNET_LIST_FALLBACK
+
+
+def _listed_claude_model(anthropic_client: object | None) -> str:
+    """First Sonnet from the Models API, then Haiku, then any Claude id."""
     if anthropic_client is None:
-        return fallback
+        return ""
     try:
         listing = anthropic_client.models.list()  # type: ignore[union-attr]
         models = list(getattr(listing, "data", None) or listing)
-        for priority in ("sonnet", "haiku"):
-            for m in models:
-                mid = str(getattr(m, "id", "") or "").lower()
-                if priority in mid and "claude" in mid:
-                    return mid
-        for m in models:
-            mid = str(getattr(m, "id", "") or "")
-            if "claude" in mid.lower():
-                return mid
     except Exception as exc:  # noqa: BLE001
-        logger.debug("Claude model discovery failed (%s); using fallback.", exc)
-    return fallback
+        logger.debug("Claude model discovery failed (%s).", type(exc).__name__)
+        return ""
+    for priority in ("sonnet", "haiku"):
+        for model in models:
+            mid = str(getattr(model, "id", "") or "").strip()
+            lowered = mid.lower()
+            if priority in lowered and "claude" in lowered:
+                return mid
+    for model in models:
+        mid = str(getattr(model, "id", "") or "").strip()
+        if "claude" in mid.lower():
+            return mid
+    return ""
 
 
 # ---------------------------------------------------------------------------

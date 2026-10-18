@@ -28,6 +28,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       OMNI_ROLE: engine
+      # Outputs volume. Unset OUTPUT_PATH makes the factory warn and write to the repo tree.
+      OUTPUT_PATH: /opt/omni-engine/outputs
       # On the compose network. Processes outside compose keep their own URL.
       SUPERMEMORY_BASE_URL: http://supermemory:6767
     volumes:
@@ -52,6 +54,7 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       OMNI_ROLE: scheduler
+      OUTPUT_PATH: /opt/omni-engine/outputs
       MIN_INTERVAL_HOURS: ${MIN_INTERVAL_HOURS:-3}
       MAX_INTERVAL_HOURS: ${MAX_INTERVAL_HOURS:-6}
       PINTEREST_PINS_PER_RUN: ${PINTEREST_PINS_PER_RUN:-1}

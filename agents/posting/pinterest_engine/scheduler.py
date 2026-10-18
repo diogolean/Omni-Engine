@@ -58,6 +58,7 @@ _DEFAULT_MAX_HOURS = 6.0
 _DEFAULT_PINS_MIN = 3
 _DEFAULT_PINS_MAX = 5
 _INTER_PIN_COURTESY_SEC = 3   # brief pause before starting sleep countdown
+_LAZY_INVENTORY_BUFFER = 3
 
 
 def _write_dry_run_card(account_id: str, post_id: str, pin_bytes: bytes) -> Path:
@@ -389,12 +390,19 @@ class PinterestScheduler:
         library_ids = {
             path.stem for path in (self.outputs_dir / "library").glob("post_*.json")
         }
-        known_ids = {entry.get("post_id") for entry in data.get("entries") or []}
-        if not known_ids or not library_ids <= known_ids:
+        ready = inv.get_unposted(data)
+        built_entries: int | None = None
+        if len(ready) < self.pins_per_run:
+            limit = max(self.pins_per_run, 1) * _LAZY_INVENTORY_BUFFER
             log.info(
-                "Building master inventory from the library with the Claude pin-copy path."
+                "Building master inventory for the next pins only "
+                "(limit=%d, library=%d, dry_run=%s).",
+                limit,
+                len(library_ids),
+                self.dry_run,
             )
-            data = inv.build(use_ai=True)
+            data = inv.build(use_ai=True, limit=limit, dry_run=self.dry_run)
+            built_entries = len(data.get("entries") or [])
             if not data.get("entries"):
                 log.warning(
                     "No recyclable assets found under %s. "
@@ -488,6 +496,8 @@ class PinterestScheduler:
             "errors": 0,
             "remaining": total_eligible,
         }
+        if built_entries is not None:
+            stats["inventory_built"] = built_entries
 
         for i, entry in enumerate(batch):
             post_id = entry["post_id"]
@@ -514,6 +524,19 @@ class PinterestScheduler:
                 log.info("  Skipping %s — image map says skip.", post_id)
                 stats["skipped"] += 1
                 continue
+            missing_link = entry.get("_skip_article") == "no-link"
+            missing_link = missing_link or not str(entry.get("target_url") or "").strip()
+            if missing_link:
+                from agents.posting.pinterest_engine.articles import article_link_required  # noqa: PLC0415
+
+                account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
+                if article_link_required(account):
+                    log.info(
+                        "  Skipping %s — no article link; pin will not be published.",
+                        post_id,
+                    )
+                    stats["skipped"] += 1
+                    continue
 
             log.info(
                 "[%d/%d] Processing: '%s'  post_id=%s  file=%s",
@@ -599,25 +622,20 @@ class PinterestScheduler:
                     pin_bytes,
                 )
                 log.info(
-                    "  [DRY RUN] Would publish '%s' (%d bytes pin image) card=%s",
-                    title, len(pin_bytes), card_path,
+                    "  [DRY RUN] Would publish '%s' (%d bytes pin image) card=%s link=%s",
+                    title, len(pin_bytes), card_path, entry.get("target_url") or "",
                 )
                 log.info(
-                    "  [DRY RUN] Would record '%s' in scheduled_history.txt.",
+                    "  [DRY RUN] Not recording '%s' (no inventory save, no ledger, no Facebook).",
                     src_filename,
                 )
-                try:
-                    self._queue_facebook(entry, pin_bytes, ledger, record_note=True)
-                except Exception as exc:  # noqa: BLE001
-                    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-
-                    if not isinstance(exc, B2DailyCapError):
-                        raise
-                    log.warning("B2 daily cap reached — stopping this run.")
-                    stats["stopped"] = "b2_daily_cap"
-                    break
-                inv.mark_posted(data, post_id, "DRY_RUN_PIN_ID")
-                inv.save(data)
+                stats.setdefault("pins", []).append(
+                    {
+                        "post_id": post_id,
+                        "title": title,
+                        "target_url": str(entry.get("target_url") or ""),
+                    }
+                )
                 stats["published"] += 1
 
             else:
@@ -764,12 +782,18 @@ class PinterestScheduler:
         if catalog is None:
             from agents.posting.pinterest_engine.articles import fetch_wordpress_catalog  # noqa: PLC0415
 
-            catalog = fetch_wordpress_catalog(site, verify=bool(verify), account_id=account)
+            catalog = fetch_wordpress_catalog(
+                site,
+                verify=bool(verify),
+                account_id=account,
+                outputs_dir=self.outputs_dir,
+            )
         from agents.posting.pinterest_engine.articles import attach_article_url  # noqa: PLC0415
 
         for entry in entries:
-            if attach_article_url(entry, catalog, account) == "skip":
-                entry["_skip_article"] = "skip"
+            linked = attach_article_url(entry, catalog, account, site_url=site)
+            if linked in {"skip", "no-link"}:
+                entry["_skip_article"] = linked
 
     def _load_ledger(self):
         import os  # noqa: PLC0415
@@ -795,7 +819,7 @@ class PinterestScheduler:
             if token and board:
                 pins = fetch_board_pins(board, token)
         if pins:
-            ledger.seed_board_pins(pins)
+            ledger.seed_board_pins(pins, persist=not self.dry_run)
         return ledger
 
     def _ensure_photo(self, entry: dict, prefix: str) -> tuple[Path | None, bool]:

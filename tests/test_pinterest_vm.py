@@ -14,6 +14,7 @@ import requests
 from PIL import Image, ImageDraw
 
 from agents.media.b2_client import media_bucket_name, resolve_b2_bucket_name
+from agents.posting.pinterest_engine.articles import Article
 from agents.posting.pinterest_engine.image_transformer import (
     _SERIF_CANDIDATES,
     PinTransformer,
@@ -630,8 +631,16 @@ def _sample_photo(path: Path) -> None:
     photo.save(path, format="JPEG", quality=95)
 
 
-def test_rendered_card_matches_the_original_template(tmp_path: Path) -> None:
+def test_rendered_card_matches_the_original_template(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Local and Docker share one renderer and the bundled Georgia substitute."""
+    from agents.posting.pinterest_engine import config as pcfg
+
+    # A previous account configure() leaves CTA and domain globals set.
+    monkeypatch.setattr(pcfg, "CTA_BUTTON_LABEL", "")
+    monkeypatch.setattr(pcfg, "TARGET_URL", "")
+    monkeypatch.setattr(pcfg, "PIN_THEME", {})
     source = tmp_path / "baalbek.jpg"
     _sample_photo(source)
     record = {
@@ -660,7 +669,8 @@ def test_rendered_card_matches_the_original_template(tmp_path: Path) -> None:
             if r < 90 and g < 110 and b < 90:
                 button += 1
     assert total > 0
-    assert button / total > 0.8
+    # No CTA and no domain: the old empty dark strip is not painted.
+    assert button / total < 0.2
 
     font = _find_font(_SERIF_CANDIDATES, 64)
     font_path = Path(getattr(font, "path", ""))
@@ -731,23 +741,41 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
         "variant_index": 0,
         "target_url": f"{_SITE}/baalbek",
     }
-    drawn: list[tuple[int, str]] = []
+    drawn: list[tuple[int, int, str, int]] = []
     original = ImageDraw.ImageDraw.text
 
     def spy(self, xy, text, *args, **kwargs):
-        drawn.append((int(xy[0]), str(text)))
+        font = kwargs.get("font")
+        size = int(getattr(font, "size", 0) or 0)
+        drawn.append((int(xy[0]), int(xy[1]), str(text), size))
         return original(self, xy, text, *args, **kwargs)
 
     monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
     raw = PinTransformer(outputs_dir=tmp_path / "pins").get_pin_bytes(record)
     assert raw
-    blob = " ".join(text for _x, text in drawn).upper()
-    assert "WHAT THE RECORDS LEAVE OUT ABOUT BAALBEK" in blob
+    blob = " ".join(text for _x, _y, text, _size in drawn).upper()
+    assert "WHAT THE RECORDS LEAVE OUT" not in blob
+    assert "BAALBEK" in blob
+    hook_bits = [
+        text
+        for _x, _y, text, _size in drawn
+        if "BAALBEK" in text.upper() and "READ THE" not in text.upper()
+    ]
+    assert hook_bits
+    assert len(" ".join(hook_bits).split()) <= 8
+    assert len(hook_bits) <= 3
     assert "READ THE FULL STORY ->" in blob
     assert "ANCIENTKNOWLEDGE.EOKVIRAL.COM" in blob
     assert "FOLLOW ANCIENT KNOWLEDGE" not in blob
-    domain_x = [x for x, text in drawn if "eokviral.com" in text.lower()]
-    assert domain_x and max(domain_x) < 80
+    domain = [
+        (x, y, size)
+        for x, y, text, size in drawn
+        if "eokviral.com" in text.lower()
+    ]
+    assert domain
+    assert max(item[0] for item in domain) < 80
+    assert min(item[1] for item in domain) > 1340
+    assert min(item[2] for item in domain) >= 32
 
     title = keyword_first_title(record["pinterest_title"], record["topic"])
     assert title.lower().startswith("baalbek")
@@ -809,15 +837,15 @@ def _prepare_channel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PUBLISHER_MODE", "docker")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    # A previous run can restore a posted inventory and hide a new library card.
+    # A previous run can restore posted state and hide or block a new library card.
     store = (
         Path(__file__).resolve().parents[1]
         / "channels_config"
         / "ancient_knowledge"
         / "store"
-        / "master_inventory.json"
     )
-    store.unlink(missing_ok=True)
+    for name in ("master_inventory.json", "scheduled_history.txt"):
+        (store / name).unlink(missing_ok=True)
     monkeypatch.setattr(
         "agents.posting.pinterest_engine.inventory.MasterInventory._load_ai_client",
         lambda self: (None, None),
@@ -860,11 +888,10 @@ def test_dry_run_renders_library_photo_and_links_the_article(
     assert len(cards) == 1
     card = Image.open(cards[0])
     assert card.size == (1000, 1500)
-    inventory = json.loads(
-        (tmp_path / "ancient_knowledge" / "master_inventory.json").read_text(encoding="utf-8")
-    )
-    assert inventory["entries"][0]["target_url"] == f"{_SITE}/baalbek"
-    assert "Practical Guide" not in inventory["entries"][0]["pinterest_title"]
+    assert not (tmp_path / "ancient_knowledge" / "master_inventory.json").exists()
+    assert stats["pins"][0]["target_url"] == f"{_SITE}/baalbek"
+    assert "Practical Guide" not in stats["pins"][0]["title"]
+    assert "pinterest/ledger/ancient_knowledge.jsonl" not in client.objects
     assert not (tmp_path / "ancient_knowledge" / "_tmp").exists() or not any(
         (tmp_path / "ancient_knowledge" / "_tmp").rglob("*.jpg")
     )
@@ -887,7 +914,10 @@ def test_ledger_and_board_titles_block_a_repeat(
             ledger_key: (row + "\n").encode(),
         }
     )
-    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    tartaria = [
+        Article(url=f"{_SITE}/tartaria", topic="Tartaria", body="Mudflood.", slug="tartaria")
+    ]
+    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=tartaria)
     assert stats["published"] == 0
     assert stats["skipped"] >= 1
     assert image_key not in client.downloads
@@ -903,11 +933,11 @@ def test_ledger_and_board_titles_block_a_repeat(
         pins=1,
         dry_run=True,
         client=fresh,
-        catalog=[],
+        catalog=tartaria,
         board_pins=[{"id": "board-pin", "title": "Tartaria"}],
     )
     assert seeded["published"] == 0
-    assert b"Tartaria" in fresh.objects["pinterest/ledger/ancient_knowledge.jsonl"]
+    assert "pinterest/ledger/ancient_knowledge.jsonl" not in fresh.objects
 
 
 def test_flux_fallback_replaces_a_missing_or_title_graphic(
@@ -944,7 +974,20 @@ def test_flux_fallback_replaces_a_missing_or_title_graphic(
         "agents.media.free_images.sourcer.resolve_image_source",
         _no_free,
     )
-    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    stats = publish_account(
+        _ancient(),
+        pins=1,
+        dry_run=True,
+        client=client,
+        catalog=[
+            Article(
+                url=f"{_SITE}/puma-punku",
+                topic="Puma Punku",
+                body="The stones.",
+                slug="puma-punku",
+            )
+        ],
+    )
     assert stats["published"] == 1
     assert calls
     uploaded = [key for key in client.objects if key.endswith("puma-punku.jpg")]
@@ -1153,11 +1196,75 @@ def test_new_card_appends_a_facebook_postplanner_row(
             image_key: _photo(),
         }
     )
-    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    gobekli = [
+        Article(
+            url=f"{_SITE}/gobekli-tepe",
+            topic="Gobekli Tepe pillars",
+            body="A temple older than pottery.",
+            slug="gobekli-tepe",
+        )
+    ]
+    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=gobekli)
     assert stats["published"] == 1
     assert client.downloads == [image_key]
     assert client.deletes == []
+    assert not (tmp_path / "ancient_knowledge" / "postplanner").exists()
+    assert not any("postplanner/" in key for key in client.objects)
+    assert "pinterest/ledger/ancient_knowledge.jsonl" not in client.objects
+    assert not (tmp_path / "ancient_knowledge" / "master_inventory.json").exists()
 
+
+def test_live_card_appends_a_facebook_postplanner_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A real publish still queues Facebook. Dry runs do not."""
+    _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.delenv("B2_BUCKET_NAME", raising=False)
+
+    class _Publisher:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def validate_token(self) -> bool:
+            return True
+
+        def publish(self, record, pin_bytes):
+            del pin_bytes
+            assert str(record.get("target_url") or "").startswith(_SITE)
+            assert "sales" not in str(record.get("target_url") or "")
+            return {"id": "pin-live"}
+
+    monkeypatch.setattr(
+        "agents.posting.pinterest_engine.publisher.PinterestPublisher",
+        _Publisher,
+    )
+    record_key = "ancient_knowledge/library/post_facebook_live.json"
+    image_key = "ancient_knowledge/library/images/facebook-live.jpg"
+    client = FakeS3(
+        {
+            record_key: _library_record(
+                "gobekli-tepe",
+                "Gobekli Tepe pillars",
+                "images/facebook-live.jpg",
+            ),
+            image_key: _photo(),
+        }
+    )
+    stats = publish_account(
+        _ancient(),
+        pins=1,
+        dry_run=False,
+        client=client,
+        catalog=[
+            Article(
+                url=f"{_SITE}/gobekli-tepe",
+                topic="Gobekli Tepe pillars",
+                body="A temple older than pottery.",
+                slug="gobekli-tepe",
+            )
+        ],
+    )
+    assert stats["published"] == 1
     folder = tmp_path / "ancient_knowledge" / "postplanner"
     cumulative = _sheet_rows(folder / "cumulative.xlsx")
     assert cumulative[0] == ("DATE / TIME", "CAPTION", "MEDIA URL")
@@ -1168,7 +1275,7 @@ def test_new_card_appends_a_facebook_postplanner_row(
     runs = list(folder.glob("postplan_*.xlsx"))
     assert len(runs) == 1
     assert _sheet_rows(runs[0])[1][2] == media
-    card_key = "ancient_knowledge/postplanner/cards/post_facebook_queue.jpg"
+    card_key = "ancient_knowledge/postplanner/cards/post_facebook_live.jpg"
     assert card_key in client.objects
     assert media == (
         "https://MediaupscaleStorage.s3.us-east-005.backblazeb2.com/" + card_key
@@ -1177,7 +1284,7 @@ def test_new_card_appends_a_facebook_postplanner_row(
     assert any(key.startswith("ancient_knowledge/postplanner/postplan_") for key in client.objects)
     ledger = client.objects["pinterest/ledger/ancient_knowledge.jsonl"].decode()
     assert '"facebook_exported": true' in ledger
-    assert '"pin_recorded": false' in ledger
+    assert '"pin_id": "pin-live"' in ledger
 
 
 def test_facebook_row_is_skipped_when_the_ledger_already_exported_it(
@@ -1206,7 +1313,20 @@ def test_facebook_row_is_skipped_when_the_ledger_already_exported_it(
             "pinterest/ledger/ancient_knowledge.jsonl": (note + "\n").encode(),
         }
     )
-    stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=[])
+    stats = publish_account(
+        _ancient(),
+        pins=1,
+        dry_run=True,
+        client=client,
+        catalog=[
+            Article(
+                url=f"{_SITE}/derinkuyu",
+                topic="Derinkuyu underground city",
+                body="The tunnels.",
+                slug="derinkuyu",
+            )
+        ],
+    )
     assert stats["published"] == 1
     assert not (tmp_path / "ancient_knowledge" / "postplanner").exists()
     assert "ancient_knowledge/postplanner/cards/post_facebook_dedupe.jpg" not in client.objects
@@ -1235,7 +1355,14 @@ def test_facebook_postplanner_stays_off_when_the_account_flag_is_false(
         pins=1,
         dry_run=True,
         client=client,
-        catalog=[],
+        catalog=[
+            Article(
+                url=f"{_SITE}/nan-madol",
+                topic="Nan Madol canals",
+                body="The canals.",
+                slug="nan-madol",
+            )
+        ],
     )
     assert stats["published"] == 1
     assert not (tmp_path / "ancient_knowledge" / "postplanner").exists()

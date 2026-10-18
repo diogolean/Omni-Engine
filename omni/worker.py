@@ -119,6 +119,37 @@ def _sleep_until(seconds: float, stop: dict) -> None:
         time.sleep(min(5.0, deadline - time.monotonic()))
 
 
+def run_one_account(account_id: str, *, pins: int, dry_run: bool) -> dict:
+    """Publish or dry-run a single account and return. Does not start the scheduler."""
+    wanted = account_id.strip()
+    account = next(
+        (
+            row
+            for row in active_pinterest_accounts()
+            if row.account_id == wanted or row.branding == wanted
+        ),
+        None,
+    )
+    if account is None:
+        log.error("No active Pinterest account %s", wanted)
+        raise SystemExit(2)
+    log.info(
+        "Single account run | account=%s pins=%d dry_run=%s",
+        account.account_id,
+        pins,
+        dry_run,
+    )
+    stats = run_pinterest_drip(account, pins=pins, dry_run=dry_run)
+    log.info(
+        "Single account done | account=%s published=%s skipped=%s errors=%s",
+        account.account_id,
+        stats.get("published"),
+        stats.get("skipped"),
+        stats.get("errors"),
+    )
+    return stats
+
+
 def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
     stop = {"flag": False}
 
@@ -186,11 +217,26 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Build image cards and log the pins. Do not call Pinterest or record them.",
     )
+    parser.add_argument(
+        "--account",
+        default=None,
+        help="Run one Pinterest account (for example ancient_knowledge) and exit.",
+    )
+    parser.add_argument(
+        "--pins",
+        type=int,
+        default=None,
+        help="How many pins --account renders. Dry-run defaults to 5.",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(message)s",
     )
+    if args.account:
+        pins = args.pins if args.pins is not None else (5 if args.dry_run else pins_per_wake())
+        run_one_account(args.account, pins=pins, dry_run=args.dry_run)
+        return
     if args.role == "engine":
         run_engine()
         return

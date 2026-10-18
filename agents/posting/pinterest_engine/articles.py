@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -71,6 +72,24 @@ _GENERIC_TOKENS = {
 }
 _SLUG_MATCH_FLOOR = 0.84
 _COMPACT_LENGTH_FLOOR = 0.72
+_FUZZY_FLOOR = 0.72
+_DEFAULT_CATALOG_TTL = 6 * 60 * 60
+_STOP_TOKENS = {
+    "the",
+    "and",
+    "of",
+    "a",
+    "an",
+    "in",
+    "on",
+    "for",
+    "with",
+    "from",
+    "its",
+    "at",
+    "to",
+    "by",
+}
 _tls_off_logged: set[str] = set()
 
 
@@ -132,18 +151,133 @@ def _wp_get(url: str, *, params: dict | None, verify: bool, site_url: str, accou
         return None
 
 
+def catalog_ttl_seconds() -> int:
+    raw = (os.getenv("ARTICLE_CATALOG_TTL_SECONDS") or "").strip()
+    if not raw:
+        return _DEFAULT_CATALOG_TTL
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_CATALOG_TTL
+    return value if value > 0 else _DEFAULT_CATALOG_TTL
+
+
+def catalog_cache_path(account_id: str, outputs_dir: Path) -> Path:
+    """JSON cache on the outputs volume (the Docker mount), not the git tree."""
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", (account_id or "site").strip()) or "site"
+    return outputs_dir / "article_cache" / f"{safe}.json"
+
+
+def _articles_from_payload(payload: object) -> list[Article]:
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("articles")
+    if not isinstance(rows, list):
+        return []
+    articles: list[Article] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url = str(row.get("url") or "").strip()
+        slug = str(row.get("slug") or "").strip()
+        if not url or not slug:
+            continue
+        articles.append(
+            Article(
+                url=url,
+                topic=str(row.get("topic") or slug),
+                body=str(row.get("body") or ""),
+                slug=slug,
+            )
+        )
+    return articles
+
+
+def _read_catalog_cache(path: Path, site_url: str) -> tuple[list[Article], float] | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if str(payload.get("site") or "").rstrip("/") != site_url.rstrip("/"):
+        return None
+    try:
+        fetched_at = float(payload.get("fetched_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    articles = _articles_from_payload(payload)
+    if not articles or fetched_at <= 0:
+        return None
+    return articles, fetched_at
+
+
+def _write_catalog_cache(path: Path, site_url: str, articles: list[Article]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "site": site_url.rstrip("/"),
+        "fetched_at": time.time(),
+        "articles": [article.__dict__ for article in articles],
+    }
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
 def fetch_wordpress_catalog(
     site_url: str,
     *,
     verify: bool = True,
     account_id: str = "",
+    outputs_dir: Path | None = None,
+    ttl_seconds: int | None = None,
 ) -> list[Article]:
-    """List the site's posts once. A TLS or HTTP failure returns an empty list."""
+    """List the site's posts, using an outputs-volume cache until the TTL expires.
+
+    A TLS or HTTP failure returns the stale cache when one exists, otherwise [].
+    """
     if not site_url or site_url.strip().upper() == "TODO":
         return []
+    ttl = catalog_ttl_seconds() if ttl_seconds is None else ttl_seconds
+    cached: tuple[list[Article], float] | None = None
+    cache_path: Path | None = None
+    if outputs_dir is not None:
+        cache_path = catalog_cache_path(account_id, outputs_dir)
+        cached = _read_catalog_cache(cache_path, site_url)
+        if cached is not None and (time.time() - cached[1]) < ttl:
+            log.info(
+                "Article catalog cache hit for %s (%d posts).",
+                account_id or "site",
+                len(cached[0]),
+            )
+            return cached[0]
+    articles = _fetch_wordpress_pages(site_url, verify=verify, account_id=account_id)
+    if articles:
+        if cache_path is not None:
+            try:
+                _write_catalog_cache(cache_path, site_url, articles)
+            except OSError as exc:
+                log.info("Article catalog cache write failed (%s).", type(exc).__name__)
+        return articles
+    if cached is not None:
+        log.info(
+            "Article catalog fetch failed; using stale cache (%d posts).",
+            len(cached[0]),
+        )
+        return cached[0]
+    return []
+
+
+def _fetch_wordpress_pages(
+    site_url: str,
+    *,
+    verify: bool,
+    account_id: str,
+) -> list[Article]:
+    """GET /wp-json/wp/v2/posts?per_page=100 and follow X-WP-TotalPages."""
     endpoint = site_url.rstrip("/") + "/wp-json/wp/v2/posts"
     articles: list[Article] = []
-    for page in range(1, 6):
+    for page in range(1, 21):
         resp = _wp_get(
             endpoint,
             params={"per_page": 100, "page": page, "_fields": "slug,link,title,excerpt,content"},
@@ -184,7 +318,7 @@ def fetch_wordpress_catalog(
 def _filename_tokens(filename: str) -> list[str]:
     stem = Path(filename).stem.lower()
     tokens: list[str] = []
-    for token in re.split(r"[_\-\s.]+", stem):
+    for token in re.split(r"[_\-\s./]+", stem):
         token = token.strip()
         if not token or _DATE_TOKEN.match(token) or _NOISE_TOKEN.match(token):
             continue
@@ -300,10 +434,15 @@ def mapped_slug(account_id: str, name: str) -> str | None:
         return None
     stem = Path(name).stem.lower()
     lowered = name.lower()
+    flat_stem = re.sub(r"[^a-z0-9]+", "", stem)
+    flat_name = re.sub(r"[^a-z0-9]+", "", lowered)
     best_key = ""
     best: str | None = None
     for key, slug in rows.items():
-        exact = key in {lowered, stem, Path(name).name.lower()}
+        flat_key = re.sub(r"[^a-z0-9]+", "", key)
+        exact = key in {lowered, stem, Path(name).name.lower()} or (
+            bool(flat_key) and flat_key in {flat_stem, flat_name}
+        )
         suffix = stem.endswith("_" + key) or stem.endswith("-" + key)
         if (exact or suffix) and len(key) > len(best_key):
             best_key = key
@@ -319,31 +458,179 @@ def article_for_slug(slug: str, catalog: list[Article]) -> Article | None:
     return None
 
 
+def article_link_required(account_id: str = "") -> bool:
+    """Ancient Knowledge pins must link to an article. Never a sales URL."""
+    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+
+    channel = (account_id or cfg.CHANNEL_ID or "").strip()
+    return channel == "ancient_knowledge"
+
+
+def resolve_pin_link(record: dict | None) -> str:
+    """Article URL for the pin. Ancient Knowledge does not fall back to a sales URL."""
+    row = record or {}
+    url = str(row.get("target_url") or "").strip()
+    if url:
+        return url
+    channel = str(row.get("channel_id") or row.get("page_id") or "")
+    if article_link_required(channel):
+        return ""
+    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+
+    if article_link_required():
+        return ""
+    return (cfg.TARGET_URL or "").strip()
+
+
+def _match_tokens(text: str) -> list[str]:
+    """Content words. Stopwords drop out. Words like ``tomb`` stay so they count as extras."""
+    out: list[str] = []
+    for token in _filename_tokens(text):
+        if token in _STOP_TOKENS or len(token) <= 2:
+            continue
+        out.append(token)
+    return out
+
+
+def _keyword_tokens(article: Article) -> list[str]:
+    blob = f"{article.slug.replace('-', ' ')} {article.topic}"
+    seen: list[str] = []
+    for token in _match_tokens(blob):
+        if token not in seen:
+            seen.append(token)
+    return seen
+
+
+def score_article_match(query: str, article: Article) -> float:
+    """0..1 overlap of the query with the article slug, title, and those keywords."""
+    tokens = _match_tokens(query)
+    if not tokens:
+        return 0.0
+    slug_tokens = _slug_tokens(article.slug)
+    if not slug_tokens and not article.topic:
+        return 0.0
+    query_set = set(tokens)
+    slug_set = set(slug_tokens)
+    if slug_set and slug_set == query_set:
+        return 1.0
+    if slug_set and slug_set <= query_set:
+        extras = [token for token in tokens if token not in slug_set]
+        if not extras:
+            return 1.0
+        # "Tartaria/Mudflood" may add one word. "giants tomb sardinia" must not hit "giants".
+        if len(extras) == 1:
+            return 0.9
+        if len(slug_set) >= 2 and len(extras) <= len(slug_set):
+            return 0.82
+    keywords = _keyword_tokens(article)
+    if not keywords:
+        return 0.0
+    key_set = set(keywords)
+    overlap = query_set & key_set
+    if not overlap:
+        compact_query = "".join(tokens)
+        compact_slug = "".join(slug_tokens)
+        shorter = min(len(compact_query), len(compact_slug))
+        longer = max(len(compact_query), len(compact_slug))
+        if shorter < 5 or longer == 0 or shorter / longer < _COMPACT_LENGTH_FLOOR:
+            return 0.0
+        return SequenceMatcher(None, compact_query, compact_slug).ratio()
+    coverage = len(overlap) / len(query_set)
+    recall = len(overlap) / len(key_set)
+    return (0.55 * coverage) + (0.45 * recall)
+
+
 def match_catalog_article(name: str, catalog: list[Article]) -> Article | None:
     slug = match_article_slug(name, [article.slug for article in catalog])
-    if not slug:
-        return None
-    return article_for_slug(slug, catalog)
+    if slug:
+        found = article_for_slug(slug, catalog)
+        if found is not None:
+            return found
+    best: Article | None = None
+    best_score = 0.0
+    for article in catalog:
+        score = score_article_match(name, article)
+        if score > best_score:
+            best_score = score
+            best = article
+    if best is not None and best_score >= _FUZZY_FLOOR:
+        return best
+    return None
 
 
-def attach_article_url(entry: dict, catalog: list[Article], account_id: str) -> str | None:
-    """Set ``target_url`` from the matched article. Return ``skip`` to drop the pin."""
-    name = str(
-        entry.get("subject_slug")
-        or entry.get("post_id")
-        or entry.get("topic")
-        or ""
-    )
-    mapped = mapped_slug(account_id, name)
-    if mapped == "skip":
-        return "skip"
-    article = article_for_slug(mapped, catalog) if mapped else None
+def _entry_names(entry: dict) -> list[str]:
+    names: list[str] = []
+    for key in ("subject_slug", "topic", "pinterest_title", "post_id"):
+        value = str(entry.get(key) or "").strip()
+        if value and value not in names:
+            names.append(value)
+    for key in ("local_image_path", "image_relative", "image_path"):
+        raw = str(entry.get(key) or "").strip()
+        if not raw:
+            continue
+        for value in (Path(raw).name, Path(raw).stem):
+            if value and value not in names:
+                names.append(value)
+    return names
+
+
+def best_catalog_match(names: list[str], catalog: list[Article]) -> Article | None:
+    """Best article across filename, slug, title, and topic. Slug hits win immediately."""
+    best: Article | None = None
+    best_score = 0.0
+    for name in names:
+        slug = match_article_slug(name, [article.slug for article in catalog])
+        if slug:
+            found = article_for_slug(slug, catalog)
+            if found is not None:
+                return found
+        for article in catalog:
+            score = score_article_match(name, article)
+            if score > best_score:
+                best_score = score
+                best = article
+    if best is not None and best_score >= _FUZZY_FLOOR:
+        return best
+    return None
+
+
+def attach_article_url(
+    entry: dict,
+    catalog: list[Article],
+    account_id: str,
+    site_url: str = "",
+) -> str | None:
+    """Set ``target_url`` from the catalog, then the image map.
+
+    Returns ``skip`` when the map says skip, ``no-link`` when an article is
+    required and none matched, otherwise None.
+    """
+    names = _entry_names(entry)
+    for name in names:
+        if mapped_slug(account_id, name) == "skip":
+            entry["target_url"] = ""
+            return "skip"
+    article = best_catalog_match(names, catalog)
     if article is None:
-        article = match_catalog_article(name, catalog)
-    if article is None and entry.get("topic"):
-        article = match_catalog_article(str(entry.get("topic")), catalog)
+        mapped = ""
+        for name in names:
+            slug = mapped_slug(account_id, name)
+            if slug and slug != "skip":
+                mapped = slug
+                break
+        if mapped:
+            article = article_for_slug(mapped, catalog)
+            if article is None and site_url:
+                url = _article_url(site_url, mapped)
+                if url:
+                    entry["target_url"] = url
+                    return None
     if article is not None:
         entry["target_url"] = article.url
+        return None
+    if article_link_required(account_id):
+        entry["target_url"] = ""
+        return "no-link"
     return None
 
 
