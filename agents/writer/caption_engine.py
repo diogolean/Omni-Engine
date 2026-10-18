@@ -2172,61 +2172,11 @@ class CaptionEngine:
         else:
             clean = _metrics_script(raw)
             from modules.reel_artefact.script_date import ensure_topic_date
-            from modules.reel_artefact.script_length import fit_word_target
+            from modules.reel_artefact.script_length import soft_ceiling
 
             clean = ensure_topic_date(clean, topic)
-            _target_words = int(total_words_target or 148)
-
-            def _rewrite_to_band(body: str, target: int, low: int, high: int) -> str:
-                import os as _os
-
-                if _os.getenv("PYTEST_CURRENT_TEST"):
-                    return ""
-                count = len(body.split())
-                if count > high:
-                    ask = (
-                        f"Rewrite this documentary narration to {low}-{high} words "
-                        f"(target {target}). Keep the opening sentence and the facts. "
-                        "Cut later sentences. Return only the narration.\n\n"
-                        f"{body}"
-                    )
-                else:
-                    ask = (
-                        f"Rewrite this documentary narration to {low}-{high} words "
-                        f"(target {target}). Keep the opening sentence. Add concrete "
-                        "visual detail, not filler. Return only the narration.\n\n"
-                        f"{body}"
-                    )
-                try:
-                    from agents.media.providers.gemini_utils import (
-                        chain_with_preferred_first,
-                        generate_content_with_model_fallback,
-                    )
-                    from agents.media.providers.model_router import text_model as _route_text
-
-                    route = _route_text(
-                        task="voiceover_script",
-                        preferred=app_config.GEMINI_ECONOMIC_BRAIN_MODEL,
-                        tier=getattr(self, "_router_tier", None),
-                        log=False,
-                    )
-                    chain = chain_with_preferred_first(
-                        list(route.chain) or [route.model_id], route.model_id,
-                    )
-                    response = generate_content_with_model_fallback(
-                        self._gemini, chain, contents=[ask],
-                    )
-                    text_attr = getattr(response, "text", None)
-                    out = text_attr() if callable(text_attr) else (text_attr or "")
-                    return (out or "").strip()
-                except Exception as _len_exc:  # noqa: BLE001
-                    logger.warning(
-                        "generate_sequence_voiceover | length rewrite failed (%s)",
-                        _len_exc,
-                    )
-                    return ""
-
-            clean = fit_word_target(clean, _target_words, rewrite=_rewrite_to_band)
+            # Soft ceiling only. No rewrite, and no cut inside a sentence.
+            clean = soft_ceiling(clean)
             clean = ensure_topic_date(clean, topic)
         logger.info(
             "generate_sequence_voiceover | final script %d words / %d chars "

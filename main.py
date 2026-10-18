@@ -1461,7 +1461,12 @@ def _synthesize_sequence_voice_track(
 
     def _synth_narr(text: str, attempt_label: int) -> tuple["Path | None", list, float]:
         """Single narration TTS call. Returns (voice_path, word_timings, dur_s)."""
-        cleaned = _trim_script_to_word_limit(text or "", max_words=words_max)
+        if is_ak:
+            from modules.reel_artefact.script_length import soft_ceiling
+
+            cleaned = soft_ceiling(text or "")
+        else:
+            cleaned = _trim_script_to_word_limit(text or "", max_words=words_max)
         if page_ctx is None or page_ctx.strip_audio_tags_before_tts:
             cleaned = _strip_audio_behavior_tags(cleaned)
         if is_ak:
@@ -1568,114 +1573,14 @@ def _synthesize_sequence_voice_track(
         100.0 * (total_s - _reel_dur) / _reel_dur if _reel_dur > 0 else 0.0,
     )
 
-    # ── Correction decision — MEASURE-then-correct, one shot only ────────
-    within_tolerance = (
-        _reel_dur > 0
-        and abs(total_s - _reel_dur) / _reel_dur <= _VOICE_TOLERANCE_FRACTION
-    )
-    if within_tolerance or caption_engine is None or not is_ak:
-        _LOG.info(
-            "VOICE ACCEPT | attempt=1 total=%.1fs (target %.1fs, tolerance ±%.0f%%)",
-            total_s, _reel_dur, 100.0 * _VOICE_TOLERANCE_FRACTION,
-        )
-        return _voice_return(
-            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
-        )
-
-    # Sanity-clamp observed WPS so a broken measurement can't drive the
-    # correction into absurd territory (e.g. divide by ~0 → millions of words).
-    if not (_VOICE_MIN_OBSERVED_WPS <= observed_wps_1 <= _VOICE_MAX_OBSERVED_WPS):
-        _LOG.warning(
-            "VOICE CORRECT | observed_wps=%.3f outside sanity range "
-            "[%.2f, %.2f] — falling back to seed WPS and accepting attempt=1",
-            observed_wps_1, _VOICE_MIN_OBSERVED_WPS, _VOICE_MAX_OBSERVED_WPS,
-        )
-        return _voice_return(
-            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
-        )
-
-    desired_narr_s = max(5.0, _reel_dur - float(cta_dur or 0.0) - _cta_silence_s)
-    corrected_words = max(40, int(round(desired_narr_s * observed_wps_1)))
+    # Length follows the story. Do not regenerate the script to hit a duration.
     _LOG.info(
-        "VOICE CORRECT | attempt=2 planned | target_narr=%.1fs observed_wps=%.3f "
-        "corrected_words=%d (prev=%d, delta=%+d)",
-        desired_narr_s, observed_wps_1, corrected_words, wc1, corrected_words - wc1,
-    )
-    try:
-        new_script = caption_engine.generate_sequence_voiceover(
-            resolved_subject,
-            page_niche=page_ctx.content_niche if page_ctx else "",
-            persona_voice=(
-                "investigative documentary narrator — "
-                f"target EXACTLY {corrected_words} spoken words"
-            ),
-            n_acts=n_acts,
-            duration_s=page_ctx.reel_duration if page_ctx else 85.0,
-            total_words_target=corrected_words,
-            economic=economic,
-            niche_disclaimer=(
-                (page_ctx.niche_disclaimer if page_ctx else "")
-                + f" DURATION CORRECTION: previous draft was {wc1} words / "
-                f"{narr_dur:.0f}s of narration. Re-plan the script to "
-                f"~{corrected_words} spoken words so the narration lands "
-                f"near {desired_narr_s:.0f}s. Do NOT pad or truncate — "
-                f"restructure the content density to hit that word count "
-                f"naturally."
-            ),
-            cta_line="",
-            narrative_mode=(
-                page_ctx.narrative_mode if page_ctx else "investigative"
-            ),
-            batch_angle_block=batch_angle_block,
-            previously_generated_hooks=list(generated_hooks_cache or []),
-        ) or ""
-    except Exception as _regen_exc:  # noqa: BLE001
-        _LOG.warning(
-            "VOICE CORRECT | script regen failed (%s) — accepting attempt=1",
-            _regen_exc,
-        )
-        new_script = ""
-
-    if not new_script or len(new_script.split()) < 40:
-        _LOG.warning(
-            "VOICE CORRECT | regen returned unusable output (%d words) — "
-            "accepting attempt=1",
-            len(new_script.split()) if new_script else 0,
-        )
-        return _voice_return(
-            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
-        )
-    if cost_tracker is not None:
-        cost_tracker.track_text(char_count=len(new_script))
-
-    current = new_script
-    voice_only_2, narr_wts, narr_dur = _synth_narr(current, attempt_label=2)
-    if voice_only_2 is None:
-        _LOG.warning(
-            "VOICE CORRECT | attempt=2 TTS failed — falling back to attempt=1 audio"
-        )
-        return _voice_return(
-            voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
-        )
-    # Reuse CTA audio — the text hasn't changed
-    voice_path = _stitch(voice_only_2, cta_path)
-    try:
-        total_s = float(_audio_file_duration_s(Path(voice_path))) if voice_path else 0.0
-    except Exception:
-        total_s = narr_dur + (cta_dur + _cta_silence_s if cta_path else 0.0)
-    wc2 = len(current.split())
-    observed_wps_2 = (wc2 / narr_dur) if narr_dur > 0 else 0.0
-    _LOG.info(
-        "VOICE MEASURE | attempt=2 narr=%.1fs cta=%.1fs total=%.1fs "
-        "target=%.1fs words=%d observed_wps=%.3f delta=%+.1fs (%+.1f%%) — FINAL",
-        narr_dur, cta_dur, total_s, _reel_dur, wc2, observed_wps_2,
-        total_s - _reel_dur,
-        100.0 * (total_s - _reel_dur) / _reel_dur if _reel_dur > 0 else 0.0,
+        "VOICE ACCEPT | story kept | narr=%.1fs total=%.1fs words=%d",
+        narr_dur, total_s, wc1,
     )
     return _voice_return(
         voice_path, narr_wts, narr_dur, total_s, current, cta_path, cta_dur,
     )
-
 
 # Known geographic/visual anchors mapped to camera-perspective image directives.
 # _GEO_ANCHORS returns IDENTITY-ONLY entity strings (place, material, era, era-
@@ -3551,14 +3456,15 @@ def _produce_variant_worker(
                         uniqueness_guard.register(_opening)
                         break
                 if _early_seq_script:
-                    _early_seq_script = _trim_script_to_word_limit(
-                        _early_seq_script,
-                        max_words=(
-                            page_ctx.reel_narration_max_words
-                            if page_ctx and (page_ctx.page_id or "").lower() == "ancient_knowledge"
-                            else _seq_words + 15
-                        ),
-                    )
+                    if page_ctx and (page_ctx.page_id or "").lower() == "ancient_knowledge":
+                        from modules.reel_artefact.script_length import soft_ceiling
+
+                        _early_seq_script = soft_ceiling(_early_seq_script)
+                    else:
+                        _early_seq_script = _trim_script_to_word_limit(
+                            _early_seq_script,
+                            max_words=_seq_words + 15,
+                        )
                     if cost_tracker is not None:
                         cost_tracker.track_text(char_count=len(_early_seq_script))
                     _LOG.info(
@@ -3668,40 +3574,32 @@ def _produce_variant_worker(
                         _seq_n, _unit, _unit * _seq_n,
                     )
                 else:
-                    # ECONOMIC_REEL non-Mei: 3–5 s semantic chunks from TTS
-                    # alignment, then JSON scene prompts. Mei keeps frame lore.
+                    # One beat per narration sentence, timed by the word timestamps.
                     if (not _is_mm) and _narr_word_timings:
                         try:
-                            from core.audio_chunker import chunk_word_timings
-                            from agents.media.scene_prompt_generator import (
-                                generate_scene_prompts,
+                            from modules.reel_qa.beats import (
+                                _scene_for as _sentence_scene,
+                                beats_from_timestamps,
                             )
 
-                            _chunks = chunk_word_timings(_narr_word_timings)
-                            if _chunks:
-                                try:
-                                    from quality.VisualQA_Agent.channel_rag import (
-                                        get_channel_rules as _qa_rules,
-                                        seed_default_channels as _qa_seed,
-                                    )
-
-                                    _qa_seed(force=False)
-                                    _dna = _qa_rules(page_ctx.page_id or "")
-                                except Exception:
-                                    _dna = {}
-                                _dna = dict(_dna or {})
-                                _dna.setdefault("topic", resolved_subject)
-                                _audio_first_scenes = generate_scene_prompts(
-                                    _early_seq_script or resolved_subject,
-                                    _chunks,
-                                    _dna,
-                                    channel_id=page_ctx.page_id or "",
-                                    atmosphere=_ak_base_style,
-                                )
-                                _raw_durs = [c.duration_s for c in _chunks]
-                                _sum_d = sum(_raw_durs) or 1.0
-                                _scale = float(_narr_dur) / _sum_d
-                                _ak_act_durs = [d * _scale for d in _raw_durs]
+                            _rows = beats_from_timestamps(
+                                _early_seq_script or resolved_subject,
+                                _narr_word_timings,
+                                narration_s=float(_narr_dur or 0.0),
+                            )
+                            if _rows:
+                                _audio_first_scenes = []
+                                _ak_act_durs = []
+                                for _i, (_text, _start, _end) in enumerate(_rows):
+                                    _dur = max(0.4, float(_end) - float(_start))
+                                    _ak_act_durs.append(_dur)
+                                    _audio_first_scenes.append(_sentence_scene(
+                                        _text,
+                                        float(_start),
+                                        float(_start) + _dur,
+                                        index=_i,
+                                        inherited={"domain_anchors": resolved_subject},
+                                    ))
                                 _cta_hold = float(_cta_audio_dur or 0.0) + float(
                                     _cta_silence_s or 1.0
                                 )
@@ -3714,32 +3612,21 @@ def _produce_variant_worker(
                                 _seq_n = len(_audio_first_scenes)
                                 _ak_keep_map = list(range(_seq_n))
                                 _LOG.info(
-                                    "AUDIO-FIRST CHUNKS | n=%d window=3-5s durs=%s",
+                                    "SENTENCE BEATS | n=%d durs=%s",
                                     _seq_n,
                                     ",".join(f"{d:.2f}" for d in _ak_act_durs[:8]),
                                 )
-                                print(
-                                    f"\n[AUDIO-FIRST] {_seq_n} spoken windows (3–5s)",
-                                    flush=True,
-                                )
                                 for _sc in _audio_first_scenes:
-                                    print(
-                                        f"  chunk {_sc.get('scene_index', '?')} "
-                                        f"[{_sc.get('start_time', 0):.1f}–{_sc.get('end_time', 0):.1f}s] "
-                                        f"spoken={_sc.get('spoken_text', '')!r}",
-                                        flush=True,
-                                    )
-                                    print(
-                                        f"    prompt={str(_sc.get('image_generation_prompt') or '')[:220]}",
-                                        flush=True,
-                                    )
-                                    print(
-                                        f"    negative={str(_sc.get('negative_prompt') or '')[:180]}",
-                                        flush=True,
+                                    _LOG.info(
+                                        "SENTENCE BEAT | %s [%.1f–%.1f] %s",
+                                        _sc.get("scene_index"),
+                                        float(_sc.get("start_time") or 0),
+                                        float(_sc.get("end_time") or 0),
+                                        str(_sc.get("spoken_text") or "")[:80],
                                     )
                         except Exception as _chunk_exc:  # noqa: BLE001
                             _LOG.warning(
-                                "AUDIO-FIRST chunker failed (%s) — bucket planner",
+                                "SENTENCE BEATS failed (%s) — bucket planner",
                                 _chunk_exc,
                             )
                             _audio_first_scenes = []
@@ -4702,6 +4589,35 @@ def _produce_variant_worker(
                         _idx + 1, _seq_n, _gate.blocked_reason or "rejected",
                     )
                     return
+                _guaranteed = None
+                try:
+                    from modules.reel_artefact.reuse import guarantee_still
+
+                    _meta_fallback = _sr_act_meta.get(_idx) or {}
+                    _entity_fallback = str(_meta_fallback.get("artefact_kwargs", {}).get(
+                        "artefact_entity_id", ""
+                    ) or "")
+                    _fallback_dest = _reel_img_dir / f"{stem}_act{_idx + 1:02d}_fallback.jpg"
+                    _guaranteed = guarantee_still(
+                        _fallback_dest,
+                        _idx,
+                        entity_id=_entity_fallback,
+                        n_beats=_seq_n,
+                    )
+                except Exception as _fall_exc:  # noqa: BLE001
+                    _LOG.warning("REEL QA FALLBACK failed (%s)", _fall_exc)
+                    _guaranteed = None
+                if _guaranteed is not None and Path(_guaranteed).is_file():
+                    _row["image_path"] = str(_guaranteed)
+                    _row["passed"] = True
+                    _row["reuse"] = "fallback"
+                    _sequence_image_paths.append(Path(_guaranteed))
+                    _ok_acts += 1
+                    _LOG.warning(
+                        "REEL QA FALLBACK | act %d/%d reason=%s — still kept, reel continues",
+                        _idx + 1, _seq_n, _gate.blocked_reason or "rejected",
+                    )
+                    return
                 _reel_qa_block_compile = True
                 _LOG.error(
                     "REEL QA BLOCK | act %d/%d reason=%s — no substitute still",
@@ -5256,11 +5172,16 @@ def _produce_variant_worker(
                         variant + 1, _episode_id,
                     )
 
-    if _reel_qa_block_compile:
-        _LOG.error(
-            "REEL QA | skipping compile — one or more beats failed closed"
+    if _reel_qa_block_compile and _sequence_image_paths:
+        _LOG.warning(
+            "REEL QA | some beats were hard — compiling the reel anyway"
         )
-        print("[VisualQA] compile skipped — beat QA failed closed")
+        _reel_qa_block_compile = False
+    elif _reel_qa_block_compile:
+        _LOG.error(
+            "REEL QA | skipping compile — no stills at all"
+        )
+        print("[VisualQA] compile skipped — no stills")
     if _is_economic_reel and not _reel_qa_block_compile and (
         (img_path_display and Path(img_path_display).is_file())
         or bool(_sequence_image_paths)

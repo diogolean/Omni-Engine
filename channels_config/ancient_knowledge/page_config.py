@@ -246,7 +246,7 @@ VIGNETTE_STRENGTH: float = 0.0       # off: a heavy vignette made the frames mur
 GRAIN_INTENSITY: float = 0.0         # off: film grain was hiding the still
 ENABLE_TOP_HOOK_TEXT: bool = False   # do not burn headline at top; only lower-third subtitles
 ENABLE_FLICKER: bool = True          # ±5 % torch/flame brightness oscillation — archival atmosphere
-ENABLE_LIGHT_RAYS: bool = True       # warm-gold volumetric beam sweeping across each scene
+ENABLE_LIGHT_RAYS: bool = False      # a pale vertical streak; off for Ancient Knowledge
 ENABLE_DUST_PARTICLES: bool = True   # floating dust drifting upward — ruin/chamber atmosphere
 ENABLE_LIGHT_REFRACTION: bool = False  # prismatic crystal glow (enable per-topic if crystal subject)
 

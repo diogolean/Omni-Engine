@@ -320,10 +320,17 @@ def _coastal(entity: Any) -> bool:
 def _arid_place(geography: str) -> bool:
     low = (geography or "").lower()
     tokens = (
-        "arid", "dry limestone", "no lake", "mesopotamia",
-        "desert plateau", "no river",
+        "arid", "dry limestone", "no lake", "desert plateau", "no river",
     )
     return any(token in low for token in tokens)
+
+
+def _sand_desert(geography: str) -> bool:
+    """True when the region template is itself dunes or a sand desert."""
+    low = (geography or "").lower()
+    if any(token in low for token in ("dune", "sahara", "erg", "sand sea")):
+        return True
+    return "desert" in low and "not a desert" not in low
 
 
 def _place_copy(
@@ -597,6 +604,8 @@ def safe_flux_prompt(
             bans.append("no modern scuba")
         if not any("boat" in item.lower() for item in bans):
             bans.append("no modern boats")
+    if (geography or "").strip() and not _sand_desert(geography):
+        bans.append("sand dunes, mesas, Sahara")
     ban_line = (", ".join(bans) + ".") if bans else ""
     reason = " ".join((rejection or "").split())
     rejected = f" The previous still was rejected: {reason}." if reason else ""

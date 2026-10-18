@@ -309,7 +309,7 @@
       "ancient_knowledge"
     ],
     "canonical_shape": "T-shaped limestone pillars in a buried circular enclosure",
-    "geography": "an arid dry limestone plateau near Şanlıurfa in southeastern Turkey, no lake and no river",
+    "geography": "rolling limestone hills and farmland near Şanlıurfa, with the Germuş mountains in southeastern Turkey, no lake",
     "coastal": false,
     "commons_search": [
       "Göbekli Tepe",
@@ -386,6 +386,9 @@
     "canonical_shape": "a clay jar with a copper cylinder and an iron rod",
     "commons_search": [
       "Baghdad battery",
+      "Baghdad Battery",
+      "Parthian battery",
+      "Khujut Rabu jar",
       "pile de Bagdad",
       "Parthian battery jar"
     ],
@@ -396,7 +399,7 @@
       "File:Ironie pile Bagdad.jpg"
     ],
     "text_only_safe": true,
-    "geography": "the arid alluvial plain of Mesopotamia near Baghdad, dry ground, no lake",
+    "geography": "the flat Tigris river plain at Khujut Rabu near Ctesiphon, date palms and mudbrick, outside Baghdad",
     "coastal": false,
     "edit_negatives": []
   },

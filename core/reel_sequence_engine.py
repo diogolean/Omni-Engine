@@ -2408,6 +2408,18 @@ def compile_sequence_reel(
     """
     if not image_paths:
         raise ValueError("compile_sequence_reel: image_paths must not be empty.")
+    # Bound before any branch. The duration probe used to import AudioFileClip
+    # only when ffprobe failed, so the MoviePy fallback then raised NameError
+    # and the reel shipped with a drone and no voice.
+    try:
+        from moviepy import AudioFileClip, concatenate_videoclips  # type: ignore[import]
+    except ImportError:
+        AudioFileClip = None  # type: ignore[assignment,misc]
+        concatenate_videoclips = None  # type: ignore[assignment]
+    if voice_audio is None or not Path(voice_audio).is_file():
+        raise RuntimeError(
+            "voice track required — refusing to compile a reel without narration"
+        )
     if (page_id or "").strip().lower() == "ancient_knowledge":
         from agents.media.audio_engine import (  # noqa: PLC0415
             assert_voice_and_subtitles_ready as _assert_ak_av,
@@ -2470,8 +2482,8 @@ def compile_sequence_reel(
             total_duration = _voice_actual_dur
         except Exception as _probe_exc:  # noqa: BLE001
             try:
-                from moviepy import AudioFileClip  # type: ignore[import]
-
+                if AudioFileClip is None:
+                    raise RuntimeError("moviepy is not installed")
                 _tmp_ac = AudioFileClip(str(voice_audio))
                 _voice_actual_dur = float(_tmp_ac.duration)
                 _tmp_ac.close()
@@ -2742,13 +2754,23 @@ def compile_sequence_reel(
             ambient_duck_ratio=_duck,
             ambient_duck_until_s=_duck_until,
             words_per_phrase=int(words_per_phrase or 4),
+            sfx_loop_audio=Path(sfx_loop_audio) if sfx_loop_audio else None,
+            impact_sfx_audio=Path(impact_sfx_audio) if impact_sfx_audio else None,
+            ambient_profile=str(ambient_profile or "mystery"),
+            require_voice=True,
+            synthesize_drone=True,
+            transition_booms=True,
         )
 
     _ffmpeg_out = attempt_ffmpeg(_render_with_ffmpeg)
     if _ffmpeg_out is not None:
         logger.info("Sequence reel ffmpeg path → %s", _ffmpeg_out)
         return _ffmpeg_out
-    from moviepy import concatenate_videoclips  # type: ignore[import]
+    if concatenate_videoclips is None or AudioFileClip is None:
+        raise RuntimeError(
+            "ffmpeg render failed and moviepy is not installed — "
+            "refusing to publish a reel without the voice track"
+        )
 
     for i, img_path in enumerate(image_paths):
         _this_act_dur = float(_act_durs[i]) if i < len(_act_durs) else act_duration_locked
@@ -3033,7 +3055,11 @@ def compile_sequence_reel(
                 vc.duration, _voice_gain,
             )
         except Exception as _ae:
-            logger.warning("Voice audio load failed: %s", _ae)
+            raise RuntimeError(f"voice track failed to load: {_ae}") from _ae
+    else:
+        raise RuntimeError(
+            "voice track required — refusing to compile a reel without narration"
+        )
 
     if ambient_audio and not ambient_audio.is_file():
         logger.warning(

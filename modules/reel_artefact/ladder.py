@@ -485,7 +485,7 @@ def _climb(
         saved = checkpoint.approved_beat(int(beat_index))
         if saved and Path(str(saved.get("path") or "")).is_file():
             path = Path(str(saved["path"]))
-            if _reserve(path, ctx.n_beats) and _diverse(path):
+            if _reserve(path, ctx.n_beats) and _diverse(path, int(beat_index)):
                 from modules.reel_artefact.reuse import (
                     note_beat_key,
                     remember_approved,
@@ -694,7 +694,7 @@ def _climb(
         ctx.rejection = str(verdict.get("rejection_reason") or "")
         scored = verdict.get("qa_status") != "unavailable"
         if verdict_passed(verdict):
-            if not _diverse(path):
+            if not _diverse(path, int(beat_index)):
                 _release(path)
                 saw_scored_fail = True
                 history.append(RungAttempt(
@@ -896,11 +896,11 @@ def _release(path: Path) -> None:
         release_noted_reuse(target, str(meta.get("reuse_key") or ""))
 
 
-def _diverse(path: Path) -> bool:
+def _diverse(path: Path, beat_index: int | None = None) -> bool:
     from modules.reel_artefact.diversity import claim_diverse
     from modules.reel_artefact.reuse import reuse_key_for
 
-    return claim_diverse(path, source_key=reuse_key_for(path))
+    return claim_diverse(path, source_key=reuse_key_for(path), beat_index=beat_index)
 
 
 def _score(verdict: dict) -> float | None:

@@ -85,6 +85,85 @@ def _attach_leading_fragments(
     return out
 
 
+def beats_from_timestamps(
+    script: str,
+    word_timings: list[tuple] | None,
+    *,
+    narration_s: float = 0.0,
+) -> list[tuple[str, float, float]]:
+    """One beat per sentence, timed by word timestamps.
+
+    A sentence longer than 12 seconds splits on a clause. Timings come from
+    the alignment, not from a 3–5 second pack.
+    """
+    sentences = split_sentences(script)
+    if not sentences:
+        return []
+    words = [
+        (str(word or "").strip(), float(start), float(end))
+        for word, start, end in (word_timings or [])
+        if str(word or "").strip() and float(end) > float(start)
+    ]
+    if not words:
+        duration = float(narration_s or 0.0) or max(1.0, len(sentences) * 4.0)
+        weights = [max(1, len(sentence.split())) for sentence in sentences]
+        total = float(sum(weights)) or 1.0
+        cursor = 0.0
+        rows: list[tuple[str, float, float]] = []
+        for sentence, weight in zip(sentences, weights):
+            span = duration * weight / total
+            rows.append((sentence, cursor, cursor + span))
+            cursor += span
+        return rows
+    cursor_i = 0
+    beats: list[tuple[str, float, float]] = []
+    for sentence in sentences:
+        if cursor_i >= len(words):
+            break
+        need = max(1, len(sentence.split()))
+        start = words[cursor_i][1]
+        end = words[cursor_i][2]
+        taken = 0
+        while cursor_i < len(words) and taken < need:
+            token, _start, token_end = words[cursor_i]
+            end = token_end
+            cursor_i += 1
+            taken += 1
+            stripped = token.rstrip("\"'")
+            if stripped.endswith((".", "!", "?")):
+                break
+        beats.append((sentence, start, max(start + 0.2, end)))
+    if beats and cursor_i < len(words):
+        text, start, _end = beats[-1]
+        beats[-1] = (text, start, words[-1][2])
+    expanded: list[tuple[str, float, float]] = []
+    for text, start, end in beats:
+        expanded.extend(_split_timed_sentence(text, start, end))
+    return expanded or beats
+
+
+def _split_timed_sentence(
+    sentence: str,
+    start: float,
+    end: float,
+) -> list[tuple[str, float, float]]:
+    duration = max(0.2, float(end) - float(start))
+    if duration <= 12.0:
+        return [(sentence, start, end)]
+    clauses = [part.strip() for part in _CLAUSE.split(sentence) if part.strip()]
+    if len(clauses) < 2:
+        return [(sentence, start, end)]
+    weights = [max(1, len(part.split())) for part in clauses]
+    total = float(sum(weights))
+    rows: list[tuple[str, float, float]] = []
+    cursor = float(start)
+    for part, weight in zip(clauses, weights):
+        span = duration * weight / total
+        rows.append((part, cursor, cursor + span))
+        cursor += span
+    return rows
+
+
 def pack_sentences(
     text: str,
     duration_s: float,
@@ -202,6 +281,21 @@ def refine_reel_beats(
     if topic and isinstance(inherited, dict):
         inherited = dict(inherited)
         inherited.setdefault("domain_anchors", topic)
+
+    # One sentence per beat is already the shot list. Do not pack those
+    # sentences back into a 3–5 s window.
+    if (
+        texts
+        and durs
+        and len(durs) == len(texts)
+        and all(len(split_sentences(item)) <= 1 for item in texts)
+    ):
+        return BeatPlan(
+            snippets=list(texts),
+            durations=list(durs),
+            scenes=list(scenes or []),
+            changed=False,
+        )
 
     if texts and durs and len(durs) == len(texts) and _within_cap(durs, max_s):
         return BeatPlan(

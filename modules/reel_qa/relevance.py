@@ -21,6 +21,7 @@ Return STRICT JSON only — no markdown, no commentary:
   "non_photoreal": boolean,
   "anatomy_defect": boolean,
   "setting_contradicts_beat": boolean,
+  "contains_text": boolean,
   "is_relevant": boolean,
   "relevance_score": float,
   "detected_subjects": [string],
@@ -33,6 +34,7 @@ or museum documentary beat, unless the spoken beat itself asks for that object.
 Set non_photoreal true for CGI, a 3D render, an illustration, a cartoon, or a miniature
 or clay-model look.
 Set anatomy_defect true for a mangled, fused, or extra limb.
+Set contains_text true when the picture has burned-in words, a museum label, a date, or a caption.
 Set setting_contradicts_beat true when the place contradicts the spoken beat.
 A visible expected subject is not enough. The wrong place, a non-photoreal look, or a
 broken body still fails.
@@ -61,6 +63,7 @@ Return STRICT JSON only — no markdown, no commentary:
   "anatomy_defect": boolean,
   "setting_contradicts_beat": boolean,
   "contains_forbidden_object": boolean,
+  "contains_text": boolean,
   "is_relevant": boolean,
   "relevance_score": float,
   "detected_subjects": [string],
@@ -73,6 +76,8 @@ the planned shot itself asks for that object.
 Set non_photoreal true for CGI, a 3D render, an illustration, a cartoon, or a miniature
 or clay-model look.
 Set anatomy_defect true for a mangled, fused, or extra limb.
+Set contains_text true when the picture has burned-in words, a museum label, a date, or a caption.
+Set setting_contradicts_beat true for sand dunes, mesas, or the Sahara when the geography is not a sand desert.
 Set setting_contradicts_beat true only when the place is a different region than the
 planned setting. A desert mesa or Egyptian sand ruins fails when the plan names the
 Colombian Andes. Do not set it because the spoken line mentions an object that is
@@ -108,12 +113,14 @@ Return STRICT JSON only — no markdown, no commentary:
   "non_photoreal": boolean,
   "anatomy_defect": boolean,
   "setting_contradicts_beat": boolean,
+  "contains_text": boolean,
   "is_relevant": boolean,
   "relevance_score": float,
   "detected_subjects": [string],
   "rejection_reason": string
 }}
 image_description is a literal caption of the photograph.
+Set contains_text true when the picture has burned-in words, a museum label, a date, or a caption.
 Set anachronism true for modern scuba, a wetsuit, or a modern boat when the event
 is the 1900-1901 wreck.
 Set non_photoreal true for CGI, a render, or an illustration.
@@ -141,6 +148,7 @@ Return STRICT JSON only — no markdown, no commentary:
   "non_photoreal": boolean,
   "anatomy_defect": boolean,
   "setting_contradicts_beat": boolean,
+  "contains_text": boolean,
   "is_relevant": boolean,
   "relevance_score": float,
   "detected_subjects": [string],
@@ -149,7 +157,9 @@ Return STRICT JSON only — no markdown, no commentary:
 image_description is a literal caption of the photograph.
 A protective roof, a walkway, a shelter, a fence, a canopy, or scaffolding
 over the ancient stones is conservation. Do not set anachronism for those.
+Set contains_text true when the picture has burned-in words, a museum label, a date, or a caption.
 Set anachronism true for scuba, a wetsuit, a smartphone, a car, or an airplane.
+Set setting_contradicts_beat true for sand dunes, mesas, or the Sahara when the geography is not a sand desert.
 Set non_photoreal true for CGI, a render, or an illustration.
 Set setting_contradicts_beat true when the photograph is a different place,
 or when it shows a lake, river, or sea and the geography is arid.
@@ -173,11 +183,29 @@ _CONSERVATION = re.compile(
     r"scaffold(?:ing)?|conservation|railings?)\b"
 )
 _ARID_GEO = re.compile(
-    r"arid|dry limestone|no lake|mesopotamia|desert plateau|no river"
+    r"arid|dry limestone|no lake|desert plateau|no river"
 )
 _WATER = re.compile(
     r"\b(?:lakes?|rivers?|seas?|oceans?|waterfalls?|oasis|ponds?|shorelines?)\b"
 )
+
+
+_DUNE = re.compile(r"\b(?:sand dunes?|dunes|mesas?|sahara|sand sea)\b")
+_SAND_DESERT_GEO = re.compile(r"dune|sahara|erg|sand sea|\bdesert\b")
+
+
+def dune_conflict(description: str, geography: str) -> bool:
+    """True when a non-desert region is shown as dunes, mesas, or the Sahara."""
+    place = (geography or "").lower()
+    if not place.strip() or _SAND_DESERT_GEO.search(place):
+        return False
+    text = (description or "").lower()
+    for match in _DUNE.finditer(text):
+        prefix = text[max(0, match.start() - 16):match.start()]
+        if re.search(r"\b(?:no|not|without|never)\s*$", prefix):
+            continue
+        return True
+    return False
 
 
 def arid_water_conflict(description: str, geography: str) -> bool:
@@ -294,6 +322,7 @@ def _verdict_from_payload(
         ("non_photoreal", "non_photoreal"),
         ("anatomy_defect", "anatomy"),
         ("setting_contradicts_beat", "setting_contradicts_beat"),
+        ("contains_text", "contains_text"),
     ):
         if _as_bool(data.get(key)) and label not in defects:
             defects.append(label)
@@ -306,6 +335,9 @@ def _verdict_from_payload(
     if arid_water_conflict(described, geography) and score_against != "event":
         if "setting_contradicts_beat" not in defects:
             defects.append("setting_contradicts_beat")
+    if dune_conflict(described, geography) and score_against != "event":
+        if "sand_dunes" not in defects:
+            defects.append("sand_dunes")
     if score_against == "shot" and (
         _as_bool(data.get("contains_forbidden_object")) or _caption_forbidden(described)
     ):

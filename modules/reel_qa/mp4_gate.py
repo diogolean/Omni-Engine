@@ -593,6 +593,11 @@ def gate_final_mp4(
             )
         from modules.reel_qa.relevance import call_judge
 
+        planned = str(
+            (beat or {}).get("subject")
+            or (beat or {}).get("shot_subject")
+            or image_prompt
+        )
         verdict = call_judge(
             judge,
             clean,
@@ -601,6 +606,13 @@ def gate_final_mp4(
             banned_subjects=(beat or {}).get("banned_subjects"),
             reference_image=str((beat or {}).get("reference_image") or ""),
             canonical_shape=str((beat or {}).get("canonical_shape") or ""),
+            score_against="shot",
+            shot_subject=planned,
+            shot_setting=str((beat or {}).get("setting") or (beat or {}).get("shot_setting") or ""),
+            shot_era=str((beat or {}).get("era") or (beat or {}).get("shot_era") or ""),
+            topic=str((beat or {}).get("topic") or ""),
+            scene_type=str((beat or {}).get("scene_type") or "landscape"),
+            geography=str((beat or {}).get("geography") or ""),
         ) or {}
         passed = verdict_passed(verdict) and verdict.get("qa_status") != "unavailable"
         frames.append(

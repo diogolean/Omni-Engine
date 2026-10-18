@@ -113,6 +113,7 @@ def reuse_into(
     kind: str | None = None,
     n_beats: int = 0,
     safety: bool = False,
+    force: bool = False,
 ) -> Path | None:
     """Copy an approved still, with a new crop and a different Ken Burns move.
 
@@ -127,7 +128,9 @@ def reuse_into(
     if adjacent_same_still(int(beat_index), key):
         note_source("reuse:skip-adjacent", entity_id, int(beat_index) + 1)
         return None
-    if safety:
+    if force:
+        pass
+    elif safety:
         if not safety_reel_room() or not safety_room(key):
             note_source("reuse:skip-safety", entity_id, int(beat_index) + 1)
             return None
@@ -167,7 +170,7 @@ def reuse_into(
     note_beat_key(int(beat_index), key)
     from modules.reel_artefact.diversity import claim_diverse
 
-    if not claim_diverse(target, source_key=key):
+    if not claim_diverse(target, source_key=key, beat_index=int(beat_index)):
         release_noted_reuse(str(target.resolve()), key)
         if safety:
             release_safety_use()
@@ -217,6 +220,66 @@ def approved_place_stills() -> list[Path]:
             continue
         found.append(image)
     return found
+
+
+def _plain_fallback(dest: Path, beat_index: int) -> Path:
+    """A distinct still so an exhausted beat still has a frame."""
+    from PIL import Image, ImageDraw
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    colors = (
+        (86, 108, 72),
+        (72, 96, 118),
+        (128, 104, 70),
+        (64, 84, 58),
+        (98, 82, 64),
+        (70, 110, 96),
+    )
+    image = Image.new("RGB", (96, 160), colors[int(beat_index) % len(colors)])
+    draw = ImageDraw.Draw(image)
+    y = 12 + (int(beat_index) % 7) * 16
+    draw.rectangle((8, y, 88, y + 10), fill=(210, 196, 150))
+    image.save(dest, format="JPEG", quality=85)
+    return dest
+
+
+def guarantee_still(
+    dest: Path | str,
+    beat_index: int,
+    *,
+    entity_id: str = "",
+    n_beats: int = 0,
+) -> Path:
+    """A still for a beat the ladder could not fill.
+
+    An approved place from this reel comes first. The safety cap is ignored
+    so a few hard beats cannot drop the reel. Adjacent copies are still
+    refused. The last resort is a plain frame that is not a neighbour of
+    the previous beat.
+    """
+    target = Path(dest)
+    placed = rescue_place(
+        target, int(beat_index), entity_id=entity_id, n_beats=n_beats,
+    )
+    if placed is not None and placed.is_file():
+        return placed
+    with _LOCK:
+        rows = list(_APPROVED)
+    for label, image in rows:
+        del label
+        if not image.is_file():
+            continue
+        forced = reuse_into(
+            target,
+            int(beat_index),
+            entity_id=entity_id,
+            source=image,
+            n_beats=n_beats,
+            force=True,
+        )
+        if forced is not None and forced.is_file():
+            return forced
+    return _plain_fallback(target, int(beat_index))
 
 
 def rescue_place(

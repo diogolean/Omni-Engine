@@ -339,28 +339,38 @@ def _render_beat(
 
 
 def _audio_filter(
+    stems: list[dict],
     *,
-    voice: bool,
-    bed: bool,
     duck_until: float,
     duck_ratio: float,
-    bed_volume: float,
-    voice_gain: float,
 ) -> str:
-    """amix of voice and a ducked bed, then one loudnorm at 48 kHz."""
+    """Mix named audio inputs. The silent video is never one of them.
+
+    Each stem is ``{"index", "role", "volume"}``. ``index`` is the ffmpeg
+    ``-i`` position assigned by the muxer, so a new stem cannot reuse ``[0:a]``.
+    ``bed`` and ``sfx`` duck under the voice. ``boom`` and ``impact`` do not.
+    """
     parts: list[str] = []
     labels: list[str] = []
-    if voice:
-        parts.append(f"[0:a]volume={voice_gain:.3f},aresample=48000[vo]")
-        labels.append("[vo]")
-    if bed:
-        src = "1" if voice else "0"
-        ducked = f"{bed_volume * duck_ratio:.4f}"
-        open_bed = f"{bed_volume:.4f}"
-        until = f"{max(0.0, duck_until):.3f}"
-        vol = f"volume='if(lt(t,{until}),{ducked},{open_bed})':eval=frame"
-        parts.append(f"[{src}:a]aresample=48000,{vol},apad[bed]")
-        labels.append("[bed]")
+    until = f"{max(0.0, float(duck_until)):.3f}"
+    ratio = max(0.0, min(1.0, float(duck_ratio)))
+    for order, stem in enumerate(stems):
+        index = int(stem["index"])
+        role = str(stem.get("role") or "bed")
+        volume = max(0.0, float(stem.get("volume") or 0.0))
+        label = f"s{order}"
+        if role in {"bed", "sfx"}:
+            ducked = f"{volume * ratio:.4f}"
+            open_bed = f"{volume:.4f}"
+            vol = (
+                f"volume='if(lt(t,{until}),{ducked},{open_bed})':eval=frame"
+            )
+            parts.append(f"[{index}:a]aresample=48000,{vol},apad[{label}]")
+        else:
+            parts.append(
+                f"[{index}:a]volume={volume:.3f},aresample=48000,apad[{label}]"
+            )
+        labels.append(f"[{label}]")
     if not labels:
         return ""
     if len(labels) == 1:
@@ -373,6 +383,91 @@ def _audio_filter(
         )
     parts.append(mix)
     return ";".join(parts)
+
+
+def _write_wav(path: Path, samples, sample_rate: int = 48000) -> None:
+    """Stereo 16-bit wav. ``samples`` is a mono float array in -1..1."""
+    import wave
+
+    import numpy as np
+
+    data = np.asarray(samples, dtype=np.float32)
+    data = np.clip(data, -1.0, 1.0)
+    stereo = np.column_stack([data, data])
+    pcm = (stereo * 32767.0).astype(np.int16)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(2)
+        handle.setsampwidth(2)
+        handle.setframerate(int(sample_rate))
+        handle.writeframes(pcm.tobytes())
+
+
+def _drone_wav(path: Path, duration: float, *, profile: str, volume: float) -> None:
+    """The same mystery/warrior pad the MoviePy path synthesizes."""
+    import numpy as np
+
+    sr = 48000
+    n = int(max(0.5, float(duration)) * sr)
+    t = np.linspace(0.0, max(0.5, float(duration)), n, dtype=np.float32)
+    swell = 0.85 + 0.15 * np.sin(2 * np.pi * 0.05 * t)
+    if (profile or "").lower() == "warrior":
+        drone = (
+            0.42 * np.sin(2 * np.pi * 40.0 * t)
+            + 0.28 * np.sin(2 * np.pi * 55.0 * t)
+            + 0.16 * np.sin(2 * np.pi * 82.5 * t)
+            + 0.08 * np.sin(2 * np.pi * 110.0 * t) * swell
+        )
+        vol = max(0.28, min(0.38, float(volume)))
+    else:
+        drone = (
+            0.40 * np.sin(2 * np.pi * 55.0 * t)
+            + 0.22 * np.sin(2 * np.pi * 82.5 * t)
+            + 0.14 * np.sin(2 * np.pi * 110.0 * t)
+        )
+        vol = max(0.08, float(volume))
+    combined = drone * swell
+    peak = float(np.max(np.abs(combined))) or 1.0
+    _write_wav(path, combined / peak * vol, sr)
+
+
+def _boom_wav(path: Path, duration: float, cuts: list[float]) -> None:
+    """400 ms, 65 Hz booms, 50 ms before each cut. One stem for the whole reel."""
+    import numpy as np
+
+    sr = 48000
+    n = int(max(0.5, float(duration)) * sr)
+    mix = np.zeros(n, dtype=np.float32)
+    boom_n = int(0.40 * sr)
+    bt = np.linspace(0.0, 0.40, boom_n, dtype=np.float32)
+    boom = np.sin(2.0 * np.pi * 65.0 * bt) * np.exp(-bt * 18.0) * 0.12
+    for cut in cuts:
+        start = int(max(0.0, float(cut) - 0.05) * sr)
+        end = min(n, start + boom_n)
+        if end > start:
+            mix[start:end] += boom[: end - start]
+    _write_wav(path, mix, sr)
+
+
+def output_has_audio(path: Path) -> bool | None:
+    """True when ffprobe sees an audio stream. None when ffprobe is missing."""
+    exe = shutil.which("ffprobe")
+    if not exe:
+        return None
+    proc = subprocess.run(
+        [
+            exe, "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return "audio" in (proc.stdout or "")
 
 
 def compile_ffmpeg_reel(
@@ -400,10 +495,21 @@ def compile_ffmpeg_reel(
     ambient_duck_until_s: float = 0.0,
     words_per_phrase: int = 4,
     workers: int | None = None,
+    sfx_loop_audio: Path | None = None,
+    impact_sfx_audio: Path | None = None,
+    ambient_profile: str = "mystery",
+    require_voice: bool = False,
+    synthesize_drone: bool = False,
+    transition_booms: bool = False,
 ) -> Path:
     """Render the reel. Raises on any ffmpeg error."""
     if not image_paths:
         raise ValueError("no stills")
+    voice_file = Path(voice_audio) if voice_audio else None
+    if require_voice and (voice_file is None or not voice_file.is_file()):
+        raise RuntimeError(
+            "voice track required — refusing to compile a reel without narration"
+        )
     exe = shutil.which("ffmpeg")
     if not exe:
         raise RuntimeError("ffmpeg is not installed")
@@ -469,24 +575,77 @@ def compile_ffmpeg_reel(
             "-f", "concat", "-safe", "0", "-i", str(listing),
             "-c", "copy", str(silent),
         ])
-        voice = Path(voice_audio) if voice_audio and Path(voice_audio).is_file() else None
+        voice = voice_file if voice_file is not None and voice_file.is_file() else None
         bed = Path(ambient_audio) if ambient_audio and Path(ambient_audio).is_file() else None
-        if voice is None and bed is None:
+        sfx = Path(sfx_loop_audio) if sfx_loop_audio and Path(sfx_loop_audio).is_file() else None
+        impact = (
+            Path(impact_sfx_audio)
+            if impact_sfx_audio and Path(impact_sfx_audio).is_file()
+            else None
+        )
+        drone = None
+        if bed is None and synthesize_drone:
+            drone = tmp / "drone.wav"
+            _drone_wav(
+                drone, total,
+                profile=ambient_profile,
+                volume=float(ambient_volume or 0.32),
+            )
+            bed = drone
+        booms = None
+        cuts = []
+        if transition_booms and len(durations) > 1:
+            cursor_s = 0.0
+            for dur in durations[:-1]:
+                cursor_s += float(dur)
+                cuts.append(cursor_s)
+            booms = tmp / "booms.wav"
+            _boom_wav(booms, total, cuts)
+        if voice is None and bed is None and sfx is None and impact is None and booms is None:
             shutil.move(str(silent), str(out))
             return out
-        graph = _audio_filter(
-            voice=voice is not None,
-            bed=bed is not None,
-            duck_until=float(ambient_duck_until_s or 0.0) or (total if voice else 0.0),
-            duck_ratio=float(ambient_duck_ratio or 0.70),
-            bed_volume=float(ambient_volume or 0.32),
-            voice_gain=float(voice_volume_gain or 1.0),
-        )
+        # Input 0 is the silent video. Audio stems start at 1, in this order.
         cmd = [exe, "-y", "-v", "error", "-i", str(silent)]
+        stems: list[dict] = []
+        nxt = 1
         if voice is not None:
             cmd += ["-i", str(voice)]
+            stems.append({
+                "index": nxt,
+                "role": "voice",
+                "volume": float(voice_volume_gain or 1.0),
+            })
+            nxt += 1
         if bed is not None:
-            cmd += ["-stream_loop", "-1", "-i", str(bed)]
+            if drone is None:
+                cmd += ["-stream_loop", "-1", "-i", str(bed)]
+            else:
+                cmd += ["-i", str(bed)]
+            stems.append({
+                "index": nxt,
+                "role": "bed",
+                "volume": float(ambient_volume or 0.32),
+            })
+            nxt += 1
+        if booms is not None:
+            cmd += ["-i", str(booms)]
+            stems.append({"index": nxt, "role": "boom", "volume": 1.0})
+            nxt += 1
+        if sfx is not None:
+            cmd += ["-stream_loop", "-1", "-i", str(sfx)]
+            stems.append({"index": nxt, "role": "sfx", "volume": 0.35})
+            nxt += 1
+        if impact is not None:
+            cmd += ["-i", str(impact)]
+            stems.append({"index": nxt, "role": "impact", "volume": 0.50})
+            nxt += 1
+        graph = _audio_filter(
+            stems,
+            duck_until=float(ambient_duck_until_s or 0.0) or (total if voice else 0.0),
+            duck_ratio=float(ambient_duck_ratio or 0.70),
+        )
+        if not graph or (voice is not None and "[1:a]" not in graph and stems[0]["index"] == 1):
+            raise RuntimeError("audio graph did not include the voice input")
         cmd += [
             "-filter_complex", graph,
             "-map", "0:v", "-map", "[a]",
@@ -496,6 +655,10 @@ def compile_ffmpeg_reel(
             str(out),
         ]
         _run(cmd)
+        if voice is not None:
+            heard = output_has_audio(out)
+            if heard is False:
+                raise RuntimeError("ffmpeg mux produced no audio stream")
     if not out.is_file():
         raise RuntimeError("ffmpeg produced no file")
     logger.info(

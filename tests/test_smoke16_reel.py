@@ -26,7 +26,7 @@ from modules.reel_artefact.reuse import (
     rescue_place,
     reset_approved,
 )
-from modules.reel_artefact.script_length import fit_word_target, trim_to_target, word_band
+from modules.reel_artefact.script_length import fit_word_target
 from modules.reel_artefact.source import write_source_sidecar
 from modules.reel_qa.relevance import _verdict_from_payload, arid_water_conflict
 from modules.shot_planner.entities import Entity, load_entities
@@ -159,7 +159,9 @@ def test_pillars_and_reliefs_are_object_beats_and_arid_places_reject_a_lake() ->
     assert object_line_strength("Stone reliefs cover the wall.") == 2
     assert object_line_strength("Scholars disagree about the lost record.") == 0
     gobekli = next(item for item in load_entities("ancient_knowledge") if item.id == "gobekli_tepe")
-    assert "arid" in gobekli.geography.lower()
+    assert "limestone hills" in gobekli.geography.lower()
+    assert "farmland" in gobekli.geography.lower()
+    assert "no lake" in gobekli.geography.lower()
     assert gobekli.coastal is False
     fields = fields_for_scene("landscape", gobekli)
     visual = fields["canonical_visual"].lower()
@@ -300,22 +302,26 @@ def test_commons_runs_before_openverse_and_openverse_is_only_a_fallback() -> Non
     assert any(item.provider == "openverse" for item in found)
 
 
-def test_a_long_script_is_cut_back_into_the_word_band() -> None:
+def test_a_long_script_keeps_whole_sentences_under_the_soft_ceiling() -> None:
+    from modules.reel_artefact.script_length import soft_ceiling, soft_word_ceiling
+
     opening = "In 1936 archaeologists found a clay jar near Baghdad."
-    extra = " ".join(["The jar held a copper tube and an iron rod."] * 40)
+    sentence = "The jar held a copper tube and an iron rod."
+    extra = " ".join([sentence] * 40)
     script = f"{opening} {extra}"
     assert len(script.split()) > 250
-    low, high = word_band(148)
-    trimmed = trim_to_target(script, 148)
-    count = len(trimmed.split())
-    assert low <= count <= high
-    assert trimmed.startswith(opening)
+    kept = soft_ceiling(script)
+    assert kept.startswith(opening)
+    assert sentence in kept
+    assert len(kept.split()) <= soft_word_ceiling()
+    # The rewrite callback is ignored. Nothing is sliced mid-sentence.
     rewritten = fit_word_target(
         script,
         148,
         rewrite=lambda _body, _target, _low, _high: " ".join(["word"] * 140),
     )
-    assert len(rewritten.split()) == 140
+    assert rewritten == kept
+    assert kept.endswith(".")
 
 
 def test_the_reel_planner_skips_the_second_gemini_call(

@@ -414,9 +414,10 @@ def _flux(
             )
         ctx.prompt = text
         logger.info(
-            "FLUX prompt | beat=%s | attempt=%s | %s",
+            "FLUX prompt | beat=%s | attempt=%s | geography=%s | %s",
             int(ctx.beat_index) + 1,
             int(ctx.replan or 0) or (int(ctx.attempt) + 1),
+            (geography or "-")[:120],
             text,
         )
         call = {key: value for key, value in kwargs.items() if key in _FLUX_KEYS}

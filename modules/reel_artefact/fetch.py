@@ -332,11 +332,20 @@ def _commons_search(query: str, client: HttpClient) -> list[Candidate]:
         },
     )
     if response is None:
+        logger.info("Commons search | query=%s | status=none | n=0 | titles=[]", query)
         return []
     if not response.ok:
         logger.warning("Commons search failed | status=%s | query=%s", response.status, query)
         return []
-    return parse_wikimedia(response.json())
+    found = parse_wikimedia(response.json())
+    logger.info(
+        "Commons search | query=%s | status=%s | n=%d | titles=%s",
+        query,
+        response.status,
+        len(found),
+        [item.title for item in found][:8],
+    )
+    return found
 
 
 def _commons_category(category: str, client: HttpClient) -> list[Candidate]:
@@ -353,6 +362,7 @@ def _commons_category(category: str, client: HttpClient) -> list[Candidate]:
         },
     )
     if response is None:
+        logger.info("Commons category | category=%s | status=none | n=0 | titles=[]", title)
         return []
     if not response.ok:
         logger.warning("Commons category failed | status=%s | category=%s", response.status, title)
