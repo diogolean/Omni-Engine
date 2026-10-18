@@ -247,3 +247,17 @@ def test_technical_judge_failure_retries_without_a_new_image(tmp_path: Path) -> 
     assert result.publishable is True
     assert result.first_pass is True
     assert result.extra_generations == 0
+
+
+def test_grounding_is_scoped_to_ancient_knowledge(monkeypatch) -> None:
+    from modules.reel_grounding.config import grounding_enabled_for
+
+    monkeypatch.delenv("REEL_VISUAL_GROUNDING", raising=False)
+    monkeypatch.delenv("REEL_VISUAL_GROUNDING_CHANNELS", raising=False)
+    assert grounding_enabled_for("ancient_knowledge") is True
+    assert grounding_enabled_for("master_mei") is False
+    assert grounding_enabled_for("") is False
+    monkeypatch.setenv("REEL_VISUAL_GROUNDING_CHANNELS", "ancient_knowledge, other_page")
+    assert grounding_enabled_for("other_page") is True
+    monkeypatch.setenv("REEL_VISUAL_GROUNDING", "0")
+    assert grounding_enabled_for("ancient_knowledge") is False
