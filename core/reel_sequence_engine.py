@@ -1330,6 +1330,9 @@ STRICT RULES:
 {anti_repeat_block}
 Write the complete {n_acts}-act script now:"""
 
+    from modules.reel_artefact.flux_policy import script_filmable_rule
+
+    _filmable = script_filmable_rule()
     return f"""You are writing a compelling {duration_s:.0f}-second documentary-style voiceover script.
 
 TOPIC: {topic}
@@ -1349,6 +1352,7 @@ STRICT RULES:
 6. Maintain an investigative, immersive, documentary tone throughout.
 7. NO headers, NO bullet points, NO markdown — pure spoken prose only.
 8. Output ONLY the script with [ACT N] markers. No preamble, no labels, no meta commentary.
+9. FILMABLE PICTURES: {_filmable}
 {anti_repeat_block}
 Write the complete {n_acts}-act script now:"""
 

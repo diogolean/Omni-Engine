@@ -60,10 +60,53 @@ def reel_budget_usd() -> float:
 _REEL_SPENT = 0.0
 
 
+_FLUX_USED = 0
+_REPLAN_USED = 0
+
+
+def flux_max_per_reel() -> int:
+    """Most Flux generations one reel may start, on top of the dollar cap."""
+    return _count("REEL_FLUX_MAX_PER_REEL", 18)
+
+
+def replan_max_per_reel() -> int:
+    """Most re-plans one reel may start, on top of the per-beat limit."""
+    return _count("REEL_REPLAN_MAX_PER_REEL", 6)
+
+
+def take_flux_slot() -> bool:
+    """Reserve one Flux generation. False once the reel cap is spent."""
+    global _FLUX_USED
+    with _LOCK:
+        if _FLUX_USED >= flux_max_per_reel():
+            return False
+        _FLUX_USED += 1
+        return True
+
+
+def release_flux_slot() -> None:
+    """Give the slot back when Flux produced no file."""
+    global _FLUX_USED
+    with _LOCK:
+        _FLUX_USED = max(0, _FLUX_USED - 1)
+
+
+def take_replan_slot() -> bool:
+    """Reserve one re-plan. False once the reel cap is spent."""
+    global _REPLAN_USED
+    with _LOCK:
+        if _REPLAN_USED >= replan_max_per_reel():
+            return False
+        _REPLAN_USED += 1
+        return True
+
+
 def reset_spend() -> None:
-    global _REEL_SPENT
+    global _REEL_SPENT, _FLUX_USED, _REPLAN_USED
     with _LOCK:
         _REEL_SPENT = 0.0
+        _FLUX_USED = 0
+        _REPLAN_USED = 0
 
 
 def reel_spent() -> float:

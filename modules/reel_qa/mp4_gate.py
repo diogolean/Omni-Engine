@@ -361,6 +361,27 @@ def decide_mp4_gate(
     }
 
 
+def _frame_hamming_limit() -> int:
+    import os
+
+    raw = (os.getenv("REEL_FRAME_HAMMING") or "").strip()
+    try:
+        return max(0, int(raw)) if raw else 20
+    except ValueError:
+        return 20
+
+
+def _same_approved_still(frame: Path, still: str) -> bool:
+    """True when the compiled frame is the beat's still, not a transition."""
+    from modules.reel_artefact.diversity import dhash
+
+    left = dhash(frame)
+    right = dhash(still)
+    if left is None or right is None:
+        return False
+    return (left ^ right).bit_count() <= _frame_hamming_limit()
+
+
 def beat_for_cue(cue: SubtitleCue, beats: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     """The still's beat for this subtitle, so the frame uses the still's rubric."""
     text = " ".join((cue.text or "").lower().split())
@@ -442,6 +463,40 @@ def gate_final_mp4(
         beat = beat_for_cue(cue, beats)
         spoken = str((beat or {}).get("text") or text)
         image_prompt = str((beat or {}).get("prompt") or spoken)
+        beat_index = (beat or {}).get("index")
+        still = str((beat or {}).get("image_path") or "")
+        approved = bool(
+            beat
+            and beat.get("passed") is True
+            and still
+            and Path(still).is_file()
+        )
+        if approved and _same_approved_still(clean, still):
+            frames.append(
+                {
+                    "index": i,
+                    "text": text,
+                    "at_s": round(cue.midpoint_s, 3),
+                    "passed": True,
+                    "score": (beat or {}).get("score"),
+                    "reason": "beat-approved",
+                    "qa_status": "beat-approved",
+                    "frame_path": str(shot),
+                    "beat_index": beat_index,
+                }
+            )
+            _LOG.info(
+                "MP4 frame | t=%.2f beat=%s | same-still | trusted",
+                cue.midpoint_s,
+                beat_index,
+            )
+            continue
+        if approved:
+            _LOG.info(
+                "MP4 frame | t=%.2f beat=%s | frame-differs | judging",
+                cue.midpoint_s,
+                beat_index,
+            )
         from modules.reel_qa.relevance import call_judge
 
         verdict = call_judge(
@@ -464,11 +519,13 @@ def gate_final_mp4(
                 "reason": verdict.get("rejection_reason"),
                 "qa_status": verdict.get("qa_status"),
                 "frame_path": str(shot),
+                "beat_index": beat_index,
             }
         )
         _LOG.info(
-            "MP4 frame | t=%.2f passed=%s score=%s text=%.48s",
+            "MP4 frame | t=%.2f beat=%s passed=%s score=%s text=%.48s",
             cue.midpoint_s,
+            beat_index,
             passed,
             verdict.get("relevance_score"),
             text,

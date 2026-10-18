@@ -15,6 +15,9 @@ from modules.reel_artefact.budget import (
     reel_budget_usd,
     reel_spent,
     refund,
+    release_flux_slot,
+    take_flux_slot,
+    take_replan_slot,
     try_spend,
 )
 from modules.reel_artefact.pricing import FLUX_USD, NANOBANANA_MODELS, price_for_model
@@ -224,7 +227,8 @@ def run_ladder(
 
     A failed rung is never published. When the ladder is exhausted and the
     beat budget can still pay for another Flux still, the concept is
-    re-planned up to ``REEL_REPLAN_MAX`` times (default 2).
+    re-planned up to ``REEL_REPLAN_MAX`` times (default 2), and only while
+    ``REEL_REPLAN_MAX_PER_REEL`` still has room.
     """
     del entity_id
     from modules.reel_artefact.replan import next_concept, replan_limit
@@ -255,6 +259,12 @@ def run_ladder(
                 "LADDER | beat=%s | replan=skip-budget | spent_beat=%.4f",
                 int(beat_index) + 1,
                 spent,
+            )
+            break
+        if not take_replan_slot():
+            logger.info(
+                "LADDER | beat=%s | replan=skip-cap",
+                int(beat_index) + 1,
             )
             break
         concept = next_concept(
@@ -409,6 +419,12 @@ def _climb(
             continue
         cost = rung_cost(rung)
         charged = False
+        flux_slot = False
+        if rung == "flux":
+            if not take_flux_slot():
+                _skip(history, rung, "flux-cap", int(beat_index) + 1)
+                continue
+            flux_slot = True
         if cost > 0:
             if beat_spent + cost > budget + 1e-9:
                 _skip(history, rung, "beat-budget", int(beat_index) + 1)
@@ -421,6 +437,8 @@ def _climb(
         try:
             made = producer(ctx)
         except Exception as exc:  # noqa: BLE001
+            if flux_slot:
+                release_flux_slot()
             history.append(RungAttempt(
                 rung=rung, status="fail", reason=type(exc).__name__, cost_usd=cost,
             ))
@@ -431,6 +449,9 @@ def _climb(
             continue
         path = Path(made) if made else None
         if path is None or not path.is_file():
+            if flux_slot:
+                release_flux_slot()
+                flux_slot = False
             if charged:
                 refund(cost)
                 beat_spent = max(0.0, beat_spent - cost)
@@ -442,6 +463,9 @@ def _climb(
             refund(cost)
             beat_spent = max(0.0, beat_spent - cost)
             charged = False
+        if flux_slot and shown == "reuse":
+            release_flux_slot()
+            flux_slot = False
         reserved = _reserve(path, ctx.n_beats)
         if not reserved:
             if charged:

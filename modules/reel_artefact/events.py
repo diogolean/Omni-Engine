@@ -2,12 +2,14 @@
 """Archival photographs for an event beat, before any generated scene."""
 from __future__ import annotations
 
+import io
 import logging
 import re
 from pathlib import Path
 
 from PIL import Image
 
+from agents.media.free_images.attribution import credit_line
 from agents.media.free_images.http import RequestsClient
 from agents.media.free_images.licenses import license_allowed
 from agents.media.free_images.models import Candidate
@@ -19,9 +21,11 @@ from modules.reel_artefact.fetch import (
     _commons_search,
     _download,
     artefact_cache_dir,
+    credit_required,
 )
 from modules.reel_artefact.logbook import note_source
 from modules.reel_artefact.motion import profile_for, write_motion_sidecar
+from modules.reel_artefact.pixels import image_defect
 from modules.reel_artefact.source import write_source_sidecar
 from modules.shot_planner.entities import Entity
 
@@ -109,12 +113,15 @@ def acquire_event_photo(
     folder.mkdir(parents=True, exist_ok=True)
     for index, (candidate, _category) in enumerate(_collect(entity, http)):
         raw = folder / f"event_{index:02d}.jpg"
+        if raw.is_file() and _reject_file(raw, entity.id):
+            raw.unlink(missing_ok=True)
         if not raw.is_file():
             data = _download(candidate, http)
-            if not data:
+            if not data or _reject_bytes(data, entity.id):
                 continue
             raw.write_bytes(data)
-        if not raw.is_file():
+        if not raw.is_file() or _reject_file(raw, entity.id):
+            raw.unlink(missing_ok=True)
             continue
         key = file_hash_key(str(raw))
         target = str(Path(dest).resolve())
@@ -140,14 +147,24 @@ def acquire_event_photo(
         frame.save(dest, format="JPEG", quality=92)
         write_motion_sidecar(dest, profile=profile_for(int(beat_index)))
         provider = candidate.provider or "commons"
+        canonical = license_allowed(candidate.license_raw) or ""
+        needs_credit = bool(canonical) and credit_required(canonical)
+        line = ""
+        if needs_credit:
+            line = credit_line(
+                title=candidate.title,
+                author=candidate.author,
+                license_name=canonical,
+                source_url=candidate.source_url,
+            )
         write_source_sidecar(
             dest,
             {
                 "provider": provider,
                 "origin": provider,
-                "license": candidate.license_raw,
-                "credit_line": "",
-                "credit_required": False,
+                "license": canonical or candidate.license_raw,
+                "credit_line": line,
+                "credit_required": needs_credit,
                 "reference_image": str(raw),
                 "canonical_shape": "",
                 "title": candidate.title,
@@ -162,3 +179,23 @@ def acquire_event_photo(
         note_source(f"event:{provider}", entity.id, int(beat_index) + 1)
         return dest
     return None
+
+
+def _reject_bytes(data: bytes, entity_id: str) -> bool:
+    try:
+        with Image.open(io.BytesIO(data)) as opened:
+            defect = image_defect(opened.convert("RGB"), nbytes=len(data))
+    except (OSError, ValueError):
+        defect = "unreadable"
+    if not defect:
+        return False
+    logger.info("event image rejected | entity=%s | %s", entity_id, defect)
+    return True
+
+
+def _reject_file(path: Path, entity_id: str) -> bool:
+    try:
+        return _reject_bytes(path.read_bytes(), entity_id)
+    except OSError:
+        return True
+

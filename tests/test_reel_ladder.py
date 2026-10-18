@@ -771,9 +771,342 @@ def test_event_search_publishes_a_commons_still(tmp_path: Path) -> None:
     assert side["image_hash"].startswith("sha256:")
 
 
+def test_flux_scenes_come_from_the_channel_style_guide() -> None:
+    from modules.reel_artefact.flux_policy import load_flux_policy
+
+    policy = load_flux_policy("ancient_knowledge")
+    allowed = " ".join(policy["allowed"]).lower()
+    forbidden = " ".join(policy["forbidden"]).lower()
+    assert "landscape" in allowed
+    assert "manuscript" in allowed
+    assert "sea" in allowed
+    assert "named artefact" in forbidden
+    assert "gear" in forbidden
+
+
+def test_object_flux_is_a_context_scene_and_keeps_edit_negatives(tmp_path: Path) -> None:
+    from modules.reel_artefact.climb import _flux
+    from modules.shot_planner.entities import Entity
+
+    entity = Entity(
+        id="antikythera_mechanism",
+        name="Antikythera Mechanism",
+        aliases=("antikythera",),
+        kind="artifact",
+        canonical_visual="corroded fragments",
+        era="Hellenistic",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        edit_negatives=("never intact gears", "corroded fragments only"),
+    )
+    seen: list[str] = []
+
+    def _generate(text: str, **kwargs: object) -> str:
+        del kwargs
+        seen.append(text)
+        return str(_jpeg(tmp_path / "out.jpg"))
+
+    ctx = RungContext(
+        beat_index=0,
+        narration="The gears are cut with a precision that still surprises researchers.",
+        prompt="draw a complete mechanism of clean brass gears",
+        dest=tmp_path / "x.jpg",
+        kind="object",
+    )
+    made = _flux(_generate, {}, entity)(ctx)
+    assert made is not None
+    prompt = seen[0].lower()
+    head = prompt.split("do not depict")[0]
+    assert "gear" not in head
+    assert "pendant" not in head
+    assert "museum hall" in prompt or "landscape" in prompt or "manuscript" in prompt
+    assert "never intact gears" in prompt
+    assert "complete mechanism" in prompt
+    assert "gold bird" in prompt
+
+
+def test_flux_cap_stops_another_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REEL_FLUX_MAX_PER_REEL", "0")
+    monkeypatch.setenv("REEL_REPLAN_MAX", "0")
+    monkeypatch.setenv("REEL_LADDER", "flux")
+    called = {"n": 0}
+
+    def _flux(ctx: RungContext) -> Path:
+        called["n"] += 1
+        return _jpeg(ctx.dest)
+
+    result = run_ladder(
+        beat_index=0,
+        narration="A wide landscape.",
+        prompt="landscape",
+        dest_dir=tmp_path,
+        kind="scene",
+        producers={"flux": _flux},
+        judge=lambda _path, _ctx: _pass(0.95),
+    )
+    assert called["n"] == 0
+    assert result.passed is False
+    assert any(row.reason == "flux-cap" for row in result.history)
+
+
+def test_replan_cap_stops_another_concept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("REEL_REPLAN_MAX", "2")
+    monkeypatch.setenv("REEL_REPLAN_MAX_PER_REEL", "0")
+    monkeypatch.setenv("REEL_LADDER_LLM", "0")
+    monkeypatch.setenv("REEL_LADDER", "flux")
+
+    def _flux(ctx: RungContext) -> Path:
+        return _jpeg(ctx.dest, (9, 9, 9))
+
+    result = run_ladder(
+        beat_index=2,
+        narration="Cicero called it a lost blueprint.",
+        prompt="intact brass gears",
+        dest_dir=tmp_path,
+        kind="scene",
+        producers={"flux": _flux},
+        judge=lambda _path, _ctx: _fail(),
+    )
+    assert result.passed is False
+    assert result.replans == 0
+    assert all("_p" not in (row.path or "") for row in result.history)
+
+
+def test_a_blank_download_is_not_an_event_photo(tmp_path: Path) -> None:
+    from modules.reel_artefact.events import acquire_event_photo
+    from modules.reel_artefact.pixels import image_defect
+    from modules.shot_planner.entities import Entity
+
+    blank = Image.new("RGB", (1600, 1200), (250, 250, 250))
+    assert image_defect(blank, nbytes=9000) == "blank"
+    banner = Image.new("RGB", (2000, 200))
+    pixels = banner.load()
+    for y in range(200):
+        for x in range(0, 2000, 8):
+            pixels[x, y] = (x % 255, 40, 40)
+    assert image_defect(banner) == "aspect"
+
+    entity = Entity(
+        id="blank_event_probe",
+        name="Blank probe",
+        aliases=("blank probe",),
+        kind="artifact",
+        canonical_visual="fragments",
+        era="Hellenistic",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        event_search=("Antikythera shipwreck 1901",),
+        event_categories=("Category:Antikythera wreck",),
+    )
+
+    class _Client:
+        def get(self, url, params=None, headers=None):
+            from agents.media.free_images.http import HttpResponse
+
+            del headers
+            params = params or {}
+            if url.endswith("blank.jpg"):
+                buf_image = Image.new("RGB", (1600, 1200), (240, 240, 240))
+                import io
+                buf = io.BytesIO()
+                buf_image.save(buf, format="JPEG")
+                return HttpResponse(200, buf.getvalue())
+            if params.get("list") == "categorymembers":
+                body = {"query": {"categorymembers": [
+                    {"title": "File:Blank placeholder.jpg"},
+                ]}}
+                return HttpResponse(200, json.dumps(body).encode())
+            body = {"query": {"pages": {"1": {
+                "title": "File:Blank placeholder.jpg",
+                "imageinfo": [{
+                    "url": "https://example.test/blank.jpg",
+                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Blank.jpg",
+                    "width": 1600,
+                    "height": 1200,
+                    "mime": "image/jpeg",
+                    "extmetadata": {
+                        "LicenseShortName": {"value": "Public domain"},
+                        "Artist": {"value": "Unknown"},
+                        "ObjectName": {"value": "Blank placeholder"},
+                    },
+                }],
+            }}}}
+            return HttpResponse(200, json.dumps(body).encode())
+
+    made = acquire_event_photo(
+        entity,
+        tmp_path / "event.jpg",
+        channel="ancient_knowledge",
+        client=_Client(),
+    )
+    assert made is None
+
+
+def test_event_cc_by_credit_is_written(tmp_path: Path) -> None:
+    from modules.reel_artefact.events import acquire_event_photo
+    from modules.shot_planner.entities import Entity
+
+    entity = Entity(
+        id="antikythera_mechanism",
+        name="Antikythera Mechanism",
+        aliases=("antikythera",),
+        kind="artifact",
+        canonical_visual="fragments",
+        era="Hellenistic",
+        setting="museum case",
+        confusions=(),
+        channels=("ancient_knowledge",),
+        event_search=("Antikythera shipwreck 1901",),
+        event_categories=("Category:Antikythera wreck",),
+    )
+    page = {
+        "title": "File:Anticythera shipwreck. Standard diving dress.jpg",
+        "imageinfo": [{
+            "url": "https://example.test/dress.jpg",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Dress.jpg",
+            "thumburl": "https://example.test/dress.jpg",
+            "width": 1600,
+            "height": 1200,
+            "mime": "image/jpeg",
+            "extmetadata": {
+                "ObjectName": {"value": "Anticythera shipwreck standard diving dress"},
+                "LicenseShortName": {"value": "CC BY-SA 3.0"},
+                "Artist": {"value": "Example Diver"},
+            },
+        }],
+    }
+
+    class _Client:
+        def get(self, url, params=None, headers=None):
+            from agents.media.free_images.http import HttpResponse
+
+            del headers
+            params = params or {}
+            if "dress.jpg" in url:
+                return HttpResponse(200, _jpeg_bytes())
+            if params.get("list") == "categorymembers":
+                body = {"query": {"categorymembers": [{"title": page["title"]}]}}
+                return HttpResponse(200, json.dumps(body).encode())
+            body = {"query": {"pages": {"1": page}}}
+            return HttpResponse(200, json.dumps(body).encode())
+
+    dest = tmp_path / "event.jpg"
+    made = acquire_event_photo(
+        entity, dest, channel="ancient_knowledge", beat_index=0, client=_Client(),
+    )
+    assert made == dest
+    side = json.loads(Path(str(dest) + ".source.json").read_text(encoding="utf-8"))
+    assert side["credit_required"] is True
+    assert "CC BY-SA" in side["credit_line"]
+    assert "Example Diver" in side["credit_line"]
+
+
+def test_final_frame_trusts_the_approved_still(tmp_path: Path) -> None:
+    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+
+    still = _jpeg(tmp_path / "still.jpg", (30, 80, 40))
+
+    def _frame(video: Path, at_s: float, dest: Path) -> Path:
+        del video, at_s
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(still.read_bytes())
+        return dest
+
+    def _judge(*args: object, **kwargs: object) -> dict:
+        raise AssertionError(args or kwargs)
+
+    decision = gate_final_mp4(
+        tmp_path / "reel.mp4",
+        [SubtitleCue(text="birds but some researchers", start_s=24.0, end_s=26.8)],
+        probe_fn=lambda _path: {
+            "error": "",
+            "duration_s": 40.0,
+            "has_audio": True,
+            "mean_volume_db": -16.0,
+        },
+        evaluate_fn=_judge,
+        frame_fn=_frame,
+        beats=[{
+            "index": 4,
+            "text": "These look like birds. But some researchers disagree.",
+            "passed": True,
+            "image_path": str(still),
+            "score": 0.91,
+            "prompt": "a museum archive",
+        }],
+    )
+    assert decision["passed"] is True
+    assert decision["frames"][0]["reason"] == "beat-approved"
+    assert decision["frames"][0]["beat_index"] == 4
+
+
+def test_a_different_final_frame_names_the_beat(tmp_path: Path) -> None:
+    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+
+    still = tmp_path / "still.jpg"
+    other = tmp_path / "other.jpg"
+    _bar(still, horizontal=False)
+    _bar(other, horizontal=True)
+
+    def _frame(video: Path, at_s: float, dest: Path) -> Path:
+        del video, at_s
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(other.read_bytes())
+        return dest
+
+    decision = gate_final_mp4(
+        tmp_path / "reel.mp4",
+        [SubtitleCue(text="birds but some researchers", start_s=24.0, end_s=26.8)],
+        probe_fn=lambda _path: {
+            "error": "",
+            "duration_s": 40.0,
+            "has_audio": True,
+            "mean_volume_db": -16.0,
+        },
+        evaluate_fn=lambda *_args, **_kwargs: _fail(),
+        frame_fn=_frame,
+        beats=[{
+            "index": 7,
+            "text": "These look like birds. But some researchers disagree.",
+            "passed": True,
+            "image_path": str(still),
+            "score": 0.91,
+            "prompt": "archive",
+        }],
+    )
+    assert decision["passed"] is False
+    assert "frame_subtitle_mismatch" in decision["reasons"]
+    assert decision["frames"][0]["beat_index"] == 7
+
+
+def _bar(path: Path, *, horizontal: bool) -> None:
+    image = Image.new("RGB", (64, 96), (12, 12, 12))
+    pixels = image.load()
+    for y in range(96):
+        for x in range(64):
+            if horizontal and y < 10:
+                pixels[x, y] = (230, 20, 20)
+            if not horizontal and x < 10:
+                pixels[x, y] = (20, 220, 220)
+    image.save(path, format="JPEG")
+
+
 def _jpeg_bytes() -> bytes:
     import io
 
     buf = io.BytesIO()
-    Image.new("RGB", (1600, 1200), (70, 90, 110)).save(buf, format="JPEG")
+    color = (70, 90, 110)
+    tile = Image.new("RGB", (16, 16), color)
+    pixels = tile.load()
+    for y in range(16):
+        for x in range(16):
+            shift = 40 if (x + y) % 2 == 0 else 0
+            pixels[x, y] = tuple(min(255, channel + shift) for channel in color)
+    tile.resize((1600, 1200), Image.Resampling.NEAREST).save(buf, format="JPEG")
     return buf.getvalue()

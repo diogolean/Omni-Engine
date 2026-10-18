@@ -8,16 +8,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from modules.reel_artefact.events import acquire_event_photo
-from modules.reel_artefact.ladder import (
-    LadderResult,
-    reprompt_from_defect,
-    run_ladder,
-)
+from modules.reel_artefact.flux_policy import safe_flux_prompt
+from modules.reel_artefact.ladder import LadderResult, run_ladder
 from modules.reel_artefact.logbook import note_accepted
-from modules.reel_artefact.prompts import context_flux_prompt, event_flux_prompt
 from modules.reel_artefact.reuse import remember_approved
 from modules.reel_artefact.role import beat_kind, is_event
-from modules.reel_artefact.route import acquire_photo, generic_flux_prompt
+from modules.reel_artefact.route import acquire_photo
 from modules.reel_qa.models import StillGateResult
 from modules.reel_qa.relevance import (
     evaluate_chunk_relevance,
@@ -119,7 +115,7 @@ def climb_act(
         event=event,
         name=entity.name if entity else "",
         period=str(getattr(entity, "event_period", "") or "") if entity else "",
-        negatives=tuple(getattr(entity, "event_negatives", ()) or ()) if entity else (),
+        negatives=_flux_negatives(entity),
         llm=_gemini_reprompt if _llm_allowed() else None,
     )
     if result.passed and not result.resumed:
@@ -210,30 +206,41 @@ def _event(entity: Entity | None, channel: str):
     return _run
 
 
+def _flux_negatives(entity: Entity | None) -> tuple[str, ...]:
+    if entity is None:
+        return ()
+    found: list[str] = []
+    for key in ("edit_negatives", "event_negatives"):
+        for item in getattr(entity, key, ()) or ():
+            text = str(item).strip()
+            if text and text not in found:
+                found.append(text)
+    return tuple(found)
+
+
 def _flux(generate: Callable[..., Any], kwargs: dict, entity: Entity | None):
     def _run(ctx):
         name = entity.name if entity else ""
         period = str(getattr(entity, "event_period", "") or "") if entity else ""
-        negatives = tuple(getattr(entity, "event_negatives", ()) or ()) if entity else ()
+        negatives = _flux_negatives(entity)
+        # Flux never receives a prompt whose subject is the named object.
+        # An object beat that reached this rung has already missed real and
+        # Nano Banana, so the still is a Flux-safe context scene.
+        text = safe_flux_prompt(
+            ctx.narration,
+            name=name,
+            negatives=negatives,
+            period=period,
+            attempt=max(1, int(ctx.replan or ctx.attempt or 1)),
+            event=bool(ctx.event),
+            kind="object" if ctx.kind == "object" and not ctx.event else "scene",
+            rejection=ctx.rejection or "",
+        )
         if ctx.concept:
             text = ctx.concept
-        elif ctx.rejection:
-            text = reprompt_from_defect(
-                ctx.narration,
-                ctx.prompt,
-                ctx.rejection,
-                llm=_gemini_reprompt,
-            )
-            if ctx.event or ctx.kind == "object":
-                text = f"{text} {_object_ban(name)}"
-        elif ctx.event:
-            text = event_flux_prompt(
-                ctx.narration, name=name, period=period, negatives=negatives,
-            )
-        elif ctx.kind == "object":
-            text = context_flux_prompt(ctx.narration, name=name)
-        else:
-            text = generic_flux_prompt(ctx.prompt or ctx.narration)
+            if "do not depict" not in text.lower():
+                text = f"{text} {safe_flux_prompt(ctx.narration, name=name, negatives=negatives)}"
+        ctx.prompt = text
         call = {key: value for key, value in kwargs.items() if key in _FLUX_KEYS}
         call["output_stem"] = ctx.dest.stem
         call["output_directory"] = ctx.dest.parent
@@ -260,14 +267,6 @@ def _reuse(kind: str, entity_id: str):
             n_beats=ctx.n_beats,
         )
     return _run
-
-
-def _object_ban(name: str) -> str:
-    named = f"Do not depict {name}. " if name else ""
-    return (
-        f"{named}Do not depict a complete mechanism, clean brass gears, "
-        "or an invented gold figurine."
-    )
 
 
 def _llm_allowed() -> bool:

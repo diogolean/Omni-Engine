@@ -48,9 +48,6 @@ _SCENE = (
     "recovered",
     "found by",
     "off the",
-    "researchers",
-    "scholars",
-    "historians",
     "legends",
     "theories",
     "commentary",
@@ -141,6 +138,16 @@ def beat_kind(
     """
     if is_cta:
         return "scene"
+    try:
+        from modules.reel_artefact.flux_policy import (
+            is_abstract_claim,
+            is_physical_object_line,
+        )
+
+        if is_abstract_claim(narration) and not is_physical_object_line(narration):
+            return "scene"
+    except Exception:  # noqa: BLE001
+        pass
     blob = " ".join((narration, camera, setting, shot_type)).lower()
     if any(cue in blob for cue in _SCENE):
         return "scene"

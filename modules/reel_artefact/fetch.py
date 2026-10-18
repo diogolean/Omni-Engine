@@ -757,6 +757,18 @@ def _save_candidate(
             height,
         )
         return None
+    from modules.reel_artefact.pixels import image_defect
+
+    defect = image_defect(image, nbytes=len(raw))
+    if defect:
+        logger.info(
+            "Artefact image rejected | entity=%s | %s | %dx%d",
+            entity.id,
+            defect,
+            width,
+            height,
+        )
+        return None
     canonical = license_allowed(candidate.license_raw) or ""
     reference = folder / f"photo_{index:02d}.jpg"
     image.save(reference, format="JPEG", quality=90)

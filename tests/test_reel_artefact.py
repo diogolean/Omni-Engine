@@ -22,8 +22,18 @@ from modules.shot_planner.entities import Entity, load_entities
 
 def _jpeg(width: int, height: int, color: tuple[int, int, int] = (180, 140, 40)) -> bytes:
     buf = io.BytesIO()
-    Image.new("RGB", (width, height), color).save(buf, format="JPEG")
+    _textured(width, height, color).save(buf, format="JPEG")
     return buf.getvalue()
+
+
+def _textured(width: int, height: int, color: tuple[int, int, int]) -> Image.Image:
+    tile = Image.new("RGB", (16, 16), color)
+    pixels = tile.load()
+    for y in range(16):
+        for x in range(16):
+            shift = 36 if (x + y) % 2 == 0 else 0
+            pixels[x, y] = tuple(min(255, channel + shift) for channel in color)
+    return tile.resize((width, height), Image.Resampling.NEAREST)
 
 
 def _page(title: str, width: int, height: int, license_name: str, url: str) -> dict:

@@ -30,6 +30,27 @@
   ],
   "identity_negatives": [],
   "style_lock": "Photoreal documentary photograph from a real camera. Natural materials, dust, and stone or metal as they exist. 35mm film grain, full-bleed, no text, no watermark, no border.",
+  "flux_scenes": {
+    "allowed": [
+      "landscapes and the real place",
+      "the sea or underwater ambience",
+      "atmosphere such as sky, light, or fog",
+      "wide establishing shots",
+      "generic museum halls or archives seen from afar",
+      "silhouettes of people and hands without detailed faces",
+      "old books or manuscripts as props without readable text"
+    ],
+    "forbidden": [
+      "a named artefact",
+      "parts of an artefact such as gears or pendants",
+      "any specific object",
+      "a complete mechanism",
+      "clean brass gears",
+      "an invented gold figurine, gold bird, or silver disc",
+      "readable text",
+      "detailed faces"
+    ]
+  },
   "recency_tags": [
     "pyramid",
     "sphinx",

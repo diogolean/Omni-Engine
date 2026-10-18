@@ -82,7 +82,8 @@ def test_flag_defaults_off_and_is_ancient_knowledge_only(monkeypatch) -> None:
 def test_prompt_forbids_era_generic_entities_and_asks_for_a_hero_shot() -> None:
     text = planner_prompt("Lost OOPArts", _BCE, load_entities("ancient_knowledge"))
     assert "2nd century BCE device" in text
-    assert "museum hero" in text
+    assert "flux-safe" in text.lower() or "manuscript" in text.lower()
+    assert "never a named artefact" in text.lower() or "its gears" in text.lower()
     assert "antikythera_mechanism" in text
     assert "small gold pendants" in text
     assert "never a modern jet" in text
@@ -104,12 +105,13 @@ def test_invalid_json_is_retried_once_then_accepted() -> None:
     assert plan.shots[1].entity_id == "antikythera_mechanism"
     assert "bce" not in plan.shots[1].subject.lower()
     closing = plan.shots[-1]
-    assert closing.subject == "Antikythera Mechanism"
-    assert "museum hero shot" in closing.camera
+    assert closing.entity_id == "antikythera_mechanism"
+    assert closing.image_role == "flux"
+    assert "museum hero" not in closing.camera
     rendered = render_shot(closing)
-    assert rendered.positive.lower().startswith("expected subject: antikythera mechanism.")
-    assert "corroded bronze gear fragments" in rendered.positive.lower()
+    assert "corroded bronze gear fragments" not in rendered.positive.lower()
     assert "vague cosmic" not in rendered.positive.lower()
+    assert "manuscript" in rendered.positive.lower() or "book" in rendered.positive.lower()
     matched = shot_for_beat(plan, _SENTENCES[1])
     assert matched is not None and matched.entity_id == "antikythera_mechanism"
 
