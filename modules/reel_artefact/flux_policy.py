@@ -203,13 +203,17 @@ def choose_scene(
     attempt: int = 1,
     event: bool = False,
     kind: str = "scene",
+    coastal: bool = True,
 ) -> str:
-    """One allowed scene id. Object beats re-plan onto a context scene."""
+    """One allowed scene id. Object beats re-plan onto a context scene.
+
+    ``coastal`` is false for an inland find. Quimbaya does not get a sea.
+    """
     if event or kind == "event":
-        return "sea"
+        return "sea" if coastal else "landscape"
     low = " ".join((narration or "").lower().split())
     if _mentions(low, ("sea", "underwater", "shipwreck", "diver", "divers", "wreck")):
-        return "sea"
+        return "sea" if coastal else "landscape"
     slot = max(1, int(attempt)) - 1
     if kind == "object":
         return _OBJECT_CYCLE[slot % len(_OBJECT_CYCLE)]
@@ -222,10 +226,59 @@ def choose_scene(
     return ("establishing", "landscape", "museum_hall", "silhouette")[slot % 4]
 
 
-def fields_for_scene(scene: str) -> dict[str, str]:
+def _coastal(entity: Any) -> bool:
+    """Unknown entities keep the old sea scenes. A known inland find does not."""
+    if entity is None:
+        return True
+    return bool(getattr(entity, "coastal", False))
+
+
+def _place_copy(
+    scene: str,
+    subject: str,
+    visual: str,
+    setting: str,
+    geography: str,
+) -> tuple[str, str, str]:
+    """Name the real geography. A bare 'real place' is what drew the wrong desert."""
+    place = " ".join((geography or "").split())
+    if not place:
+        return subject, visual, setting
+    if scene == "landscape":
+        return (
+            place,
+            f"A wide landscape of {place}. The real ground, ridges, and vegetation. No named artefact.",
+            place,
+        )
+    if scene == "establishing":
+        return (
+            place,
+            f"A wide establishing shot of {place}. The location is the subject.",
+            place,
+        )
+    if scene == "atmosphere":
+        return (
+            place,
+            f"Sky, light, or fog over {place}. Empty of objects.",
+            place,
+        )
+    if scene == "sea":
+        return (
+            place,
+            f"Calm sea along {place}. Light in the water, uncluttered.",
+            place,
+        )
+    return subject, visual, setting
+
+
+def fields_for_scene(scene: str, entity: Any = None) -> dict[str, str]:
     """Subject, camera, and setting for one allowed Flux scene type."""
     key = scene if scene in _SCENES else "landscape"
+    if key == "sea" and not _coastal(entity):
+        key = "landscape"
     subject, visual, camera, setting, shot_type = _SCENES[key]
+    geography = str(getattr(entity, "geography", "") or "") if entity is not None else ""
+    subject, visual, setting = _place_copy(key, subject, visual, setting, geography)
     return {
         "scene": key,
         "subject": subject,
@@ -237,9 +290,14 @@ def fields_for_scene(scene: str) -> dict[str, str]:
     }
 
 
-def next_scene(scene: str) -> str:
+def next_scene(scene: str, *, coastal: bool = True) -> str:
     """A different allowed scene, used when two beats already used this one."""
-    order = ("manuscript", "silhouette", "museum_hall", "landscape", "sea", "establishing", "atmosphere")
+    order = ["manuscript", "silhouette", "museum_hall", "landscape", "establishing", "atmosphere"]
+    if coastal:
+        order = [
+            "manuscript", "silhouette", "museum_hall", "landscape",
+            "sea", "establishing", "atmosphere",
+        ]
     if scene not in order:
         return order[0]
     return order[(order.index(scene) + 1) % len(order)]
@@ -254,8 +312,9 @@ def scene_fields(
 ) -> dict[str, str]:
     """Planner fields for a line that must not ask Flux to invent an object."""
     low = " ".join((narration or "").lower().split())
+    coastal = _coastal(entity)
     if event:
-        scene = "sea"
+        scene = "sea" if coastal else "landscape"
     elif any(word in low for word in ("real place", "highland", "landscape", "region")):
         scene = "landscape"
     elif any(word in low for word in ("historian", "debate", "archive", "researcher")):
@@ -277,8 +336,12 @@ def scene_fields(
             "lighting": "natural daylight, documentary",
         }
     else:
-        scene = choose_scene(narration, attempt=index, event=event, kind="scene")
-    return fields_for_scene(scene)
+        scene = choose_scene(
+            narration, attempt=index, event=event, kind="scene", coastal=coastal,
+        )
+    if scene == "sea" and not coastal:
+        scene = "landscape"
+    return fields_for_scene(scene, entity)
 
 
 _PART_WORDS = (
@@ -344,19 +407,34 @@ def safe_flux_prompt(
     event: bool = False,
     kind: str = "scene",
     rejection: str = "",
+    scene: str = "",
+    geography: str = "",
+    coastal: bool = True,
+    variant: int = 0,
 ) -> str:
-    """One Flux prompt. The subject is always an allowed scene type."""
-    scene = choose_scene(narration, attempt=attempt, event=event, kind=kind)
-    _subject, visual, _camera, _setting, _shot = _SCENES[scene]
+    """One Flux prompt. The subject is always an allowed scene type.
+
+    ``scene`` is the planned scene. ``variant`` walks to the next allowed
+    scene on a retry. ``geography`` is the real place from the entity file.
+    """
+    chosen = scene if scene in _SCENES else choose_scene(
+        narration, attempt=attempt, event=event, kind=kind, coastal=coastal,
+    )
+    if chosen == "sea" and not coastal:
+        chosen = "landscape"
+    for _step in range(max(0, int(variant or 0))):
+        chosen = next_scene(chosen, coastal=coastal)
+    _subject, visual, _camera, _setting, _shot = _SCENES[chosen]
+    _subject, visual, _setting = _place_copy(chosen, _subject, visual, _setting, geography)
     spoken = " ".join((narration or "").split())
     named = f" Do not depict {name}." if name else ""
-    when = f" Period: {period}." if period and (event or scene == "sea") else ""
+    when = f" Period: {period}." if period and (event or chosen == "sea") else ""
     bans = [
         str(item).strip().rstrip(".")
         for item in negatives
         if str(item).strip()
     ]
-    if event or scene == "sea":
+    if event or chosen == "sea":
         if not any("scuba" in item.lower() for item in bans):
             bans.append("no modern scuba")
         if not any("boat" in item.lower() for item in bans):

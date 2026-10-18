@@ -51,7 +51,10 @@
       "no wetsuit",
       "no modern boat",
       "no outboard motor"
-    ]
+    ],
+    "geography": "the Greek islands, the Aegean, and the Antikythera and Kythira coast",
+    "coastal": true,
+    "usable_photos": 6
   },
   {
     "id": "coso_artifact",
@@ -174,6 +177,9 @@
       "File:Precolombina cultura prc.jpg"
     ],
     "text_only_safe": false,
+    "geography": "the Colombian Andes and the Cauca and Quindío valley, cloud forest",
+    "coastal": false,
+    "usable_photos": 0,
     "edit_negatives": [
       "no propeller",
       "no modern aircraft",

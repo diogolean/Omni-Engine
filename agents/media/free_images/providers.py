@@ -32,6 +32,20 @@ def _meta_value(block: Any) -> str:
     return _plain(block)
 
 
+def clean_author(author: str) -> str:
+    """Collapse a doubled credit such as ``Unknown author Unknown author``."""
+    text = re.sub(r"\s+", " ", str(author or "").replace("\xa0", " ")).strip(" ,;")
+    if not text:
+        return ""
+    parts = text.split()
+    while len(parts) >= 2 and len(parts) % 2 == 0:
+        half = len(parts) // 2
+        if [part.casefold() for part in parts[:half]] != [part.casefold() for part in parts[half:]]:
+            break
+        parts = parts[:half]
+    return " ".join(parts)
+
+
 def _int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -87,7 +101,9 @@ def parse_wikimedia(payload: Any) -> list[Candidate]:
                 provider="wikimedia",
                 title=title,
                 description=_meta_value(meta.get("ImageDescription")),
-                author=_meta_value(meta.get("Artist")) or _meta_value(meta.get("Credit")),
+                author=clean_author(
+                    _meta_value(meta.get("Artist")) or _meta_value(meta.get("Credit"))
+                ),
                 license_raw=_meta_value(meta.get("LicenseShortName")),
                 license_url=_meta_value(meta.get("LicenseUrl")),
                 source_url=str(info.get("descriptionurl") or page.get("fullurl") or ""),

@@ -46,9 +46,11 @@ subject, as a photoreal documentary photograph, in a setting the beat allows.
 """
 
 _SHOT_PROMPT = """You are a strict documentary still judge. You are shown the IMAGE.
-Score the picture against the PLANNED SHOT. The planner already chose this
-picture for the spoken line. Do not fail the picture because the spoken line
-names an object the planned shot deliberately leaves out.
+This still was planned as a real place or scene. Judge whether it is a real,
+plausible, photoreal place or scene for this topic and era, and whether it
+matches the PLANNED SHOT. The spoken line is context only. Do not fail the
+picture because the spoken line names an artefact, fragments, gears, or a
+pendant that the planned shot deliberately leaves out.
 Return STRICT JSON only — no markdown, no commentary:
 {{
   "image_description": string,
@@ -70,19 +72,61 @@ the planned shot itself asks for that object.
 Set non_photoreal true for CGI, a 3D render, an illustration, a cartoon, or a miniature
 or clay-model look.
 Set anatomy_defect true for a mangled, fused, or extra limb.
-Set setting_contradicts_beat true only when the place contradicts the planned setting.
-Set contains_forbidden_object true when the picture shows a named artefact, gears,
-pendants, a gold ornament, a figurine, or any other specific object.
-Set shows_expected_subject true when the planned subject is visible in the planned setting.
-is_relevant is true only when every flag above is false and the planned subject is visible.
+Set setting_contradicts_beat true only when the place is a different region than the
+planned setting. A desert mesa or Egyptian sand ruins fails when the plan names the
+Colombian Andes. Do not set it because the spoken line mentions an object that is
+absent. Do not compare the place to the spoken line.
+Set contains_forbidden_object true only when the picture itself clearly shows a named
+artefact, gears, a pendant, a gold ornament, or a figurine. Do not set it because
+the spoken line or the prompt mentions those words.
+Set shows_expected_subject true when the planned place or scene is visible.
+is_relevant is true only when every flag above is false and the planned scene is visible.
 relevance_score is 0.0–1.0. rejection_reason is null only when is_relevant is true
 and relevance_score >= {threshold:.2f}.
+Do not score artefact shape. shape_mismatch does not apply to this still.
+Topic: {topic}
+Geography: {geography}
 PLANNED SHOT
+Scene: {scene_type}
 Subject: {shot_subject}
 Setting: {shot_setting}
 Era: {shot_era}
 Spoken line, context only, not the subject: {chunk_text}
 Image prompt: {prompt}
+"""
+
+_EVENT_PROMPT = """You are a strict documentary still judge. You are shown an ARCHIVAL PHOTOGRAPH
+of a historical event. Score it as a record of that event: the people, the boat,
+the coast, or the year. The artefact itself may be absent. Do not score artefact
+shape. Do not ask for gears, fragments, or a mechanism.
+Return STRICT JSON only — no markdown, no commentary:
+{{
+  "image_description": string,
+  "shows_expected_subject": boolean,
+  "anachronism": boolean,
+  "non_photoreal": boolean,
+  "anatomy_defect": boolean,
+  "setting_contradicts_beat": boolean,
+  "is_relevant": boolean,
+  "relevance_score": float,
+  "detected_subjects": [string],
+  "rejection_reason": string
+}}
+image_description is a literal caption of the photograph.
+Set anachronism true for modern scuba, a wetsuit, or a modern boat when the event
+is the 1900-1901 wreck.
+Set non_photoreal true for CGI, a render, or an illustration.
+Set setting_contradicts_beat true only when the photograph is a different event
+(a museum gallery of the object, with no people and no boat).
+A real photograph of divers, a period boat, or the coast passes even when the
+artefact is not in the frame.
+is_relevant is true only when every flag above is false.
+relevance_score is 0.0–1.0. rejection_reason is null only when is_relevant is true
+and relevance_score >= {threshold:.2f}.
+Do not score artefact shape. An event photograph is not an object still.
+Event: {chunk_text}
+Era: {shot_era}
+Setting: {shot_setting}
 """
 
 # A Flux scene must not contain these. An object photograph may.
@@ -206,7 +250,9 @@ def _verdict_from_payload(
         spoken_text=chunk_text,
         banned_subjects=banned_subjects,
     )
-    if _as_bool(data.get("shape_mismatch")) and "shape_mismatch" not in defects:
+    # shape_mismatch is only for an object photograph. A scene, an event,
+    # and an archival boat are not failed because the artefact is absent.
+    if score_against == "narration" and _as_bool(data.get("shape_mismatch")) and "shape_mismatch" not in defects:
         defects.append("shape_mismatch")
         relevant = False
         score = min(score, 0.35)
@@ -272,11 +318,16 @@ def evaluate_chunk_relevance(
     shot_subject: str = "",
     shot_setting: str = "",
     shot_era: str = "",
+    topic: str = "",
+    scene_type: str = "",
+    geography: str = "",
 ) -> dict[str, Any]:
-    """Score one still against one spoken beat.
+    """Score one still.
 
-    Tries ``REEL_QA_MODEL_CHAIN`` (default Qwen via OpenRouter, then Gemini Flash).
-    A missing key, a down provider, or unparseable output is not a pass.
+    ``narration`` is an object beat and may include artefact shape.
+    ``shot`` is a planned Flux scene. ``event`` is an archival photograph.
+    Tries ``REEL_QA_MODEL_CHAIN``. A missing key, a down provider, or
+    unparseable output is not a pass.
     """
     from modules.reel_visual_qa import _strip_json
 
@@ -290,11 +341,21 @@ def evaluate_chunk_relevance(
     if against == "shot":
         prompt = _SHOT_PROMPT.format(
             threshold=threshold,
+            topic=(topic or "this episode").strip()[:180],
+            geography=(geography or shot_setting or "the planned place").strip()[:240],
+            scene_type=(scene_type or "the planned scene").strip()[:80],
             shot_subject=(shot_subject or "the planned subject").strip()[:240],
             shot_setting=(shot_setting or "the planned setting").strip()[:240],
             shot_era=(shot_era or "the planned era").strip()[:120],
             chunk_text=(current_chunk_text or "").strip()[:400],
             prompt=(image_generation_prompt or "").strip()[:800],
+        )
+    elif against == "event":
+        prompt = _EVENT_PROMPT.format(
+            threshold=threshold,
+            chunk_text=(current_chunk_text or "").strip()[:400],
+            shot_setting=(shot_setting or "the event").strip()[:240],
+            shot_era=(shot_era or "the event period").strip()[:120],
         )
     else:
         prompt = _GATE_PROMPT.format(
@@ -305,7 +366,7 @@ def evaluate_chunk_relevance(
     images: list[Path] = [path]
     labels = ["candidate"]
     reference = Path(reference_image) if reference_image else None
-    if reference is not None and reference.is_file():
+    if against == "narration" and reference is not None and reference.is_file():
         shape = (canonical_shape or "the object in the reference photograph").strip()
         prompt += (
             "\nA second image labeled REFERENCE is a photograph of the real artefact. "
@@ -359,6 +420,9 @@ def evaluate_with_technical_retry(
     shot_subject: str = "",
     shot_setting: str = "",
     shot_era: str = "",
+    topic: str = "",
+    scene_type: str = "",
+    geography: str = "",
 ) -> dict[str, Any]:
     """Score one still. Retry the judge on timeout or an invalid reply.
 
@@ -384,6 +448,9 @@ def evaluate_with_technical_retry(
                     shot_subject=shot_subject,
                     shot_setting=shot_setting,
                     shot_era=shot_era,
+                    topic=topic,
+                    scene_type=scene_type,
+                    geography=geography,
                 )
                 or {}
             )

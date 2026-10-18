@@ -293,7 +293,11 @@ def normalize_shots(shots: list[Shot], entities: list[Entity]) -> list[Shot]:
         output.append(_fill(
             shot, entity, recap=recap, others=introduced, index=index,
         ))
-    return _vary_scenes(output)
+    by_id = {entity.id: entity for entity in entities}
+    output = _fit_topic(output, by_id)
+    output = _cap_objects(output, by_id)
+    output = _vary_scenes(output, by_id)
+    return _fit_topic(output, by_id)
 
 
 def _scene_name(shot: Shot) -> str:
@@ -316,8 +320,8 @@ def _scene_name(shot: Shot) -> str:
     return ""
 
 
-def _with_scene(shot: Shot, scene: str) -> Shot:
-    fields = fields_for_scene(scene)
+def _with_scene(shot: Shot, scene: str, entity: Entity | None = None) -> Shot:
+    fields = fields_for_scene(scene, entity)
     shot_type = fields["shot_type"] if fields["shot_type"] in SHOT_TYPES else shot.shot_type
     return Shot(
         id=shot.id,
@@ -339,20 +343,23 @@ def _with_scene(shot: Shot, scene: str) -> Shot:
     )
 
 
-def _vary_scenes(shots: list[Shot]) -> list[Shot]:
+def _vary_scenes(shots: list[Shot], by_id: dict[str, Entity] | None = None) -> list[Shot]:
     """No more than two flux beats in a row may share a scene type."""
+    known = by_id or {}
     varied: list[Shot] = []
     previous = ""
     run = 0
     for shot in shots:
+        entity = known.get(shot.entity_id)
+        coastal = bool(getattr(entity, "coastal", False)) if entity is not None else True
         scene = _scene_name(shot)
         if shot.image_role == "flux" and scene and scene == previous:
             run += 1
         else:
             run = 1 if scene else 0
         if shot.image_role == "flux" and scene and run > 2:
-            scene = next_scene(previous)
-            shot = _with_scene(shot, scene)
+            scene = next_scene(previous, coastal=coastal)
+            shot = _with_scene(shot, scene, entity)
             run = 1
         previous = scene or previous
         if shot.image_role == "flux" and scene and not shot.scene_type:
@@ -376,3 +383,68 @@ def _vary_scenes(shots: list[Shot]) -> list[Shot]:
             )
         varied.append(shot)
     return varied
+
+
+def _fit_topic(shots: list[Shot], by_id: dict[str, Entity]) -> list[Shot]:
+    """An inland culture does not get a sea scene. Landscapes name the real place."""
+    fitted: list[Shot] = []
+    for shot in shots:
+        entity = by_id.get(shot.entity_id)
+        if shot.image_role != "flux" or entity is None:
+            fitted.append(shot)
+            continue
+        coastal = bool(getattr(entity, "coastal", False))
+        scene = _scene_name(shot)
+        if scene == "sea" and not coastal:
+            shot = _with_scene(shot, "landscape", entity)
+        elif scene in {"landscape", "establishing", "atmosphere", "sea"} and entity.geography:
+            shot = _with_scene(shot, scene or "landscape", entity)
+        fitted.append(shot)
+    return fitted
+
+
+def _cap_objects(shots: list[Shot], by_id: dict[str, Entity]) -> list[Shot]:
+    """Do not plan more object photographs than real photos plus the Nano cap.
+
+    The extra beats become Flux-safe scenes at planning time, so the ladder
+    is not asked for a photograph it cannot have.
+    """
+    from modules.reel_artefact.budget import nano_cap
+
+    groups: dict[str, list[int]] = {}
+    for index, shot in enumerate(shots):
+        if shot.image_role != "photo" or not shot.entity_id:
+            continue
+        groups.setdefault(shot.entity_id, []).append(index)
+    capped = list(shots)
+    for entity_id, indexes in groups.items():
+        entity = by_id.get(entity_id)
+        photos = int(getattr(entity, "usable_photos", 0) or 0) if entity is not None else 0
+        slots = max(0, photos + nano_cap())
+        for nth, index in enumerate(indexes):
+            if nth < slots:
+                continue
+            shot = capped[index]
+            fields = scene_fields(
+                shot.narration, entity=entity, index=nth + 1, event=False,
+            )
+            shot_type = fields["shot_type"] if fields["shot_type"] in SHOT_TYPES else "wide"
+            capped[index] = Shot(
+                id=shot.id,
+                narration=shot.narration,
+                entity_id=shot.entity_id,
+                subject=fields["subject"],
+                canonical_visual=fields["canonical_visual"],
+                shot_type=shot_type,
+                camera=fields["camera"],
+                setting=fields["setting"],
+                era=shot.era,
+                mood=shot.mood,
+                lighting=fields["lighting"],
+                negatives=list(shot.negatives),
+                kb_miss=shot.kb_miss,
+                canonical_shape="",
+                image_role="flux",
+                scene_type=fields.get("scene") or "",
+            )
+    return capped

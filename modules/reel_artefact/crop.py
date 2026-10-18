@@ -104,6 +104,112 @@ def _blur_fill(image: Image.Image) -> Image.Image:
     return background
 
 
+def prepare_event_frame(img: Image.Image) -> tuple[Image.Image, str]:
+    """9:16 crop around the people or the boat, then fit the reel frame.
+
+    A centre crop of a wreck photograph keeps the empty sea and cuts off
+    the divers. The window sits on the busiest, darkest part of the frame.
+    """
+    image = img.convert("RGB")
+    width, height = image.size
+    if width < 2 or height < 2:
+        raise ValueError("image_too_small")
+    left, top, right, bottom = _salient_box(image)
+    cropped = image.crop((left, top, right, bottom))
+    frame = cropped.resize((REEL_W, REEL_H), Image.Resampling.LANCZOS)
+    return frame, "salient_crop"
+
+
+def _salient_box(image: Image.Image) -> tuple[int, int, int, int]:
+    """A 9:16 window that covers the high-contrast, darker subject."""
+    width, height = image.size
+    energy, ew, eh = _energy(image)
+    target = 9 / 16
+    if width / max(1, height) > target:
+        crop_w = max(1, min(width, int(round(height * target))))
+        crop_h = height
+        span = max(0, width - crop_w)
+        best = (0, 0, crop_w, height)
+    else:
+        crop_h = max(1, min(height, int(round(width / target))))
+        crop_w = width
+        span = max(0, height - crop_h)
+        best = (0, 0, width, crop_h)
+    best_score = -1.0
+    steps = 32
+    for step in range(steps + 1):
+        if width / max(1, height) > target:
+            left = int(round(span * step / steps)) if steps else 0
+            top = 0
+        else:
+            left = 0
+            top = int(round(span * step / steps)) if steps else 0
+        score = _window_score(energy, ew, eh, width, height, left, top, crop_w, crop_h)
+        if score > best_score:
+            best_score = score
+            best = (left, top, left + crop_w, top + crop_h)
+    return best
+
+
+def _energy(image: Image.Image) -> tuple[list[list[float]], int, int]:
+    small = image.convert("RGB")
+    small.thumbnail((96, 96), Image.Resampling.BOX)
+    width, height = small.size
+    pixels = list(small.getdata())
+
+    def luma(index: int) -> float:
+        red, green, blue = pixels[index]
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    grid = [[0.0] * width for _ in range(height)]
+    for y in range(height):
+        for x in range(width):
+            index = y * width + x
+            red, green, blue = pixels[index]
+            level = luma(index)
+            contrast = 0.0
+            seen = 0
+            for dy, dx in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+                xx, yy = x + dx, y + dy
+                if 0 <= xx < width and 0 <= yy < height:
+                    contrast += abs(level - luma(yy * width + xx))
+                    seen += 1
+            contrast = contrast / max(1, seen)
+            dark = max(0.0, 190.0 - level) / 190.0
+            skin = 0.0
+            if red > 90 and green > 40 and red > green > blue and (red - blue) > 15:
+                skin = 1.0
+            grid[y][x] = contrast + (55.0 * dark) + (90.0 * skin)
+    return grid, width, height
+
+
+def _window_score(
+    energy: list[list[float]],
+    ew: int,
+    eh: int,
+    width: int,
+    height: int,
+    left: int,
+    top: int,
+    crop_w: int,
+    crop_h: int,
+) -> float:
+    x0 = int(left / max(1, width) * ew)
+    x1 = max(x0 + 1, int((left + crop_w) / max(1, width) * ew))
+    y0 = int(top / max(1, height) * eh)
+    y1 = max(y0 + 1, int((top + crop_h) / max(1, height) * eh))
+    x1 = min(ew, x1)
+    y1 = min(eh, y1)
+    total = 0.0
+    count = 0
+    for y in range(y0, y1):
+        row = energy[y]
+        for x in range(x0, x1):
+            total += row[x]
+            count += 1
+    return total / max(1, count)
+
+
 def usable_as_still(width: int, height: int) -> bool:
     """True when the long side can be a still, including a local upscale."""
     if width <= 0 or height <= 0:

@@ -4403,18 +4403,9 @@ def _produce_variant_worker(
                     else None
                 )
                 if _ladder_on:
-                    from modules.reel_artefact.climb import climb_act as _climb_act
+                    from modules.reel_artefact.orchestrate import make_climb_job as _make_climb_job
 
-                    _shot_type = str(getattr(_plan_shot, "shot_type", "") or "")
-                    _shot_camera = str(getattr(_plan_shot, "camera", "") or "")
-                    _shot_setting = str(getattr(_plan_shot, "setting", "") or "")
-                    _entity_for_climb = ""
-                    _shape_for_climb = ""
-                    if _plan_shot is not None and not getattr(_plan_shot, "kb_miss", False):
-                        _entity_for_climb = str(getattr(_plan_shot, "entity_id", "") or "")
-                        _shape_for_climb = str(getattr(_plan_shot, "canonical_shape", "") or "")
-                    _sr_act_jobs[_act_i] = functools.partial(
-                        _climb_act,
+                    _sr_act_jobs[_act_i] = _make_climb_job(
                         beat_index=_act_i,
                         narration=_snippet,
                         prompt=_act_prompt,
@@ -4422,7 +4413,7 @@ def _produce_variant_worker(
                         stem=f"{stem}_act{_act_i + 1:02d}",
                         channel=str((page_ctx.page_id if page_ctx else "") or "ancient_knowledge"),
                         flux_generate=adapter.generate,
-                        entity_id=_entity_for_climb,
+                        shot=_plan_shot,
                         checkpoint=_reel_checkpoint,
                         generate_kwargs={
                             "negative_prompt": _act_neg,
@@ -4431,15 +4422,9 @@ def _produce_variant_worker(
                         episode_subject=str(
                             resolved_subject_for_beat or resolved_subject or ""
                         ),
-                        canonical_shape=_shape_for_climb,
                         banned_subjects=list(_act_banned or []) or None,
                         is_cta=bool(_sr_act_meta[_act_i]["is_cta"]),
                         n_beats=int(_seq_n),
-                        shot_type=_shot_type,
-                        camera=_shot_camera,
-                        setting=_shot_setting,
-                        shot_subject=str(getattr(_plan_shot, "subject", "") or ""),
-                        shot_era=str(getattr(_plan_shot, "era", "") or ""),
                     )
                 else:
                     _sr_act_jobs[_act_i] = functools.partial(
@@ -4501,9 +4486,9 @@ def _produce_variant_worker(
             )
 
             if _ladder_on:
-                from modules.reel_artefact.fair import run_fair as _run_fair
+                from modules.reel_artefact.orchestrate import run_reel_stills as _run_reel_stills
 
-                _sr_act_results = _run_fair(_sr_act_jobs)
+                _sr_act_results = _run_reel_stills(_sr_act_jobs)
             else:
                 _sr_act_results = _run_acts_parallel(_sr_act_jobs)
 

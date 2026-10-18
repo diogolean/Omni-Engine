@@ -66,6 +66,12 @@ class Entity:
     event_categories: tuple[str, ...] = ()
     event_period: str = ""
     event_negatives: tuple[str, ...] = ()
+    # Where the real place is. Flux landscapes name this instead of a generic desert.
+    geography: str = ""
+    # Sea and coast scenes are only for a maritime find. An Andean culture is not.
+    coastal: bool = False
+    # Usable real photographs already known, before the Nano Banana cap.
+    usable_photos: int = 0
 
 
 def repo_root() -> Path:
@@ -110,6 +116,13 @@ def is_commentary(text: str) -> bool:
     if not low:
         return False
     return any(cue in low for cue in _COMMENTARY_CUES)
+
+
+def _count(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def load_entities(channel: str) -> list[Entity]:
@@ -160,6 +173,9 @@ def load_entities(channel: str) -> list[Entity]:
             event_categories=_texts("event_categories"),
             event_period=str(row.get("event_period") or "").strip(),
             event_negatives=_texts("event_negatives"),
+            geography=str(row.get("geography") or "").strip(),
+            coastal=bool(row.get("coastal")),
+            usable_photos=_count(row.get("usable_photos")),
         ))
     return found
 

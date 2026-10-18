@@ -15,7 +15,7 @@ from agents.media.free_images.http import RequestsClient
 from agents.media.free_images.licenses import license_allowed
 from agents.media.free_images.models import Candidate
 from modules.reel_artefact.budget import claim_still, file_hash_key, release_still
-from modules.reel_artefact.crop import anchor_for, prepare_reel_frame
+from modules.reel_artefact.crop import prepare_event_frame
 from modules.reel_artefact.fetch import (
     _BAD_TITLE,
     _commons_category,
@@ -224,10 +224,7 @@ def acquire_event_photo(
             continue
         try:
             with Image.open(raw) as opened:
-                frame, _how = prepare_reel_frame(
-                    opened.convert("RGB"),
-                    anchor=anchor_for(int(beat_index)),
-                )
+                frame, _how = prepare_event_frame(opened.convert("RGB"))
         except (OSError, ValueError):
             release_still(target, key)
             continue
@@ -261,7 +258,7 @@ def acquire_event_photo(
                 "model_id": "",
                 "image_hash": key,
                 "reuse_key": key,
-                "still_kind": "scene",
+                "still_kind": "event",
             },
         )
         note_source(f"event:{provider}", entity.id, int(beat_index) + 1)

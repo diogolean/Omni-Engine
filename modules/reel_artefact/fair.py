@@ -30,9 +30,13 @@ def run_fair(
         return {}
     reset_cursors()
     execute = runner or _parallel
+    # The share flag is a contextvar. This process's worker threads do not
+    # inherit it, so each job sets the flag inside the thread that climbs.
+    # Otherwise every beat runs the whole ladder and the first beats spend
+    # the Flux cap before the later beats generate anything.
     set_share("first")
     try:
-        results = execute(jobs)
+        results = execute({index: _in_share(fn, "first") for index, fn in jobs.items()})
     finally:
         set_share("full")
     pending = [
@@ -45,7 +49,9 @@ def run_fair(
         before = {index: cursor_for(index) for index in pending}
         set_share("retry")
         try:
-            wave = execute({index: jobs[index] for index in pending})
+            wave = execute({
+                index: _in_share(jobs[index], "retry") for index in pending
+            })
         finally:
             set_share("full")
         moved = False
@@ -69,6 +75,15 @@ def run_fair(
             break
         pending = still_open
     return results
+
+
+def _in_share(fn: Callable[[], Any], mode: str) -> Callable[[], Any]:
+    """Set the fair-share flag in the worker that actually climbs."""
+    def _run() -> Any:
+        set_share(mode)
+        return fn()
+
+    return _run
 
 
 def _passed(result: Any) -> bool:

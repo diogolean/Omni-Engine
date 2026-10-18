@@ -34,6 +34,9 @@ _SHARE: contextvars.ContextVar[str] = contextvars.ContextVar(
 _CURSOR: dict[int, int] = {}
 _CURSOR_LOCK = threading.Lock()
 
+_ARCHIVAL = {
+    "commons", "met", "smithsonian", "openverse", "europeana", "wikimedia",
+}
 _FLUX_KEYS = {
     "negative_prompt",
     "aspect_ratio",
@@ -66,16 +69,31 @@ def climb_act(
     setting: str = "",
     shot_subject: str = "",
     shot_era: str = "",
+    image_role: str = "",
+    scene_type: str = "",
+    topic: str = "",
 ) -> StillGateResult:
     """One beat. Flag-off callers keep using generate_and_gate instead."""
     entity = _entity(channel, entity_id, narration, episode_subject)
-    kind = "scene" if is_cta else beat_kind(
-        entity,
-        narration=narration,
-        shot_type=shot_type,
-        camera=camera,
-        setting=setting,
-    )
+    role = (image_role or "").strip().lower()
+    # The planner's image_role wins. beat_kind() was turning planned object
+    # photographs into Flux scenes, so Nano Banana never ran.
+    if is_cta or role == "flux":
+        kind = "scene"
+    elif role == "photo":
+        kind = "object"
+    else:
+        kind = beat_kind(
+            entity,
+            narration=narration,
+            shot_type=shot_type,
+            camera=camera,
+            setting=setting,
+        )
+    geography = str(getattr(entity, "geography", "") or "") if entity else ""
+    coastal = bool(getattr(entity, "coastal", False)) if entity else True
+    planned_scene = (scene_type or "").strip().lower()
+    judge_mode = "shot" if kind == "scene" else "object"
     folder = Path(output_directory)
     folder.mkdir(parents=True, exist_ok=True)
     safe = bool(entity and entity.text_only_safe) and kind == "object"
@@ -88,7 +106,14 @@ def climb_act(
         "event": _event(entity, channel),
         "nb-ref": _nano(entity, channel, beat_index, text_only=False),
         "nb-text": _nano(entity, channel, beat_index, text_only=True),
-        "flux": _flux(flux_generate, kwargs, entity),
+        "flux": _flux(
+            flux_generate,
+            kwargs,
+            entity,
+            scene_type=planned_scene,
+            geography=geography,
+            coastal=coastal,
+        ),
         "reuse": _reuse(kind, entity.id if entity else ""),
     }
 
@@ -96,6 +121,7 @@ def climb_act(
         reference = ""
         found_shape = shape
         provider = ""
+        meta: dict = {}
         try:
             from modules.reel_artefact.source import source_meta
 
@@ -105,11 +131,32 @@ def climb_act(
             provider = str(meta.get("provider") or "")
         except Exception:  # noqa: BLE001
             reference = ""
+        nonlocal judge_mode
+        still_kind = str(meta.get("still_kind") or "")
         fluxish = _flux_still(ctx.prompt, provider)
+        # An event photograph is the divers or the boat, never the artefact.
+        if still_kind == "event" or (ctx.event and provider in _ARCHIVAL and still_kind != "object"):
+            judge_mode = "event"
+        elif fluxish or (kind == "scene" and still_kind != "object" and provider not in _ARCHIVAL):
+            judge_mode = "shot"
+        else:
+            judge_mode = "object"
         planned = shot_subject or _planned_subject(ctx.prompt)
-        if fluxish:
+        logger.info(
+            "LADDER beat | beat=%s | scene=%s | role=%s | judge=%s",
+            int(beat_index) + 1,
+            planned_scene or kind,
+            role or kind,
+            judge_mode,
+        )
+        if judge_mode == "shot":
             judge_prompt = ctx.prompt
             against = "shot"
+            judged_shape = ""
+            judged_ref = ""
+        elif judge_mode == "event":
+            judge_prompt = ctx.prompt
+            against = "event"
             judged_shape = ""
             judged_ref = ""
         else:
@@ -117,7 +164,7 @@ def climb_act(
             against = "narration"
             judged_shape = found_shape
             judged_ref = reference
-        return evaluate_with_technical_retry(
+        verdict = evaluate_with_technical_retry(
             evaluate_chunk_relevance,
             path,
             ctx.narration,
@@ -127,9 +174,16 @@ def climb_act(
             canonical_shape=judged_shape,
             score_against=against,
             shot_subject=planned,
-            shot_setting=setting,
+            shot_setting=setting or geography,
             shot_era=shot_era,
+            topic=topic or episode_subject,
+            scene_type=planned_scene or kind,
+            geography=geography,
         )
+        verdict["judge_mode"] = judge_mode
+        verdict["scene_type"] = planned_scene or kind
+        verdict["image_role"] = role or kind
+        return verdict
 
     share = _SHARE.get()
     start = cursor_for(beat_index) if share == "retry" else 0
@@ -292,11 +346,24 @@ def _flux_negatives(entity: Entity | None) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _flux(generate: Callable[..., Any], kwargs: dict, entity: Entity | None):
+def _flux(
+    generate: Callable[..., Any],
+    kwargs: dict,
+    entity: Entity | None,
+    *,
+    scene_type: str = "",
+    geography: str = "",
+    coastal: bool = True,
+):
     def _run(ctx):
         name = entity.name if entity else ""
         period = str(getattr(entity, "event_period", "") or "") if entity else ""
         negatives = _flux_negatives(entity)
+        # The planned scene leads. A later rung or a re-plan steps to the next
+        # allowed scene, still in this entity's real geography.
+        variant = int(ctx.replan or 0)
+        if scene_type and not ctx.replan:
+            variant = int(ctx.attempt or 0)
         # Flux never receives a prompt whose subject is the named object.
         # An object beat that reached this rung has already missed real and
         # Nano Banana, so the still is a Flux-safe context scene.
@@ -309,6 +376,10 @@ def _flux(generate: Callable[..., Any], kwargs: dict, entity: Entity | None):
             event=bool(ctx.event),
             kind="object" if ctx.kind == "object" and not ctx.event else "scene",
             rejection=ctx.rejection or "",
+            scene=scene_type,
+            geography=geography,
+            coastal=coastal if entity is not None else True,
+            variant=variant,
         )
         aliases = tuple(getattr(entity, "aliases", ()) or ())
         if ctx.concept and acceptable_flux_concept(ctx.concept, name=name, aliases=aliases):
