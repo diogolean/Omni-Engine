@@ -32,7 +32,9 @@ That script pins `OMNI_IMAGE_TAG` and starts **engine only**. The scheduler is a
 
 B2 is the shared store for media, the content library the schedulers read, and the publish ledger. Callers list or fetch one object when they need it. They do not mirror the bucket onto the VM or the PC. See [0001](decisions/0001-b2-on-demand.md) and [0003](decisions/0003-shared-b2-ledger-and-board-dedupe.md).
 
-Uploads go through `agents/media/b2_client.py`. Pinterest reads image keys with `list_object_keys` and downloads only the object it is about to pin.
+Every read, list, download, and upload goes through `agents/media/b2_client.py`, which charges `agents/media/b2_budget.py` first. Uploads are Class A and are not counted. The head or list before an upload is Class B or Class C and is counted. The free daily allowance is 1 GB of download, 2,500 Class B, and 2,500 Class C. `B2_DAILY_DOWNLOAD_MB`, `B2_DAILY_CLASS_B`, and `B2_DAILY_CLASS_C` are clamped to that allowance and cannot raise it. A call that would pass a cap raises `B2DailyCapError` and stops the run.
+
+The engine, the scheduler, and scripts on one machine share a file-locked counter at `outputs/b2/usage.json` (override with `B2_USAGE_PATH`). Counters reset at 00:00 UTC. The PC and the Oracle VM do not share a disk, so each keeps its own counter. Defaults stay near half the free allowance (500 MB, 1,500 Class B, 1,500 Class C) so the two hosts together stay inside it. A CI test rejects any non-test module outside `agents/media/` that constructs a boto3 S3 client or a b2sdk API for B2.
 
 ### PC runner
 

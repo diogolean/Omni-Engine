@@ -182,7 +182,23 @@ def _resolve_runpod_s3_creds() -> dict[str, str] | None:
     }
 
 
+def _refuse_backblaze_endpoint(endpoint: str) -> None:
+    """RunPod volume S3 must not be pointed at Backblaze.
+
+    A B2 endpoint here would list and download outside the daily budget.
+    B2 traffic goes through ``agents.media.b2_client`` instead.
+    """
+    host = (endpoint or "").lower()
+    if "backblazeb2" in host or "backblaze.com" in host:
+        raise RemoteGPUError(
+            "This S3 client is for the RunPod network volume. "
+            "Backblaze B2 goes through agents.media.b2_client so the "
+            "daily free allowance cannot be bypassed."
+        )
+
+
 def _get_runpod_s3_client(creds: Mapping[str, str]) -> Any:
+    _refuse_backblaze_endpoint(str(creds.get("endpoint") or ""))
     cache_key = f"{creds['endpoint']}|{creds['access_key']}|{creds['volume_id']}"
     with _S3_LOCK:
         cached = _S3_CACHE.get(cache_key)

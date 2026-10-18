@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
 """Daily Backblaze B2 budgets shared by Pinterest, YouTube, and the ledger.
 
-Counters live on the outputs volume and reset at 00:00 UTC. A call that would
-pass the download, Class B, or Class C budget is refused and logged once.
-Bucket listings and small object reads are cached. Downloads are one object
-at a time, and a video is not pulled when an image can be published instead.
-A provider 403 that says the cap is exceeded backs off, then stops the run.
+Counters live in one file-locked usage file on the outputs volume and reset
+at 00:00 UTC. The engine, the scheduler, and scripts on the same host share
+that file. The PC and the Oracle VM do not share a disk, so each keeps its
+own counter. Defaults stay near half of B2's free daily allowance (1 GB
+download, 2,500 Class B, 2,500 Class C) so the two hosts together stay
+inside it. Env overrides are clamped to that allowance and cannot raise it.
+
+A call that would pass the download, Class B, or Class C budget raises
+``B2DailyCapError`` and stops the run. Bucket listings and small object
+reads are cached. Downloads are one object at a time, and a video is not
+pulled when an image can be published instead. A provider 403 that says
+the cap is exceeded backs off, then stops the run.
 """
 
 from __future__ import annotations
@@ -13,7 +20,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -23,6 +32,10 @@ _VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 _DEFAULT_DOWNLOAD_MB = 500
 _DEFAULT_CLASS_B = 1500
 _DEFAULT_CLASS_C = 1500
+# Backblaze B2 free daily allowance. Env overrides cannot go above these.
+_FREE_DOWNLOAD_MB = 1000
+_FREE_CLASS_B = 2500
+_FREE_CLASS_C = 2500
 _DEFAULT_LIST_TTL_S = 6 * 60 * 60
 _BACKOFF_ATTEMPTS = 3
 
@@ -46,26 +59,38 @@ def _today() -> str:
     return time.strftime("%Y-%m-%d", time.gmtime())
 
 
-def _int_env(name: str, default: int) -> int:
+def _int_env(name: str, default: int, *, ceiling: int | None = None) -> int:
     raw = (os.getenv(name) or "").strip()
     if not raw:
-        return default
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return default
+        value = default
+    else:
+        try:
+            value = max(0, int(raw))
+        except ValueError:
+            value = default
+    if ceiling is not None and value > ceiling:
+        return ceiling
+    return value
+
+
+def download_limit_mb() -> int:
+    return _int_env(
+        "B2_DAILY_DOWNLOAD_MB",
+        _DEFAULT_DOWNLOAD_MB,
+        ceiling=_FREE_DOWNLOAD_MB,
+    )
 
 
 def download_limit_bytes() -> int:
-    return _int_env("B2_DAILY_DOWNLOAD_MB", _DEFAULT_DOWNLOAD_MB) * 1024 * 1024
+    return download_limit_mb() * 1024 * 1024
 
 
 def class_b_limit() -> int:
-    return _int_env("B2_DAILY_CLASS_B", _DEFAULT_CLASS_B)
+    return _int_env("B2_DAILY_CLASS_B", _DEFAULT_CLASS_B, ceiling=_FREE_CLASS_B)
 
 
 def class_c_limit() -> int:
-    return _int_env("B2_DAILY_CLASS_C", _DEFAULT_CLASS_C)
+    return _int_env("B2_DAILY_CLASS_C", _DEFAULT_CLASS_C, ceiling=_FREE_CLASS_C)
 
 
 def list_cache_ttl_seconds() -> int:
@@ -153,48 +178,45 @@ def is_transaction_cap(exc: BaseException) -> bool:
 
 
 def charge(*, class_b: int = 0, class_c: int = 0, download_bytes: int = 0) -> None:
-    """Reserve a transaction. Raises when today's budget cannot hold it."""
-    state = _load_state()
-    if class_b and state["class_b"] + class_b > class_b_limit():
-        _refuse(
-            "class_b",
-            "B2 daily Class B budget reached "
-            f"({class_b_limit()}). Refusing further downloads until 00:00 UTC.",
-        )
-    if class_c and state["class_c"] + class_c > class_c_limit():
-        _refuse(
-            "class_c",
-            "B2 daily Class C budget reached "
-            f"({class_c_limit()}). Refusing further listings until 00:00 UTC.",
-        )
-    if download_bytes and state["download_bytes"] + download_bytes > download_limit_bytes():
-        _refuse(
-            "download",
-            "B2 daily download budget reached "
-            f"({_int_env('B2_DAILY_DOWNLOAD_MB', _DEFAULT_DOWNLOAD_MB)} MB). "
-            "Refusing further downloads until 00:00 UTC.",
-        )
-    state["class_b"] += class_b
-    state["class_c"] += class_c
-    state["download_bytes"] += download_bytes
-    _save_state(state)
+    """Reserve a transaction. Raises when today's budget cannot hold it.
+
+    Class A uploads are free and are not charged here. Callers charge Class B
+    for a head or download and Class C for a listing.
+    """
+    with _usage_file_lock():
+        state = _load_state()
+        if class_b and state["class_b"] + class_b > class_b_limit():
+            _mark_refused(
+                state,
+                "class_b",
+                "B2 daily Class B budget reached "
+                f"({class_b_limit()}). Refusing further downloads until 00:00 UTC.",
+            )
+        if class_c and state["class_c"] + class_c > class_c_limit():
+            _mark_refused(
+                state,
+                "class_c",
+                "B2 daily Class C budget reached "
+                f"({class_c_limit()}). Refusing further listings until 00:00 UTC.",
+            )
+        if download_bytes and state["download_bytes"] + download_bytes > download_limit_bytes():
+            _mark_refused(state, "download", _download_cap_message())
+        state["class_b"] += class_b
+        state["class_c"] += class_c
+        state["download_bytes"] += download_bytes
+        _save_state(state)
 
 
 def note_download_bytes(nbytes: int) -> None:
     """Record bytes after a download. Stop the run if this file crossed the cap."""
     if nbytes <= 0:
         return
-    state = _load_state()
-    state["download_bytes"] += nbytes
-    over = state["download_bytes"] > download_limit_bytes()
-    _save_state(state)
-    if over:
-        _refuse(
-            "download",
-            "B2 daily download budget reached "
-            f"({_int_env('B2_DAILY_DOWNLOAD_MB', _DEFAULT_DOWNLOAD_MB)} MB). "
-            "Refusing further downloads until 00:00 UTC.",
-        )
+    with _usage_file_lock():
+        state = _load_state()
+        state["download_bytes"] += nbytes
+        if state["download_bytes"] > download_limit_bytes():
+            _mark_refused(state, "download", _download_cap_message())
+        _save_state(state)
 
 
 def call_with_cap_backoff(action, *, what: str):
@@ -393,8 +415,68 @@ def _write_cache(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
-def _refuse(kind: str, message: str) -> None:
-    state = _load_state()
+def _download_cap_message() -> str:
+    return (
+        "B2 daily download budget reached "
+        f"({download_limit_mb()} MB). "
+        "Refusing further downloads until 00:00 UTC."
+    )
+
+
+@contextmanager
+def _usage_file_lock():
+    """Exclusive lock so every process on this host shares one counter.
+
+    The lock file sits beside the usage file on the outputs volume. flock
+    (Windows: msvcrt) covers other processes; threads in this process take
+    separate descriptors and block on the same lock. The PC and the VM do
+    not share this file.
+    """
+    path = usage_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f"{path.name}.lock")
+    handle = open(lock_path, "a+b")
+    locked = False
+    try:
+        _lock_handle(handle)
+        locked = True
+        yield
+    finally:
+        if locked:
+            _unlock_handle(handle)
+        handle.close()
+
+
+def _lock_handle(handle) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_handle(handle) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _mark_refused(state: dict, kind: str, message: str) -> None:
+    """Record the refusal and stop the run. Caller holds the usage lock."""
     logged = state.setdefault("logged", {})
     first = not logged.get(kind)
     logged[kind] = True
