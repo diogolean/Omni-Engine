@@ -114,7 +114,7 @@ def test_smoke12_reel_through_the_main_entry(tmp_path: Path, monkeypatch) -> Non
 
     original_provider = relevance._provider
     try:
-        _run_quimbaya(tmp_path / "quimbaya", logs)
+        _run_quimbaya(tmp_path / "quimbaya", monkeypatch, logs)
         _reset()
         _run_antikythera(tmp_path / "antikythera", monkeypatch, logs)
     finally:
@@ -129,7 +129,7 @@ def test_smoke12_reel_through_the_main_entry(tmp_path: Path, monkeypatch) -> Non
     assert any("scene=landscape" in line or "scene=establishing" in line for line in beat_logs)
 
 
-def _run_quimbaya(folder: Path, logs: list[str]) -> None:
+def _run_quimbaya(folder: Path, monkeypatch, logs: list[str]) -> None:
     """Every flux beat gets one attempt before any beat is retried."""
     del logs
     plan = build_shot_list(
@@ -149,7 +149,7 @@ def _run_quimbaya(folder: Path, logs: list[str]) -> None:
     ]
     assert len(flux_beats) >= 5
     monkey_cap = len(flux_beats) + 2
-    _set_flux_cap(monkey_cap)
+    _set_flux_cap(monkeypatch, monkey_cap)
     flux_log: list[tuple[int, str]] = []
     lock = threading.Lock()
     shot_calls = {"n": 0}
@@ -224,7 +224,7 @@ def _run_antikythera(folder: Path, monkeypatch, logs: list[str]) -> None:
         if shot.image_role == "flux"
         and not is_event(shot.narration, camera=shot.camera, setting=shot.setting)
     ]
-    _set_flux_cap(max(4, len(flux_beats) + 2))
+    _set_flux_cap(monkeypatch, max(4, len(flux_beats) + 2))
     photo_log: list[tuple[int, bool]] = []
     lock = threading.Lock()
     prompts: list[str] = []
@@ -458,10 +458,9 @@ def _install_judge(shot_calls: dict[str, int], flux_count: int, prompts: list[st
     relevance._provider = lambda name: _Provider()  # type: ignore[assignment]
 
 
-def _set_flux_cap(limit: int) -> None:
-    import os
-
-    os.environ["REEL_FLUX_MAX_PER_REEL"] = str(limit)
+def _set_flux_cap(monkeypatch, limit: int) -> None:
+    # monkeypatch restores the cap, so later tests see the default again.
+    monkeypatch.setenv("REEL_FLUX_MAX_PER_REEL", str(limit))
 
 
 def _reset() -> None:

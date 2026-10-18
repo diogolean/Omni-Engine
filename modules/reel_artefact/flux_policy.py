@@ -328,7 +328,8 @@ def _place_copy(
     if scene == "landscape":
         return (
             place,
-            f"A wide landscape of {place}. The real ground, ridges, and vegetation. No named artefact.",
+            f"A wide landscape of {place}. The real ground, ridges, and vegetation. "
+            "No named artefact.",
             place,
         )
     if scene == "establishing":
@@ -396,7 +397,8 @@ def fields_for_scene(scene: str, entity: Any = None) -> dict[str, str]:
     """Subject, camera, and setting for one allowed Flux scene type."""
     coastal = _coastal(entity)
     key = scene if scene in _SCENES else "landscape"
-    if key in _DROPPED_SCENES or key not in _cycle(coastal) and key not in {"establishing", "atmosphere"}:
+    off_cycle = key not in _cycle(coastal) and key not in {"establishing", "atmosphere"}
+    if key in _DROPPED_SCENES or off_cycle:
         key = _cycle(coastal)[0]
     if key == "sea" and not coastal:
         key = "landscape"
@@ -444,7 +446,10 @@ def scene_fields(
         scene = "sea" if coastal else "landscape"
     elif any(word in low for word in ("real place", "highland", "landscape", "region")):
         scene = "landscape"
-    elif any(word in low for word in ("historian", "debate", "archive", "researcher", "theory", "legend")):
+    elif any(
+        word in low
+        for word in ("historian", "debate", "archive", "researcher", "theory", "legend")
+    ):
         scene = _cycle(coastal)[(max(1, int(index)) - 1) % len(_cycle(coastal))]
     elif (
         entity is not None

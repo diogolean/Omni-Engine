@@ -150,7 +150,9 @@ def _is_object_photo(candidate: Candidate, keys: set[str]) -> bool:
     )
 
 
-def _collect(entity: Entity, client, *, object_keys: set[str] | None = None) -> list[tuple[Candidate, bool]]:
+def _collect(
+    entity: Entity, client, *, object_keys: set[str] | None = None,
+) -> list[tuple[Candidate, bool]]:
     found: list[tuple[Candidate, bool]] = []
     seen: set[str] = set()
     tokens = _tokens(entity)

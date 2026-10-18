@@ -127,7 +127,10 @@ def _merge(previous: Any, nxt: Any) -> Any:
         path=chosen.path,
         extra_generations=int(previous.extra_generations or 0) + int(nxt.extra_generations or 0),
         publishable=bool(chosen.publishable),
-        blocked_reason="" if chosen.publishable else (chosen.blocked_reason or previous.blocked_reason),
+        blocked_reason=(
+            "" if chosen.publishable
+            else (chosen.blocked_reason or previous.blocked_reason)
+        ),
         attempts=list(previous.attempts or []) + list(nxt.attempts or []),
         verdict=verdict,
         first_pass=False if nxt.publishable and not previous.publishable else previous.first_pass,

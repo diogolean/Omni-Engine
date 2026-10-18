@@ -141,7 +141,8 @@ def climb_act(
         still_kind = str(meta.get("still_kind") or "")
         fluxish = _flux_still(ctx.prompt, provider)
         # An event photograph is the divers or the boat, never the artefact.
-        if still_kind == "event" or (ctx.event and provider in _ARCHIVAL and still_kind != "object"):
+        archival_event = ctx.event and provider in _ARCHIVAL and still_kind != "object"
+        if still_kind == "event" or archival_event:
             judge_mode = "event"
         elif fluxish or (kind == "scene" and still_kind != "object" and provider not in _ARCHIVAL):
             judge_mode = "shot"
