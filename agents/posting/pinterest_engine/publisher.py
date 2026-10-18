@@ -57,9 +57,11 @@ _BACKOFF_BASE_SEC  = 10
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm"}
 
 
-def _sales_url() -> str:
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
-    return cfg.TARGET_URL
+def _pin_link(record: dict) -> str:
+    """Article link. Ancient Knowledge never substitutes the sales URL."""
+    from agents.posting.pinterest_engine.articles import resolve_pin_link  # noqa: PLC0415
+
+    return resolve_pin_link(record)
 
 
 def _hashtags() -> str:
@@ -208,7 +210,7 @@ class PinterestPublisher:
             "title": title,
             "description": self._build_description(record),
             "alt_text": pin_alt_text(record),
-            "link": record.get("target_url") or _sales_url() or None,
+            "link": _pin_link(record) or None,
             "media_source": {
                 "source_type": "image_base64",
                 "content_type": "image/jpeg",
@@ -573,7 +575,7 @@ class PinterestPublisher:
             "board_id": self.board_id,
             "title": title,
             "description": self._build_description(record),
-            "link": record.get("target_url") or _sales_url() or None,
+            "link": _pin_link(record) or None,
             "media_source": media_source,
         }
         if not payload["link"]:

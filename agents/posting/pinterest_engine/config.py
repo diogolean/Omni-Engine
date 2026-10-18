@@ -486,25 +486,14 @@ def print_dotenv_bootstrap() -> None:
 
 
 def get_best_claude_model(anthropic_client: object | None = None) -> str:
-    """Resolve a Claude model id for optional AI metadata generation."""
-    fallback = (os.getenv("CLAUDE_MODEL") or "claude-3-5-sonnet-latest").strip()
-    if anthropic_client is None:
-        return fallback
-    try:
-        listing = anthropic_client.models.list()  # type: ignore[union-attr]
-        models = list(getattr(listing, "data", None) or listing)
-        for priority in ("sonnet", "haiku"):
-            for m in models:
-                mid = str(getattr(m, "id", "") or "").lower()
-                if priority in mid and "claude" in mid:
-                    return mid
-        for m in models:
-            mid = str(getattr(m, "id", "") or "")
-            if "claude" in mid.lower():
-                return mid
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Claude model discovery failed (%s); using fallback.", exc)
-    return fallback
+    """Pin the pin-copy model. Do not auto-pick the newest Sonnet.
+
+    Listing models selected a thinking Sonnet, and ``content[0]`` was a
+    ThinkingBlock. ``CLAUDE_MODEL`` overrides the non-thinking default.
+    The pin-copy call also disables extended thinking.
+    """
+    del anthropic_client
+    return (os.getenv("CLAUDE_MODEL") or "claude-3-5-sonnet-latest").strip()
 
 
 # ---------------------------------------------------------------------------

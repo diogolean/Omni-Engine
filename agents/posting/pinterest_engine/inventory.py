@@ -466,7 +466,7 @@ RULES:
 1. Remove every "Comment [KEYWORD]", "Type [KEYWORD]", "DM me" CTA entirely.
 2. End with a humble, non-pushy line{url_rule}.
 3. The pinterest_title must lead with the subject keyword, max 100 chars. No suffix such as "| Practical Guide" or "— Key Insights".
-4. visual_hook is a truthful curiosity gap about the real topic, 5-12 words, no invented claims.
+4. visual_hook is a truthful curiosity gap about the real topic, at most 8 words.
 
 OUTPUT: Valid JSON only, no markdown:
 {{"pinterest_title": "...", "pinterest_caption": "...", "visual_hook": "..."}}
@@ -603,6 +603,84 @@ def _generate_deepseek(
     return {}
 
 
+_PIN_COPY_MAX_TOKENS = 4096
+_AI_FAILURE_LIMIT_DEFAULT = 3
+_ai_failure_streak = 0
+_ai_circuit_open = False
+
+
+def reset_ai_circuit() -> None:
+    """Allow Claude calls again. One inventory build is one run."""
+    global _ai_failure_streak, _ai_circuit_open
+    _ai_failure_streak = 0
+    _ai_circuit_open = False
+
+
+def ai_circuit_open() -> bool:
+    return _ai_circuit_open
+
+
+def _ai_failure_limit() -> int:
+    raw = (os.getenv("PINTEREST_AI_FAIL_LIMIT") or "").strip()
+    if not raw:
+        return _AI_FAILURE_LIMIT_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _AI_FAILURE_LIMIT_DEFAULT
+    return value if value > 0 else _AI_FAILURE_LIMIT_DEFAULT
+
+
+def _note_ai_failure(topic: str, reason: str) -> dict:
+    global _ai_failure_streak, _ai_circuit_open
+    _ai_failure_streak += 1
+    log.warning("AI generation failed for '%s': %s", topic, reason)
+    if _ai_failure_streak >= _ai_failure_limit():
+        _ai_circuit_open = True
+        log.warning(
+            "AI circuit open after %d consecutive failures; "
+            "template fallback for the rest of this run.",
+            _ai_failure_streak,
+        )
+    return {}
+
+
+def _claude_message_text(resp: object) -> str:
+    """Join text blocks. ThinkingBlock has no .text and must be skipped."""
+    blocks = getattr(resp, "content", None) or []
+    parts: list[str] = []
+    for block in blocks:
+        if isinstance(block, dict):
+            kind = str(block.get("type") or "")
+            text = block.get("text")
+        else:
+            kind = str(getattr(block, "type", "") or "")
+            text = getattr(block, "text", None)
+        if kind == "thinking" or text is None:
+            continue
+        parts.append(str(text))
+    return "\n".join(parts).strip()
+
+
+def _create_pin_message(client: object, *, model: str, system: str, user_msg: str):
+    """Pin-copy call with extended thinking off so the token budget stays on JSON."""
+    kwargs = {
+        "model": model,
+        "max_tokens": _PIN_COPY_MAX_TOKENS,
+        "system": system,
+        "messages": [{"role": "user", "content": user_msg}],
+    }
+    create = client.messages.create  # type: ignore[attr-defined]
+    try:
+        return create(**kwargs, thinking={"type": "disabled"})
+    except TypeError:
+        return create(**kwargs)
+    except Exception as exc:  # noqa: BLE001
+        if "thinking" not in str(exc).lower():
+            raise
+        return create(**kwargs)
+
+
 def _parse_pin_json(raw: str) -> dict:
     """Parse a pin-copy object, including fenced or prose-wrapped JSON."""
     text = (raw or "").strip()
@@ -639,25 +717,30 @@ def _generate_ai(
         if url else
         " inviting the reader to learn more from the pin link"
     )
+    global _ai_failure_streak
+    if _ai_circuit_open:
+        log.info("AI circuit open; template fallback for '%s'.", topic)
+        return {}
+
     user_msg = _AI_USER_TPL.format(topic=topic, caption=source, url_rule=url_rule)
     try:
-        resp = client.messages.create(
-            model=model,
-            max_tokens=900,
-            system=cfg.AI_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_msg}],
+        resp = _create_pin_message(
+            client, model=model, system=cfg.AI_SYSTEM_PROMPT, user_msg=user_msg
         )
-        raw = resp.content[0].text.strip()
-        raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("```").strip()
-        data = json.loads(raw)
-        return {
-            "pinterest_title": sanitize_pin_title(str(data.get("pinterest_title", ""))),
-            "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
-            "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
-        }
+        raw = _claude_message_text(resp)
+        data = _parse_pin_json(raw)
     except Exception as exc:  # noqa: BLE001
-        log.warning("AI generation failed for '%s': %s", topic, exc)
-        return {}
+        return _note_ai_failure(topic, type(exc).__name__)
+    title = sanitize_pin_title(str(data.get("pinterest_title", "")))
+    caption = polish_pin_text(str(data.get("pinterest_caption", "")))
+    if not title and not caption:
+        return _note_ai_failure(topic, "invalid JSON")
+    _ai_failure_streak = 0
+    return {
+        "pinterest_title": title,
+        "pinterest_caption": caption,
+        "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -744,6 +827,7 @@ class MasterInventory:
         Returns the inventory dict.
         """
         log.info("Building master inventory...")
+        reset_ai_circuit()
 
         # Load existing inventory to preserve publication_status
         existing = self.load()
@@ -767,11 +851,21 @@ class MasterInventory:
         log.info("  library JSON files: %d", len(lib_files))
 
         entries: list[dict] = []
+        seen_ids: set[str] = set()
         generated = 0
 
         for lib_path in lib_files:
-            if limit is not None and generated >= limit:
-                break
+            post_id = lib_path.stem
+            prev_meta = existing_map.get(post_id, {})
+            has_saved_meta = bool(
+                prev_meta.get("pinterest_title") and prev_meta.get("pinterest_caption")
+            )
+            needs_new = force_regenerate or not has_saved_meta
+            if limit is not None and needs_new and generated >= limit:
+                if has_saved_meta:
+                    entries.append(prev_meta)
+                    seen_ids.add(post_id)
+                continue
             try:
                 raw = json.loads(lib_path.read_text(encoding="utf-8"))
             except Exception as exc:  # noqa: BLE001
@@ -829,7 +923,9 @@ class MasterInventory:
                 "local_video_path": local_vid,
                 "media_kind": "image",
                 "created_utc": raw.get("created_utc", ""),
-                "target_url": _target_url(),
+                "target_url": (
+                    "" if (cfg.CHANNEL_ID or "") == "ancient_knowledge" else _target_url()
+                ),
                 "pinterest_title": prev.get("pinterest_title", ""),
                 "pinterest_caption": prev.get("pinterest_caption", ""),
                 "visual_hook": prev.get("visual_hook", ""),
@@ -871,6 +967,11 @@ class MasterInventory:
 
             finalize_pin_copy(entry)
             entries.append(entry)   # always accumulate in memory
+            seen_ids.add(post_id)
+
+        for saved_id, saved in existing_map.items():
+            if saved_id not in seen_ids and saved:
+                entries.append(saved)
 
         recycled = self._recycle_unpaired_videos(entries, existing_map)
         if recycled:
