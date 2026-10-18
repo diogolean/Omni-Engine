@@ -1514,6 +1514,24 @@ def sanitize_youtube_description(raw: "object") -> str:
     return text
 
 
+def resolve_upload_video(video_path: str | Path, page_name: str) -> Path:
+    """Return a local file for *video_path*, fetching it from Drive when needed.
+
+    A path that already exists (including a PC ``G:`` file) is used as-is.
+    One missing file is downloaded at publish time. B2 is not asked for a
+    video unless ``B2_ALLOW_VIDEO_DOWNLOAD`` is set.
+    """
+    path = Path(video_path)
+    if path.is_file():
+        return path
+    from agents.media.content_source import materialize_publish_file  # noqa: PLC0415
+
+    found = materialize_publish_file(path, channel=_sanitize_page_name(page_name))
+    if found is not None and found.is_file():
+        return found
+    raise FileNotFoundError(f"Video file not found: {video_path}")
+
+
 # ---------------------------------------------------------------------------
 # Upload function
 # ---------------------------------------------------------------------------
@@ -1550,11 +1568,8 @@ def upload_short(
     from googleapiclient.http import MediaFileUpload  # type: ignore[import]
     from googleapiclient.errors import HttpError  # type: ignore[import]
 
-    video_path = Path(video_path)
-    if not video_path.is_file():
-        raise FileNotFoundError(f"Video file not found: {video_path}")
-
     page_slug = _sanitize_page_name(page_name)
+    video_path = resolve_upload_video(video_path, page_slug)
     # High-CTR title: strip #hashtags + MASTER MEI brand; move tags to description
     if preserve_title:
         safe_title = (title or "").strip()[:100] or "Untitled"

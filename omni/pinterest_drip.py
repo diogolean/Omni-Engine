@@ -109,6 +109,7 @@ def publish_account(
             "b2_prefix": account.extra.get("b2_prefix", ""),
             "b2_client": client,
             "b2_bucket": bucket,
+            "drive_folder_id": account.extra.get("drive_folder_id", ""),
             "board_pins": board_pins or [],
             "catalog": catalog,
             "skip_board_fetch": client is not None or board_pins is not None,

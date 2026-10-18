@@ -12,7 +12,12 @@ accounts:
     display_name: Ancient Knowledge
     niche: ancient mysteries and lost civilizations
     site_url: https://ancientknowledge.eokviral.com
-    # Same tree as outputs/ancient_knowledge/library/ on the PC.
+    # Same tree as outputs/ancient_knowledge/ on the PC. Library JSON is under
+    # library/; images are referenced beside it (usually assets/).
+    # On the VM that tree is read from Drive when DRIVE_OUTPUTS_FOLDER_ID
+    # is set. DRIVE_LIBRARY_FOLDER_ID_ANCIENT_KNOWLEDGE (or drive_folder_id)
+    # is an optional per-channel override.
+    # Post Planner still needs the B2 public URL, not a Drive link.
     b2_prefix: ancient_knowledge/library/
     # local = PC script only, docker = VM scheduler only, both = either, off = never.
     runner: both

@@ -41,6 +41,18 @@ from agents.posting.pinterest_engine import config as cfg  # noqa: E402
 
 log = logging.getLogger(__name__)
 
+
+def _fetch_stop_reason(exc: BaseException) -> str:
+    """Stop the run on a B2 daily cap or a Drive-only quota failure."""
+    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+    from agents.media.drive_source import DriveQuotaError  # noqa: PLC0415
+
+    if isinstance(exc, DriveQuotaError):
+        return "drive_quota"
+    if isinstance(exc, B2DailyCapError):
+        return "b2_daily_cap"
+    return ""
+
 _DEFAULT_MIN_HOURS = 3.0
 _DEFAULT_MAX_HOURS = 6.0
 _DEFAULT_PINS_MIN = 3
@@ -356,20 +368,20 @@ class PinterestScheduler:
                     prefix=prefix,
                     client=self.context.get("b2_client"),
                     bucket=self.context.get("b2_bucket"),
+                    folder_id=str(self.context.get("drive_folder_id") or ""),
                 )
             except Exception as exc:  # noqa: BLE001
-                from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-
-                if not isinstance(exc, B2DailyCapError):
+                reason = _fetch_stop_reason(exc)
+                if not reason:
                     raise
-                log.warning("B2 daily cap reached — stopping this run.")
+                log.warning("Library fetch stopped (%s).", reason)
                 return {
                     "published": 0,
                     "skipped": 0,
                     "skipped_by_history": 0,
                     "errors": 0,
                     "remaining": 0,
-                    "stopped": "b2_daily_cap",
+                    "stopped": reason,
                 }
 
         inv = MasterInventory(outputs_dir=self.outputs_dir)
@@ -547,12 +559,11 @@ class PinterestScheduler:
             try:
                 image_path, delete_after = self._ensure_photo(entry, prefix)
             except Exception as exc:  # noqa: BLE001
-                from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-
-                if not isinstance(exc, B2DailyCapError):
+                reason = _fetch_stop_reason(exc)
+                if not reason:
                     raise
-                log.warning("B2 daily cap reached — stopping this run.")
-                stats["stopped"] = "b2_daily_cap"
+                log.warning("Library fetch stopped (%s).", reason)
+                stats["stopped"] = reason
                 break
             source_hash = ""
             if image_path is not None and image_path.is_file():
@@ -799,6 +810,7 @@ class PinterestScheduler:
             channel=channel,
             client=self.context.get("b2_client"),
             bucket=self.context.get("b2_bucket"),
+            folder_id=str(self.context.get("drive_folder_id") or ""),
         )
         if path is not None and path.is_file() and not is_text_graphic(path):
             return path, delete_after
