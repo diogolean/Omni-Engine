@@ -625,10 +625,31 @@ def test_b2_public_url_uploads_a_drive_file_once(
     assert client.deleted == []
 
 
+def _load_attach_b2_urls():
+    """Import Post Planner without the Aiwake package init.
+
+    ``channels_config.aiwake`` imports the debate orchestrator, which imports
+    numpy. The validate job does not install numpy. Post Planner itself does not.
+    """
+    import sys
+    import types
+
+    name = "channels_config.aiwake"
+    if name not in sys.modules:
+        root = Path("channels_config/aiwake").resolve()
+        package = types.ModuleType(name)
+        package.__path__ = [str(root)]
+        package.__package__ = name
+        sys.modules[name] = package
+    from channels_config.aiwake.tools.post_planner import attach_b2_urls
+
+    return attach_b2_urls
+
+
 def test_post_planner_uploads_a_drive_only_video(
     drive_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from channels_config.aiwake.tools.post_planner import attach_b2_urls
+    attach_b2_urls = _load_attach_b2_urls()
 
     _b2_budget(monkeypatch, drive_env)
     monkeypatch.setenv("DRIVE_LIBRARY_FOLDER_ID_AIWAKE", "chan-ak")
