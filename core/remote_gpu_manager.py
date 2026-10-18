@@ -188,8 +188,9 @@ def _refuse_backblaze_endpoint(endpoint: str) -> None:
     A B2 endpoint here would list and download outside the daily budget.
     B2 traffic goes through ``agents.media.b2_client`` instead.
     """
-    host = (endpoint or "").lower()
-    if "backblazeb2" in host or "backblaze.com" in host:
+    from agents.media.b2_budget import is_backblaze_endpoint  # noqa: PLC0415
+
+    if is_backblaze_endpoint(endpoint):
         raise RemoteGPUError(
             "This S3 client is for the RunPod network volume. "
             "Backblaze B2 goes through agents.media.b2_client so the "

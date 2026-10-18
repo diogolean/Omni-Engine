@@ -106,6 +106,16 @@ def allow_video_download() -> bool:
     }
 
 
+def is_backblaze_endpoint(endpoint: str) -> bool:
+    """True when *endpoint* is a Backblaze B2 URL.
+
+    Other S3-compatible hosts, including RunPod, are not B2 and are not
+    charged against this budget.
+    """
+    host = (endpoint or "").lower()
+    return "backblazeb2" in host or "backblaze.com" in host
+
+
 def usage_path() -> Path:
     override = (os.getenv("B2_USAGE_PATH") or "").strip()
     if override:

@@ -353,15 +353,20 @@ def test_processes_share_one_usage_file(budget: Path) -> None:
     assert state["class_c"] == 2
 
 
-def test_runpod_s3_refuses_a_backblaze_endpoint() -> None:
-    from core.remote_gpu_manager import RemoteGPUError, _get_runpod_s3_client
+def test_backblaze_endpoint_is_not_treated_as_runpod() -> None:
+    from agents.media.b2_budget import is_backblaze_endpoint
 
-    with pytest.raises(RemoteGPUError, match="b2_client"):
-        _get_runpod_s3_client(
-            {
-                "endpoint": "https://s3.us-east-005.backblazeb2.com",
-                "access_key": "not-a-secret",
-                "secret": "not-a-secret",
-                "volume_id": "vol",
-            }
-        )
+    assert is_backblaze_endpoint("https://s3.us-east-005.backblazeb2.com")
+    assert is_backblaze_endpoint("https://s3.eu-central-003.backblaze.com")
+    assert not is_backblaze_endpoint("https://s3api-eu-ro-1.runpod.io")
+    assert not is_backblaze_endpoint("")
+
+
+def test_runpod_s3_refuses_backblaze_before_creating_a_client() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "core" / "remote_gpu_manager.py"
+    ).read_text(encoding="utf-8")
+    function = source.split("def _get_runpod_s3_client", 1)[1].split("\ndef ", 1)[0]
+    refuse_at = function.index("_refuse_backblaze_endpoint")
+    client_at = function.index("boto3.client")
+    assert refuse_at < client_at
