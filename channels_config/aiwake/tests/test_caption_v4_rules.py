@@ -50,12 +50,33 @@ def test_quote_over_20_words_fails() -> None:
     assert "quote_line" in fails
 
 
-def test_title_must_keep_original_question_when_it_fits() -> None:
+def test_title_needs_no_keyword_but_description_does() -> None:
     row = _row()
-    row["platform_overrides"]["youtube"]["title"] = "Who keeps the training logs? | Gemini vs Llama"
+    title = "Who keeps the training logs? | Gemini vs Llama"
+    row["platform_overrides"]["youtube"]["title"] = title
+    row["base_metadata"]["title"] = title
+    row["caption_qa"]["title_source"] = "editorial"
+    assert "seo_keyword" not in " ".join(entry_failures(row))
+    for platform in ("tiktok", "youtube", "instagram", "facebook", "kwai"):
+        caption = row["platform_overrides"][platform]["caption"]
+        for phrase in ("AI censorship", "chatbot privacy", "AI hallucination", "AI consciousness", "Big Tech", "AI ethics"):
+            caption = caption.replace(phrase, "the topic")
+        row["platform_overrides"][platform]["caption"] = caption
+    assert "seo_keyword" in " ".join(entry_failures(row))
+
+
+def test_editorial_title_skips_the_mid_cut_check_only() -> None:
+    row = _row()
+    title = "Who keeps the logs when the lab shuts down? | Gemini vs Llama"
+    row["platform_overrides"]["youtube"]["title"] = title
+    row["base_metadata"]["title"] = title
+    row["spoken_utterances"][0]["text"] = "If the lab shuts down, who keeps the logs?"
+    assert "title_cut_off" in " ".join(entry_failures(row))
+    row["caption_qa"]["title_source"] = "editorial"
+    assert "title_cut_off" not in " ".join(entry_failures(row))
+    row["platform_overrides"]["youtube"]["title"] = "Who keeps the? | Gemini vs Llama"
     row["base_metadata"]["title"] = row["platform_overrides"]["youtube"]["title"]
-    fails = " ".join(entry_failures(row))
-    assert "seo_keyword" in fails
+    assert "title_cut_off" in " ".join(entry_failures(row))
 
 
 def test_banned_list_fails() -> None:

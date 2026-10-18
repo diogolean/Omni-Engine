@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""LLM captions for one Aiwake video. The model writes every sentence.
+"""LLM captions for one Aiwake video.
 
-``prompts/captions_v4.md`` is the system prompt. This module prepends the
-headline and appends hashtags. It does not keep a template, a salt word, or a
-batch-wide kill switch.
+``prompts/captions_v4.md`` asks the model for a verbatim quote. This module
+turns that quote into the title and description the v4 validator accepts.
 """
 from __future__ import annotations
 
@@ -938,7 +937,8 @@ _DISCLOSURE_BANK = (
 def _choose_angle(requested: str, history: CaptionHistory) -> str:
     letter = str(requested or "").strip().upper()[:1]
     banned = history.forbidden_angles()
-    if letter in "ABCD" and letter not in banned:
+    # '' in "ABCD" is true in Python, so an empty request must not count.
+    if len(letter) == 1 and letter in "ABCD" and letter not in banned:
         return letter
     for candidate in "ABCD":
         if candidate not in banned:
@@ -1259,6 +1259,56 @@ def _as_tags(value: Any) -> list[str]:
     return tags
 
 
+def _seo_state(peers: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Titles and closers already used, so the next row does not repeat them."""
+    titles: set[str] = set()
+    questions: list[str] = []
+    for peer in peers or []:
+        base = peer.get("base_metadata") if isinstance(peer.get("base_metadata"), dict) else {}
+        title = str(base.get("title") or "")
+        if " | " in title:
+            titles.add(title.split(" | ", 1)[0])
+        overrides = peer.get("platform_overrides") if isinstance(peer.get("platform_overrides"), dict) else {}
+        tiktok = overrides.get("tiktok") if isinstance(overrides.get("tiktok"), dict) else {}
+        for line in str(tiktok.get("caption") or "").splitlines():
+            if line.strip().endswith("?"):
+                questions.append(line.strip())
+                break
+    return {"titles": titles, "questions": questions, "masks": set()}
+
+
+def _fit_description(description: str, limit: int = 550) -> str:
+    """Drop the clash line when the shared description exceeds the short-form cap."""
+    if len(description) <= limit:
+        return description
+    parts = [part for part in description.split("\n\n") if part.strip()]
+    if len(parts) >= 2 and len("\n\n".join(parts[1:])) <= limit:
+        return "\n\n".join(parts[1:])
+    return description
+
+
+def _quote_options(row: dict[str, Any], payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Model quote first, then other spoken lines of at least four words.
+
+    The clash line repeats the opening, so a quote taken from the opening
+    fails the paraphrase check. Another spoken line still belongs to the clip.
+    """
+    options: list[tuple[str, str]] = []
+
+    def add(text: str, speaker: str) -> None:
+        cleaned = _clean(text).strip().strip('"')
+        if len(cleaned.split()) < 4:
+            return
+        if any(cleaned == existing for existing, _who in options):
+            return
+        options.append((cleaned, display_name(speaker) or _clean(speaker)))
+
+    add(str(payload.get("quote") or ""), str(payload.get("quote_speaker") or ""))
+    for item in _read_turns(row):
+        add(str(item.get("text") or ""), str(item.get("speaker") or ""))
+    return options
+
+
 def _pack_from_payload(
     row: dict[str, Any],
     payload: dict[str, Any],
@@ -1266,43 +1316,37 @@ def _pack_from_payload(
     model: str,
     attempts: int,
     history: CaptionHistory | None = None,
+    peers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    asker, answerer = seat_names(row)
-    topic = _clean(str(payload.get("topic") or ""))
-    headline = build_headline(asker, answerer, topic)
+    """Build the validator's title and description from the model's quote.
+
+    The v4 prompt does not ask for a title or per-platform bodies. Those used
+    to be read anyway, so a correct model reply produced an empty headline.
+    """
+    from channels_config.aiwake.tools.seo_caption import SEO_CTA, build_seo
+
+    quote = _clean(str(payload.get("quote") or "")).strip().strip('"')
+    speaker = display_name(str(payload.get("quote_speaker") or "")) or _clean(
+        str(payload.get("quote_speaker") or "")
+    )
     book = history or CaptionHistory()
-    tags = _choose_tags(_as_tags(payload.get("hashtags")), row, book)
-    x_tags = tags[:2]
-    quote = _clean(str(payload.get("quote") or "")).strip('"')
-    closing = _clean(str(payload.get("closing_question") or ""))
-    disclosure = _choose_disclosure(str(payload.get("disclosure_line") or ""), book)
     angle = _choose_angle(str(payload.get("angle") or ""), book)
-
-    def _body(key: str) -> str:
-        text = _apply_disclosure(_clean(str(payload.get(key) or "")), disclosure)
-        if quote and quote not in text:
-            text = f'"{quote}"\n\n{text}'.strip()
-        return text
-
+    staged = json.loads(json.dumps(row))
+    prior_qa = staged.get("caption_qa") if isinstance(staged.get("caption_qa"), dict) else {}
+    staged["caption_qa"] = {**prior_qa, "quote": quote, "quote_speaker": speaker}
+    seo = build_seo(staged, _seo_state(peers))
+    description = _fit_description(seo["description"])
+    tags = [tag for tag in str(seo["hashtags"]).split() if tag]
     texts = {
-        "tiktok": _assemble(headline, _body("tiktok"), tags),
-        "instagram": _assemble(headline, _body("instagram"), tags),
-        "facebook": _assemble(headline, _body("facebook"), tags),
-        "youtube": _assemble(headline, _body("youtube_description"), tags),
-        "kwai": _assemble(headline, _body("kwai"), tags),
-        "x": _assemble(headline, _body("x"), x_tags),
-        "linkedin": _assemble(headline, _body("linkedin"), tags[:3]),
+        name: description
+        for name in ("tiktok", "instagram", "facebook", "youtube", "kwai", "x", "linkedin")
     }
-    # X must stay within 280. Drop hashtags, then fall back to the model's own quote and question.
-    if len(texts["x"]) > 280:
-        short = "\n\n".join(part for part in (f'"{quote}"' if quote else "", closing) if part)
-        texts["x"] = short if len(short) <= 280 else _assemble(headline, _body("x"), [])
-    _ = disclosure
+    question = seo["title"].split(" | ", 1)[0]
     return {
         "texts": texts,
-        "title": headline,
-        "pinterest_title": _clean(str(payload.get("pinterest_title") or "")),
-        "pinterest_description": _clean(str(payload.get("pinterest_description") or "")),
+        "title": seo["title"],
+        "pinterest_title": question[:100],
+        "pinterest_description": description[:500],
         "hashtags": tags,
         "caption_qa": {
             "status": "ok",
@@ -1313,8 +1357,8 @@ def _pack_from_payload(
             "angle": angle,
             "verdict_evidence": _clean(str(payload.get("verdict_evidence") or "")),
             "quote": quote,
-            "quote_speaker": display_name(str(payload.get("quote_speaker") or "")) or _clean(str(payload.get("quote_speaker") or "")),
-            "disclosure_line": _clean(str(payload.get("disclosure_line") or "")),
+            "quote_speaker": speaker,
+            "disclosure_line": SEO_CTA,
             "validator_version": "captions_v4",
             "generated_at": _now(),
         },
@@ -1497,7 +1541,9 @@ def generate_caption_pack(
 
     from channels_config.aiwake.tools.validate_aiwake_captions import candidate_failures
 
-    pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book)
+    quotes = _quote_options(row, payload)
+    quote_at = 0
+    pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book, peers=prior)
     for _reprompt in range(3):
         failures = _hard_failures(candidate_failures(
             _preview_row(row, pack),
@@ -1509,6 +1555,37 @@ def generate_caption_pack(
             return pack
         reasons = failures[:12]
         _LOG.info("caption re-prompt %s: %s", session, "; ".join(reasons[:4]))
+        paraphrase = any(
+            item.split(":", 1)[0] in {
+                "closer_paraphrase",
+                "closer_pasted_debate_line",
+                "closer_equals_quote",
+                "quote_verbatim",
+            }
+            for item in reasons
+        )
+        while paraphrase and quote_at + 1 < len(quotes):
+            quote_at += 1
+            quote, speaker = quotes[quote_at]
+            payload = {**payload, "quote": quote, "quote_speaker": speaker}
+            pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book, peers=prior)
+            failures = _hard_failures(candidate_failures(
+                _preview_row(row, pack),
+                prior,
+                expected=max(expected_ready, 1),
+            ))
+            if not failures:
+                return pack
+            reasons = failures[:12]
+            paraphrase = any(
+                item.split(":", 1)[0] in {
+                    "closer_paraphrase",
+                    "closer_pasted_debate_line",
+                    "closer_equals_quote",
+                    "quote_verbatim",
+                }
+                for item in reasons
+            )
         try:
             nxt = _once(reasons, rounds=1)
         except CaptionAuthError:
@@ -1516,7 +1593,9 @@ def generate_caption_pack(
         if nxt is None:
             break
         payload = nxt
-        pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book)
+        quotes = _quote_options(row, payload)
+        quote_at = 0
+        pack = _pack_from_payload(row, payload, model=model, attempts=attempts, history=book, peers=prior)
     else:
         failures = _hard_failures(candidate_failures(
             _preview_row(row, pack),
