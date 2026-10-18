@@ -89,6 +89,40 @@ _STOP_TOKENS = {
     "at",
     "to",
     "by",
+    "that",
+    "this",
+    "still",
+    "has",
+    "have",
+    "who",
+    "whose",
+    "what",
+    "about",
+    "was",
+    "were",
+    "are",
+    "not",
+    "but",
+    "into",
+    "their",
+    "they",
+    "than",
+    "over",
+    "after",
+    "before",
+    "out",
+    "when",
+    "where",
+    "which",
+    "while",
+    "there",
+    "just",
+    "more",
+    "also",
+    "only",
+    "does",
+    "did",
+    "been",
 }
 _tls_off_logged: set[str] = set()
 
@@ -107,10 +141,26 @@ def _plain(raw_html: str) -> str:
     return normalize_pin_text(_TAG_RE.sub(" ", raw_html or ""))
 
 
+def ensure_trailing_slash(url: str) -> str:
+    """Article permalinks redirect without the trailing slash."""
+    from urllib.parse import urlunsplit  # noqa: PLC0415
+
+    text = (url or "").strip()
+    if not text or text.upper() == "TODO":
+        return ""
+    parts = urlsplit(text)
+    if not parts.scheme or not parts.netloc:
+        return text if text.endswith("/") else text + "/"
+    path = parts.path or "/"
+    if not path.endswith("/"):
+        path += "/"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
 def _article_url(site: str, slug: str) -> str:
     if not site or not slug or site.strip().upper() == "TODO":
         return ""
-    return f"{site.rstrip('/')}/{slug.strip('/')}"
+    return ensure_trailing_slash(f"{site.rstrip('/')}/{slug.strip('/')}")
 
 
 def _host(url: str) -> str:
@@ -301,7 +351,7 @@ def _fetch_wordpress_pages(
             excerpt = _plain(str((post.get("excerpt") or {}).get("rendered") or ""))
             content = _plain(str((post.get("content") or {}).get("rendered") or ""))
             link = str(post.get("link") or "").strip()
-            url = link.rstrip("/") if link else _article_url(site_url, slug)
+            url = ensure_trailing_slash(link) if link else _article_url(site_url, slug)
             if slug and url and (title or excerpt or content):
                 articles.append(
                     Article(url=url, topic=title or slug, body=excerpt or content or title, slug=slug)
@@ -316,9 +366,20 @@ def _fetch_wordpress_pages(
 
 
 def _filename_tokens(filename: str) -> list[str]:
-    stem = Path(filename).stem.lower()
+    """Words in a filename or a topic. A slash inside a title is a word break.
+
+    ``Path.stem`` would keep only ``Mudflood`` from ``Tartaria/Mudflood``.
+    Real image keys still use the file stem so parent folders do not match.
+    """
+    text = str(filename or "").replace("\\", "/")
+    if "/" in text:
+        tail = text.rsplit("/", 1)[-1]
+        if re.search(r"\.[A-Za-z0-9]{1,5}$", tail):
+            text = tail
+    if re.search(r"\.[A-Za-z0-9]{1,5}$", text):
+        text = Path(text).stem
     tokens: list[str] = []
-    for token in re.split(r"[_\-\s./]+", stem):
+    for token in re.split(r"[_\-\s./]+", text.lower()):
         token = token.strip()
         if not token or _DATE_TOKEN.match(token) or _NOISE_TOKEN.match(token):
             continue
@@ -354,35 +415,100 @@ def _slug_prefixes_topic(slug: str, topic_tokens: list[str]) -> bool:
     return topic_tokens[: len(slug_tokens)] == slug_tokens
 
 
+def _stem_token(token: str) -> str:
+    """Fold simple plurals so ``cities`` and ``city`` are the same word."""
+    word = token.lower()
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def _content_tokens(text: str) -> list[str]:
+    """Stemmed content words. Stopwords drop out. Generic words stay, as extras."""
+    out: list[str] = []
+    for token in _filename_tokens(text):
+        if token in _STOP_TOKENS or len(token) <= 2:
+            continue
+        stemmed = _stem_token(token)
+        if len(stemmed) <= 2 or stemmed in _STOP_TOKENS:
+            continue
+        out.append(stemmed)
+    return out
+
+
+def _is_sentence(text: str) -> bool:
+    """True for a headline. Filenames and short compounds are not sentences."""
+    raw = _filename_tokens(text)
+    if any(token in _STOP_TOKENS for token in raw):
+        return True
+    return len(raw) >= 8
+
+
+def _slug_distinctive(slug: str) -> list[str]:
+    out: list[str] = []
+    for part in _raw_slug_tokens(slug):
+        if part in _STOP_TOKENS or len(part) <= 2:
+            continue
+        stemmed = _stem_token(part)
+        if len(stemmed) <= 2:
+            continue
+        out.append(stemmed)
+    return out
+
+
+def _compact_score(query_tokens: list[str], slug_tokens: list[str]) -> float:
+    """Near-spellings such as baalbec/baalbek. Kept below a real token hit."""
+    if not query_tokens or not slug_tokens:
+        return 0.0
+    file_compact = "".join(query_tokens)
+    slug_compact = "".join(slug_tokens)
+    shorter = min(len(file_compact), len(slug_compact))
+    longer = max(len(file_compact), len(slug_compact))
+    if shorter < 5 or longer == 0 or shorter / longer < _COMPACT_LENGTH_FLOOR:
+        return 0.0
+    ratio = SequenceMatcher(None, file_compact, slug_compact).ratio()
+    if ratio < _SLUG_MATCH_FLOOR:
+        return 0.0
+    return min(ratio, 0.89)
+
+
+def _query_slug_score(query: str, slug: str, title: str = "") -> float:
+    """High when every distinctive slug token appears in *query*.
+
+    A sentence may add filler (``Oak Island and the 200-year mystery...``).
+    A filename may add one extra word (``baalbek-trilithon``, ``Tartaria/Mudflood``).
+    Two extra subject words are a different subject (``giants-tomb-sardinia``),
+    unless the article title already contains them.
+    Longer slugs score higher so ``easter-island-moai`` beats ``easter-island``.
+    """
+    wanted = _slug_distinctive(slug)
+    query_tokens = _content_tokens(query)
+    if not wanted or not query_tokens:
+        return 0.0
+    wanted_set = set(wanted)
+    if wanted_set <= set(query_tokens):
+        extras = [token for token in query_tokens if token not in wanted_set]
+        title_set = set(_content_tokens(title)) | wanted_set
+        uncovered = [token for token in extras if token not in title_set]
+        if uncovered and not _is_sentence(query) and len(uncovered) > 1:
+            return 0.0
+        return min(0.99, 0.90 + 0.01 * len(wanted_set))
+    return _compact_score(query_tokens, wanted)
+
+
 def match_article_slug(filename: str, slugs: list[str]) -> str:
     """Best site slug for a library name or topic. Empty when the overlap is weak."""
-    topic_tokens = _filename_tokens(filename)
-    distinctive = _distinctive_tokens(topic_tokens)
-    if not distinctive:
-        return ""
-    file_set = set(distinctive)
-    file_compact = "".join(distinctive)
     best = ""
     best_score = 0.0
     ordered = sorted(
         {slug.strip() for slug in slugs if slug and slug.strip()},
-        key=lambda slug: (len(_slug_tokens(slug)), len(slug)),
+        key=lambda slug: (len(_slug_distinctive(slug)), len(slug)),
         reverse=True,
     )
     for slug in ordered:
-        slug_tokens = _slug_tokens(slug)
-        if not slug_tokens:
-            continue
-        if set(slug_tokens) == file_set:
-            return slug
-        if _slug_prefixes_topic(slug, topic_tokens):
-            return slug
-        slug_compact = "".join(slug_tokens)
-        shorter = min(len(file_compact), len(slug_compact))
-        longer = max(len(file_compact), len(slug_compact))
-        if shorter < 5 or longer == 0 or shorter / longer < _COMPACT_LENGTH_FLOOR:
-            continue
-        score = SequenceMatcher(None, file_compact, slug_compact).ratio()
+        score = _query_slug_score(filename, slug)
         if score > best_score:
             best_score = score
             best = slug
@@ -502,42 +628,8 @@ def _keyword_tokens(article: Article) -> list[str]:
 
 
 def score_article_match(query: str, article: Article) -> float:
-    """0..1 overlap of the query with the article slug, title, and those keywords."""
-    tokens = _match_tokens(query)
-    if not tokens:
-        return 0.0
-    slug_tokens = _slug_tokens(article.slug)
-    if not slug_tokens and not article.topic:
-        return 0.0
-    query_set = set(tokens)
-    slug_set = set(slug_tokens)
-    if slug_set and slug_set == query_set:
-        return 1.0
-    if slug_set and slug_set <= query_set:
-        extras = [token for token in tokens if token not in slug_set]
-        if not extras:
-            return 1.0
-        # "Tartaria/Mudflood" may add one word. "giants tomb sardinia" must not hit "giants".
-        if len(extras) == 1:
-            return 0.9
-        if len(slug_set) >= 2 and len(extras) <= len(slug_set):
-            return 0.82
-    keywords = _keyword_tokens(article)
-    if not keywords:
-        return 0.0
-    key_set = set(keywords)
-    overlap = query_set & key_set
-    if not overlap:
-        compact_query = "".join(tokens)
-        compact_slug = "".join(slug_tokens)
-        shorter = min(len(compact_query), len(compact_slug))
-        longer = max(len(compact_query), len(compact_slug))
-        if shorter < 5 or longer == 0 or shorter / longer < _COMPACT_LENGTH_FLOOR:
-            return 0.0
-        return SequenceMatcher(None, compact_query, compact_slug).ratio()
-    coverage = len(overlap) / len(query_set)
-    recall = len(overlap) / len(key_set)
-    return (0.55 * coverage) + (0.45 * recall)
+    """0..1. Slug tokens must appear in the query; the article title covers extras."""
+    return _query_slug_score(query, article.slug, title=article.topic or "")
 
 
 def match_catalog_article(name: str, catalog: list[Article]) -> Article | None:
@@ -626,7 +718,7 @@ def attach_article_url(
                     entry["target_url"] = url
                     return None
     if article is not None:
-        entry["target_url"] = article.url
+        entry["target_url"] = ensure_trailing_slash(article.url)
         return None
     if article_link_required(account_id):
         entry["target_url"] = ""

@@ -56,6 +56,20 @@ def test_topics_match_site_slugs_and_titles() -> None:
     assert match_catalog_article("Tartaria/Mudflood", catalog).slug == "tartaria"
     assert match_catalog_article("Ancient Underwater Cities", catalog).slug == "underwater-cities"
     assert match_catalog_article("Easter Island moai", catalog).slug == "easter-island-moai"
+    long_oak = "Oak Island and the 200-year mystery that still has no answer"
+    assert match_catalog_article(long_oak, catalog).slug == "oak-island"
+    giants_sentence = "The giants who left bones that do not fit the graves"
+    assert match_catalog_article(giants_sentence, catalog).slug == "giants"
+    tartaria_sentence = "Tartaria and the mudflood that buried an older map"
+    assert match_catalog_article(tartaria_sentence, catalog).slug == "tartaria"
+    underwater = "Ancient underwater cities and the streets that are still down there"
+    assert match_catalog_article(underwater, catalog).slug == "underwater-cities"
+    moai = "Easter Island moai and the quarry that never closed"
+    assert match_catalog_article(moai, catalog).slug == "easter-island-moai"
+    longer = list(catalog) + [
+        Article(url=f"{_SITE}/easter-island/", topic="Easter Island", body="", slug="easter-island")
+    ]
+    assert match_catalog_article(moai, longer).slug == "easter-island-moai"
     assert match_catalog_article("giants tomb sardinia", catalog) is None
 
 
@@ -70,7 +84,7 @@ def test_yaml_override_is_the_fallback_when_the_catalog_misses(
         site_url=_SITE,
     )
     assert linked is None
-    assert entry["target_url"] == f"{_SITE}/baalbek"
+    assert entry["target_url"] == f"{_SITE}/baalbek/"
 
     skipped = {"subject_slug": "no-such-place", "topic": "Garden roses"}
     assert attach_article_url(skipped, [], "ancient_knowledge", site_url=_SITE) == "no-link"
@@ -186,7 +200,7 @@ def test_claude_reads_text_blocks_and_opens_the_circuit(monkeypatch: pytest.Monk
     good = _generate_ai("Oak Island", "The pit.", "", client, "claude-sonnet-5-5", 0)
     assert good["pinterest_title"] == "Oak Island Money Pit"
     assert good["visual_hook"] == "Who dug the Oak Island pit"
-    assert client.calls[0]["thinking"] == {"type": "disabled"}
+    assert "thinking" not in client.calls[0]
     assert client.calls[0]["max_tokens"] >= 2048
 
     for _ in range(3):
@@ -259,12 +273,54 @@ def test_empty_inventory_builds_only_the_next_pins(
         for slug, topic in topics
     ]
     stats = publish_account(_ancient(), pins=1, dry_run=True, client=client, catalog=catalog)
+    # pins requested plus two spare, not the whole library.
     assert stats["inventory_built"] == 3
     assert stats["published"] == 1
+    assert stats["pins"][0]["target_url"].endswith("/")
     assert not (tmp_path / "ancient_knowledge" / "master_inventory.json").exists()
     assert not (tmp_path / "ancient_knowledge" / "postplanner").exists()
     assert not any(key.startswith("pinterest/ledger/") for key in client.objects)
     assert client.deletes == []
+
+
+def test_run_picks_linkable_posts_ahead_of_the_rest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """pins=5 must publish five articles, not the first five library files."""
+    _prepare_channel(monkeypatch, tmp_path)
+    library = tmp_path / "ancient_knowledge" / "library"
+    images = library / "images"
+    images.mkdir(parents=True)
+    (images / "shared.jpg").write_bytes(_photo())
+    linked = [
+        ("oak-island", "Oak Island and the 200-year mystery that still has no answer"),
+        ("giants", "The giants who left bones that do not fit the graves"),
+        ("tartaria", "Tartaria and the mudflood that buried an older map"),
+        ("underwater-cities", "Ancient underwater cities and the streets still down there"),
+        ("easter-island-moai", "Easter Island moai and the quarry that never closed"),
+    ]
+    unlinked = [
+        ("aaa-one", "Garden roses"),
+        ("aaa-two", "Kitchen herbs"),
+        ("aaa-three", "Window ferns"),
+        ("aaa-four", "Clay pots"),
+        ("aaa-five", "Linen cloth"),
+        ("aaa-six", "River stones"),
+    ]
+    for slug, topic in unlinked + linked:
+        (library / f"post_{slug}.json").write_bytes(
+            _library_record(slug, topic, "images/shared.jpg")
+        )
+    catalog = [
+        Article(url=f"{_SITE}/{slug}", topic=slug, body=slug, slug=slug) for slug, _topic in linked
+    ]
+    stats = publish_account(_ancient(), pins=5, dry_run=True, client=FakeS3({}), catalog=catalog)
+    assert stats["published"] == 5
+    assert stats["inventory_built"] == 7
+    urls = [row["target_url"] for row in stats["pins"]]
+    slugs = {url.rstrip("/").rsplit("/", 1)[-1] for url in urls}
+    assert slugs == {slug for slug, _topic in linked}
+    assert all(url.endswith("/") for url in urls)
 
 
 def test_pin_without_an_article_is_skipped(

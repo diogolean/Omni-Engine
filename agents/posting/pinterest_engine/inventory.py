@@ -663,22 +663,16 @@ def _claude_message_text(resp: object) -> str:
 
 
 def _create_pin_message(client: object, *, model: str, system: str, user_msg: str):
-    """Pin-copy call with extended thinking off so the token budget stays on JSON."""
-    kwargs = {
-        "model": model,
-        "max_tokens": _PIN_COPY_MAX_TOKENS,
-        "system": system,
-        "messages": [{"role": "user", "content": user_msg}],
-    }
-    create = client.messages.create  # type: ignore[attr-defined]
-    try:
-        return create(**kwargs, thinking={"type": "disabled"})
-    except TypeError:
-        return create(**kwargs)
-    except Exception as exc:  # noqa: BLE001
-        if "thinking" not in str(exc).lower():
-            raise
-        return create(**kwargs)
+    """Pin-copy call. Omit ``thinking``; sending disabled returns HTTP 400.
+
+    Text blocks are read afterwards, so a ThinkingBlock in the response is skipped.
+    """
+    return client.messages.create(  # type: ignore[attr-defined]
+        model=model,
+        max_tokens=_PIN_COPY_MAX_TOKENS,
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+    )
 
 
 def _parse_pin_json(raw: str) -> dict:
@@ -815,6 +809,7 @@ class MasterInventory:
         force_regenerate: bool = False,
         limit: int | None = None,
         dry_run: bool = False,
+        prefer_ids: list[str] | None = None,
     ) -> dict:
         """
         Build (or update) master_inventory.json.
@@ -848,6 +843,11 @@ class MasterInventory:
 
         # Load all library JSON records
         lib_files = sorted(self.library_dir.glob("post_*.json"))
+        if prefer_ids:
+            order = {post_id: index for index, post_id in enumerate(prefer_ids)}
+            lib_files.sort(
+                key=lambda path: (path.stem not in order, order.get(path.stem, 0), path.name)
+            )
         log.info("  library JSON files: %d", len(lib_files))
 
         entries: list[dict] = []

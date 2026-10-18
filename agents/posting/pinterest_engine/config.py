@@ -494,8 +494,8 @@ def get_best_claude_model(anthropic_client: object | None = None) -> str:
     """Newest listed Sonnet, unless ``CLAUDE_MODEL`` is set.
 
     The Models API lists newest ids first; the dry run took ``claude-sonnet-5-5``.
-    Pin copy disables extended thinking and reads text blocks only, so a
-    thinking Sonnet does not crash the JSON parse.
+    Pin copy omits the thinking parameter (sending disabled is a 400) and
+    reads text blocks only, so a ThinkingBlock does not crash the JSON parse.
     """
     pinned = (os.getenv("CLAUDE_MODEL") or "").strip()
     if pinned:
