@@ -51,7 +51,7 @@ Early post types leave `cli` before `produce`:
 
 ## What stayed put
 
-QA stays in `modules/reel_qa/`. Publishers stay in `agents/posting/` and `omni/adapters/`. The variant worker sequences the stage modules above; it does not grow a second copy of QA or publish.
+QA stays in `modules/reel_qa/`. Publishers stay in `agents/posting/` and `core/publishing/adapters/`. The variant worker sequences the stage modules above; it does not grow a second copy of QA or publish.
 
 These modules are still large and were not split in the same change. They are cohesive libraries of functions that call each other:
 
