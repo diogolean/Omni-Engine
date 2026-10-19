@@ -32,9 +32,10 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | B2, Drive, content source | `agents/media/` | Do not move. The B2 client guard forbids direct B2 clients outside this package. |
 | Puppet / Aiwake animator | `core/animator/` | Code. Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
 | Visual QA critic | `quality/VisualQA_Agent/` | Code and package-local critic JSON. Shared profiles stay in root `critic_profiles/`. |
-| Cursor rules | `.cursor/rules/` | Shared rules are tracked. `.cursor/*` other than `rules/` is gitignored. |
-| Channel store | `channels_config/<channel>/store/` | Gitignored (`channels_config/*/store/`). Holds `scene_library/` and `artefact_cache/`. The Oracle compose file mounts Ancient Knowledge's store over the image copy. Do not rename that path. |
-| Committed artefact photos | `channels_config/<channel>/artefact_cache/<entity>/` | Photographs shipped with the repo. The runtime cache is the gitignored store path above. |
+| Cursor rules | `.cursor/rules/` | The whole directory is versioned, including `aiwake-copy.mdc` and `video-pipeline.mdc`. `.cursor/*` other than `rules/` is gitignored. |
+| Channel store | `channels_config/<channel>/store/` | First-level files are versioned (`*.json`, `scheduled_history.txt`, `.gitkeep`). [#29](https://github.com/diogolean/Omni-Engine/pull/29) adds them. Subfolders `scene_library/`, `artefact_cache/`, and `reel_checkpoints/` stay gitignored, as do backups (`*.before_*.json`, `*.bak*`) and the regenerable `openrouter_models.json` cache. Aiwake also keeps `store/aiwake_memory.json` out. The Oracle compose file mounts Ancient Knowledge's store over the image copy. Do not rename that path. |
+| Lofi store | `core/economic_reel_lofi/store/` | Versioned, including `aphorism_recent.json`. #29 adds the current state files. |
+| Committed artefact photos | `channels_config/<channel>/artefact_cache/<entity>/` | Photographs shipped with the repo. The runtime cache under `store/artefact_cache/` stays gitignored. |
 | Channel operator env | `channels_config/<id>/.env.<id>` on the host, seen in the container as `channels_env/<id>/.env.<id>` | The compose file mounts `./channels_config` at `/opt/omni-engine/channels_env`. Do not change that mount. |
 | Pinterest account map | `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml` | Do not rename. Article cache for Ancient Knowledge is `outputs/ancient_knowledge/article_cache/` and is gitignored with the rest of `outputs/`. |
 | Worker entry | `python -m omni.worker --role engine` and `--role scheduler` | `omni/` stays the package. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
@@ -48,7 +49,8 @@ These already have a home. Do not invent a second one, and do not add empty plac
 - `*.npz` and `*.psd` (render caches and design binaries). Runtime assets are the PNG/TTF the code opens.
 - Error screenshots (`click_failed_*.png`, `*_error_*.png`)
 - `*_recovered*.txt` and `__mine_*` transcript miners
-- `channels_config/*/store/`
+- `channels_config/<channel>/store/scene_library/`, `store/artefact_cache/`, and `store/reel_checkpoints/`
+- Channel-store backups (`*.before_*.json`, `*.bak*`) and `store/openrouter_models.json`
 
 ## Tests
 
