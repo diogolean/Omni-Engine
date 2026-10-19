@@ -14,6 +14,7 @@ The repository root holds entry points, config, containers, CI, docs, and top-le
 - Write logs under `outputs/logs/` via `pipeline_logs_dir()`.
 - Put tests in `tests/` or `channels_config/<channel>/tests/`. Pytest must collect them from there.
 - Secrets belong in `.env` only. Never hardcode tokens.
+- First-level files in `channels_config/<channel>/store/`, `core/economic_reel_lofi/store/`, and `.cursor/rules/` are versioned. `scene_library/`, `artefact_cache/`, and `reel_checkpoints/` under a channel store stay gitignored.
 - Do not rename `omni/`, `agents/media/`, compose services `engine` and `scheduler`, the `memory` profile, `channels_config/*/store`, `scene_library`, or `artefact_cache`.
 - Delete a temp folder once nothing references it.
 
