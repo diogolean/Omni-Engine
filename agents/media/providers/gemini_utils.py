@@ -686,7 +686,9 @@ def _cheap_text_first(model_chain: list[str], contents: Any, config: Any) -> Any
         return None
     from core.google_guardrail import is_image_model
 
-    if any(is_image_model(str(mid)) for mid in model_chain):
+    # Only the head model says what the caller wants; the live fallback tail
+    # can hold an image model and must not turn a text call back to Gemini.
+    if is_image_model(str(model_chain[0])):
         return None
     if _config_value(config, "response_modalities"):
         return None

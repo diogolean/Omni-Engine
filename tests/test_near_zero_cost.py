@@ -163,6 +163,12 @@ def test_text_only_gemini_request_is_served_by_the_cheap_chain(prod) -> None:
     assert resp.text == "A short script."
     assert resp.candidates[0].content.parts[0].text == "A short script."
     assert gemini_utils._text_only_blob([b"\x89PNG"]) is None
+    # The live fallback tail can list an image model; the head decides.
+    tail = ["models/gemini-2.5-flash", "models/gemini-nano-banana-2.1"]
+    resp = gemini_utils.generate_content_with_model_fallback(
+        _NoGemini(), tail, contents=["Write it."],
+    )
+    assert resp.provider == "deepinfra"
 
 
 def _noise(path: Path, size=(800, 1400)) -> Path:
