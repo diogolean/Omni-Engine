@@ -830,7 +830,7 @@ def test_text_preflight_stops_before_images_when_nobody_is_live() -> None:
     preflight_text("ancient_knowledge", probes={"gemini": dead, "openrouter": live})
     assert provider_dead("gemini")
     assert not provider_dead("openrouter")
-    source = Path("/workspace/main.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     assert source.find('_preflight_text("ancient_knowledge")') < source.find("_build_topic_pool(")
     reset_providers()
 
