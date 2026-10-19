@@ -58,6 +58,11 @@ def _ensure_dotenv() -> None:
 _ensure_dotenv()
 
 
+def repo_root() -> Path:
+    """Repository root (the folder holding ``main.py``)."""
+    return _FACTORY_ROOT
+
+
 def factory_root() -> Path:
     return _FACTORY_ROOT
 

@@ -9,9 +9,9 @@ from typing import Any
 import yaml
 
 from core.publishing.models import Account
+from utils.pipeline_paths import repo_root as _paths_repo_root
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BRANDINGS_PATH = _REPO_ROOT / "config" / "brandings.yaml"
+DEFAULT_BRANDINGS_PATH = _paths_repo_root() / "config" / "brandings.yaml"
 
 _PINTEREST_LEGACY = {
     "legacy_token_env": "PINTEREST_ACCESS_TOKEN",
@@ -75,7 +75,7 @@ class Branding:
 
 
 def repo_root() -> Path:
-    return _REPO_ROOT
+    return _paths_repo_root()
 
 
 def _slug_env(prefix: str, branding_id: str) -> str:

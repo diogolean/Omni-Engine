@@ -279,7 +279,7 @@ def _account_for_channel(channel_id: str):
     if not channel_id:
         return None
     try:
-        from omni.pinterest_accounts import load_pinterest_accounts  # noqa: PLC0415
+        from modules.accounts.pinterest_accounts import load_pinterest_accounts  # noqa: PLC0415
     except Exception:  # noqa: BLE001
         return None
     try:

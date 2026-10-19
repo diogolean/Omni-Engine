@@ -49,7 +49,7 @@ The runner switch is `local`, `docker`, or `both`. See [0002](decisions/0002-run
 | Surface | Who publishes | Source |
 |---|---|---|
 | Facebook | WordPress orchestrator bot | Post Planner xlsx (`DATE/TIME`, `CAPTION`, `MEDIA URL`) produced by `agents/posting/post_planner.py` |
-| Pinterest | VM scheduler | One library image at a time (Drive, then local, then B2), linked to a WordPress article (`omni/pinterest_drip.py`) |
+| Pinterest | VM scheduler | One library image at a time (Drive, then local, then B2), linked to a WordPress article (`core/publishing/pinterest_drip.py`) |
 | YouTube | VM, `main.py --publish-youtube` | `private` + `publishAt` via `agents/posting/youtube_publisher.py`. A missing local file is read from Drive. |
 
 Reel rows reach Post Planner and YouTube only when the QA report says `verdict=pass`. See [0005](decisions/0005-fail-closed-reel-qa.md).
