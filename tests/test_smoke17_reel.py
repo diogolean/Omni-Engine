@@ -830,6 +830,28 @@ def test_text_preflight_stops_before_images_when_nobody_is_live() -> None:
     preflight_text("ancient_knowledge", probes={"gemini": dead, "openrouter": live})
     assert provider_dead("gemini")
     assert not provider_dead("openrouter")
+
+
+def test_preflight_logs_the_names_of_the_live_providers(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    from modules.reel_artefact.provider_health import preflight_text, reset_providers
+
+    reset_providers()
+
+    def live() -> str:
+        return "ok"
+
+    def dead() -> str:
+        raise RuntimeError("402 RESOURCE_EXHAUSTED prepayment credits are depleted")
+
+    with caplog.at_level(logging.INFO):
+        preflight_text(
+            "ancient_knowledge",
+            probes={"gemini": dead, "openrouter": live, "deepseek": live},
+        )
+    assert "live_providers=openrouter,deepseek" in caplog.text
+    reset_providers()
     source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     assert source.find('_preflight_text("ancient_knowledge")') < source.find("_build_topic_pool(")
     reset_providers()
@@ -876,7 +898,13 @@ def test_ancient_knowledge_script_uses_the_same_prompt_on_fallback(
 
     def _openrouter(prompt: str, **_kwargs: object) -> str:
         seen["prompt"] = prompt
-        return _script(60)
+        return (
+            "The Baghdad Battery sat in Parthian Mesopotamia around 250 BC. "
+            "A clay jar held a copper cylinder and an iron rod. "
+            "Some researchers believe the vessel produced a small current. "
+            "The jar was found near Baghdad, and the copper shows a thin crust. "
+            "Museums still display the pieces in a glass case beside a small label."
+        )
 
     monkeypatch.setattr(
         "modules.reel_grounding.config.angle_memory_for",
@@ -912,3 +940,244 @@ def test_ancient_knowledge_script_uses_the_same_prompt_on_fallback(
     assert "Baghdad" in seen["prompt"]
     assert len(seen["prompt"]) > 80
     assert "deepseek" not in seen
+
+
+# A recorded OpenRouter reply: the reasoning is longer than the narration,
+# and the spoken script begins only after the think block.
+_QWEN_DRAFT = (
+    "<think>\n"
+    "The user wants a documentary narration of about 162 words. I should plan\n"
+    "four acts before I write, and this reasoning must not be spoken. The first\n"
+    "two hundred words of this draft are the plan, not the script. Gobekli is\n"
+    "the wrong monument for this episode, so I will not open on the pillars.\n"
+    "</think>\n"
+    "\n"
+    "Here is the script:\n"
+    "\n"
+    "```text\n"
+    "[ACT 1]\n"
+    "The Baghdad Battery sat in Parthian Mesopotamia around 250 BC. "
+    "A clay jar held a copper cylinder and an iron rod. "
+    "Some researchers believe the vessel produced a small current.\n"
+    "[ACT 2]\n"
+    "The jar was found near Baghdad, and the copper shows a thin crust. "
+    "The iron rod is eaten by rust where it met the air.\n"
+    "[ACT 3]\n"
+    "Museums still display the pieces in a glass case. "
+    "The label names the Parthian jar and the city of Baghdad.\n"
+    "[ACT 4]\n"
+    "The Baghdad Battery remains a small clay puzzle from Mesopotamia, "
+    "and the copper cylinder still sits beside the iron rod.\n"
+    "```\n"
+)
+
+_TOPIC = "The Baghdad Battery, Parthian Mesopotamia, 250 BC"
+
+
+def _engine() -> object:
+    from agents.writer.caption_engine import CaptionEngine
+
+    engine = CaptionEngine.__new__(CaptionEngine)
+    engine._channel = type("Ch", (), {"channel_id": "ancient_knowledge"})()
+    engine._text_model_chain = ["gemini-2.5-flash"]
+    engine._econ_gemini_chain = ["gemini-2.5-flash"]
+    engine._router_tier = "cheap"
+    engine._gemini = object()
+    engine._deepseek = None
+    engine._anthropic = None
+    engine._last_script_error = None
+    return engine
+
+
+def test_a_qwen_reasoning_draft_is_extracted_and_passes_grounding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.reel_artefact.provider_health import reset_providers
+    from modules.reel_artefact.script_grounding import (
+        extract_narration,
+        grounding_problem,
+    )
+
+    reset_providers()
+    clean = extract_narration(_QWEN_DRAFT)
+    assert "<think>" not in clean.lower()
+    assert "here is the script" not in clean.lower()
+    assert "```" not in clean
+    assert "reasoning must not be spoken" not in clean.lower()
+    assert clean.lower().startswith("[act 1]")
+    spoken = clean.split("[ACT 1]", 1)[-1]
+    assert grounding_problem(spoken, _TOPIC, channel="ancient_knowledge") == ""
+
+    seen: dict[str, str] = {}
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("402 RESOURCE_EXHAUSTED prepayment credits are depleted")
+
+    def _openrouter(prompt: str, **_kwargs: object) -> str:
+        seen["prompt"] = prompt
+        return _QWEN_DRAFT
+
+    monkeypatch.setattr(
+        "modules.reel_grounding.config.angle_memory_for",
+        lambda *_a, **_k: False,
+    )
+    monkeypatch.setattr(
+        "agents.media.providers.gemini_utils.generate_content_with_model_fallback",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "modules.reel_artefact.provider_health.openrouter_text",
+        _openrouter,
+    )
+    engine = _engine()
+
+    def _deepseek(*_a: object, **_k: object) -> str:
+        seen["deepseek"] = "called"
+        return ""
+
+    engine._deepseek_complete = _deepseek  # type: ignore[method-assign]
+    text = engine.generate_sequence_voiceover(
+        _TOPIC,
+        page_niche="history",
+        duration_s=80.0,
+        narrative_mode="",
+    )
+    assert "reasoning must not be spoken" not in text.lower()
+    assert "here is the script" not in text.lower()
+    assert text.lower().startswith("the baghdad battery")
+    assert grounding_problem(text, _TOPIC, channel="ancient_knowledge") == ""
+    assert "deepseek" not in seen
+    assert 'The first sentence must contain' in (
+        Path(__file__).resolve().parents[1] / "main.py"
+    ).read_text(encoding="utf-8")
+    reset_providers()
+
+
+def test_a_hook_miss_is_repaired_and_a_long_draft_falls_through() -> None:
+    from modules.reel_artefact.provider_health import complete_ak_text, reset_providers
+    from modules.reel_artefact.script_grounding import (
+        grounding_problem,
+        repair_hook_if_only_miss,
+        script_is_usable,
+    )
+
+    reset_providers()
+    topic = _TOPIC
+    short = (
+        "A clay jar sat in a museum case under a small paper label. "
+        "The copper cylinder and the iron rod were packed in the same jar. "
+        "Some researchers believe this vessel came from the old river plain. "
+        "The crust on the copper still shows where the metal met the air. "
+        "A glass case holds the pieces beside a short catalogue card. "
+        "The find is small, and the rod is thin, and the jar is cracked."
+    )
+    repaired = repair_hook_if_only_miss(short, topic, channel="ancient_knowledge")
+    assert repaired.lower().startswith("the baghdad battery")
+    assert grounding_problem(repaired, topic, channel="ancient_knowledge") == ""
+    calls = {"openrouter": 0, "deepseek": 0}
+
+    def openrouter(_prompt: str) -> str:
+        calls["openrouter"] += 1
+        return short
+
+    def deepseek(_prompt: str) -> str:
+        calls["deepseek"] += 1
+        return _QWEN_DRAFT
+
+    def _refine(text: str) -> str:
+        from modules.reel_artefact.script_grounding import extract_narration
+
+        return repair_hook_if_only_miss(
+            extract_narration(text), topic, channel="ancient_knowledge",
+        )
+
+    def _accept(text: str) -> bool:
+        return script_is_usable(text, topic) and not grounding_problem(
+            text, topic, channel="ancient_knowledge",
+        )
+
+    kept = complete_ak_text(
+        "Write the narration.",
+        [("openrouter", openrouter), ("deepseek", deepseek)],
+        accept=_accept,
+        refine=_refine,
+    )
+    assert calls == {"openrouter": 1, "deepseek": 0}
+    assert kept.lower().startswith("the baghdad battery")
+
+    calls["openrouter"] = 0
+    sentence = (
+        "The plan for this episode stays inside the notes and never names a place. "
+    )
+    long_draft = sentence * 30
+
+    def openrouter_long(_prompt: str) -> str:
+        calls["openrouter"] += 1
+        return long_draft
+
+    kept_next = complete_ak_text(
+        "Write the narration.",
+        [("openrouter", openrouter_long), ("deepseek", deepseek)],
+        accept=_accept,
+        refine=_refine,
+    )
+    assert calls["deepseek"] == 1
+    assert "reasoning must not be spoken" not in kept_next.lower()
+    assert grounding_problem(kept_next, topic, channel="ancient_knowledge") == ""
+    reset_providers()
+
+
+def test_openrouter_text_excludes_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+    import sys
+    import types
+
+    import config
+
+    seen: dict[str, object] = {}
+
+    class _Message:
+        content = "<think>plan the acts</think>\n\nHere is the script:\nHello."
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs: object) -> _Response:
+            seen["kwargs"] = kwargs
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        def __init__(self, **kwargs: object) -> None:
+            seen["init"] = kwargs
+
+        chat = _Chat()
+
+    monkeypatch.setattr(config, "OPENROUTER_API_KEY", "test-key")
+    fake = types.ModuleType("openai")
+    fake.OpenAI = _Client  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake)
+    from modules.reel_artefact.provider_health import openrouter_text
+
+    with caplog.at_level(logging.INFO):
+        text = openrouter_text("Write the narration.", timeout=3.0, max_tokens=1800)
+    kwargs = seen["kwargs"]
+    assert isinstance(kwargs, dict)
+    extra = kwargs["extra_body"]
+    assert isinstance(extra, dict)
+    assert extra["reasoning"] == {"exclude": True, "effort": "none"}
+    assert "think" not in text.lower()
+    assert "here is the script" not in text.lower()
+    assert text == "Hello."
+    assert "provider=openrouter" in caplog.text
+    assert "qwen/qwen3.5-flash-02-23" in caplog.text
+    assert "plan the acts" in caplog.text

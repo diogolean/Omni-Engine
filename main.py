@@ -3578,6 +3578,11 @@ def _produce_variant_worker(
                 _ground_why = _grounding_problem(
                     _early_seq_script, _topic_text, channel="ancient_knowledge",
                 )
+                _retry_note = _ground_why
+                if _ground_why == "hook does not name the topic":
+                    _retry_note = (
+                        f'The first sentence must contain "{_topic_text}".'
+                    )
                 _LOG.warning("SCRIPT GROUNDING | %s | one retry", _ground_why)
                 if caption_engine is not None:
                     _early_seq_script = caption_engine.generate_sequence_voiceover(
@@ -3594,7 +3599,7 @@ def _produce_variant_worker(
                         cta_line="",
                         narrative_mode=page_ctx.narrative_mode,
                         batch_angle_block=_batch_angle_block,
-                        uniqueness_rejection=_ground_why,
+                        uniqueness_rejection=_retry_note,
                         previously_generated_hooks=list(generated_hooks_cache or []),
                         asset_captions=_asset_captions or None,
                     ) or ""
@@ -3605,6 +3610,22 @@ def _produce_variant_worker(
             _ground_left = _grounding_problem(
                 _early_seq_script or "", _topic_text, channel="ancient_knowledge",
             ) if _early_seq_script else "empty script"
+            if (
+                _ground_left == "hook does not name the topic"
+                and _script_usable(_early_seq_script or "", _topic_text)
+            ):
+                from modules.reel_artefact.script_grounding import (
+                    repair_hook as _repair_hook,
+                )
+
+                _early_seq_script = _repair_hook(_early_seq_script, _topic_text)
+                _ground_left = _grounding_problem(
+                    _early_seq_script, _topic_text, channel="ancient_knowledge",
+                )
+                _LOG.info(
+                    "SCRIPT GROUNDING | hook repaired | %s",
+                    _topic_text[:80],
+                )
             if not _script_usable(_early_seq_script or "", _topic_text) or _ground_left:
                 _saved_script = ""
                 try:

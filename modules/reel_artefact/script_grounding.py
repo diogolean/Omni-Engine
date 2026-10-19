@@ -13,6 +13,21 @@ _HOOK_STOP = frozenset({
     "that", "this", "their", "there", "into", "near", "were", "have",
 })
 _SANDS = re.compile(r"\bsands\b", re.I)
+_THINK_BLOCK = re.compile(r"<think\b[^>]*>.*?</think>", re.I | re.S)
+_THINK_TAIL = re.compile(r"<think\b[^>]*>.*\Z", re.I | re.S)
+_FENCE = re.compile(r"```+[a-z0-9_-]*", re.I)
+_ACT_ONE = re.compile(r"\[\s*ACT\s*1\s*\]", re.I)
+_PREAMBLE = re.compile(
+    r"^(?:here(?:'s| is)|sure|certainly|of course|below is|the following is)"
+    r"[^\n]{0,80}(?:script|narration|voiceover|draft)[^\n]*$",
+    re.I,
+)
+_LABELS = frozenset({
+    "narration", "script", "voiceover", "voiceover script", "documentary script",
+})
+# A real narration is near the 90-second ceiling. A longer draft is still the
+# model's reasoning, and prefixing the topic onto it would hide that.
+_HOOK_REPAIR_WORDS = 400
 
 
 def _fold(text: str) -> str:
@@ -25,6 +40,58 @@ def topic_tokens(topic: str) -> list[str]:
         for token in re.findall(r"[a-z0-9]{4,}", _fold(topic))
         if token not in _HOOK_STOP
     ]
+
+
+def strip_model_wrapper(text: str) -> str:
+    """Drop reasoning tags, fences, and a leading 'Here is the script'."""
+    raw = _THINK_BLOCK.sub("\n", text or "")
+    raw = _THINK_TAIL.sub("\n", raw)
+    raw = _FENCE.sub(" ", raw)
+    kept: list[str] = []
+    started = False
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not started:
+            if not stripped or _PREAMBLE.match(stripped):
+                continue
+            if stripped.lower().rstrip(".:") in _LABELS:
+                continue
+        started = True
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def extract_narration(text: str) -> str:
+    """The spoken script, starting at [ACT 1] when the model wrote one."""
+    raw = strip_model_wrapper(text)
+    match = _ACT_ONE.search(raw)
+    if match:
+        raw = raw[match.start():]
+    return raw.strip()
+
+
+def repair_hook(script: str, topic: str) -> str:
+    """Prefix the topic so the opening sentence names this episode."""
+    body = (script or "").strip()
+    name = " ".join((topic or "").split()).strip().rstrip(".")
+    if not body or not name or hook_names_topic(body, name):
+        return body
+    return f"{name}. {body}"
+
+
+def repair_hook_if_only_miss(
+    script: str,
+    topic: str,
+    *,
+    channel: str = "",
+) -> str:
+    """Repair a short script whose only grounding miss is the opening line."""
+    body = (script or "").strip()
+    if len(body.split()) > _HOOK_REPAIR_WORDS or not script_is_usable(body, topic):
+        return body
+    if grounding_problem(body, topic, channel=channel) != "hook does not name the topic":
+        return body
+    return repair_hook(body, topic)
 
 
 def first_sentence(script: str) -> str:

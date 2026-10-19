@@ -118,3 +118,79 @@ def test_a_perfect_score_still_fails_when_the_description_is_a_library(
     assert "anachronism" in prompt
     assert "non_photoreal" in prompt or "non-photoreal" in prompt.lower() or "CGI" in prompt
     assert "anatomy" in prompt.lower()
+
+
+def test_the_qwen_object_prompt_keeps_a_labelled_museum_jar(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    img = tmp_path / "jar.jpg"
+    img.write_bytes(b"\xff\xd8\xff" + b"x" * 32)
+    captured: dict[str, str] = {}
+
+    class _Provider:
+        def evaluate(self, prompt, paths, labels=None):
+            del paths, labels
+            captured["prompt"] = prompt
+            return SimpleNamespace(
+                text=(
+                    '{"is_relevant": false, "relevance_score": 0.0, '
+                    '"shows_expected_subject": true, '
+                    '"image_description": "photograph of a clay jar in a museum '
+                    'case with a small label and a scale bar", '
+                    '"non_photoreal": true, "contains_text": true, '
+                    '"setting_contradicts_beat": true, "anachronism": true, '
+                    '"anatomy_defect": false, '
+                    '"detected_subjects": ["clay jar"], '
+                    '"rejection_reason": "museum label"}'
+                ),
+                provider="openrouter",
+                model_id="qwen/qwen3.5-flash-02-23",
+            )
+
+    monkeypatch.setattr("modules.reel_qa.relevance._provider", lambda name: _Provider())
+    verdict = evaluate_chunk_relevance(
+        img,
+        "PartherJar InnerSystem",
+        "PartherJar InnerSystem",
+        providers=["qwen"],
+        score_against="narration",
+    )
+    prompt = captured["prompt"].lower()
+    assert "museum" in prompt
+    assert "scale bar" in prompt
+    assert "do not set setting_contradicts_beat" in prompt
+    assert "plain background" in prompt
+    assert verdict["is_relevant"] is True
+    assert verdict["relevance_score"] >= 0.70
+    assert verdict["contains_text"] is False
+    assert verdict["non_photoreal"] is False
+    assert "setting_contradicts" not in str(verdict["rejection_reason"])
+
+    captured.clear()
+
+    class _Site:
+        def evaluate(self, prompt, paths, labels=None):
+            del paths, labels
+            captured["prompt"] = prompt
+            return SimpleNamespace(
+                text=(
+                    '{"is_relevant": false, "relevance_score": 0.2, '
+                    '"image_description": "a museum label filling the frame", '
+                    '"contains_text": true, "rejection_reason": "label"}'
+                ),
+                provider="openrouter",
+                model_id="qwen/qwen3.5-flash-02-23",
+            )
+
+    monkeypatch.setattr("modules.reel_qa.relevance._provider", lambda name: _Site())
+    site = evaluate_chunk_relevance(
+        img,
+        "limestone enclosure",
+        "limestone enclosure",
+        providers=["qwen"],
+        score_against="site",
+    )
+    site_prompt = captured["prompt"].lower()
+    assert "do not set setting_contradicts_beat" not in site_prompt
+    assert "museum label" in site_prompt
+    assert site["is_relevant"] is False

@@ -34,13 +34,18 @@ or museum documentary beat, unless the spoken beat itself asks for that object.
 Set non_photoreal true for CGI, a 3D render, an illustration, a cartoon, or a miniature
 or clay-model look.
 Set anatomy_defect true for a mangled, fused, or extra limb.
-Set contains_text true when the picture has burned-in words, a museum label, a date, or a caption.
-A real photograph of a museum object is still a photograph when a small label, a scale
-bar, or the display case is visible. Set contains_text false for that label or scale bar.
-Set contains_text true only when the frame is a slide, a poster, or a text panel and the
-object is not the subject. Set non_photoreal true only for a true illustration, diagram,
-map, drawing, or CGI. A museum photograph is not an illustration.
-Set setting_contradicts_beat true when the place contradicts the spoken beat.
+Set contains_text true when the picture has burned-in words, a date, or a caption that
+covers the frame.
+A real photograph of the artefact in a museum, a display case, or on a plain background
+is the correct subject. A small label, a scale bar, or the glass case does not make it
+a text panel and does not make it an illustration. Set contains_text false for that
+label or scale bar. Set non_photoreal false for that photograph. Set anachronism false
+for the case, the scale bar, or the catalogue label. Do not set setting_contradicts_beat
+because the photograph is indoors, in a museum, or not outdoors in the ancient landscape.
+Set those flags only for a true illustration, diagram, map, drawing, CGI, or a slide
+or text panel that does not show the object.
+Set setting_contradicts_beat true only when the picture shows a different monument
+or a different region.
 A visible expected subject is not enough. The wrong place, a non-photoreal look, or a
 broken body still fails.
 is_relevant is true only when every flag above is false and the picture shows the subject.
@@ -348,7 +353,22 @@ def _verdict_from_payload(
     ):
         if "contains_forbidden_object" not in defects:
             defects.append("contains_forbidden_object")
-    relevant = bool(data.get("is_relevant")) and score >= threshold and not defects
+    from modules.reel_artefact.asset_pool import museum_object_photo
+
+    museum = score_against == "narration" and museum_object_photo(described)
+    if museum:
+        drop = {
+            "contains_text",
+            "non_photoreal",
+            "setting_contradicts_beat",
+            "anachronism",
+        }
+        defects = [item for item in defects if item not in drop]
+    stated = bool(data.get("is_relevant"))
+    if museum and not defects:
+        score = max(score, threshold)
+        stated = True
+    relevant = stated and score >= threshold and not defects
     reason = data.get("rejection_reason")
     if defects:
         relevant = False
@@ -387,8 +407,14 @@ def _verdict_from_payload(
     verdict["qa_status"] = "scored"
     verdict["publishable"] = bool(verdict.get("is_relevant")) and not verdict.get("hard_reject")
     verdict["image_description"] = str(data.get("image_description") or "")[:500]
-    verdict["contains_text"] = _as_bool(data.get("contains_text")) or "contains_text" in defects
-    verdict["non_photoreal"] = _as_bool(data.get("non_photoreal")) or "non_photoreal" in defects
+    text_flag = _as_bool(data.get("contains_text")) or "contains_text" in defects
+    drawn_flag = _as_bool(data.get("non_photoreal")) or "non_photoreal" in defects
+    if museum and "contains_text" not in defects:
+        text_flag = False
+    if museum and "non_photoreal" not in defects:
+        drawn_flag = False
+    verdict["contains_text"] = text_flag
+    verdict["non_photoreal"] = drawn_flag
     verdict["provider"] = provider
     verdict["model_id"] = model_id
     _LOG.info(

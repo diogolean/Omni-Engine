@@ -587,6 +587,60 @@ def test_label_bands_are_cropped_off_an_object_photo(tmp_path: Path) -> None:
     assert pixel[1] < 120
 
 
+def test_commons_jar_titles_are_objects_and_a_museum_label_stays() -> None:
+    from modules.reel_artefact.asset_pool import (
+        accept_verdict,
+        classify_kind,
+    )
+
+    assert classify_kind("PartherJar InnerSystem") == "object"
+    assert classify_kind("Parther Cu-Fe-Elektroden") == "object"
+    assert classify_kind("Ironie pile Bagdad") == "object"
+    assert classify_kind("Mosquée al-Saraï in Baghdad") == "site"
+
+    kept = accept_verdict(
+        {
+            "passed": False,
+            "contains_text": True,
+            "non_photoreal": True,
+            "rejection_reason": (
+                "documentary_fail:non_photoreal,contains_text,setting_contradicts_beat"
+            ),
+            "relevance_score": 0.0,
+            "kind": "object",
+            "image_description": (
+                "photograph of a clay jar in a museum case "
+                "with a small label and a scale bar"
+            ),
+        },
+        artefact=True,
+    )
+    assert kept is True
+    diagram = accept_verdict(
+        {
+            "passed": False,
+            "non_photoreal": True,
+            "rejection_reason": "documentary_fail:non_photoreal",
+            "relevance_score": 0.95,
+            "kind": "object",
+            "image_description": "ink diagram of the jar",
+        },
+        artefact=True,
+    )
+    assert diagram is False
+    pyramid = accept_verdict(
+        {
+            "passed": False,
+            "rejection_reason": "documentary_fail:setting_contradicts_beat",
+            "relevance_score": 0.1,
+            "kind": "object",
+            "image_description": "the pyramids at Giza",
+        },
+        artefact=True,
+    )
+    assert pyramid is False
+
+
 def test_committed_baghdad_cache_names_the_licence(tmp_path: Path) -> None:
     import json
 

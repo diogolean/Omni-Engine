@@ -30,8 +30,15 @@ _ATMOSPHERE = re.compile(
     re.I,
 )
 _OBJECT = re.compile(
-    r"\b(jars?|batter(?:y|ies)|vessels?|artefacts?|artifacts?|mechanisms?|"
-    r"gears?|pendants?|figurines?|statues?|pottery|relics?)\b",
+    r"(?:"
+    r"\b(?:jars?|batter(?:y|ies)|vessels?|artefacts?|artifacts?|mechanisms?|"
+    r"gears?|pendants?|figurines?|statues?|pottery|relics?|"
+    r"electrodes?|cylinders?)\b"
+    r"|partherjar|elektroden"
+    r"|\bpile\s+bagdad\b"
+    r"|\biron\s+rods?\b"
+    r"|\bcopper\s+cylinders?\b"
+    r")",
     re.I,
 )
 _SITE = re.compile(
@@ -105,6 +112,23 @@ _DRAWN = re.compile(
     re.I,
 )
 _TEXT_PANEL = re.compile(r"\b(text panels?|slides?|posters?|title cards?)\b", re.I)
+_OBJECT_NOUN = re.compile(
+    r"(?:"
+    r"\b(?:jars?|vessels?|pottery|batter(?:y|ies)|cylinders?|electrodes?|"
+    r"copper|iron\s+rods?|relics?|artefacts?|artifacts?)\b"
+    r"|partherjar|elektroden|\bpile\s+bagdad\b"
+    r")",
+    re.I,
+)
+_NOT_OBJECT_PHOTO = re.compile(
+    r"\b(?:illustrations?|diagrams?|maps?|drawings?|schematics?|engravings?|"
+    r"paintings?|cgi|3d\s+renders?|cartoons?|text\s+panels?|slides?|posters?|"
+    r"title\s+cards?|pyramids?|sphinx|moai|sahara|scuba|airplanes?|"
+    r"libraries|library|bookshelves?|car\s+batter(?:y|ies)|smartphones?|"
+    r"clock\s+faces?|wristwatches?)\b",
+    re.I,
+)
+_NEGATED = re.compile(r"\b(?:no|not|without|never)\s+$", re.I)
 
 
 def _blob(row: dict[str, Any]) -> str:
@@ -123,6 +147,24 @@ def _text_panel(row: dict[str, Any]) -> bool:
     return _TEXT_PANEL.search(_blob(row)) is not None
 
 
+def _bad_photo(text: str) -> bool:
+    blob = text or ""
+    for match in _NOT_OBJECT_PHOTO.finditer(blob):
+        prefix = blob[max(0, match.start() - 16):match.start()]
+        if _NEGATED.search(prefix):
+            continue
+        return True
+    return False
+
+
+def museum_object_photo(text: str) -> bool:
+    """A photograph of the artefact, including one with a museum label."""
+    blob = text or ""
+    if _bad_photo(blob):
+        return False
+    return _OBJECT_NOUN.search(blob) is not None
+
+
 def accept_verdict(verdict: dict[str, Any] | None, *, artefact: bool = False) -> bool:
     """One judge pass. A real museum photo of the object can pass with a label.
 
@@ -135,8 +177,9 @@ def accept_verdict(verdict: dict[str, Any] | None, *, artefact: bool = False) ->
     text_hit = bool(row.get("contains_text")) or "contains_text" in reason
     drawn = bool(row.get("non_photoreal")) or "non_photoreal" in reason
     kind = str(row.get("kind") or "")
+    museum = bool(artefact and kind == "object" and museum_object_photo(_blob(row)))
     waived = False
-    if artefact and kind == "object" and (text_hit or drawn):
+    if artefact and kind == "object" and (text_hit or drawn or museum):
         if _true_drawing(row) or _text_panel(row):
             return False
         text_hit = False
@@ -144,7 +187,9 @@ def accept_verdict(verdict: dict[str, Any] | None, *, artefact: bool = False) ->
         waived = True
     if text_hit or drawn:
         return False
-    hard = ("anachronism", "anatomy", "setting_contradicts", "shape_mismatch")
+    hard = ("anatomy", "shape_mismatch") if museum else (
+        "anachronism", "anatomy", "setting_contradicts", "shape_mismatch",
+    )
     if any(item in reason for item in hard):
         return False
     score = row.get("relevance_score", row.get("score"))
@@ -899,6 +944,7 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
             "relevance_score": verdict.get("relevance_score"),
             "kind": kind,
             "rejection_reason": reason,
+            "caption": caption,
         }
 
     def download(item: Any, folder: Path) -> Path | None:

@@ -1871,7 +1871,14 @@ class CaptionEngine:
             ("anthropic", _claude),
         ]
 
-    def _complete_ancient_text(self, prompt: str, *, gemini=None, accept=None) -> str:
+    def _complete_ancient_text(
+        self,
+        prompt: str,
+        *,
+        gemini=None,
+        accept=None,
+        refine=None,
+    ) -> str:
         """Ancient Knowledge only. Gemini is skipped once it has been marked dead."""
         if not self._is_ancient_knowledge():
             return ""
@@ -1881,7 +1888,7 @@ class CaptionEngine:
         if gemini is not None:
             callers.append(("gemini", gemini))
         callers.extend(self._text_fallbacks())
-        return complete_ak_text(prompt, callers, accept=accept)
+        return complete_ak_text(prompt, callers, accept=accept, refine=refine)
 
     def _ancient_after_gemini(self, prompt: str, exc: BaseException | None) -> str:
         if not self._is_ancient_knowledge():
@@ -2197,10 +2204,39 @@ class CaptionEngine:
             def _gemini_script(_body: str) -> str:
                 return _try_gemini(attempt=1, raise_errors=True)
 
+            def _refine_script(text: str) -> str:
+                from modules.reel_artefact.script_grounding import (
+                    extract_narration,
+                    repair_hook_if_only_miss,
+                )
+
+                spoken = _metrics_script(extract_narration(text))
+                return repair_hook_if_only_miss(
+                    spoken, topic, channel="ancient_knowledge",
+                )
+
+            def _accept_script(text: str) -> bool:
+                from modules.reel_artefact.script_grounding import (
+                    grounding_problem,
+                    script_is_usable,
+                )
+
+                spoken = _metrics_script(text)
+                if _word_count(spoken) < 40 or not script_is_usable(spoken, topic):
+                    return False
+                problem = grounding_problem(
+                    spoken, topic, channel="ancient_knowledge",
+                )
+                if problem:
+                    logger.info("AK text grounding | %s", problem)
+                    return False
+                return True
+
             raw = self._complete_ancient_text(
                 _full_prompt,
                 gemini=_gemini_script,
-                accept=lambda text: _word_count(text) >= 40,
+                accept=_accept_script,
+                refine=_refine_script,
             )
         else:
             _net_tries = 1

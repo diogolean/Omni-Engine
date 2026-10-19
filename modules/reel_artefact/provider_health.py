@@ -76,17 +76,66 @@ def complete_ak_text(
     callers: list[tuple[str, Callable[[str], str] | None]],
     *,
     accept: Callable[[str], bool] | None = None,
+    refine: Callable[[str], str] | None = None,
 ) -> str:
-    """Try each provider once. Billing marks it dead and moves on."""
+    """Try each provider once. A draft that fails ``accept`` falls through.
+
+    Billing marks that provider dead and moves on. ``refine`` runs first, so
+    a reasoning blob can be reduced to the narration before the check.
+    """
     from modules.reel_artefact.net_retry import is_network_error, retry_sleep
+    from modules.reel_artefact.script_grounding import strip_model_wrapper
 
     for name, call in callers:
         if call is None or provider_dead(name):
             continue
-        text = _one_call(name, call, prompt, is_network_error, retry_sleep)
+        raw = _one_call(name, call, prompt, is_network_error, retry_sleep)
+        if not raw:
+            continue
+        logger.info(
+            "AK text draft | provider=%s | model=%s | %s",
+            name,
+            _model_label(name),
+            _preview(raw),
+        )
+        text = strip_model_wrapper(raw)
+        if refine is not None:
+            text = (refine(text) or "").strip()
         if text and (accept is None or accept(text)):
             logger.info("AK text | provider=%s | chars=%d", name, len(text))
             return text
+        if text:
+            logger.info(
+                "AK text rejected | provider=%s | model=%s | chars=%d",
+                name,
+                _model_label(name),
+                len(text),
+            )
+    return ""
+
+
+def _preview(text: str, limit: int = 200) -> str:
+    flat = " ".join((text or "").split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1] + "…"
+
+
+def _model_label(provider: str) -> str:
+    import config as app_config
+
+    name = (provider or "").strip().lower()
+    if name == "openrouter":
+        return (os.getenv("OPENROUTER_TEXT_MODEL") or "qwen/qwen3.5-flash-02-23").strip()
+    if name == "deepseek":
+        return str(getattr(app_config, "DEEPSEEK_FLASH_MODEL", "") or "")
+    if name == "anthropic":
+        return str(getattr(app_config, "CLAUDE_MODEL", "") or "")
+    if name == "gemini":
+        return (
+            os.getenv("GEMINI_ECONOMIC_BRAIN_MODEL")
+            or str(getattr(app_config, "GEMINI_ECONOMIC_BRAIN_MODEL", "") or "")
+        )
     return ""
 
 
@@ -136,8 +185,17 @@ def openrouter_text(prompt: str, *, timeout: float = 25.0, max_tokens: int = 180
         messages=[{"role": "user", "content": prompt}],
         temperature=0.4,
         max_tokens=max_tokens,
+        extra_body={"reasoning": {"exclude": True, "effort": "none"}},
     )
-    return (resp.choices[0].message.content or "").strip()
+    raw = (resp.choices[0].message.content or "").strip()
+    logger.info(
+        "AK text draft | provider=openrouter | model=%s | %s",
+        model,
+        _preview(raw),
+    )
+    from modules.reel_artefact.script_grounding import strip_model_wrapper
+
+    return strip_model_wrapper(raw)
 
 
 def preflight_text(
@@ -158,6 +216,7 @@ def preflight_text(
         return
     chosen = default_text_probes() if probes is None else probes
     live = 0
+    live_names: list[str] = []
     failures: list[str] = []
     configured = 0
     for name, probe in chosen.items():
@@ -170,6 +229,7 @@ def preflight_text(
         ok, detail = _run_probe(name, probe)
         if ok:
             live += 1
+            live_names.append(name)
         elif detail:
             failures.append(detail)
     if live == 0:
@@ -180,10 +240,11 @@ def preflight_text(
         )
     _PREFLIGHT_OK = True
     logger.info(
-        "text preflight | live=%d configured=%d dead=%s",
+        "text preflight | live=%d configured=%d dead=%s live_providers=%s",
         live,
         configured,
         ",".join(sorted(_DEAD)) or "none",
+        ",".join(live_names) or "none",
     )
 
 
