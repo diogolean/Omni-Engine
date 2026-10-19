@@ -1,0 +1,31 @@
+---
+description: Reel pipeline rules: real photos first, Ken Burns, ffmpeg, local QA gates, hard spend cap
+alwaysApply: true
+---
+
+# Video pipeline rules
+
+Works the same on a local PC and in the cloud. Settings come from env vars; no machine-specific paths.
+
+## Images
+- Order: free real photos (Wikimedia Commons, then Openverse) → reusable `scene_library` → Flux-schnell.
+- Flux-schnell only draws the scene types a channel lists as safe (sky, landscape, sea, atmosphere). It never depicts a named artefact, its parts or a specific object (`modules/reel_artefact/flux_policy.py`).
+- Nano Banana is off by default (`REEL_NANOBANANA_MAX_PER_REEL=0`).
+- No fixed image count: each image matches the narration line it sits under. Never show a place or object the line does not name, and never repeat the same picture.
+
+## Motion and render
+- Ken Burns is the default motion.
+- The depth-parallax hook is optional and off (`REEL_HOOK_PARALLAX=1` to enable).
+- Render with ffmpeg (`REEL_RENDERER=ffmpeg`, the default). MoviePy is legacy only. `REEL_FFMPEG_TIMEOUT_S` (default 600) stops a hung render.
+- The timeline is audio-driven: never cut the narration or the CTA.
+
+## QA judges
+- Local Python gates run first (`modules/reel_qa/local_gate.py`, `still_guard`).
+- Then the cheap LLM chain (`REEL_QA_MODEL_CHAIN`, default `qwen`). Gemini is not a judge unless opted in. The judge fails closed.
+
+## Cost
+- Hard cap per reel: `REEL_REEL_BUDGET_USD` (default $0.05), enforced by `core/spend_ledger.py`.
+- ElevenLabs on a subscription is logged as informational at list price and sits outside the cap (`ELEVENLABS_BILLING`). A warning fires above `ELEVENLABS_LIST_WARN_USD`.
+
+## Style
+- Cyberpunk visuals and music belong to Master Mei only. Documentary channels get no cyberpunk prefix.
