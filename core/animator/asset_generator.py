@@ -389,10 +389,17 @@ def _drop_shadow(size: tuple[int, int], *, cx: int, cy: int, rx: int, ry: int, b
     return img.filter(ImageFilter.GaussianBlur(blur))
 
 
+def _windows_fonts_dir() -> Path:
+    # Kept local: this module must import without utils.pipeline_paths.
+    import os  # noqa: PLC0415
+
+    return Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+
+
 def _brand_font(size: int) -> ImageFont.ImageFont:
     for candidate in (
-        "C:/Windows/Fonts/ariblk.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
+        str(_windows_fonts_dir() / "ariblk.ttf"),
+        str(_windows_fonts_dir() / "arialbd.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ):
         try:

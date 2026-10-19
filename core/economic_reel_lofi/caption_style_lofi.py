@@ -14,6 +14,8 @@ Library (kept for easy swaps on wonder_feed + momma_circle):
 from __future__ import annotations
 
 from pathlib import Path
+
+from utils.pipeline_paths import windows_fonts_dir
 from typing import Sequence
 
 from PIL import Image as PILImage
@@ -142,7 +144,7 @@ FONT_LIBRARY: dict[str, dict[str, object]] = {
         "candidates": (
             "Fonts/ComicSans/ComicSansMS-Bold.ttf",
             "Fonts/ComicSans/comicbd.ttf",
-            r"C:\Windows\Fonts\comicbd.ttf",
+            str(windows_fonts_dir() / "comicbd.ttf"),
             "Fonts/Poppins/Poppins-Bold.ttf",
             "Fonts/Montserrat/static/Montserrat-Bold.ttf",
         ),

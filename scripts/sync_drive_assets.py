@@ -46,7 +46,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import config  # noqa: E402  -- loads .env
-from utils.pipeline_paths import coerce_outputs_path, path_from_env  # noqa: E402
+from utils.pipeline_paths import coerce_outputs_path, drive_root, path_from_env  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -295,10 +295,9 @@ def _resolve_local_image(record: dict) -> str | None:
 
     # 3. Historical Anna Protocol engine on Drive, or ANNA_PROTOCOL_ENGINE_ROOT.
     # image_relative is like "outputs/assets/topic_slug/file.png"
-    windows_anna = Path(
-        r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@_Content 2026"
-        r"\The Holistic Legacy - Anna's Protocol"
-        r"\Anna's Automated Image Posts Engine"
+    windows_anna = (
+        drive_root() / "@_Content 2026" / "The Holistic Legacy - Anna's Protocol"
+        / "Anna's Automated Image Posts Engine"
     )
     drive_candidate = path_from_env(("ANNA_PROTOCOL_ENGINE_ROOT",), windows_anna) / rel
     if drive_candidate.is_file():

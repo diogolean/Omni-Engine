@@ -24,6 +24,8 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from utils.pipeline_paths import WINDOWS_FFMPEG_FALLBACK, ffmpeg_binary_override
+
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 SIGNED_SUFFIX = "_signed"
 PROCESSES_DIRNAME = "processes"
@@ -50,7 +52,10 @@ _DEFAULT_OPTIONS: dict[str, Any] = {
 
 
 def resolve_ffmpeg() -> str:
-    """Return an ffmpeg executable path (PATH, imageio_ffmpeg, or common installs)."""
+    """Return an ffmpeg executable path (FFMPEG_BINARY, PATH, imageio_ffmpeg, or common installs)."""
+    override = ffmpeg_binary_override()
+    if override is not None:
+        return str(override)
     ff = shutil.which("ffmpeg")
     if ff:
         return ff
@@ -64,7 +69,7 @@ def resolve_ffmpeg() -> str:
         pass
     for cand in (
         Path.home() / "AppData/Local/Programs/Stremio/ffmpeg.exe",
-        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
+        WINDOWS_FFMPEG_FALLBACK,
     ):
         if cand.is_file():
             return str(cand)

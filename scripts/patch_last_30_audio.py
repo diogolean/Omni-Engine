@@ -33,7 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from utils.pipeline_paths import (
+    WINDOWS_FFMPEG_FALLBACK,
+    ffmpeg_binary_override,
+    page_outputs_dir,
+)
 
 try:
     from dotenv import load_dotenv
@@ -54,6 +58,9 @@ _VARIANT_RE = re.compile(r"_v(\d+)$", re.IGNORECASE)
 
 
 def _resolve_ffmpeg() -> str:
+    override = ffmpeg_binary_override()
+    if override is not None:
+        return str(override)
     ff = shutil.which("ffmpeg")
     if ff:
         return ff
@@ -67,7 +74,7 @@ def _resolve_ffmpeg() -> str:
         pass
     for cand in (
         Path.home() / "AppData/Local/Programs/Stremio/ffmpeg.exe",
-        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
+        WINDOWS_FFMPEG_FALLBACK,
     ):
         if cand.is_file():
             return str(cand)
