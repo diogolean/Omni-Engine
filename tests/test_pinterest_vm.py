@@ -837,15 +837,16 @@ def _prepare_channel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PUBLISHER_MODE", "docker")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    # A previous run can restore posted state and hide or block a new library card.
-    store = (
-        Path(__file__).resolve().parents[1]
-        / "channels_config"
-        / "ancient_knowledge"
-        / "store"
-    )
-    for name in ("master_inventory.json", "scheduled_history.txt"):
-        (store / name).unlink(missing_ok=True)
+    # Posted state in the real channel store can hide or block a new library
+    # card. Point the store at an empty folder instead of deleting the
+    # channel's real master_inventory.json and scheduled_history.txt.
+    monkeypatch.setenv("CHANNEL_STORE_ROOT", str(tmp_path / "_channels_store"))
+    try:
+        from modules.durable_store import reset_restore_cache
+
+        reset_restore_cache()
+    except ImportError:
+        pass
     monkeypatch.setattr(
         "agents.posting.pinterest_engine.inventory.MasterInventory._load_ai_client",
         lambda self: (None, None),

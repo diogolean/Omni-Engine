@@ -504,6 +504,17 @@ def _stage_sequence_render_04(state: VariantState) -> None:
             state._ok_acts += 1
             _LOG.warning('REEL QA REUSE | act %d/%d reason=%s — approved still kept the reel', _idx + 1, state._seq_n, _gate.blocked_reason or 'rejected')
             return
+        if _gate.blocked_reason == 'pool_exhausted' and state._sequence_image_paths and Path(state._sequence_image_paths[-1]).is_file():
+            # s23d B #10: no fitting photo left. Hold the previous beat's
+            # photo rather than a flat placeholder or a site the line never names.
+            _held = Path(state._sequence_image_paths[-1])
+            _row['image_path'] = str(_held)
+            _row['passed'] = True
+            _row['reuse'] = 'hold_previous'
+            state._sequence_image_paths.append(_held)
+            state._ok_acts += 1
+            _LOG.warning('REEL QA HOLD | act %d/%d reason=pool_exhausted — previous photo held', _idx + 1, state._seq_n)
+            return
         _guaranteed = None
         try:
             from modules.reel_artefact.reuse import guarantee_still

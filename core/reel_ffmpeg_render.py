@@ -347,8 +347,22 @@ def _encode(duration_s: float, preset: str) -> list[str]:
     ]
 
 
+def _ffmpeg_timeout_s() -> float:
+    try:
+        return max(30.0, float(os.environ.get("REEL_FFMPEG_TIMEOUT_S", "600")))
+    except ValueError:
+        return 600.0
+
+
 def _run(cmd: list[str]) -> None:
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    # s23d: one beat's ffmpeg sat at near-zero CPU for 27 minutes and held the
+    # whole reel. A stuck encode now fails the beat instead of the machine.
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=_ffmpeg_timeout_s(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ffmpeg timed out after {exc.timeout:.0f}s") from exc
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-800:]
         raise RuntimeError(tail or f"ffmpeg exit {proc.returncode}")

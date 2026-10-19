@@ -3,6 +3,14 @@
 
 * ``fingerprint``: md5 of the bytes and a 256-bit difference hash, so the same
   photograph never shows twice in one reel, even as a re-encoded copy.
+* ``core_dhash``: the difference hash of the picture after blur-padded or
+  letterbox bands are trimmed, cut to the reel's 9:16 centre. A blur-padded
+  still and the full-frame crop of the same photograph share it.
+* ``crop_match``: ORB keypoints and a RANSAC similarity fit (OpenCV, when
+  installed). A different crop or window of one photograph matches; another
+  photograph of the same monument does not.
+* ``source_key``: the pool key or source URL from the still's sidecar. Two
+  stills cut from one source file are one photograph.
 * ``text_panel``: a slide or museum label (a flat grey field with bright
   strokes on it). Never a scene still, never the cover.
 * ``looks_like_photo``: a sketch or flat drawing has almost no sensor texture
@@ -17,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -38,6 +46,14 @@ def near_dup_bits() -> int:
     return int(_env_float("REEL_NEAR_DUP_BITS", NEAR_DUP_BITS))
 
 
+CORE_DUP_BITS = 32
+
+
+def core_dup_bits() -> int:
+    """Core hashes of one photograph sat at 6-22 bits in s23b; others at 83+."""
+    return int(_env_float("REEL_CORE_DUP_BITS", CORE_DUP_BITS))
+
+
 @dataclass(frozen=True)
 class Traits:
     md5: str
@@ -48,9 +64,13 @@ class Traits:
     panel_text: float = 0.0
     texture: float = 0.0
     tone_peak: float = 0.0
+    core_dhash: int = 0
+    source_key: str = ""
+    path: str = field(default="", compare=False)
 
 
 _CACHE: dict[tuple[str, int, int], Traits] = {}
+_FEATURES: dict[tuple[str, int, int], object] = {}
 
 
 def _dhash(image, size: int = 16) -> int:
@@ -63,6 +83,91 @@ def _dhash(image, size: int = 16) -> int:
             right = px[row * (size + 1) + col + 1]
             bits = (bits << 1) | (left > right)
     return bits
+
+
+def _band_rows(energy: list[float]) -> tuple[int, int]:
+    """Low-detail rows at both ends: (top count, bottom count)."""
+    count = len(energy)
+    if count < 16:
+        return 0, 0
+    middle = sorted(energy[count // 4: 3 * count // 4])
+    floor = max(0.6, 0.25 * middle[len(middle) // 2])
+    top = 0
+    while top < count // 2 and energy[top] < floor:
+        top += 1
+    bottom = 0
+    while bottom < count // 2 and energy[count - 1 - bottom] < floor:
+        bottom += 1
+    return top, bottom
+
+
+def _pad(top: int, bottom: int, count: int) -> int:
+    """Padding from a centred fit is the same height above and below.
+
+    A flat sky next to the top band makes that side look taller, so the
+    smaller side is the pad. One band alone is part of the photograph.
+    """
+    pad = min(top, bottom)
+    return pad if pad >= 0.04 * count else 0
+
+
+def content_region(image):
+    """The picture without blur-padded or letterbox bands.
+
+    Only bands of matching size at both ends count, so a flat sky at the
+    top of a photograph stays part of it.
+    """
+    import numpy as np
+
+    grey = image.convert("L")
+    grey.thumbnail((360, 640))
+    pixels = np.asarray(grey, dtype=np.float32)
+    # Fine detail per row and column. A blur pad has almost none; the
+    # Laplacian ignores the smooth colour that a blur leaves behind.
+    lap = np.zeros_like(pixels)
+    lap[1:-1, 1:-1] = np.abs(
+        4 * pixels[1:-1, 1:-1]
+        - pixels[:-2, 1:-1] - pixels[2:, 1:-1] - pixels[1:-1, :-2] - pixels[1:-1, 2:]
+    )
+    rows = lap.mean(axis=1).tolist()
+    cols = lap.mean(axis=0).tolist()
+    rows[0] = rows[1] if len(rows) > 1 else rows[0]
+    rows[-1] = rows[-2] if len(rows) > 1 else rows[-1]
+    cols[0] = cols[1] if len(cols) > 1 else cols[0]
+    cols[-1] = cols[-2] if len(cols) > 1 else cols[-1]
+    height, width = pixels.shape
+    top, bottom = _band_rows(rows)
+    left, right = _band_rows(cols)
+    box = [0, 0, image.size[0], image.size[1]]
+    sx = image.size[0] / max(1, width)
+    sy = image.size[1] / max(1, height)
+    rows_pad = _pad(top, bottom, height)
+    cols_pad = _pad(left, right, width)
+    if rows_pad:
+        box[1] = int(round(rows_pad * sy))
+        box[3] = int(round((height - rows_pad) * sy))
+    if cols_pad:
+        box[0] = int(round(cols_pad * sx))
+        box[2] = int(round((width - cols_pad) * sx))
+    if box[2] - box[0] < 16 or box[3] - box[1] < 16:
+        return image
+    return image.crop(tuple(box))
+
+
+def _reel_window(image):
+    """The centre 9:16 window, the one ``prepare_reel_frame`` cuts."""
+    width, height = image.size
+    if width / max(1, height) > 9 / 16:
+        crop_w = max(1, int(round(height * 9 / 16)))
+        left = (width - crop_w) // 2
+        return image.crop((left, 0, left + crop_w, height))
+    crop_h = max(1, int(round(width * 16 / 9)))
+    top = (height - crop_h) // 2
+    return image.crop((0, top, width, top + crop_h))
+
+
+def core_dhash(image) -> int:
+    return _dhash(_reel_window(content_region(image)))
 
 
 def distance(a: int, b: int) -> int:
@@ -139,7 +244,7 @@ def traits(path: str | Path) -> Traits | None:
     key = (str(target.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
     hit = _CACHE.get(key)
     if hit is not None:
-        return hit
+        return _with_source(hit, target)
     try:
         data = target.read_bytes()
         with Image.open(target) as image:
@@ -147,8 +252,10 @@ def traits(path: str | Path) -> Traits | None:
             dhash = _dhash(image)
             try:
                 numbers = _pixel_traits(image)
+                core = core_dhash(image)
             except ImportError:
                 numbers = (0.0, 0.0, 99.0, 0.0)
+                core = 0
     except Exception as exc:  # noqa: BLE001
         logger.info("still guard could not read %s (%s)", target.name, type(exc).__name__)
         return None
@@ -162,14 +269,136 @@ def traits(path: str | Path) -> Traits | None:
         panel_text=numbers[1],
         texture=numbers[2],
         tone_peak=numbers[3],
+        core_dhash=core,
+        path=str(target),
     )
     _CACHE[key] = result
-    return result
+    return _with_source(result, target)
+
+
+def _with_source(found: Traits, target: Path) -> Traits:
+    """Attach the pool key or source URL from the sidecar, read fresh each time."""
+    key = source_key_for(target)
+    if key == found.source_key:
+        return found
+    return replace(found, source_key=key)
+
+
+def source_key_for(path: str | Path) -> str:
+    try:
+        from modules.reel_artefact.source import source_meta
+
+        meta = source_meta(Path(path)) or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    for name in ("pool_key", "source_url", "reuse_key"):
+        value = str(meta.get(name) or "").strip()
+        if value:
+            return value.split("?")[0].lower()
+    return ""
+
+
+def with_source_key(found: Traits | None, key: str) -> Traits | None:
+    """A pool file has no sidecar; its pool key names the source."""
+    if found is None or not key:
+        return found
+    return replace(found, source_key=str(key).split("?")[0].lower())
+
+
+def _orb_enabled() -> bool:
+    return (os.getenv("REEL_ORB_MATCH") or "1").strip().lower() not in {"0", "false", "off", "no"}
+
+
+def _features(path: str):
+    """ORB keypoints on a 480px greyscale copy. None without OpenCV."""
+    if not path:
+        return None
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    cache_key = (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    hit = _FEATURES.get(cache_key)
+    if hit is not None:
+        return hit or None
+    try:
+        import cv2  # type: ignore[import-not-found]
+        import numpy as np
+        from PIL import Image
+
+        with Image.open(path) as opened:
+            grey = opened.convert("L")
+            grey.thumbnail((480, 480))
+            pixels = np.asarray(grey, dtype=np.uint8)
+        orb = cv2.ORB_create(nfeatures=600, fastThreshold=12)
+        keys, desc = orb.detectAndCompute(pixels, None)
+        points = np.float32([k.pt for k in keys]) if keys else None
+        found = (points, desc, pixels.shape) if desc is not None and len(keys) >= 8 else ()
+    except Exception:  # noqa: BLE001 - no OpenCV, unreadable file
+        found = ()
+    _FEATURES[cache_key] = found
+    return found or None
+
+
+def crop_match(a: Traits, b: Traits) -> bool:
+    """One photograph in two crops: many ORB matches that agree on one
+    similarity transform, with a sane scale, no rotation, and inliers spread
+    over both pictures. A different photograph of the same place collapses
+    to a degenerate fit and fails.
+    """
+    if not _orb_enabled():
+        return False
+    left = _features(a.path)
+    right = _features(b.path)
+    if left is None or right is None:
+        return False
+    try:
+        import cv2  # type: ignore[import-not-found]
+        import numpy as np
+
+        pts_a, desc_a, shape_a = left
+        pts_b, desc_b, shape_b = right
+        pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(desc_a, desc_b, k=2)
+        good = [m[0] for m in pairs if len(m) == 2 and m[0].distance < 0.8 * m[1].distance]
+        need = int(_env_float("REEL_ORB_MIN_INLIERS", 20))
+        if len(good) < need:
+            return False
+        src = np.float32([pts_a[m.queryIdx] for m in good])
+        dst = np.float32([pts_b[m.trainIdx] for m in good])
+        model, mask = cv2.estimateAffinePartial2D(
+            src, dst, method=cv2.RANSAC, ransacReprojThreshold=4.0,
+        )
+        if model is None or mask is None:
+            return False
+        inliers = mask.ravel().astype(bool)
+        if int(inliers.sum()) < need:
+            return False
+        scale = float(np.hypot(model[0, 0], model[1, 0]))
+        angle = abs(float(np.degrees(np.arctan2(model[1, 0], model[0, 0]))))
+        if not 0.15 <= scale <= 6.0 or angle > 8.0:
+            return False
+
+        def spread(points, shape) -> float:
+            box = points[inliers]
+            area = float(np.prod(box.max(axis=0) - box.min(axis=0)))
+            return area / float(max(1, shape[0] * shape[1]))
+
+        return min(spread(src, shape_a), spread(dst, shape_b)) >= 0.01
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def same_picture(a: Traits, b: Traits, *, bits: int | None = None) -> bool:
+    """Same file, same pixels, same source, or a crop of the same photograph."""
     limit = near_dup_bits() if bits is None else int(bits)
-    return a.md5 == b.md5 or distance(a.dhash, b.dhash) <= limit
+    if a.md5 == b.md5 or distance(a.dhash, b.dhash) <= limit:
+        return True
+    if a.source_key and a.source_key == b.source_key:
+        return True
+    core_limit = core_dup_bits() if bits is None else int(bits)
+    if a.core_dhash and b.core_dhash and distance(a.core_dhash, b.core_dhash) <= core_limit:
+        return True
+    return crop_match(a, b)
 
 
 def repeats(paths: Iterable[str | Path | None]) -> list[tuple[int, int]]:
@@ -225,3 +454,4 @@ def enforce_unique(
 
 def reset_cache() -> None:
     _CACHE.clear()
+    _FEATURES.clear()

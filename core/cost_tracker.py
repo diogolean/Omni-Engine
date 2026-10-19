@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -77,6 +78,17 @@ def _normalize_tier(value: Any) -> Literal["nano", "economic", "premium"]:
 # Official per-unit formulas (USD)
 FLUX_SCHNELL_USD_PER_IMAGE: float = 0.003
 ELEVENLABS_USD_PER_1K_CHARS: float = 0.030          # → $0.00003 / char
+
+
+def elevenlabs_on_plan() -> bool:
+    """ElevenLabs runs on a flat subscription (Pro) unless told otherwise.
+
+    Plan usage costs $0 at the margin, like ``spend_ledger.record_informational``:
+    the list price is kept on the entry for scale but stays out of the total.
+    ``ELEVENLABS_BILLING=metered`` restores list-price billing.
+    """
+    raw = (os.getenv("ELEVENLABS_BILLING") or "subscription").strip().lower()
+    return raw not in {"metered", "payg", "pay_as_you_go", "usage", "list"}
 GEMINI_FLASH_USD_PER_1M_TOKENS: float = 0.075       # input+output tokens
 ELEVENLABS_SFX_USD_PER_CALL: float = 0.002          # Sound Effects API
 ELEVENLABS_MUSIC_USD_PER_CALL: float = 0.030        # Music compose API
@@ -150,6 +162,44 @@ _TIER_TEXT_KEY: dict[str, str] = {
 }
 
 
+
+def _plan_list_warn_usd() -> float:
+    try:
+        return float(os.environ.get("ELEVENLABS_LIST_WARN_USD", "0.20"))
+    except ValueError:
+        return 0.20
+
+
+def _ledger_llm_summary() -> dict | None:
+    """Real LLM and vision spend of this run, by provider, from spend_ledger."""
+    try:
+        from core.spend_ledger import run_records  # noqa: PLC0415
+        records = [
+            r for r in run_records()
+            if str(r.kind or "") in {"text", "vision", "llm"}
+        ]
+    except Exception:  # noqa: BLE001
+        return None
+    if not records:
+        return None
+    by_provider: dict[str, float] = {}
+    text_usd: dict[str, float] = {}
+    for r in records:
+        provider = str(r.provider or "unknown").strip().lower()
+        by_provider[provider] = by_provider.get(provider, 0.0) + float(r.cost_usd or 0.0)
+        if str(r.kind or "") != "vision":
+            label = f"{provider}:{r.model or ''}"
+            text_usd[label] = text_usd.get(label, 0.0) + float(r.cost_usd or 0.0)
+    text_label = max(text_usd, key=text_usd.get) if text_usd else ""
+    return {
+        "usd": round(sum(by_provider.values()), 6),
+        "calls": len(records),
+        "by_provider": {k: round(v, 6) for k, v in sorted(by_provider.items())},
+        "text_model_key": f"text_{text_label.split(':', 1)[0]}" if text_label else "",
+        "top_text_model": text_label,
+    }
+
+
 @dataclass
 class CostTracker:
     """
@@ -175,12 +225,28 @@ class CostTracker:
     def __post_init__(self) -> None:
         self.page_id = str(self.page_id or "unknown").strip() or "unknown"
         object.__setattr__(self, "cost_tier", _normalize_tier(self.cost_tier))
+        try:
+            from core.spend_ledger import run_records  # noqa: PLC0415
+
+            object.__setattr__(self, "_ledger_seen", len(run_records()))
+        except Exception:  # noqa: BLE001
+            object.__setattr__(self, "_ledger_seen", 0)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _add(self, operation: str, model_key: str, units: float, cost: float) -> float:
+    def _add(
+        self,
+        operation: str,
+        model_key: str,
+        units: float,
+        cost: float,
+        *,
+        plan_list_usd: float | None = None,
+        detail: dict | None = None,
+    ) -> float:
+        """Add a line. ``plan_list_usd`` marks flat-plan usage: $0, informational."""
         units_f = max(0.0, _safe_float(units, 0.0))
         cost_f = max(0.0, _safe_float(cost, 0.0))
         entry = {
@@ -190,6 +256,14 @@ class CostTracker:
             "cost_usd": round(cost_f, 8),
             "ts": datetime.now(timezone.utc).isoformat(),
         }
+        if plan_list_usd is not None:
+            cost_f = 0.0
+            entry["cost_usd"] = 0.0
+            entry["billing"] = "subscription"
+            entry["informational"] = True
+            entry["list_usd"] = round(max(0.0, _safe_float(plan_list_usd, 0.0)), 8)
+        if detail:
+            entry.update(detail)
         with self._lock:
             self._entries.append(entry)
             self._total_usd = _safe_float(self._total_usd, 0.0) + cost_f
@@ -231,6 +305,23 @@ class CostTracker:
             logger.warning("CostTracker.track_image failed (%s) — recording $0 fallback", exc)
             return 0.0
 
+    def _served_text_calls(self) -> list:
+        """Text calls the spend ledger saw since this tracker last looked.
+
+        The ledger knows which provider actually answered (DeepSeek, Gemini,
+        ...) and what it cost, so the script line carries the real label.
+        """
+        try:
+            from core.spend_ledger import run_records  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            return []
+        records = run_records()
+        seen = int(getattr(self, "_ledger_seen", 0) or 0)
+        if seen > len(records):
+            seen = 0
+        object.__setattr__(self, "_ledger_seen", len(records))
+        return [r for r in records[seen:] if str(r.kind or "") == "text"]
+
     def track_text(
         self,
         model_key: str | None = None,
@@ -247,6 +338,23 @@ class CostTracker:
             tokens = _safe_int(token_count, 0) if token_count is not None else max(0, chars // 4)
             if tokens <= 0 and chars > 0:
                 tokens = max(1, chars // 4)
+            if model_key is None:
+                served = self._served_text_calls()
+                if served:
+                    last = served[-1]
+                    provider = str(last.provider or "unknown").strip().lower()
+                    return self._add(
+                        "text_generation",
+                        f"text_{provider}",
+                        float(sum(r.input_tokens + r.output_tokens for r in served) or tokens),
+                        sum(float(r.cost_usd or 0.0) for r in served),
+                        detail={
+                            "provider": provider,
+                            "model": str(last.model or ""),
+                            "calls": len(served),
+                            "source": "spend_ledger",
+                        },
+                    )
             key = model_key or _TIER_TEXT_KEY.get(self.cost_tier, "text_gemini_flash")
             if str(key).startswith("text_gemini"):
                 price_per_m = _safe_float(
@@ -276,6 +384,10 @@ class CostTracker:
             if sfx:
                 total += self.track_sfx(calls=1)
             if chars > 0:
+                if elevenlabs_on_plan():
+                    self._add("audio_generation", "elevenlabs_tts", float(chars), 0.0,
+                              plan_list_usd=tts_cost)
+                    return total - tts_cost
                 self._add("audio_generation", "elevenlabs_tts", float(chars), tts_cost)
             return total
         except Exception as exc:  # noqa: BLE001
@@ -287,6 +399,9 @@ class CostTracker:
         try:
             n = max(1, _safe_int(calls, 1))
             cost = ELEVENLABS_SFX_USD_PER_CALL * n
+            if elevenlabs_on_plan():
+                return self._add("sfx_generation", "elevenlabs_sfx", float(n), 0.0,
+                                 plan_list_usd=cost)
             return self._add("sfx_generation", "elevenlabs_sfx", float(n), cost)
         except Exception as exc:  # noqa: BLE001
             logger.warning("CostTracker.track_sfx failed (%s)", exc)
@@ -297,8 +412,12 @@ class CostTracker:
         try:
             n = max(1, _safe_int(beds, 1))
             if api:
+                # ElevenLabs Music compose: same account and plan as the voice.
                 cost = ELEVENLABS_MUSIC_USD_PER_CALL * n
                 key = "music_api_per_call"
+                if elevenlabs_on_plan():
+                    return self._add("music_generation", key, float(n), 0.0,
+                                     plan_list_usd=cost)
             else:
                 cost = LOCAL_MUSIC_USD_PER_BED * n
                 key = "music_local_per_bed"
@@ -433,11 +552,20 @@ class CostTracker:
         with other._lock:
             entries = list(other._entries)
         for e in entries:
+            extra = {
+                k: v for k, v in e.items()
+                if k not in {"operation", "model_key", "units", "cost_usd", "ts",
+                             "billing", "informational", "list_usd"}
+            }
             self._add(
                 str(e.get("operation") or "unknown"),
                 str(e.get("model_key") or "unknown"),
                 _safe_float(e.get("units"), 0.0),
                 _safe_float(e.get("cost_usd"), 0.0),
+                plan_list_usd=(
+                    _safe_float(e.get("list_usd"), 0.0) if e.get("informational") else None
+                ),
+                detail=extra or None,
             )
 
     def category_totals(self, entries: list[dict] | None = None) -> dict[str, Any]:
@@ -456,9 +584,20 @@ class CostTracker:
         sfx_cost = sfx_calls = 0.0
         music_cost = music_beds = 0.0
         music_api = False
+        info_usd = 0.0
+        info_audio = False
+        text_label = ""
         for e in src or []:
             if not isinstance(e, dict):
                 continue
+            if e.get("informational"):
+                info_usd += max(0.0, _safe_float(e.get("list_usd"), 0.0))
+                if str(e.get("operation") or "") in {
+                    "audio_generation", "sfx_generation", "music_generation",
+                }:
+                    info_audio = True
+            if str(e.get("operation") or "") == "text_generation" and e.get("provider"):
+                text_label = f"{e.get('provider')}:{e.get('model') or ''}".rstrip(":")
             op = str(e.get("operation") or "")
             cost = max(0.0, _safe_float(e.get("cost_usd"), 0.0))
             units = max(0.0, _safe_float(e.get("units"), 0.0))
@@ -494,7 +633,7 @@ class CostTracker:
             invented = flux_count * FLUX_SCHNELL_USD_PER_IMAGE
             image_cost += invented
             flux_cost += invented
-        if tts_chars > 0 and tts_cost <= 0:
+        if tts_chars > 0 and tts_cost <= 0 and not info_audio:
             tts_cost = tts_chars * (ELEVENLABS_USD_PER_1K_CHARS / 1000.0)
         if research_tokens > 0 and research_cost <= 0:
             research_cost = research_tokens * GEMINI_FLASH_USD_PER_1M_TOKENS / 1_000_000.0
@@ -521,6 +660,9 @@ class CostTracker:
             "music_beds": int(music_beds),
             "music_api": music_api,
             "audio_cost": audio_cost,
+            "audio_on_plan": info_audio,
+            "informational_usd": info_usd,
+            "text_label": text_label,
             "total": total,
         }
 
@@ -539,11 +681,52 @@ class CostTracker:
             entries = list(self._entries)
             ledger = _safe_float(self._total_usd, 0.0)
         cats = self.category_totals(entries)
+        marginal = float(cats.get("total") or 0.0)
+        llm = _ledger_llm_summary()
+        if llm is not None:
+            # The spend ledger saw every LLM and vision call with its real
+            # price and provider (s23d: the per-script estimate said
+            # text_gemini_flash $0.0003; DeepSeek and Gemma cost $0.0035).
+            estimated_text = sum(
+                _safe_float(e.get("cost_usd"), 0.0) for e in entries
+                if e.get("operation") == "text_generation"
+            )
+            marginal = marginal - estimated_text + llm["usd"]
+            entries = [e for e in entries if e.get("operation") != "text_generation"]
+            entries.insert(0, {
+                "operation": "text_generation",
+                "model_key": llm["text_model_key"] or "text_unknown",
+                "units": float(llm["calls"]),
+                "cost_usd": llm["usd"],
+                "detail": {
+                    "source": "spend_ledger",
+                    "by_provider": llm["by_provider"],
+                    "top_text_model": llm["top_text_model"],
+                    "replaces_estimate_usd": round(estimated_text, 6),
+                },
+            })
+        plan_list = float(cats.get("informational_usd") or 0.0)
+        plan_warn = plan_list > _plan_list_warn_usd()
+        if plan_warn:
+            # On the flat plan this is not spend and not in the cap, but a run
+            # this heavy burns plan credits fast (or real money if metered).
+            logger.warning(
+                "COST | ElevenLabs list usage $%.4f this run is above $%.2f "
+                "(plan usage, not counted toward the cap)",
+                plan_list, _plan_list_warn_usd(),
+            )
         return {
             "page_id": self.page_id,
             "cost_tier": self.cost_tier,
-            "total_estimated_usd": round(float(cats.get("total") or 0.0), 6),
+            "plan_list_warning": plan_warn,
+            "total_estimated_usd": round(marginal, 6),
             "ledger_usd": round(ledger, 6),
+            "marginal_usd": round(marginal, 6),
+            "llm_ledger": llm,
+            "informational_usd": round(float(cats.get("informational_usd") or 0.0), 6),
+            "informational_note": (
+                "flat subscription usage at list price; $0 marginal; not in the reel cap"
+            ),
             "breakdown": entries,
             "tracked_at": datetime.now(timezone.utc).isoformat(),
         }

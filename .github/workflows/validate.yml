@@ -45,16 +45,11 @@ jobs:
           # Whole suite, including the B2, Drive, and Pinterest tests from main
           # (test_b2_budget, test_b2_direct_client_guard, test_drive_source,
           # test_upload_clips_b2_budget, test_pinterest_vm, and the omni tests).
-          # Three Ancient Knowledge deselects stay out (shot-variety page id,
-          # flux retry, fair-share stills). Their owner will fix them in a
-          # small follow-up based on this branch. The visual-QA chain tests
-          # run: the default chain is qwen-only and fails closed. The other
-          # deselects failed in isolation on the base branch before this refactor.
+          # The visual-QA chain tests run: the default chain is qwen-only and
+          # fails closed. The remaining deselects failed in isolation on the
+          # base branch before the engine refactor.
           pytest -q tests channels_config \
             --deselect tests/test_lofi_emotional_pipeline.py::test_gemini38_provider_uses_only_configured_primary_model \
-            --deselect tests/test_shot_variety.py::test_get_image_adapter_accepts_page_id \
-            --deselect tests/test_reel_object_beats_and_encode.py::test_pass_one_retry_does_not_call_flux_again \
-            --deselect tests/test_reel_still_fair_share.py::test_reel_stills_through_the_main_entry \
             --deselect channels_config/aiwake/tests/test_caption_validator.py::test_truncated_plugs_it_fails \
             --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_tiktok_caption_is_hook_quote_trigger \
             --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_planner_imports_root_videos_with_optimized_captions \

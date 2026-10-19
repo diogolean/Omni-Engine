@@ -419,3 +419,23 @@ def test_runpod_s3_refuses_backblaze_before_creating_a_client() -> None:
     refuse_at = function.index("_refuse_backblaze_endpoint")
     client_at = function.index("boto3.client")
     assert refuse_at < client_at
+
+
+def test_a_new_client_never_inherits_a_collected_clients_cache_token() -> None:
+    """id() is reused after garbage collection; the token must not be."""
+    import gc
+
+    from agents.media.b2_budget import client_token
+
+    class _Client:
+        pass
+
+    seen = set()
+    for _ in range(50):
+        client = _Client()
+        token = client_token(client)
+        assert token == client_token(client)
+        assert token not in seen
+        seen.add(token)
+        del client
+        gc.collect()

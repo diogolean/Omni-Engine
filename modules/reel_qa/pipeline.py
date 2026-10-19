@@ -83,8 +83,13 @@ def seal_compiled_reel(
     probe_fn: Callable[[Path], dict[str, Any]] | None = None,
     frame_fn: Callable[..., Any] | None = None,
     blocked_reason: str = "",
+    cta_text: str = "",
 ) -> dict[str, Any]:
-    """Score beats, gate the MP4, and persist the report. Never raises."""
+    """Score beats, gate the MP4, and persist the report. Never raises.
+
+    ``cta_text`` is the closing line the compile step stitched on. Its frames
+    are checked for black, flat, or glitched video, not for subtitle match.
+    """
     rows = [dict(b) for b in (beats or [])]
     try:
         still_reasons = _score_beats(rows, evaluate_fn=evaluate_fn, score_stills=score_stills)
@@ -106,6 +111,7 @@ def seal_compiled_reel(
                 work_dir=(Path(output_dir) / f"{stem}_frames") if output_dir else None,
                 beats=rows,
                 narration_end_s=narration_end or None,
+                cta_text=cta_text,
             )
         else:
             mp4 = _fail_mp4(blocked_reason or "missing_video")

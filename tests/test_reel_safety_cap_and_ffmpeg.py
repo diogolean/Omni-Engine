@@ -142,6 +142,15 @@ def test_a_white_band_and_a_fog_frame_are_rejected_before_the_judge() -> None:
             dark_px[x, y] = (0, 0, 0)
     assert image_defect(dark) == "band"
 
+    # A blown-out stripe inside the frame (bright sky or sea in an old
+    # photograph) is part of the picture, not padding.
+    interior = varied.copy()
+    interior_px = interior.load()
+    for y in range(160, 240):
+        for x in range(200):
+            interior_px[x, y] = (255, 255, 255)
+    assert image_defect(interior) == ""
+
     fog = Image.new("RGB", (180, 320))
     fog_px = fog.load()
     for y in range(320):

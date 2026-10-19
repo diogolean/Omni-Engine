@@ -73,6 +73,12 @@ def llm_spent() -> float:
         return sum(r.cost_usd for r in _REEL)
 
 
+def run_records() -> list[SpendRecord]:
+    """Every paid call this process made, oldest first (a copy)."""
+    with _LOCK:
+        return list(_RUN)
+
+
 def reel_total() -> float:
     """LLM calls plus generated stills for the current reel."""
     return llm_spent() + _stills_spent()

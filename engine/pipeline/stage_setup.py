@@ -388,8 +388,10 @@ def _stage_setup_02(state: VariantState) -> None:
         state._reset_diverse = _reset_diverse
         from modules.reel_artefact.logbook import reset as _reset_sources
         state._reset_sources = _reset_sources
+        from modules.reel_artefact.asset_pool import reset_claims as _reset_claims
         from modules.reel_artefact.reuse import reset_approved as _reset_approved
         state._reset_approved = _reset_approved
+        _reset_claims()
         state._reset_nano()
         state._reset_spend()
         state._reset_uses()

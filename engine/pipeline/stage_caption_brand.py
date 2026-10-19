@@ -223,7 +223,7 @@ def _stage_caption_brand_01(state: VariantState) -> None:
         if not state._qa_beats:
             state._qa_beats = [{'index': 0, 'text': str(state.overlay_text or state.resolved_subject or ''), 'image_path': str(state.img_path_display or ''), 'passed': None}]
         state._qa_dir = Path(app_config.PAGE_OUTPUTS_DIR) / 'qa'
-        state._qa_report = state.seal_compiled_reel(video_path=state.reel_path, post_type=state.post_type, beats=state._qa_beats, word_timings=list(getattr(state, '_word_timings', None) or getattr(state, '_narr_word_timings', None) or []), output_dir=state._qa_dir, stem=f'{state.stem}_v{state.variant + 1:02d}', channel=(state.page_ctx.page_id if state.page_ctx else '') or '', blocked_reason='beat_qa_failed' if state._reel_qa_block_compile else '')
+        state._qa_report = state.seal_compiled_reel(video_path=state.reel_path, post_type=state.post_type, beats=state._qa_beats, word_timings=list(getattr(state, '_word_timings', None) or getattr(state, '_narr_word_timings', None) or []), output_dir=state._qa_dir, stem=f'{state.stem}_v{state.variant + 1:02d}', channel=(state.page_ctx.page_id if state.page_ctx else '') or '', blocked_reason='beat_qa_failed' if state._reel_qa_block_compile else '', cta_text=str((state.page_ctx.reel_cta_text if state.page_ctx else '') or ''))
     state.imgbb_url = ''
     state._upload_candidate = state.img_path_display
     if isinstance(state._upload_candidate, Path) and state._upload_candidate.is_file():

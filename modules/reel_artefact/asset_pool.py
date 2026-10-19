@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -217,6 +218,33 @@ def _overlap(sentence: str, caption: str) -> int:
     return len(_tokens(sentence) & _tokens(caption))
 
 
+# Words that describe any building or photo. A line that only shares these
+# with a caption has not named the place in the picture.
+_GENERIC_SITE = frozenset({
+    "arch", "arches", "archway", "wall", "walls", "decoration", "decorations",
+    "decorative", "pattern", "patterns", "ruin", "ruins", "remains", "site",
+    "sites", "temple", "temples", "palace", "palaces", "building", "buildings",
+    "tower", "towers", "minaret", "minarets", "dome", "domes", "gate", "gates",
+    "city", "cities", "town", "view", "views", "ancient", "century", "centuries",
+    "stone", "stones", "brick", "bricks", "mudbrick", "mosque", "tomb", "tombs",
+    "shrine", "shrines", "street", "market", "region", "area", "today",
+    "stands", "standing", "great", "large", "old", "famous", "museum", "jpg",
+    "jpeg", "png", "iraq", "iran", "mesopotamia",
+})
+
+
+def _name_tokens(text: str) -> set[str]:
+    return {
+        token for token in _tokens(text)
+        if token not in _GENERIC_SITE and not token.isdigit()
+    }
+
+
+def _names_site(sentence: str, asset: PoolAsset) -> int:
+    """How many place names the line shares with the photo's caption."""
+    return len(_name_tokens(sentence) & _name_tokens(asset.caption))
+
+
 _DRAWING = re.compile(
     r"(?:innersystem|inner\s*system|elektroden|cut-?away|cross-?section|"
     r"\b(?:diagrams?|sketches?|illustrations?|schematics?|drawings?)\b)",
@@ -273,7 +301,14 @@ def _asset_rank(sentence: str, asset: PoolAsset, *, want_object: bool) -> tuple:
     object_hit = 1 if want_object and asset.kind == "object" and photo else 0
     outdoors = 0 if _gallery_outdoors(sentence, asset) else 1
     site_hit = 1 if (not want_object) and asset.kind == "site" and photo else 0
-    return (photo, jar, object_hit, outdoors, site_hit, _overlap(sentence, asset.caption))
+    # A line that names the place takes the photo whose caption names it,
+    # and a curated cache photo before a search hit.
+    named = _names_site(sentence, asset) if asset.kind == "site" else 0
+    curated = 1 if (asset.source or "") == "cache" else 0
+    return (
+        photo, jar, object_hit, outdoors, named, site_hit, curated,
+        _overlap(sentence, asset.caption),
+    )
 
 
 def _ranked_assets(
@@ -384,11 +419,13 @@ def _on_topic(sentence: str, asset: PoolAsset, *, object_topic: bool) -> bool:
     """On an artefact story a site photograph must be named by its line.
 
     The Baghdad Battery pool carries Ctesiphon, a minaret and a museum hall;
-    without this they fill every line that does not mention the jar.
+    without this they fill every line that does not mention the jar. Sharing
+    a word like "wall" or "arch" is not naming the site (s23b: a minaret for
+    "Wall decorations from that era").
     """
     if not object_topic or asset.kind == "object":
         return True
-    return _overlap(sentence, asset.caption) > 0
+    return _names_site(sentence, asset) > 0
 
 
 def assign_shots(
@@ -404,7 +441,8 @@ def assign_shots(
     One source is used once per reel (``REEL_SOURCE_MAX_USES``), never on
     back-to-back beats. The first beat is the cover and must be a photograph.
     A sentence that cannot take a new source is merged into the previous
-    beat; after ``MAX_MERGED_SPAN`` lines it gets a Flux landscape instead.
+    beat; after ``MAX_MERGED_SPAN`` lines only an atmosphere line gets a
+    Flux landscape, any other line keeps holding the previous photo.
     """
     from modules.reel_artefact.flux_policy import safe_flux_prompt
 
@@ -448,9 +486,16 @@ def assign_shots(
             assigned.append(ShotAssignment(sentence=text, mode="fallback"))
             return
         previous = assigned[-1]
-        if int(previous.span or 1) >= MAX_MERGED_SPAN and flux_used < int(flux_max):
+        if (
+            int(previous.span or 1) >= MAX_MERGED_SPAN
+            and wants_flux(text)
+            and flux_used < int(flux_max)
+        ):
             flux_shot(text)
             return
+        # Past the span limit a non-atmosphere line still holds the previous
+        # photo: a longer hold beats a landscape or a site the line never
+        # names (s23c B #4, #7, #10, #11).
         previous.sentence = f"{previous.sentence} {text}".strip()
         previous.span = int(previous.span or 1) + 1
 
@@ -470,7 +515,15 @@ def assign_shots(
     for sentence in sentences:
         text = str(sentence or "").strip()
         cover = shot_state.placed == 0
-        if not cover and wants_flux(text) and flux_used < int(flux_max):
+        names_pool_site = any(
+            asset.kind == "site" and _names_site(text, asset) > 0 for asset in assets
+        )
+        if (
+            not cover
+            and not names_pool_site
+            and wants_flux(text)
+            and flux_used < int(flux_max)
+        ):
             flux_shot(text)
             continue
         want_object = bool(_OBJECT.search(text))
@@ -666,16 +719,39 @@ def _credit_blurbs(cache_dir: Path) -> dict[str, str]:
     return blurbs
 
 
+_REGION_WORDS = frozenset({"iraq", "iran", "mesopotamia", "syria", "turkey", "egypt"})
+
+
+def view_key(asset: PoolAsset) -> frozenset[str]:
+    """What a site photo shows, from its caption: the place and the structure.
+
+    Two different photographs of one facade from a similar viewpoint (the
+    Ctesiphon arch as 04, 05 and 07) defeat every pixel check, the ORB crop
+    match included, so a site's view is also judged by its caption. Years,
+    numbers and the country do not change the view. Curated cache files only.
+    """
+    if asset.kind != "site" or asset.source != "cache":
+        # Search captions are too thin ("Gobekli Tepe") to tell views apart.
+        return frozenset()
+    view = frozenset(
+        token for token in _tokens(asset.caption)
+        if not token.isdigit() and token not in _REGION_WORDS
+    )
+    return view if len(view) >= 2 else frozenset()
+
+
 def screen_pool(assets: list[PoolAsset]) -> list[PoolAsset]:
     """Pixel checks, no model: drop slides and labelled panels, drop repeats.
 
-    Two files of one photograph (a crop, a re-upload) collapse to the first.
+    Two files of one photograph (a crop, a re-upload) collapse to the first,
+    and so do two site photos of one view (see ``view_key``).
     Every survivor carries its photo-or-drawing verdict for the cover rule.
     """
     from modules.reel_artefact import still_guard
 
     kept: list[PoolAsset] = []
     seen: list[Any] = []
+    views: set[frozenset[str]] = set()
     for asset in assets:
         found = still_guard.traits(asset.path)
         if found is None:
@@ -688,6 +764,12 @@ def screen_pool(assets: list[PoolAsset]) -> list[PoolAsset]:
         if twin is not None:
             logger.info("ASSET POOL dropped %s (same photograph)", Path(asset.path).name)
             continue
+        view = view_key(asset)
+        if view and view in views:
+            logger.info("ASSET POOL dropped %s (same view)", Path(asset.path).name)
+            continue
+        if view:
+            views.add(view)
         seen.append(found)
         asset.photo = bool(found.photo)
         kept.append(asset)
@@ -973,15 +1055,21 @@ def place_assignment(
                     "relevance_score": 0.9,
                 }],
             )
-    chosen = _asset_by_key(pool, assignment.asset_key) or best_asset(assignment.sentence, pool)
-    if chosen is None and pool:
-        chosen = pool[beat_index % len(pool)]
+    chosen = _asset_by_key(pool, assignment.asset_key)
+    if chosen is not None:
+        claim_key(chosen.key)
+    else:
+        chosen = _unused_asset(assignment.sentence, pool)
     if chosen is None:
+        if pool:
+            logger.warning(
+                "ASSET POOL | beat %d fallback found no unused photograph", int(beat_index) + 1,
+            )
         return StillGateResult(
             path=None,
             extra_generations=0,
             publishable=False,
-            blocked_reason="empty_pool",
+            blocked_reason="pool_exhausted" if pool else "empty_pool",
         )
     anchor = assignment.anchor or pick_anchor(chosen.key, None, {})
     if assignment.mode == "flux":
@@ -1003,6 +1091,49 @@ def place_assignment(
     )
 
 
+_CLAIM_LOCK = threading.Lock()
+_PLANNED: set[str] = set()
+_CLAIMED: set[str] = set()
+
+
+def reset_claims() -> None:
+    """Forget the photographs claimed by the last reel. Call at reel start."""
+    with _CLAIM_LOCK:
+        _PLANNED.clear()
+        _CLAIMED.clear()
+
+
+def claim_key(key: str) -> None:
+    if key:
+        with _CLAIM_LOCK:
+            _CLAIMED.add(key)
+
+
+def _unused_asset(sentence: str, pool: list[PoolAsset]) -> PoolAsset | None:
+    """The best pool photograph no other beat has planned or used.
+
+    Pool jobs run in parallel, so the pick and the claim share one lock.
+    """
+    object_topic = _object_topic(pool)
+    with _CLAIM_LOCK:
+        taken = _PLANNED | _CLAIMED
+        free = [asset for asset in pool if asset.key not in taken]
+        # On an artefact story a generic line takes an unused object photo,
+        # not a site the line never names (s23b B #5 and #9: Ctesiphon).
+        fitting = [
+            asset for asset in free
+            if _on_topic(sentence, asset, object_topic=object_topic)
+        ]
+        want_object = object_topic or bool(_OBJECT.search(sentence or ""))
+        # No fitting photo left: report pool_exhausted rather than show an
+        # unnamed site (s23c B #4 and #10 came through this fallback).
+        ranked = _ranked_assets(sentence, fitting, want_object=want_object)
+        chosen = ranked[0] if ranked else None
+        if chosen is not None:
+            _CLAIMED.add(chosen.key)
+        return chosen
+
+
 def make_pool_job(
     assignment: ShotAssignment,
     dest: Path | str,
@@ -1014,6 +1145,9 @@ def make_pool_job(
 ) -> Callable[[], Any]:
     import functools
 
+    if assignment.asset_key:
+        with _CLAIM_LOCK:
+            _PLANNED.add(assignment.asset_key)
     return functools.partial(
         place_assignment,
         assignment,
@@ -1039,7 +1173,12 @@ def _write_pool_source(path: Path, asset: PoolAsset, *, provider: str) -> None:
         billed = "commons"
     else:
         billed = source or "commons"
-    write_source_sidecar(path, {"provider": billed, "model_id": "", "source": source})
+    write_source_sidecar(path, {
+        "provider": billed,
+        "model_id": "",
+        "source": source,
+        "pool_key": asset.key,
+    })
 
 
 def _asset_by_key(pool: list[PoolAsset], key: str) -> PoolAsset | None:
@@ -1196,8 +1335,9 @@ def unique_stills(
 ) -> tuple[list[Path], list[int]]:
     """Last pass before export: one picture once per reel, a photo for a cover.
 
-    A later copy of a picture already on screen (md5 or pHash within
-    ``REEL_NEAR_DUP_BITS``) is replaced by an unused pool photograph, then a
+    A later copy of a picture already on screen (md5, pHash within
+    ``REEL_NEAR_DUP_BITS``, the same padded-or-cropped core, an ORB crop
+    match, or the same pool key) is replaced by an unused pool photograph, then a
     Flux landscape. A cover that is a sketch or a labelled panel is replaced
     the same way. Returns the new paths and the beats left unresolved.
     """
@@ -1214,15 +1354,16 @@ def unique_stills(
         for asset in sorted(pool, key=lambda a: 0 if is_photo(a) else 1):
             if index == 0 and not is_photo(asset):
                 continue
-            found = still_guard.traits(asset.path)
+            found = still_guard.with_source_key(still_guard.traits(asset.path), asset.key)
             if found is None or found.text_panel:
                 continue
             if any(still_guard.same_picture(found, other) for other in used):
                 continue
             written = write_asset_crop(asset.path, target, "center")
+            _write_pool_source(written, asset, provider="asset")
             crop = still_guard.traits(written)
             if crop is not None and not any(still_guard.same_picture(crop, o) for o in used):
-                _write_pool_source(written, asset, provider="asset")
+                claim_key(asset.key)
                 return written
         if flux_generate is not None and flux_left[0] > 0 and index > 0:
             flux_left[0] -= 1
