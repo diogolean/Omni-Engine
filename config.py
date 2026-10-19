@@ -53,10 +53,7 @@ DOTENV_PATH: Path = ENGINE_ROOT / ".env"
 # ---------------------------------------------------------------------------
 
 def _load_project_dotenv() -> tuple[Path, bool]:
-    """Load ``.env`` over the environment, unless ``OMNI_SKIP_DOTENV=1`` (tests)."""
     resolved = DOTENV_PATH.expanduser().resolve()
-    if (os.environ.get("OMNI_SKIP_DOTENV") or "").strip() == "1":
-        return resolved, False
     # CLI / Phase-0 preparse wins over .env for the active channel.
     preserved_page = (os.environ.get("ACTIVE_PAGE") or "").strip()
     if resolved.is_file():

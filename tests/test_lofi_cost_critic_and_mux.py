@@ -100,6 +100,9 @@ def test_tests_do_not_load_the_real_dotenv() -> None:
 
     assert os.environ.get("OMNI_SKIP_DOTENV") == "1"
     assert dotenv.load_dotenv() is False
+    import config
+
+    assert config.DOTENV_LOADED_FROM_FILE is False
 
 
 def test_voice_mux_is_bounded_by_the_video_length(
