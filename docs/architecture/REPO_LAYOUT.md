@@ -14,7 +14,7 @@ Tracked at the repository root:
 | Entry points | `main.py`, `config.py`, `channel_loader.py`. `run_main_noupload.py` is an allowed entry point when it is added. Do not rename it. |
 | Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml`, `.gitleaksignore` |
 | Containers and CI | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.github/` |
-| Packages | `agents/`, `channels_config/`, `config/`, `core/`, `engine/`, `models_avatar/`, `modules/`, `omni/` (temporary shims, removed in PR-O4), `portfolio_showcase/`, `quality/`, `utils/` |
+| Packages | `agents/`, `channels_config/`, `config/`, `core/`, `engine/`, `models_avatar/`, `modules/`, `portfolio_showcase/`, `quality/`, `utils/` |
 | Support trees | `assets/`, `critic_profiles/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
 | Agent rules | `.cursor/rules/` |
 
@@ -42,7 +42,7 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Committed artefact photos | `channels_config/<channel>/artefact_cache/<entity>/` | Photographs shipped with the repo. The runtime cache under `store/artefact_cache/` stays gitignored. |
 | Channel operator env | `channels_config/<id>/.env.<id>` on the host, seen in the container as `channels_env/<id>/.env.<id>` | The compose file mounts `./channels_config` at `/opt/omni-engine/channels_env`. Do not change that mount. |
 | Pinterest account map | `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml` | Do not rename. Article cache for Ancient Knowledge is `outputs/ancient_knowledge/article_cache/` and is gitignored with the rest of `outputs/`. |
-| Worker entry | `python -m core.worker --role engine` and `--role scheduler` | The code lives in `core/worker.py`; `omni/worker.py` stays a shim until PR-O4. Publishing is `core/publishing/` (models, publisher, registry, pinterest_drip, brandings, adapters) and accounts/tokens are `modules/accounts/`. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
+| Worker entry | `python -m core.worker --role engine` and `--role scheduler` | The code lives in `core/worker.py`. Publishing is `core/publishing/` (models, publisher, registry, pinterest_drip, brandings, adapters) and accounts/tokens are `modules/accounts/`. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
 
 `outputs/` is runtime state: renders, logs, review dumps, the B2 usage ledger, and publisher libraries. It is gitignored. Write scratch with `temp_path` and `review_path` from `utils/pipeline_paths.py`.
 

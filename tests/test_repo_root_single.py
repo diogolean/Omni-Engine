@@ -16,6 +16,10 @@ def test_repo_root_single_source():
     assert brandings.DEFAULT_BRANDINGS_PATH == root / "config" / "brandings.yaml"
 
 
+def test_omni_package_is_gone():
+    assert not (Path(pipeline_paths.repo_root()) / "omni").exists()
+
+
 def test_no_production_import_of_omni():
     offenders = []
     for path in Path(pipeline_paths.repo_root()).rglob("*.py"):
