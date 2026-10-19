@@ -22,6 +22,8 @@ import logging
 import os
 import sys
 import time
+import uuid
+import weakref
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -41,6 +43,9 @@ _BACKOFF_ATTEMPTS = 3
 
 _listings: dict[str, dict] = {}
 _texts: dict[str, dict] = {}
+# One token per injected client object. id() is reused once a client is
+# garbage-collected, which handed a new client the old client's listings.
+_client_tokens: "weakref.WeakKeyDictionary[object, str]" = weakref.WeakKeyDictionary()
 
 
 class B2StorageCapError(RuntimeError):
@@ -129,7 +134,14 @@ def client_token(client: object | None) -> str:
     """Injected clients do not share a cache. The process client does."""
     if client is None:
         return "default"
-    return str(id(client))
+    try:
+        token = _client_tokens.get(client)
+        if token is None:
+            token = uuid.uuid4().hex
+            _client_tokens[client] = token
+        return token
+    except TypeError:
+        return str(id(client))
 
 
 def reset_caches() -> None:
