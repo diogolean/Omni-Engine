@@ -43,7 +43,7 @@ _LOG = logging.getLogger(__name__)
 
 # Rough per-token USD estimates for episode cost accounting — public list
 # pricing, NOT verified against actual account billing. Audit notes belong
-# under outputs/<channel>/_review/ (see docs/PROJECT_STRUCTURE.md).
+# under outputs/<channel>/_review/ (see docs/architecture/REPO_LAYOUT.md).
 _CLAUDE_SONNET_INPUT_USD_PER_TOKEN: float = 3.0 / 1_000_000
 _CLAUDE_SONNET_OUTPUT_USD_PER_TOKEN: float = 15.0 / 1_000_000
 

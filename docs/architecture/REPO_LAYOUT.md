@@ -20,7 +20,11 @@ Tracked at the repository root:
 
 `Fonts/` stays at the root because page configs address fonts as `Fonts/<family>/...` from the repo root. `critic_profiles/` stays at the root because `quality/VisualQA_Agent/visual_critic.py` loads `critic_profiles/<name>.json` from the factory root and from the package.
 
-Secrets live only in `.env` (gitignored) and in `credentials/` (gitignored except the tokens keep-file). `.env.example` lists names and stays empty of secrets.
+`config.py` and `channel_loader.py` stay beside `main.py`. `config/` is a data directory (YAML only, not a Python package), and other packages have their own `config.py` (`pinterest_engine`, `economic_reel_lofi`, `VisualQA_Agent`). `import config` is the process settings module. `engine/runtime.py` imports it, and `from channel_loader import load_page_context`, only after `ACTIVE_PAGE` is set. `config.py` uses `Path(__file__).parent` as the repo root to find `.env`. Moving either file would rename that import across the factory and move the `.env` lookup.
+
+The three requirement files stay split. `requirements.txt` is the full local install (`mediapipe`, `pyautogui`). `requirements-docker.txt` is the arm64 image and drops those two (no aarch64 wheel, and no desktop on the VM). `requirements-ci.txt` is the pull-request subset so CI does not install the media stack. One combined file would either put desktop packages in the Oracle image or drop pins the VM needs.
+
+Secrets live only in `.env` (gitignored, including `.env.bak*` and `.env.*.bak`) and in `credentials/` (gitignored). `.env.example` lists names and stays empty of secrets. The doc index is [../README.md](../README.md).
 
 ## Packages that another change may add
 
@@ -44,7 +48,8 @@ These already have a home. Do not invent a second one, and do not add empty plac
 
 ## What does not belong in git
 
-- `.env`, credential JSON, API keys, page tokens
+- `.env`, `.env.bak*`, `.env.*.bak`, other env backups, credential JSON, API keys, page tokens
+- `credentials/`, `.claude/`
 - `outputs/`, `logs/`, `*.mp4`, `*.mp3`, `*.wav`, and other render media
 - `*.npz` and `*.psd` (render caches and design binaries). Runtime assets are the PNG/TTF the code opens.
 - Error screenshots (`click_failed_*.png`, `*_error_*.png`)
@@ -73,8 +78,9 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | `engine/voice.py` | Script trim, TTS stitch, voice track |
 | `engine/stills.py` | Still cache, parallel act jobs |
 | `engine/reporting.py` | Cost and run summaries |
-| `engine/orchestrator.py` | `produce`, the variant worker, agentic stills |
-| `engine/cli.py` | Argument parser and `cli()` |
+| `engine/orchestrator.py` | Re-exports `produce`, the variant worker, agentic stills, and `--test-images` |
+| `engine/pipeline/` | Stage modules behind that re-export. `variant.py` sequences them. See [main-module-map.md](main-module-map.md) |
+| `engine/cli.py` | `cli()`. Flags are in `engine/cli_parser.py`. The run sequence is `engine/cli_run.py` |
 | `engine/log.py` | Logger proxy bound to `main`'s logger |
 
 `from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged.
