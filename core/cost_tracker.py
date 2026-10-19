@@ -162,6 +162,37 @@ _TIER_TEXT_KEY: dict[str, str] = {
 }
 
 
+
+def _ledger_llm_summary() -> dict | None:
+    """Real LLM and vision spend of this run, by provider, from spend_ledger."""
+    try:
+        from core.spend_ledger import run_records  # noqa: PLC0415
+        records = [
+            r for r in run_records()
+            if str(r.kind or "") in {"text", "vision", "llm"}
+        ]
+    except Exception:  # noqa: BLE001
+        return None
+    if not records:
+        return None
+    by_provider: dict[str, float] = {}
+    text_usd: dict[str, float] = {}
+    for r in records:
+        provider = str(r.provider or "unknown").strip().lower()
+        by_provider[provider] = by_provider.get(provider, 0.0) + float(r.cost_usd or 0.0)
+        if str(r.kind or "") != "vision":
+            label = f"{provider}:{r.model or ''}"
+            text_usd[label] = text_usd.get(label, 0.0) + float(r.cost_usd or 0.0)
+    text_label = max(text_usd, key=text_usd.get) if text_usd else ""
+    return {
+        "usd": round(sum(by_provider.values()), 6),
+        "calls": len(records),
+        "by_provider": {k: round(v, 6) for k, v in sorted(by_provider.items())},
+        "text_model_key": f"text_{text_label.split(':', 1)[0]}" if text_label else "",
+        "top_text_model": text_label,
+    }
+
+
 @dataclass
 class CostTracker:
     """
@@ -643,12 +674,37 @@ class CostTracker:
             entries = list(self._entries)
             ledger = _safe_float(self._total_usd, 0.0)
         cats = self.category_totals(entries)
+        marginal = float(cats.get("total") or 0.0)
+        llm = _ledger_llm_summary()
+        if llm is not None:
+            # The spend ledger saw every LLM and vision call with its real
+            # price and provider (s23d: the per-script estimate said
+            # text_gemini_flash $0.0003; DeepSeek and Gemma cost $0.0035).
+            estimated_text = sum(
+                _safe_float(e.get("cost_usd"), 0.0) for e in entries
+                if e.get("operation") == "text_generation"
+            )
+            marginal = marginal - estimated_text + llm["usd"]
+            entries = [e for e in entries if e.get("operation") != "text_generation"]
+            entries.insert(0, {
+                "operation": "text_generation",
+                "model_key": llm["text_model_key"] or "text_unknown",
+                "units": float(llm["calls"]),
+                "cost_usd": llm["usd"],
+                "detail": {
+                    "source": "spend_ledger",
+                    "by_provider": llm["by_provider"],
+                    "top_text_model": llm["top_text_model"],
+                    "replaces_estimate_usd": round(estimated_text, 6),
+                },
+            })
         return {
             "page_id": self.page_id,
             "cost_tier": self.cost_tier,
-            "total_estimated_usd": round(float(cats.get("total") or 0.0), 6),
+            "total_estimated_usd": round(marginal, 6),
             "ledger_usd": round(ledger, 6),
-            "marginal_usd": round(float(cats.get("total") or 0.0), 6),
+            "marginal_usd": round(marginal, 6),
+            "llm_ledger": llm,
             "informational_usd": round(float(cats.get("informational_usd") or 0.0), 6),
             "informational_note": (
                 "flat subscription usage at list price; $0 marginal; not in the reel cap"
