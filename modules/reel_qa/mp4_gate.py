@@ -512,6 +512,35 @@ def beat_for_cue(cue: SubtitleCue, beats: list[dict[str, Any]] | None) -> dict[s
     return None
 
 
+def _cue_words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", (text or "").lower().replace("\u2019", "'").replace("'", ""))
+
+
+def _inside(words: list[str], whole: list[str]) -> bool:
+    size = len(words)
+    if not size or size > len(whole):
+        return False
+    return any(whole[i:i + size] == words for i in range(len(whole) - size + 1))
+
+
+def cta_tail_cues(cues: list[SubtitleCue], cta_text: str) -> set[int]:
+    """Indexes of the closing cues that are our own CTA line.
+
+    Only the run of cues at the very end counts, and every word of each cue
+    must come from the CTA string in order. A cue that also carries
+    narration, or a CTA phrase spoken mid-script, is judged as usual.
+    """
+    whole = _cue_words(cta_text)
+    tail: set[int] = set()
+    if not whole:
+        return tail
+    for index in range(len(cues) - 1, -1, -1):
+        if not _inside(_cue_words(cues[index].text), whole):
+            break
+        tail.add(index)
+    return tail
+
+
 def gate_final_mp4(
     video_path: Path | str,
     cues: list[SubtitleCue] | None,
@@ -522,18 +551,23 @@ def gate_final_mp4(
     work_dir: Path | str | None = None,
     beats: list[dict[str, Any]] | None = None,
     narration_end_s: float | None = None,
+    cta_text: str = "",
 ) -> dict[str, Any]:
     """Sample frames at subtitle midpoints and score them with the still rubric.
 
     The frame is cropped above the subtitle band, and the prompt is the beat's
     image prompt rather than the four-word subtitle. An artefact beat also
-    receives the reference photograph.
+    receives the reference photograph. A frame under the closing CTA cues
+    (``cta_text``) shows our own overlay, so it gets the technical checks only.
     """
     video = Path(video_path)
     probe = dict((probe_fn or probe_media)(video) or {})
     if narration_end_s is not None and float(narration_end_s) > 0.5:
         probe["narration_end_s"] = float(narration_end_s)
-    chosen = select_cues(list(cues or []))
+    all_cues = list(cues or [])
+    chosen = select_cues(all_cues)
+    tail = cta_tail_cues(all_cues, cta_text)
+    cta_cues = {id(all_cues[index]) for index in tail}
     frames: list[dict[str, Any]] = []
     if not chosen:
         return decide_mp4_gate(probe, frames)
@@ -569,6 +603,27 @@ def gate_final_mp4(
                 clean = stripped
         except Exception:  # noqa: BLE001
             clean = shot
+        if id(cue) in cta_cues:
+            fault = frame_fault(clean)
+            frames.append(
+                {
+                    "index": i,
+                    "text": text,
+                    "at_s": round(cue.midpoint_s, 3),
+                    "passed": not fault,
+                    "score": None,
+                    "reason": fault or "cta-overlay",
+                    "qa_status": fault or "cta-overlay",
+                    "frame_path": str(shot),
+                    "beat_index": None,
+                }
+            )
+            _LOG.info(
+                "MP4 frame | t=%.2f | cta overlay | %s",
+                cue.midpoint_s,
+                fault or "own text, content check skipped",
+            )
+            continue
         beat = beat_for_cue(cue, beats)
         spoken = str((beat or {}).get("text") or text)
         image_prompt = str((beat or {}).get("prompt") or spoken)

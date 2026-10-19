@@ -4587,6 +4587,7 @@ def _produce_variant_worker(
             stem=f"{stem}_v{variant + 1:02d}",
             channel=(page_ctx.page_id if page_ctx else "") or "",
             blocked_reason="beat_qa_failed" if _reel_qa_block_compile else "",
+            cta_text=str((page_ctx.reel_cta_text if page_ctx else "") or ""),
         )
 
     # ====================================================================
