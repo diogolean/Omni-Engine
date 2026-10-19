@@ -1,6 +1,63 @@
-# Unified Multi-Page Content Factory
+# Omni-Engine
 
-> **A multi-persona, AI-powered social-media production engine** that generates brand-aligned images, kinetic video reels, and scheduled postplanner sheets across multiple independent page identities — from a single CLI command.
+Omni-Engine is the content factory for several public pages. `python main.py` drafts a post, draws or renders it, and writes a Post Planner row. The process that stays up on the Oracle VM is `python -m omni.worker`.
+
+The repository is public. API keys, tokens, and credentials live only in `.env` (gitignored). `.env.example` lists the names and stays empty.
+
+## Start here: `omni/`
+
+`omni/` is the package the VM runs. Generation stays in `engine/`, `agents/media/`, and `core/`. Channel identity stays in `channels_config/<page>/`.
+
+| Piece | Role |
+|---|---|
+| `omni/worker.py` | Process entry. `--role engine` stays up for operator commands. `--role scheduler` publishes Pinterest image pins. |
+| `omni/adapters/` | YouTube and the other publish adapters the CLI calls. |
+| `omni/pinterest_drip.py` | One B2 image card at a time, linked to a WordPress article. |
+
+`main.py` is the operator CLI. It sets UTF-8, `ACTIVE_PAGE`, and `.env`, then calls `engine/`. `from main import produce` still works. Layout rules: [docs/architecture/REPO_LAYOUT.md](docs/architecture/REPO_LAYOUT.md).
+
+## Architecture
+
+```
+python main.py --channel <page> --post-type ECONOMIC_REEL
+        │
+        ▼
+main.py          UTF-8, ACTIVE_PAGE, .env
+        │
+        ▼
+engine/          produce → stills, voice, compile
+        │
+        ├── agents/media/      image, audio, video, B2
+        ├── modules/reel_qa/   seal the MP4 before a row is publishable
+        └── agents/posting/    Post Planner xlsx, YouTube
+                 │
+                 ▼
+        outputs/<page>/  (gitignored)   and   Backblaze B2
+
+Oracle VM (docker compose)
+    engine service      python -m omni.worker --role engine
+    scheduler profile   python -m omni.worker --role scheduler
+                 │
+                 ▼
+    WordPress bot reads the xlsx → Facebook
+    Pinterest and YouTube publish from the VM
+```
+
+How the VM, B2, and the PC runner fit together: [docs/architecture/overview.md](docs/architecture/overview.md).
+
+## Quickstart
+
+```bash
+git clone https://github.com/diogolean/Omni-Engine.git
+cd Omni-Engine
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-ci.txt
+cp .env.example .env
+pytest -q tests channels_config
+python main.py --help
+```
+
+A real render needs the keys in `.env` and ffmpeg on `PATH`. CI installs the smaller `requirements-ci.txt` set and runs that same pytest tree.
 
 ---
 
@@ -26,7 +83,7 @@
 
 ## Overview
 
-The Unified Multi-Page Factory is a production-grade Python automation pipeline built for high-volume social media content creation. It orchestrates:
+The factory is one Python pipeline for several page identities. It orchestrates:
 
 - **Multi-page persona switching** — each page (e.g. `wonder_feed`, `anna_protocol`, `master_mei`) has isolated DNA, assets, and output directories.
 - **Dual AI brain** — economic (DeepSeek + Gemini Flash) or premium (Claude + Gemini Pro) text generation chains selected per run.
@@ -239,18 +296,19 @@ See `docs/PROJECT_STRUCTURE.md`.
 ## Directory Structure
 
 ```
-Unified Multi-Page Factory/
-├── main.py                     # Primary CLI orchestrator
+Omni-Engine/
+├── main.py                     # CLI entry; re-exports engine/
+├── engine/                     # produce, stills, voice, reporting, cli
 ├── config.py                   # Credentials, model IDs, ACTIVE_PAGE paths
 ├── channel_loader.py           # Channel-config bootstrap (PageContext; CLI `--page`)
-├── omni/                       # Publisher interface, brand adapters, drip worker
+├── omni/                       # Worker, brand adapters, drip publisher — start here
 ├── config/brandings.yaml       # N brandings × N platforms (active flag)
 ├── Dockerfile                  # linux/arm64 runtime (Oracle VM)
 ├── docker-compose.yml          # engine + scheduler
 ├── .github/workflows/          # PR validation, GHCR build, SSH deploy
 ├── utils/run_ledger.py         # Per-run model/banner registry → outputs/logs/
 ├── requirements.txt
-├── .env                        # Factory secrets — NOT committed, stays at root
+├── .env.example                # Names only. Secrets stay in gitignored .env
 │
 ├── agents/
 │   ├── writer/                 # Captions + LOFI scripts (script_agent, caption_engine)
@@ -291,7 +349,7 @@ Unified Multi-Page Factory/
 │       └── wealth_main.py      # Library-ingest + YouTube publish CLI
 │
 ├── docs/                       # Architecture + command docs
-│   └── architecture/           # DEPRECATED — artifacts live in portfolio_showcase/
+│   └── architecture/           # Current layout, overview, decisions
 │
 └── outputs/                    # NOT committed (generated at runtime)
     └── {page_id}/
@@ -306,15 +364,15 @@ Unified Multi-Page Factory/
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12
 - [Git for Windows](https://git-scm.com/) (or Git on Linux/macOS)
 - FFmpeg on `PATH` (required by MoviePy for video export)
 
 ### Installation
 
 ```bash
-git clone https://github.com/MediaUpScale/Unified-Multi-Page-Factory-edition.git
-cd Unified-Multi-Page-Factory-edition
+git clone https://github.com/diogolean/Omni-Engine.git
+cd Omni-Engine
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
@@ -508,7 +566,7 @@ Repository secrets (Settings → Secrets and variables → Actions):
 cd /opt/omni-engine && docker compose pull engine && docker compose up -d engine
 ```
 
-That starts the **engine only**. The scheduler is not started by deploy. Set `SCHEDULER_ENABLED=1` in the VM `.env` before a deploy when the scheduler should come up with the engine, or start it by hand (see below). Pull requests do not deploy. They run Ruff and the omni pytest modules (`validate.yml`).
+That starts the **engine only**. The scheduler is not started by deploy. Set `SCHEDULER_ENABLED=1` in the VM `.env` before a deploy when the scheduler should come up with the engine, or start it by hand (see below). Pull requests do not deploy. They run Ruff and `pytest -q tests channels_config` (`validate.yml`, job name `lint and tests`).
 
 ### One-time VM setup
 
@@ -576,6 +634,4 @@ docker compose up -d engine
 
 ## License
 
-Proprietary — MediaUpScale LLC. All rights reserved.
-
-Internal use only. Do not distribute without authorization.
+The repository is public. An earlier version of this file called the project proprietary and internal-only. That contradicts a public repo. This change does not choose a license. The owner needs to pick one and replace this section.

@@ -19,6 +19,7 @@ _ALLOWED_ROOT = {
     ".gitattributes",
     ".github",
     ".gitignore",
+    ".pre-commit-config.yaml",
     ".cursor",
     "AGENTS.md",
     "CONTRIBUTING.md",
