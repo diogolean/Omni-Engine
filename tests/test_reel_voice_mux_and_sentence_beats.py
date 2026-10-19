@@ -855,7 +855,7 @@ def test_preflight_logs_the_names_of_the_live_providers(caplog: pytest.LogCaptur
         )
     assert "live_providers=openrouter,deepseek" in caplog.text
     reset_providers()
-    source = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "engine/orchestrator.py").read_text(encoding="utf-8")
     assert source.find('_preflight_text("ancient_knowledge")') < source.find("_build_topic_pool(")
     reset_providers()
 
@@ -1051,7 +1051,7 @@ def test_a_qwen_reasoning_draft_is_extracted_and_passes_grounding(
     assert grounding_problem(text, _TOPIC, channel="ancient_knowledge") == ""
     assert "deepseek" not in seen
     assert 'The first sentence must contain' in (
-        Path(__file__).resolve().parents[1] / "main.py"
+        Path(__file__).resolve().parents[1] / "engine/orchestrator.py"
     ).read_text(encoding="utf-8")
     reset_providers()
 

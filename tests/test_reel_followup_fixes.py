@@ -34,7 +34,7 @@ def test_visual_gate_forwards_episode_subject(monkeypatch) -> None:
 def test_main_gate_calls_match_visual_qa_signature() -> None:
     """Every keyword main.py passes into the still gate is a real parameter."""
     allowed = set(inspect.signature(generate_and_gate).parameters)
-    tree = ast.parse(Path("main.py").read_text(encoding="utf-8"))
+    tree = ast.parse(Path("engine/orchestrator.py").read_text(encoding="utf-8"))
     found = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
