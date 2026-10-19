@@ -362,6 +362,55 @@ def test_backblaze_endpoint_is_not_treated_as_runpod() -> None:
     assert not is_backblaze_endpoint("")
 
 
+def test_recycled_client_identity_does_not_reuse_a_listing(budget: Path) -> None:
+    """A new client must not inherit a listing cached for a collected client.
+
+    CPython reuses ``id()`` after garbage collection. The Pinterest library
+    listing is cached by client token, so a reused id publishes the previous
+    client's post.
+    """
+    import gc
+
+    from agents.media.b2_budget import cached_listing, client_token, store_listing
+
+    del budget
+    prefix = "ancient_knowledge/library/"
+    bucket = "MediaupscaleStorage"
+    stale = ["ancient_knowledge/library/post_site_link.json"]
+
+    first = _Client({stale[0]: b"{}"})
+    second = _Client({"ancient_knowledge/library/post_facebook_live.json": b"{}"})
+    assert client_token(first) != str(id(first))
+    assert client_token(first) == client_token(first)
+    assert client_token(first) != client_token(second)
+    store_listing(str(id(second)), bucket, prefix, stale, {})
+    assert cached_listing(client_token(second), bucket, prefix) is None
+    assert list_object_keys(prefix, client=first, bucket=bucket) == stale
+    assert list_object_keys(prefix, client=second, bucket=bucket) == [
+        "ancient_knowledge/library/post_facebook_live.json"
+    ]
+    assert first.lists == 1
+    assert second.lists == 1
+
+    class _Box:
+        pass
+
+    previous = [_Box() for _ in range(80)]
+    stale_tokens = {id(client): client_token(client) for client in previous}
+    for client in previous:
+        store_listing(stale_tokens[id(client)], bucket, prefix, stale, {})
+    old_ids = set(stale_tokens)
+    del previous
+    gc.collect()
+    fresh = [_Box() for _ in range(80)]
+    for client in fresh:
+        if id(client) not in old_ids:
+            continue
+        token = client_token(client)
+        assert token != stale_tokens[id(client)]
+        assert cached_listing(token, bucket, prefix) is None
+
+
 def test_runpod_s3_refuses_backblaze_before_creating_a_client() -> None:
     source = (
         Path(__file__).resolve().parents[1] / "core" / "remote_gpu_manager.py"

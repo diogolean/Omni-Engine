@@ -2,6 +2,7 @@
 """Voice in the mux, sentence beats, and a reel that still compiles."""
 from __future__ import annotations
 
+import ast
 import math
 import struct
 import wave
@@ -10,6 +11,53 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
+
+
+def _ordered_variant_source() -> str:
+    """Stage bodies in the order `_produce_variant_worker` calls them."""
+    root = Path(__file__).resolve().parents[1] / "engine" / "pipeline"
+    sources: dict[str, str] = {}
+    for path in root.glob("stage_*.py"):
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        tree = ast.parse(text)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("_stage_"):
+                sources[node.name] = "\n".join(lines[node.lineno - 1 : node.end_lineno])
+
+    def calls(src: str) -> list[str]:
+        tree = ast.parse(src)
+        found: list[str] = []
+
+        def walk(node: ast.AST, depth: int = 0) -> None:
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id.startswith("_stage_")
+            ):
+                found.append(node.func.id)
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                    if depth == 0:
+                        walk(child, 1)
+                    continue
+                walk(child, depth)
+
+        walk(tree)
+        return found
+
+    order: list[str] = []
+
+    def visit(name: str) -> None:
+        if name in order:
+            return
+        order.append(name)
+        for callee in calls(sources[name]):
+            visit(callee)
+
+    for name in calls((root / "variant.py").read_text(encoding="utf-8")):
+        visit(name)
+    return "\n".join(sources[name] for name in order)
 
 
 def _tone(path: Path, freq: float, seconds: float, *, sr: int = 16000, amp: float = 0.6) -> None:
@@ -855,8 +903,11 @@ def test_preflight_logs_the_names_of_the_live_providers(caplog: pytest.LogCaptur
         )
     assert "live_providers=openrouter,deepseek" in caplog.text
     reset_providers()
-    source = (Path(__file__).resolve().parents[1] / "engine/orchestrator.py").read_text(encoding="utf-8")
-    assert source.find('_preflight_text("ancient_knowledge")') < source.find("_build_topic_pool(")
+    source = _ordered_variant_source()
+    preflight = source.find("_preflight_text(")
+    pool = source.find("_build_topic_pool(")
+    assert 0 <= preflight < pool
+    assert "ancient_knowledge" in source[preflight:preflight + 80]
     reset_providers()
 
 
@@ -1050,9 +1101,7 @@ def test_a_qwen_reasoning_draft_is_extracted_and_passes_grounding(
     assert text.lower().startswith("the baghdad battery")
     assert grounding_problem(text, _TOPIC, channel="ancient_knowledge") == ""
     assert "deepseek" not in seen
-    assert 'The first sentence must contain' in (
-        Path(__file__).resolve().parents[1] / "engine/orchestrator.py"
-    ).read_text(encoding="utf-8")
+    assert "The first sentence must contain" in _ordered_variant_source()
     reset_providers()
 
 

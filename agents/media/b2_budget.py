@@ -43,9 +43,10 @@ _BACKOFF_ATTEMPTS = 3
 
 _listings: dict[str, dict] = {}
 _texts: dict[str, dict] = {}
-# One token per injected client object. id() is reused once a client is
-# garbage-collected, which handed a new client the old client's listings.
-_client_tokens: "weakref.WeakKeyDictionary[object, str]" = weakref.WeakKeyDictionary()
+# Identity of an injected client, dropped when that client is collected.
+# ``id(client)`` is not safe: CPython reuses ids, and a recycled id would
+# serve another client's cached listing.
+_CLIENT_TOKENS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 class B2StorageCapError(RuntimeError):
@@ -131,17 +132,32 @@ def usage_path() -> Path:
 
 
 def client_token(client: object | None) -> str:
-    """Injected clients do not share a cache. The process client does."""
+    """Injected clients do not share a cache. The process client does.
+
+    The token stays with the client object. It is not ``id(client)``, which
+    CPython reuses after garbage collection.
+    """
     if client is None:
         return "default"
     try:
-        token = _client_tokens.get(client)
-        if token is None:
-            token = uuid.uuid4().hex
-            _client_tokens[client] = token
+        token = _CLIENT_TOKENS.get(client)
+    except TypeError:
+        token = None
+    if isinstance(token, str) and token:
+        return token
+    token = uuid.uuid4().hex
+    try:
+        _CLIENT_TOKENS[client] = token
         return token
     except TypeError:
-        return str(id(client))
+        stored = getattr(client, "_omni_b2_cache_token", None)
+        if isinstance(stored, str) and stored:
+            return stored
+        try:
+            setattr(client, "_omni_b2_cache_token", token)
+        except (AttributeError, TypeError):
+            return f"ephemeral-{token}"
+        return token
 
 
 def reset_caches() -> None:
@@ -281,24 +297,25 @@ def cached_listing(token: str, bucket: str, prefix: str) -> list[str] | None:
 
 
 def cached_object_size(token: str, bucket: str, key: str) -> int | None:
-    """Size from a cached listing, if this process already listed a parent prefix."""
-    for hit in _listings.values():
-        sizes = hit.get("sizes")
-        if isinstance(sizes, dict) and key in sizes:
-            try:
-                return int(sizes[key])
-            except (TypeError, ValueError):
-                return None
-    disk = _read_cache(_list_path())
-    for hit in disk.values():
-        if not isinstance(hit, dict):
+    """Size from this client's cached listing, if a parent prefix was listed."""
+    found = _size_in_hits(_listings, token, bucket, key)
+    if found is not None:
+        return found
+    return _size_in_hits(_read_cache(_list_path()), token, bucket, key)
+
+
+def _size_in_hits(hits: dict, token: str, bucket: str, key: str) -> int | None:
+    prefix = f"{token}|{bucket}|"
+    for cache_key, hit in hits.items():
+        if not str(cache_key).startswith(prefix) or not isinstance(hit, dict):
             continue
         sizes = hit.get("sizes")
-        if isinstance(sizes, dict) and key in sizes:
-            try:
-                return int(sizes[key])
-            except (TypeError, ValueError):
-                return None
+        if not isinstance(sizes, dict) or key not in sizes:
+            continue
+        try:
+            return int(sizes[key])
+        except (TypeError, ValueError):
+            return None
     return None
 
 
