@@ -95,10 +95,10 @@ def _llm_enabled() -> bool:
 
 
 def _ask_once(plan: ShotList) -> None:
-    """One text call. The deterministic repair already ran; this only logs."""
-    key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-    if not key:
-        return
+    """One cheap text call. The deterministic repair already ran; this only logs.
+
+    Gemini is no longer asked: a log-only check is not worth a paid Flash call.
+    """
     lines = []
     for shot in plan.shots:
         lines.append(
@@ -107,26 +107,18 @@ def _ask_once(plan: ShotList) -> None:
             f"scene: {shot.scene_type or shot.image_role}"
         )
     try:
-        from core.google_guardrail import (
-            guarded_generate_content,
-            make_guarded_gemini_client,
-        )
+        from core.cheap_llm import complete
 
-        client = make_guarded_gemini_client(key)
-        response = guarded_generate_content(
-            client,
-            model="gemini-2.5-flash",
-            contents=(
-                "You check a documentary shot list. For each line, the picture "
-                "must fit the narration without asking a generator to draw a "
-                "named artefact, its parts, or a specific object. "
-                "Reply with OK, or list the shot ids that do not fit. No prose.\n"
-                + "\n".join(lines)
-            ),
-            kind="text",
+        text = complete(
+            "You check a documentary shot list. For each line, the picture "
+            "must fit the narration without asking a generator to draw a "
+            "named artefact, its parts, or a specific object. "
+            "Reply with OK, or list the shot ids that do not fit. No prose.\n"
+            + "\n".join(lines),
+            max_tokens=200,
+            temperature=0.1,
             source="shot_planner.fit",
-        )
-        text = str(getattr(response, "text", "") or "").strip()
+        ).text
         _LOG.info("shot plan llm check | %s", text[:500] or "empty")
     except Exception as exc:  # noqa: BLE001
         _LOG.info("shot plan llm check skipped (%s)", type(exc).__name__)

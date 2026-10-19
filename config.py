@@ -155,10 +155,10 @@ VISUAL_EVAL_PROVIDER: str = (
     os.getenv("VISUAL_EVAL_PROVIDER") or "openrouter"
 ).strip().lower()
 VISUAL_EVAL_MODEL: str = (
-    os.getenv("VISUAL_EVAL_MODEL") or "qwen/qwen3.5-flash-02-23"
+    os.getenv("VISUAL_EVAL_MODEL") or "google/gemma-3-12b-it"
 ).strip()
 VISUAL_EVAL_MODEL_FALLBACK: str = (
-    os.getenv("VISUAL_EVAL_MODEL_FALLBACK") or "qwen/qwen3.5-9b"
+    os.getenv("VISUAL_EVAL_MODEL_FALLBACK") or "z-ai/glm-5.3-flash"
 ).strip()
 # Hard cap for Visual Inspector OpenRouter calls. On timeout/empty/error the
 # inspector fail-opens so TTS / MoviePy are never blocked.
@@ -496,7 +496,8 @@ IMAGE_MODEL_FALLBACK_CHAIN: list[str] = [
 ]
 # Premium image SKU — only appended when USE_PREMIUM_MODEL / MODEL_TIER=premium
 PREMIUM_IMAGE_MODEL: str = SAFE_GEMINI_IMAGE_FALLBACK_3
-PREMIUM_TEXT_MODEL: str = "models/gemini-2.5-pro"
+# Near-zero cost: "premium" text is 2.5 Flash unless .env names Pro on purpose.
+PREMIUM_TEXT_MODEL: str = (os.getenv("PREMIUM_TEXT_MODEL") or "models/gemini-2.5-flash").strip()
 
 
 def resolve_image_model_alias(raw: str | None) -> str | None:

@@ -1384,7 +1384,7 @@ def test_openrouter_vision_gives_each_judge_time_and_one_retry(
     assert calls["timeouts"]
     assert min(calls["timeouts"]) >= 25
     assert "0.91" in result.text
-    assert "qwen2.5-vl-7b" in ",".join(judge._model_chain())
+    assert "google/gemma-3-12b-it" in ",".join(judge._model_chain())
 
 
 def test_a_blocked_reel_does_not_write_the_postplanner_xlsx(tmp_path: Path) -> None:

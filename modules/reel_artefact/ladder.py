@@ -54,12 +54,19 @@ def rung_cost(name: str) -> float:
 
 
 def rung_names() -> list[str]:
-    """Object-beat order. Flux Dev stays off: the A/B lost to Schnell."""
+    """Object-beat order. Flux Dev stays off: the A/B lost to Schnell.
+
+    Nano Banana rungs drop out while ``REEL_NANOBANANA_MAX_PER_REEL`` is 0
+    (the near-zero default), so a missed photograph goes straight to reuse
+    and then to the per-scene Flux fallback.
+    """
     raw = (os.getenv("REEL_LADDER") or "").strip()
     if raw:
         names = [part.strip() for part in raw.split(",") if part.strip()]
     else:
         names = list(_DEFAULT)
+        if nano_cap() <= 0:
+            names = [name for name in names if name not in {"nb-ref", "nb-text"}]
     if "flux-dev" in names:
         logger.info("LADDER | flux-dev dropped | Schnell won the A/B")
         names = [name for name in names if name != "flux-dev"]

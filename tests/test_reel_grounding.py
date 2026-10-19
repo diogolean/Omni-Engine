@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from modules.reel_grounding.memory import recall, remember
 from modules.reel_grounding.prompt import assemble_beat, ground_image_prompt
 from modules.reel_grounding.still_cache import (
@@ -196,8 +198,13 @@ def test_reel_free_images_default_off(monkeypatch, tmp_path: Path) -> None:
     assert path.is_file()
 
 
-def test_technical_judge_failure_retries_without_a_new_image(tmp_path: Path) -> None:
+def test_technical_judge_failure_retries_without_a_new_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from modules.reel_qa.retry import generate_and_gate
+
+    # The default is one retry now; this test drives two.
+    monkeypatch.setenv("REEL_QA_JUDGE_RETRIES", "2")
 
     def _png(path: Path) -> Path:
         path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 32)

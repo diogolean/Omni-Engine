@@ -1358,3 +1358,8 @@ def _checker_bytes() -> bytes:
             pixels[x, y] = tuple(min(255, channel + shift) for channel in color)
     tile.resize((1600, 1200), Image.Resampling.NEAREST).save(buf, format="JPEG")
     return buf.getvalue()
+
+
+# The near-zero cost defaults live in tests/test_near_zero_cost.py. CI runs
+# them through this file, because the workflow list cannot be edited here.
+from tests.test_near_zero_cost import *  # noqa: E402,F401,F403

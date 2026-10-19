@@ -1,0 +1,26 @@
+# -*- coding: utf-8 -*-
+"""Shared test defaults.
+
+Production runs near-zero by default: Nano Banana is off and a pure-Python
+gate screens stills before any vision model. Older tests exercise the Nano
+Banana rungs and the LLM judge with tiny stub images, so they get the old
+switches back here. ``tests/test_near_zero_cost.py`` clears both to test
+the production defaults.
+"""
+from __future__ import annotations
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _legacy_reel_switches(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REEL_NANOBANANA_MAX_PER_REEL", "4")
+    monkeypatch.setenv("REEL_LOCAL_GATE", "0")
+    monkeypatch.setenv("REEL_REEL_BUDGET_USD", "2.0")
+    monkeypatch.setenv("REEL_BEAT_BUDGET_USD", "0.20")
+    try:
+        from core.spend_ledger import reset_all
+
+        reset_all()
+    except Exception:  # noqa: BLE001
+        pass

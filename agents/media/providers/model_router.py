@@ -44,11 +44,16 @@ CHEAP_TEXT_CHAIN: list[str] = [
     "models/gemini-1.5-flash-latest",
 ]
 
-PREMIUM_TEXT_PRIMARY: str = "models/gemini-2.5-pro"
+# Near-zero cost (2026-10-19): "premium" text no longer means 2.5 Pro
+# ($1.25 in / $10 out per 1M). It is 2.5 Flash with thinking off; set
+# PREMIUM_TEXT_MODEL=models/gemini-2.5-pro to bring Pro back on purpose.
+PREMIUM_TEXT_PRIMARY: str = (
+    os.getenv("PREMIUM_TEXT_MODEL") or "models/gemini-2.5-flash"
+).strip()
 PREMIUM_TEXT_CHAIN: list[str] = [
-    "models/gemini-2.5-pro",
-    "models/gemini-2.5-flash",  # safe demotion within premium request only
-    "models/gemini-1.5-pro-latest",
+    PREMIUM_TEXT_PRIMARY,
+    "models/gemini-2.5-flash",
+    "models/gemini-flash-lite-latest",
 ]
 
 CHEAP_IMAGE_PRIMARY: str = "black-forest-labs/FLUX.1-schnell"

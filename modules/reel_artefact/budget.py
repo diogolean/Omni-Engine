@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Per-reel cap on Nano Banana calls. Real photos and reuse do not spend it."""
+"""Per-reel caps on paid stills. Real photos and reuse do not spend them.
+
+Near-zero mode (2026-10-19): Nano Banana is off unless
+``REEL_NANOBANANA_MAX_PER_REEL`` is set above 0, one beat may spend $0.02
+and the whole reel $0.05. The reel cap is shared with LLM and judge calls
+through ``core.spend_ledger``.
+"""
 from __future__ import annotations
 
 import os
@@ -11,11 +17,11 @@ _USED = 0
 
 
 def nano_cap() -> int:
-    raw = (os.getenv("REEL_NANOBANANA_MAX_PER_REEL") or "4").strip()
+    raw = (os.getenv("REEL_NANOBANANA_MAX_PER_REEL") or "0").strip()
     try:
         return max(0, int(raw))
     except ValueError:
-        return 4
+        return 0
 
 
 def reset_nano_budget() -> None:
@@ -49,12 +55,21 @@ def _usd(name: str, default: float) -> float:
 
 def beat_budget_usd() -> float:
     """Most one beat may spend on generated stills. Real photos and reuse are $0."""
-    return _usd("REEL_BEAT_BUDGET_USD", 0.20)
+    return _usd("REEL_BEAT_BUDGET_USD", 0.02)
 
 
 def reel_budget_usd() -> float:
-    """Most one reel may spend on generated stills."""
-    return _usd("REEL_REEL_BUDGET_USD", 2.00)
+    """Most one reel may spend, stills and LLM calls together."""
+    return _usd("REEL_REEL_BUDGET_USD", 0.05)
+
+
+def _llm_spent() -> float:
+    try:
+        from core.spend_ledger import llm_spent
+
+        return float(llm_spent())
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 _REEL_SPENT = 0.0
@@ -132,7 +147,7 @@ def scene_regen_allowed(kind: str) -> bool:
         return False
     from modules.reel_artefact.pricing import FLUX_USD
 
-    return reel_spent() + float(FLUX_USD) <= reel_budget_usd() + 1e-9
+    return reel_spent() + _llm_spent() + float(FLUX_USD) <= reel_budget_usd() + 1e-9
 
 
 def reset_spend() -> None:
@@ -141,6 +156,12 @@ def reset_spend() -> None:
         _REEL_SPENT = 0.0
         _FLUX_USED = 0
         _REPLAN_USED = 0
+    try:
+        from core.spend_ledger import reset_reel
+
+        reset_reel()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def reel_spent() -> float:
@@ -152,10 +173,11 @@ def try_spend(amount: float) -> bool:
     """Reserve ``amount`` against the reel cap. $0 always fits."""
     global _REEL_SPENT
     cost = max(0.0, float(amount))
+    llm = _llm_spent() if cost > 0 else 0.0
     with _LOCK:
         if cost <= 0:
             return True
-        if _REEL_SPENT + cost > reel_budget_usd() + 1e-9:
+        if _REEL_SPENT + llm + cost > reel_budget_usd() + 1e-9:
             return False
         _REEL_SPENT += cost
         return True

@@ -3230,6 +3230,14 @@ def _produce_variant_worker(
         _mark_tts(False)
     except Exception:  # noqa: BLE001
         pass
+    try:
+        from modules.reel_artefact.scene_library import start_reel as _scene_lib_start
+
+        _scene_lib_start(
+            (page_ctx.page_id if page_ctx else "") or "ancient_knowledge"
+        )
+    except Exception:  # noqa: BLE001
+        pass
     _qa_report: dict | None = None
     # Episode assets: outputs/<page>/assets/<episode_id>/
     # Clips always:   outputs/<page>/clips/

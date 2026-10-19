@@ -1888,15 +1888,23 @@ class CaptionEngine:
         accept=None,
         refine=None,
     ) -> str:
-        """Ancient Knowledge only. Gemini is skipped once it has been marked dead."""
+        """Ancient Knowledge only. Cheap providers first, Gemini after them.
+
+        Near-zero cost: OpenRouter and DeepSeek write the draft. Gemini runs
+        only when both fail, and Claude (Sonnet prices) stays the last resort.
+        Gemini is skipped once it has been marked dead.
+        """
         if not self._is_ancient_knowledge():
             return ""
         from modules.reel_artefact.provider_health import complete_ak_text
 
-        callers = []
+        fallbacks = self._text_fallbacks()
+        cheap = [pair for pair in fallbacks if pair[0] != "anthropic"]
+        last = [pair for pair in fallbacks if pair[0] == "anthropic"]
+        callers = list(cheap)
         if gemini is not None:
             callers.append(("gemini", gemini))
-        callers.extend(self._text_fallbacks())
+        callers.extend(last)
         return complete_ak_text(prompt, callers, accept=accept, refine=refine)
 
     def _ancient_after_gemini(self, prompt: str, exc: BaseException | None) -> str:

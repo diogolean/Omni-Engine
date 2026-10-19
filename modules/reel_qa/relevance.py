@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -429,6 +430,33 @@ def _verdict_from_payload(
     return verdict
 
 
+def _local_screen(path: Path, *, narration: str, against: str) -> dict[str, Any] | None:
+    """Hard local failures return a verdict. Borderline and clean stills return None.
+
+    A clean still still reaches the vision judge: a sharp, large, unique photo
+    can be the wrong subject. The local layer only removes the cases that do
+    not need a model at all.
+    """
+    mode = (os.getenv("REEL_LOCAL_GATE") or "1").strip().lower()
+    if mode in {"0", "off", "false", "no"}:
+        return None
+    try:
+        from modules.reel_qa.local_gate import check_still
+    except Exception:  # noqa: BLE001
+        return None
+    result = check_still(path, narration=narration, vertical=True, remember=False)
+    if result.ok or result.needs_llm:
+        return None
+    verdict = _unavailable("local:" + ",".join(result.reasons))
+    verdict["qa_status"] = "scored"
+    verdict["local_gate"] = result.as_dict()
+    verdict["hard_reject"] = True
+    _LOG.info(
+        "VisualQA local reject | file=%s | %s", path.name, ",".join(result.reasons),
+    )
+    return verdict
+
+
 def call_judge(judge: Callable[..., dict[str, Any]], image, text: str, prompt: str, **extra):
     """Call a judge with the kwargs it accepts.
 
@@ -481,6 +509,14 @@ def evaluate_chunk_relevance(
     path = Path(image_path)
     if not path.is_file():
         return _unavailable("missing_image")
+
+    local = _local_screen(
+        path,
+        narration=current_chunk_text,
+        against=(score_against or "narration").strip().lower(),
+    )
+    if local is not None:
+        return local
 
     chain = list(providers or model_chain())
     threshold = relevance_threshold()

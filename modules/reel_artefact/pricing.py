@@ -2,10 +2,13 @@
 """Verified Gemini image prices, standard paid tier, October 2026.
 
 Source: https://ai.google.dev/gemini-api/docs/pricing and the image
-generation model list. Flux Dev/Schnell stays $0.003 in the cost tracker.
+generation model list. Flux Schnell is billed at $0.003 here (DeepInfra
+charges about $0.002 for a 4-step 1 MP still, so the cap stays conservative).
 ``gemini-3.1-flash-lite-image`` and ``gemini-nano-banana-2.1`` are
-$0.0336. ``gemini-2.5-flash-image`` is $0.039. The live call tries the
-cheap ids first. ``REEL_NANOBANANA_MODELS`` replaces the list.
+$0.0336. ``gemini-2.5-flash-image`` ($0.039) was removed from the live list
+on 2026-10-19: Nano Banana is off by default (``REEL_NANOBANANA_MAX_PER_REEL``
+is 0) and only the lite ids may run when it is switched on.
+``REEL_NANOBANANA_MODELS`` replaces the list.
 """
 from __future__ import annotations
 
@@ -29,7 +32,6 @@ NANOBANANA_USD: dict[str, float] = {
 NANOBANANA_MODELS: tuple[str, ...] = (
     "gemini-3.1-flash-lite-image",
     "gemini-nano-banana-2.1",
-    "gemini-2.5-flash-image",
 )
 
 _FREE_PROVIDERS = {
@@ -40,6 +42,7 @@ _FREE_PROVIDERS = {
     "europeana",
     "wikimedia",
     "cache",
+    "library",
 }
 
 

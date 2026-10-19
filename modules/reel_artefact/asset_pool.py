@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from modules.reel_artefact.budget import nano_cap
+
 logger = logging.getLogger(__name__)
 
 TARGET_MIN = 8
@@ -1051,8 +1053,9 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
             openverse=lambda query: _openverse_search(query, client),
             download=download,
             judge=judge,
-            nano=nano,
+            nano=nano if nano_cap() > 0 else None,
             object_prompts=prompts,
+            nano_max=min(NANO_MAX, nano_cap()),
             cache_dirs=cache_dirs,
             strict=True,
         )

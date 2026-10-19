@@ -30,12 +30,16 @@ class GuardrailTests(unittest.TestCase):
         gg.assert_google_allowed(context="unit_test")
 
     def test_flash_text_pricing(self) -> None:
-        self.assertAlmostEqual(gg.text_cost_usd(1_000_000, 1_000_000), 0.375)
+        # 2.5 Flash list price, thinking billed as output: $0.30 in + $2.50 out.
+        self.assertAlmostEqual(gg.text_cost_usd(1_000_000, 1_000_000), 2.80)
+        self.assertAlmostEqual(
+            gg.text_cost_usd(1_000_000, 1_000_000, model_id="gemini-flash-lite-latest"), 0.50,
+        )
 
     def test_image_pricing(self) -> None:
         os.environ["GEMINI_IMAGE_SIZE"] = "1K"
         self.assertAlmostEqual(gg.image_unit_cost_usd("models/gemini-2.5-flash-image"), 0.039)
-        self.assertAlmostEqual(gg.image_unit_cost_usd("models/gemini-3-pro-image-preview"), 0.03)
+        self.assertAlmostEqual(gg.image_unit_cost_usd("models/gemini-3-pro-image-preview"), 0.134)
         self.assertAlmostEqual(gg.image_unit_cost_usd("imagen-3.0-generate"), 0.03)
         os.environ["GEMINI_IMAGE_SIZE"] = "2K"
         self.assertAlmostEqual(gg.image_unit_cost_usd("models/gemini-3-pro-image-preview"), 0.134)

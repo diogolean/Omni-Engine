@@ -6,7 +6,11 @@ Used by the Visual Control Agent (sequence inspector). The brain is decoupled
 from any single vendor: swap the backend via ``VISUAL_EVAL_PROVIDER`` /
 ``VISUAL_EVAL_MODEL`` (OpenRouter Qwen VL, DeepSeek VL, Gemini, …).
 
-Default: OpenRouter OpenAI-compatible client → ``qwen/qwen3.5-flash-02-23``.
+Default: OpenRouter OpenAI-compatible client → ``google/gemma-3-12b-it``,
+then ``qwen/qwen3.7-flash`` with reasoning off, then ``z-ai/glm-5.3-flash``,
+then DeepInfra's Gemma 3 12B. A live probe on 2026-10-19 measured Gemma at
+$0.00003 per judged still; ``qwen3.5-flash`` spent its whole reply on
+reasoning and returned nothing, which is what pushed every judge to Gemini.
 """
 from __future__ import annotations
 
@@ -20,10 +24,13 @@ from typing import Protocol, Sequence
 _LOG = logging.getLogger(__name__)
 
 OPENROUTER_DEFAULT_BASE_URL: str = "https://openrouter.ai/api/v1"
-DEFAULT_OPENROUTER_VISION_MODEL: str = "qwen/qwen3.5-flash-02-23"
-DEFAULT_OPENROUTER_VISION_FALLBACK: str = "qwen/qwen3.5-9b"
-# A second cheap vision judge. The 9b fallback stays in the chain.
-DEFAULT_OPENROUTER_VISION_SECOND: str = "qwen/qwen2.5-vl-7b-instruct"
+DEFAULT_OPENROUTER_VISION_MODEL: str = "google/gemma-3-12b-it"
+DEFAULT_OPENROUTER_VISION_FALLBACK: str = "z-ai/glm-5.3-flash"
+# A second cheap vision judge, reasoning disabled in the request body.
+DEFAULT_OPENROUTER_VISION_SECOND: str = "qwen/qwen3.7-flash"
+DEEPINFRA_OPENAI_BASE_URL: str = "https://api.deepinfra.com/v1/openai"
+DEFAULT_DEEPINFRA_VISION_MODEL: str = "google/gemma-3-12b-it"
+VISION_MAX_TOKENS: int = 600
 OPENROUTER_VISION_FLOOR_S: float = 28.0
 DEFAULT_GEMINI_VISION_MODEL: str = "models/gemini-2.5-flash"
 
@@ -239,7 +246,11 @@ class OpenRouterVisualEval:
                     "model": mid,
                     "messages": [{"role": "user", "content": content}],
                     "temperature": 0.1,
-                    "max_tokens": 2048,
+                    "max_tokens": VISION_MAX_TOKENS,
+                    "extra_body": {
+                        "reasoning": {"enabled": False, "exclude": True},
+                        "usage": {"include": True},
+                    },
                 }
                 try:
                     try:
@@ -256,6 +267,7 @@ class OpenRouterVisualEval:
                         text = (resp.choices[0].message.content or "").strip()
                     except Exception:  # noqa: BLE001
                         text = ""
+                    _charge_vision(resp, provider="openrouter", model=mid)
                     if text and _vision_json_ok(text):
                         self.model_id = mid
                         return VisualEvalResult(text=text, provider=self.name, model_id=mid)
@@ -281,9 +293,62 @@ class OpenRouterVisualEval:
                     continue
                 _LOG.warning("OpenRouter visual eval failed | model=%s | %s", mid, last_exc)
             continue
+        backup = _deepinfra_vision(content, timeout_s=per_model)
+        if backup is not None:
+            return backup
         raise RuntimeError(
             f"OpenRouter visual eval exhausted models {self._model_chain()}: {last_exc}"
         ) from last_exc
+
+
+def _charge_vision(resp, *, provider: str, model: str) -> None:
+    """Put one judge call on the reel ledger. Never raises."""
+    try:
+        from core import cheap_llm, spend_ledger
+
+        usage = getattr(resp, "usage", None)
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output = int(getattr(usage, "completion_tokens", 0) or 0)
+        billed = getattr(usage, "cost", None)
+        if billed is None and isinstance(getattr(usage, "model_extra", None), dict):
+            billed = usage.model_extra.get("cost") or usage.model_extra.get("estimated_cost")
+        cost = (
+            float(billed)
+            if isinstance(billed, (int, float))
+            else cheap_llm.estimate_usd(provider, model, prompt or 1200, output or 120)
+        )
+        spend_ledger.record(
+            provider=provider, model=model, cost_usd=cost, source="visual_eval",
+            kind="vision", input_tokens=prompt, output_tokens=output, images=1,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _deepinfra_vision(content: list[dict], *, timeout_s: float) -> "VisualEvalResult | None":
+    """Same judge on DeepInfra when every OpenRouter model failed."""
+    key = _cfg("DEEPINFRA_API_KEY")
+    if not key:
+        return None
+    model = _cfg("VISUAL_EVAL_DEEPINFRA_MODEL", DEFAULT_DEEPINFRA_VISION_MODEL)
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=key, base_url=DEEPINFRA_OPENAI_BASE_URL, timeout=timeout_s)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            temperature=0.1,
+            max_tokens=VISION_MAX_TOKENS,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("DeepInfra visual eval failed | model=%s | %s", model, type(exc).__name__)
+        return None
+    _charge_vision(resp, provider="deepinfra", model=model)
+    if text and _vision_json_ok(text):
+        return VisualEvalResult(text=text, provider="deepinfra", model_id=model)
+    return None
 
 
 class GeminiVisualEval:
@@ -319,6 +384,7 @@ class GeminiVisualEval:
         labels: Sequence[str] | None = None,
     ) -> VisualEvalResult:
         from google.genai import types
+
         from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
 
         if not self.api_key:

@@ -21,6 +21,7 @@ REST base (v1beta default):
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from typing import Any, Literal
@@ -456,6 +457,10 @@ def generate_content_with_model_fallback(
     if not model_chain:
         raise RuntimeError("generate_content_with_model_fallback: model_chain is empty.")
 
+    cheap = _cheap_text_first(model_chain, contents, config)
+    if cheap is not None:
+        return cheap
+
     from modules.reel_artefact.provider_health import dead_reason, provider_dead
 
     if provider_dead("gemini"):
@@ -480,6 +485,13 @@ def generate_content_with_model_fallback(
             kind=kind,
         )
 
+        if kind == "text":
+            from core.google_guardrail import cheap_text_config
+
+            model_config = cheap_text_config(config, str(model_id))
+        else:
+            model_config = config
+
         for attempt in range(attempts):
             from google.genai import errors as _g_errors  # lazy — resolve exception class on demand
 
@@ -496,9 +508,9 @@ def generate_content_with_model_fallback(
                     _app_cfg.note_gemini_flash_call(str(model_id))
                 except Exception:
                     pass
-                if config is not None:
+                if model_config is not None:
                     response = client.models.generate_content(
-                        model=model_id, contents=contents, config=config
+                        model=model_id, contents=contents, config=model_config
                     )
                 else:
                     response = client.models.generate_content(
@@ -569,6 +581,162 @@ def generate_content_with_model_fallback(
     if last:
         raise last
     raise RuntimeError("generate_content_with_model_fallback: chain exhausted with no response.")
+
+
+# ---------------------------------------------------------------------------
+# Near-zero cost: text-only requests go to the cheap chain before Gemini
+# ---------------------------------------------------------------------------
+
+_OFF = {"0", "false", "no", "off"}
+
+
+class _CheapPart:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.inline_data = None
+
+
+class _CheapContent:
+    def __init__(self, text: str) -> None:
+        self.parts = [_CheapPart(text)]
+        self.role = "model"
+
+
+class _CheapCandidate:
+    def __init__(self, text: str) -> None:
+        self.content = _CheapContent(text)
+        self.finish_reason = "STOP"
+
+
+class _CheapUsage:
+    def __init__(self, prompt: int, output: int) -> None:
+        self.prompt_token_count = prompt
+        self.candidates_token_count = output
+        self.thoughts_token_count = 0
+        self.total_token_count = prompt + output
+
+
+class CheapTextResponse:
+    """Duck-types the parts of a Gemini response that callers read."""
+
+    def __init__(self, text: str, *, provider: str, model: str, prompt: int, output: int) -> None:
+        self.text = text
+        self.candidates = [_CheapCandidate(text)]
+        self.usage_metadata = _CheapUsage(prompt, output)
+        self.model_version = f"{provider}:{model}"
+        self.provider = provider
+        self.parsed = None
+
+
+def _text_only_blob(contents: Any) -> str | None:
+    """Joined prompt text, or None when any part is an image, file or bytes."""
+    if contents is None:
+        return None
+    if isinstance(contents, str):
+        return contents
+    if isinstance(contents, (bytes, bytearray)):
+        return None
+    if isinstance(contents, (list, tuple)):
+        chunks: list[str] = []
+        for item in contents:
+            sub = _text_only_blob(item)
+            if sub is None:
+                return None
+            chunks.append(sub)
+        return "\n\n".join(c for c in chunks if c)
+    if isinstance(contents, dict):
+        if "parts" in contents:
+            return _text_only_blob(contents.get("parts"))
+        if set(contents) <= {"text"}:
+            return str(contents.get("text") or "")
+        return None
+    if getattr(contents, "inline_data", None) is not None or getattr(contents, "file_data", None) is not None:
+        return None
+    parts = getattr(contents, "parts", None)
+    if parts is not None:
+        return _text_only_blob(list(parts))
+    text = getattr(contents, "text", None)
+    if isinstance(text, str):
+        return text
+    return None
+
+
+def _config_value(config: Any, name: str) -> Any:
+    if config is None:
+        return None
+    if isinstance(config, dict):
+        return config.get(name)
+    return getattr(config, name, None)
+
+
+def _system_text(config: Any) -> str | None:
+    raw = _config_value(config, "system_instruction")
+    if raw is None:
+        return None
+    blob = _text_only_blob(raw)
+    return blob or None
+
+
+def _cheap_text_first(model_chain: list[str], contents: Any, config: Any) -> Any | None:
+    """Answer a text-only request from the cheap chain. None means use Gemini."""
+    mode = (os.getenv("GEMINI_TEXT_CHEAP_FIRST") or "1").strip().lower()
+    if mode in _OFF:
+        return None
+    if os.getenv("PYTEST_CURRENT_TEST") and mode != "force":
+        return None
+    from core.google_guardrail import is_image_model
+
+    if any(is_image_model(str(mid)) for mid in model_chain):
+        return None
+    if _config_value(config, "response_modalities"):
+        return None
+    if _config_value(config, "tools"):
+        return None
+    blob = _text_only_blob(contents)
+    if not blob or not blob.strip():
+        return None
+    from core import cheap_llm
+
+    if not cheap_llm.available("text"):
+        return None
+    json_mode = str(_config_value(config, "response_mime_type") or "").lower() == "application/json"
+    schema = _config_value(config, "response_json_schema") or _config_value(config, "response_schema")
+    prompt = blob
+    if json_mode:
+        hint = "Reply with one JSON value only, no prose and no code fence."
+        if isinstance(schema, dict):
+            try:
+                import json as _json
+
+                hint += " It must match this JSON schema: " + _json.dumps(schema)[:4000]
+            except Exception:  # noqa: BLE001
+                pass
+        prompt = f"{blob}\n\n{hint}"
+    max_tokens = _config_value(config, "max_output_tokens") or 4096
+    temperature = _config_value(config, "temperature")
+    try:
+        result = cheap_llm.complete(
+            prompt,
+            system=_system_text(config),
+            json_mode=json_mode,
+            max_tokens=int(max_tokens),
+            temperature=float(temperature) if temperature is not None else 0.4,
+            source="gemini_utils.cheap_text_first",
+        )
+    except cheap_llm.CheapLLMUnavailable as exc:
+        logger.warning("cheap text chain unavailable, using Gemini | %s", exc)
+        return None
+    logger.info(
+        "Gemini text request served by %s:%s (wanted %s)",
+        result.provider, result.model, model_chain[0],
+    )
+    return CheapTextResponse(
+        result.text,
+        provider=result.provider,
+        model=result.model,
+        prompt=result.input_tokens,
+        output=result.output_tokens,
+    )
 
 
 def _log_fallback_chain_step(failed_model: str, exc: BaseException, next_model: str | None) -> None:

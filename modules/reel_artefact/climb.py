@@ -119,6 +119,7 @@ def climb_act(
             scene_type=planned_scene,
             geography=geography,
             coastal=coastal,
+            channel=channel,
         ),
         "reuse": _reuse(kind, entity.id if entity else ""),
     }
@@ -233,6 +234,8 @@ def climb_act(
     if result.passed and not result.resumed:
         note_accepted(result.rung or "flux")
     if result.passed and result.path is not None and not result.resumed:
+        _library_keep(result, channel=channel, kind=kind, scene_type=planned_scene,
+                      geography=geography, entity=entity)
         remember_approved(result.path, kind=kind)
         note_beat_key(int(beat_index), reuse_key_for(result.path))
         if checkpoint is not None:
@@ -278,6 +281,8 @@ def _flux_still(prompt: str, provider: str) -> bool:
         "commons", "met", "smithsonian", "openverse", "europeana", "wikimedia", "reuse",
     }:
         return False
+    if provider == "library":
+        return True
     return "do not depict a named artefact" in (prompt or "").lower()
 
 
@@ -368,6 +373,59 @@ def _flux_negatives(entity: Entity | None) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _library_keep(result, *, channel: str, kind: str, scene_type: str,
+                  geography: str, entity: Entity | None) -> None:
+    """Store a judged Flux scene so a later reel can reuse it for free."""
+    if kind != "scene" or (result.rung or "") != "flux":
+        return
+    try:
+        from modules.reel_artefact.scene_library import add
+        from modules.reel_artefact.source import source_meta
+
+        provider = str(source_meta(result.path).get("provider") or "")
+        if provider and provider not in {"flux", "together", "deepinfra"}:
+            return
+        add(
+            channel,
+            result.path,
+            scene_type=scene_type or "scene",
+            geography=geography,
+            prompt=str((result.verdict or {}).get("image_description") or ""),
+            period=str(getattr(entity, "event_period", "") or "") if entity else "",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info("SCENE LIBRARY add skipped (%s)", type(exc).__name__)
+
+
+def _library_hit(ctx, *, channel: str, scene_type: str, geography: str,
+                 period: str, prompt: str) -> Path | None:
+    """First Flux attempt of a scene beat: reuse an approved library still."""
+    if ctx.kind == "object" or ctx.replan or int(ctx.attempt or 0) > 0 or ctx.rejection:
+        return None
+    try:
+        from modules.reel_artefact.budget import refund
+        from modules.reel_artefact.pricing import FLUX_USD
+        from modules.reel_artefact.scene_library import copy_into, find
+        from modules.reel_artefact.source import write_source_sidecar
+
+        found = find(channel, scene_type=scene_type or "scene", geography=geography,
+                     prompt=prompt, period=period)
+        if found is None:
+            return None
+        made = copy_into(found, Path(ctx.dest))
+        write_source_sidecar(made, {
+            "provider": "library",
+            "still_kind": "scene",
+            "library_file": found.name,
+        })
+        # The ladder reserved a Flux price for this rung; a library still is free.
+        refund(FLUX_USD)
+        return made
+    except Exception as exc:  # noqa: BLE001
+        logger.info("SCENE LIBRARY lookup skipped (%s)", type(exc).__name__)
+        return None
+
+
 def _flux(
     generate: Callable[..., Any],
     kwargs: dict,
@@ -376,6 +434,7 @@ def _flux(
     scene_type: str = "",
     geography: str = "",
     coastal: bool = True,
+    channel: str = "ancient_knowledge",
 ):
     def _run(ctx):
         name = entity.name if entity else ""
@@ -413,6 +472,12 @@ def _flux(
                 int(ctx.beat_index) + 1,
             )
         ctx.prompt = text
+        stored = _library_hit(
+            ctx, channel=channel, scene_type=scene_type, geography=geography,
+            period=period, prompt=text,
+        )
+        if stored is not None:
+            return stored
         logger.info(
             "FLUX prompt | beat=%s | attempt=%s | geography=%s | %s",
             int(ctx.beat_index) + 1,
@@ -454,11 +519,50 @@ def _llm_allowed() -> bool:
     }
     if disabled:
         return False
+    try:
+        from core.cheap_llm import available
+
+        if available("text"):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
 
 
+def _reprompt_text(narration: str, prompt: str, rejection: str) -> str:
+    return (
+        "Rewrite this as one photoreal documentary image prompt. "
+        "35mm film grain, natural colour, real location. "
+        "No cyberpunk and no illustration. "
+        f"Narration: {narration}\nRejected because: {rejection}\n"
+        f"Previous prompt: {prompt}\nReturn only the prompt."
+    )
+
+
 def _gemini_reprompt(narration: str, prompt: str, rejection: str) -> str | None:
+    """Rewrite a rejected Flux prompt. The cheap text chain runs first.
+
+    Gemini is used only when no cheap provider answered and
+    ``REEL_LADDER_GEMINI=1``; the function keeps its old name for callers.
+    """
     if (os.getenv("REEL_LADDER_LLM") or "").strip().lower() in {"0", "off", "false", "no"}:
+        return None
+    try:
+        from core.cheap_llm import CheapLLMUnavailable, complete
+
+        try:
+            result = complete(
+                _reprompt_text(narration, prompt, rejection),
+                max_tokens=220,
+                temperature=0.5,
+                source="reel_artefact.ladder",
+            )
+            return result.text.strip().strip('"') or None
+        except CheapLLMUnavailable:
+            pass
+    except Exception:  # noqa: BLE001 — includes the reel spend cap
+        return None
+    if (os.getenv("REEL_LADDER_GEMINI") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         return None
     key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     if not key:
@@ -473,13 +577,7 @@ def _gemini_reprompt(narration: str, prompt: str, rejection: str) -> str | None:
         response = guarded_generate_content(
             client,
             model="gemini-2.5-flash",
-            contents=(
-                "Rewrite this as one photoreal documentary image prompt. "
-                "35mm film grain, natural colour, real location. "
-                "No cyberpunk and no illustration. "
-                f"Narration: {narration}\nRejected because: {rejection}\n"
-                f"Previous prompt: {prompt}\nReturn only the prompt."
-            ),
+            contents=_reprompt_text(narration, prompt, rejection),
             kind="text",
             source="reel_artefact.ladder",
         )

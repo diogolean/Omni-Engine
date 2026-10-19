@@ -503,7 +503,8 @@ class GeminiImageAdapter(ImageProvider):
         self._extra_kwargs = dict(kwargs)
 
         if self._gemini_mode:
-            self._model_id = requested or "models/gemini-3-pro-image-preview"
+            # Cheapest Gemini image SKU unless the caller names one.
+            self._model_id = requested or "models/gemini-3.1-flash-lite-image"
             self._image_chain = _gemini_image_chain(self._model_id)
             self._router_tier = "premium" if "pro" in self._model_id.lower() else "cheap"
             self.last_gemini_image_model_used = self._model_id
