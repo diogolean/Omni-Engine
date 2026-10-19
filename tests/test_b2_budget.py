@@ -216,3 +216,157 @@ def test_class_c_limit_from_env(
             list_object_keys("other/", client=client, bucket="bucket")
     assert client.lists == 0
     assert len([record for record in caplog.records if "Class C" in record.message]) == 1
+
+
+def test_defaults_stay_at_half_the_free_allowance(budget: Path) -> None:
+    del budget
+    from agents.media.b2_budget import class_b_limit, class_c_limit, download_limit_bytes
+
+    assert download_limit_bytes() == 500 * 1024 * 1024
+    assert class_b_limit() == 1500
+    assert class_c_limit() == 1500
+
+
+def test_env_cannot_raise_budgets_above_the_free_allowance(
+    budget: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    del budget
+    from agents.media.b2_budget import (
+        charge,
+        class_b_limit,
+        class_c_limit,
+        download_limit_bytes,
+    )
+
+    monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "5000")
+    monkeypatch.setenv("B2_DAILY_CLASS_B", "9000")
+    monkeypatch.setenv("B2_DAILY_CLASS_C", "9000")
+    assert download_limit_bytes() == 1000 * 1024 * 1024
+    assert class_b_limit() == 2500
+    assert class_c_limit() == 2500
+    charge(class_b=2500, class_c=2500)
+    with pytest.raises(B2DailyCapError):
+        charge(class_b=1)
+    with pytest.raises(B2DailyCapError):
+        charge(class_c=1)
+
+
+def test_clamped_download_cap_refuses_the_fetch(
+    budget: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    del budget
+    monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "4000")
+    client = _Client({"clips/huge.jpg": b"x"})
+    from agents.media.b2_budget import client_token, store_listing
+
+    store_listing(
+        client_token(client),
+        "bucket",
+        "clips/",
+        ["clips/huge.jpg"],
+        {"clips/huge.jpg": 1000 * 1024 * 1024 + 1},
+    )
+    with pytest.raises(B2DailyCapError):
+        download_object("clips/huge.jpg", tmp_path / "huge.jpg", client=client, bucket="bucket")
+    assert client.downloads == []
+
+
+def test_lower_env_override_is_kept(budget: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    del budget
+    from agents.media.b2_budget import class_b_limit, download_limit_mb
+
+    monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "100")
+    monkeypatch.setenv("B2_DAILY_CLASS_B", "10")
+    assert download_limit_mb() == 100
+    assert class_b_limit() == 10
+
+
+def test_usage_lock_excludes_concurrent_writers(budget: Path) -> None:
+    import threading
+    import time
+
+    from agents.media.b2_budget import _usage_file_lock
+
+    del budget
+    order: list[str] = []
+
+    def worker(label: str) -> None:
+        with _usage_file_lock():
+            order.append(f"in-{label}")
+            time.sleep(0.05)
+            order.append(f"out-{label}")
+
+    threads = [threading.Thread(target=worker, args=(str(i),)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(order) == 4
+    assert order[0].startswith("in-")
+    assert order[1] == "out-" + order[0].removeprefix("in-")
+    assert order[2].startswith("in-")
+    assert order[3] == "out-" + order[2].removeprefix("in-")
+
+
+def test_processes_share_one_usage_file(budget: Path) -> None:
+    import os
+    import subprocess
+    import sys
+
+    path = budget / "usage.json"
+    code = (
+        "import os\n"
+        "from agents.media.b2_budget import B2DailyCapError, charge\n"
+        "try:\n"
+        "    charge(class_c=2)\n"
+        "    print('ok')\n"
+        "except B2DailyCapError:\n"
+        "    print('capped')\n"
+    )
+    env = os.environ.copy()
+    env["B2_USAGE_PATH"] = str(path)
+    env["B2_DAILY_CLASS_C"] = "2"
+    env.pop("B2_DAILY_CLASS_B", None)
+    env.pop("B2_DAILY_DOWNLOAD_MB", None)
+    root = str(Path(__file__).resolve().parents[1])
+    first = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    second = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert first.stdout.strip() == "ok"
+    assert second.stdout.strip() == "capped"
+    state = json.loads(path.read_text(encoding="utf-8"))
+    assert state["class_c"] == 2
+
+
+def test_backblaze_endpoint_is_not_treated_as_runpod() -> None:
+    from agents.media.b2_budget import is_backblaze_endpoint
+
+    assert is_backblaze_endpoint("https://s3.us-east-005.backblazeb2.com")
+    assert is_backblaze_endpoint("https://s3.eu-central-003.backblaze.com")
+    assert not is_backblaze_endpoint("https://s3api-eu-ro-1.runpod.io")
+    assert not is_backblaze_endpoint("")
+
+
+def test_runpod_s3_refuses_backblaze_before_creating_a_client() -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "core" / "remote_gpu_manager.py"
+    ).read_text(encoding="utf-8")
+    function = source.split("def _get_runpod_s3_client", 1)[1].split("\ndef ", 1)[0]
+    refuse_at = function.index("_refuse_backblaze_endpoint")
+    client_at = function.index("boto3.client")
+    assert refuse_at < client_at

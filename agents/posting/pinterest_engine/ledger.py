@@ -139,8 +139,12 @@ class PinLedger:
         )
         self._write()
 
-    def seed_board_pins(self, pins: list[dict]) -> int:
-        """Add board pins that are not already in the ledger. Returns how many were added."""
+    def seed_board_pins(self, pins: list[dict], *, persist: bool = True) -> int:
+        """Add board pins that are not already in the ledger. Returns how many were added.
+
+        ``persist=False`` keeps the rows in memory for this run and does not
+        upload the ledger. Dry runs use that so B2 stays unchanged.
+        """
         added = 0
         for pin in pins:
             title = str(pin.get("title") or "").strip()
@@ -163,9 +167,14 @@ class PinLedger:
                 }
             )
             added += 1
-        if added:
+        if added and persist:
             self._write()
             log.info("Seeded %d existing board pin(s) into %s", added, self.key)
+        elif added:
+            log.info(
+                "Noted %d existing board pin(s) in memory only (no ledger upload).",
+                added,
+            )
         return added
 
     def _write(self) -> None:

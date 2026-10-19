@@ -28,11 +28,15 @@ That script pins `OMNI_IMAGE_TAG` and starts **engine only**. The scheduler is a
 
 `python -m omni.worker --role engine` stays up so an operator can `docker compose exec engine python main.py ...`. It does not generate content by itself. `--role scheduler` publishes Pinterest image pins on a random 3–6 hour gap.
 
-### Backblaze B2
+### Libraries and Backblaze B2
 
-B2 is the shared store for media, the content library the schedulers read, and the publish ledger. Callers list or fetch one object when they need it. They do not mirror the bucket onto the VM or the PC. See [0001](decisions/0001-b2-on-demand.md) and [0003](decisions/0003-shared-b2-ledger-and-board-dedupe.md).
+Publishers read the channel library from Google Drive first (`drive.readonly`), then the local tree (the PC `G:` path), then B2. `DRIVE_OUTPUTS_FOLDER_ID` is the shared `outputs` folder, and keys resolve like `OUTPUT_PATH`. One file is downloaded when it is published. See [0007](decisions/0007-google-drive-library-source.md) and `docs/runbooks/google-drive.md`.
 
-Uploads go through `agents/media/b2_client.py`. Pinterest reads image keys with `list_object_keys` and downloads only the object it is about to pin.
+B2 remains the publish ledger and the public URL store for Post Planner, which cannot fetch a Drive link. Nothing in the bucket is deleted. See [0001](decisions/0001-b2-on-demand.md) and [0003](decisions/0003-shared-b2-ledger-and-board-dedupe.md). A Drive-only Post Planner asset is uploaded once through the budgeted B2 client (Class A) and left in the bucket.
+
+Every B2 read, list, download, and upload goes through `agents/media/b2_client.py`, which charges `agents/media/b2_budget.py` first. Uploads are Class A and are not counted. The head or list before an upload is Class B or Class C and is counted. The free daily allowance is 1 GB of download, 2,500 Class B, and 2,500 Class C. `B2_DAILY_DOWNLOAD_MB`, `B2_DAILY_CLASS_B`, and `B2_DAILY_CLASS_C` are clamped to that allowance and cannot raise it. A call that would pass a cap raises `B2DailyCapError` and stops the run.
+
+The engine, the scheduler, and scripts on one machine share a file-locked counter at `outputs/b2/usage.json` (override with `B2_USAGE_PATH`). Counters reset at 00:00 UTC. The PC and the Oracle VM do not share a disk, so each keeps its own counter. Defaults stay near half the free allowance (500 MB, 1,500 Class B, 1,500 Class C) so the two hosts together stay inside it. A CI test rejects any non-test module outside `agents/media/` that constructs a boto3 S3 client or a b2sdk API for B2.
 
 ### PC runner
 
@@ -45,8 +49,8 @@ The runner switch is `local`, `docker`, or `both`. See [0002](decisions/0002-run
 | Surface | Who publishes | Source |
 |---|---|---|
 | Facebook | WordPress orchestrator bot | Post Planner xlsx (`DATE/TIME`, `CAPTION`, `MEDIA URL`) produced by `agents/posting/post_planner.py` |
-| Pinterest | VM scheduler | One B2 image at a time, linked to a WordPress article (`omni/pinterest_drip.py`) |
-| YouTube | VM, `main.py --publish-youtube` | `private` + `publishAt` via `agents/posting/youtube_publisher.py` |
+| Pinterest | VM scheduler | One library image at a time (Drive, then local, then B2), linked to a WordPress article (`omni/pinterest_drip.py`) |
+| YouTube | VM, `main.py --publish-youtube` | `private` + `publishAt` via `agents/posting/youtube_publisher.py`. A missing local file is read from Drive. |
 
 Reel rows reach Post Planner and YouTube only when the QA report says `verdict=pass`. See [0005](decisions/0005-fail-closed-reel-qa.md).
 

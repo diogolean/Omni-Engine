@@ -25,18 +25,16 @@ Usage
 
 Requirements
 ------------
-    pip install boto3 openpyxl python-dotenv
+    pip install openpyxl python-dotenv
+
+Uploads go through ``agents.media.b2_client.B2VideoUploader``. A head
+before the upload counts against the shared daily Class B budget. The
+upload itself is Class A. Hitting the daily cap stops this run.
 
 Credentials are read from the project .env file (or environment variables):
     B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET_NAME, B2_ENDPOINT_URL
 """
 from __future__ import annotations
-
-from pathlib import Path as _ReorgPath
-import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[1]
-if str(_REORG_ROOT) not in _reorg_sys.path:
-    _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
 import argparse
 import json
@@ -46,6 +44,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - dotenv is optional at runtime
+    load_dotenv = None
+
 # ---------------------------------------------------------------------------
 # Bootstrap: ensure the factory root is on sys.path so imports resolve
 # ---------------------------------------------------------------------------
@@ -53,12 +56,8 @@ _FACTORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_FACTORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_FACTORY_ROOT))
 
-# Load .env from the factory root
-try:
-    from dotenv import load_dotenv
+if load_dotenv is not None:
     load_dotenv(_FACTORY_ROOT / ".env", override=False)
-except ImportError:
-    pass  # dotenv optional — rely on shell environment
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,66 +90,24 @@ def _sidecar_manual_review(path: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# B2 upload helpers (inline — works without agents.media on PATH)
+# B2 upload helpers — budgeted client only. No direct boto3/b2sdk.
 # ---------------------------------------------------------------------------
-
-def _build_b2_resource():
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError:
-        raise RuntimeError("boto3 not installed. Run: pip install boto3")
-
-    key_id  = (os.getenv("B2_KEY_ID") or "").strip()
-    app_key = (os.getenv("B2_APPLICATION_KEY") or "").strip()
-    if not key_id or not app_key:
-        raise RuntimeError(
-            "B2_KEY_ID and B2_APPLICATION_KEY are not set.\n"
-            "Add them to your .env file or export them in the shell."
-        )
-    endpoint = (
-        os.getenv("B2_ENDPOINT_URL") or "https://s3.us-east-005.backblazeb2.com"
-    ).strip()
-
-    return boto3.resource(
-        service_name="s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=key_id,
-        aws_secret_access_key=app_key,
-        region_name="us-east-005",
-        config=Config(
-            signature_version="s3v4",
-            s3={"addressing_style": "path"},
-        ),
-    )
-
-
-def _object_exists(b2, bucket: str, key: str) -> bool:
-    try:
-        b2.Object(bucket, key).load()
-        return True
-    except Exception as exc:
-        try:
-            code = exc.response["Error"]["Code"]
-            if code in ("404", "NoSuchKey", "403"):
-                return False
-        except (AttributeError, KeyError):
-            pass
-        return False
-
 
 def _public_url(bucket: str, filename: str) -> str:
     return f"https://{bucket}.s3.us-east-005.backblazeb2.com/{Path(filename).name}"
 
 
 def upload_file_to_b2(
-    b2,
     bucket: str,
     local_path: Path,
     *,
     dry_run: bool = False,
 ) -> str:
-    """Upload one file; return its public URL."""
+    """Upload one file through the budgeted client and return its public URL.
+
+    The head that checks for an existing object counts as Class B. The put
+    is Class A. ``B2DailyCapError`` is left for the caller to stop the run.
+    """
     key = local_path.name
     url = _public_url(bucket, key)
 
@@ -158,17 +115,11 @@ def upload_file_to_b2(
         print(f"  [DRY-RUN] Would upload: {key} → {url}")
         return url
 
-    if _object_exists(b2, bucket, key):
-        print(f"  [SKIP] Already in B2: {key}")
-        logger.info("Already uploaded: %s", key)
-        return url
+    from agents.media.b2_client import B2VideoUploader
 
     size_mb = local_path.stat().st_size / (1024 * 1024)
     print(f"  [UPLOAD] {key} ({size_mb:.1f} MB) …")
-    b2.Object(bucket, key).upload_file(
-        str(local_path),
-        ExtraArgs={"ContentType": "video/mp4"},
-    )
+    B2VideoUploader(bucket_name=bucket).upload(local_path, content_type="video/mp4")
     print(f"  [OK] {url}")
     logger.info("Uploaded: %s → %s", key, url)
     return url
@@ -356,25 +307,29 @@ def main(argv: list[str] | None = None) -> None:
 
     # ── B2 connection ─────────────────────────────────────────────────────────
     bucket = (args.bucket or os.getenv("B2_BUCKET_NAME") or "MediaupscaleStorage").strip()
-    b2 = None
-    if not args.dry_run:
-        try:
-            b2 = _build_b2_resource()
-        except RuntimeError as exc:
-            print(f"[ERROR] {exc}")
-            sys.exit(1)
 
     # ── Upload loop ───────────────────────────────────────────────────────────
+    from agents.media.b2_budget import B2DailyCapError
+
     slots = _posting_slots(len(clips), args.interval)
     records: list[dict] = []
 
     for clip, slot in zip(clips, slots):
         caption = caption_map.get(clip.name) or caption_map.get(clip.stem) or default_caption
         try:
-            url = upload_file_to_b2(b2, bucket, clip, dry_run=args.dry_run)
+            url = upload_file_to_b2(bucket, clip, dry_run=args.dry_run)
+        except B2DailyCapError as exc:
+            print(f"[ERROR] {exc}")
+            logger.error("B2 daily budget exhausted: %s", exc)
+            sys.exit(1)
         except Exception as exc:
-            print(f"  [FAIL] {clip.name}: {exc}")
-            logger.error("Upload failed for %s: %s", clip.name, exc)
+            print(f"  [FAIL] {clip.name}: {type(exc).__name__}: {exc}")
+            logger.error(
+                "Upload failed for %s: %s: %s",
+                clip.name,
+                type(exc).__name__,
+                exc,
+            )
             url = ""
 
         records.append({
@@ -405,7 +360,8 @@ def main(argv: list[str] | None = None) -> None:
     else:
         out = write_postplanner_xlsx(records, output_path, template_path=template)
         print(f"\n[DONE] PostPlanner written → {out}")
-        print(f"       {len(records)} rows | {sum(1 for r in records if r['media_url'])} with B2 URLs\n")
+        with_url = sum(1 for row in records if row["media_url"])
+        print(f"       {len(records)} rows | {with_url} with B2 URLs\n")
 
 
 if __name__ == "__main__":

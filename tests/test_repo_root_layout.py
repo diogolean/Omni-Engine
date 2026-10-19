@@ -17,6 +17,7 @@ _ALLOWED_ROOT = {
     ".dockerignore",
     ".env.example",
     ".gitattributes",
+    ".gitleaksignore",
     ".github",
     ".gitignore",
     ".pre-commit-config.yaml",

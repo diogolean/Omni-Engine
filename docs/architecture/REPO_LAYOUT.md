@@ -12,7 +12,7 @@ Tracked at the repository root:
 |---|---|
 | Identity | `README.md`, `AGENTS.md`, `CONTRIBUTING.md` |
 | Entry points | `main.py`, `config.py`, `channel_loader.py`. `run_main_noupload.py` is an allowed entry point when it is added. Do not rename it. |
-| Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml` |
+| Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml`, `.gitleaksignore` |
 | Containers and CI | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.github/` |
 | Packages | `agents/`, `channels_config/`, `config/`, `core/`, `engine/`, `models_avatar/`, `modules/`, `omni/`, `portfolio_showcase/`, `quality/`, `utils/` |
 | Support trees | `assets/`, `critic_profiles/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |

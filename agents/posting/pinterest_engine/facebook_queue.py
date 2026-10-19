@@ -84,7 +84,7 @@ def build_facebook_caption(
     template: str = "",
 ) -> str:
     """Hook, two or three lines, then the article link."""
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    from agents.posting.pinterest_engine.articles import resolve_pin_link  # noqa: PLC0415
     from agents.posting.pinterest_engine.pin_copy import (  # noqa: PLC0415
         _fill,
         card_hook_text,
@@ -92,7 +92,7 @@ def build_facebook_caption(
 
     hook = card_hook_text(record)
     lines = facebook_body_lines(record)
-    url = str(record.get("target_url") or cfg.TARGET_URL or "").strip()
+    url = resolve_pin_link(record)
     topic = str(record.get("topic") or "").strip()
     filled = _fill(
         (template or "").strip() or _DEFAULT_TEMPLATE,

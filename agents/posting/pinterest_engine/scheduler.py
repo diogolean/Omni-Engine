@@ -25,6 +25,7 @@ Interval config (in .env):
 """
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -41,11 +42,24 @@ from agents.posting.pinterest_engine import config as cfg  # noqa: E402
 
 log = logging.getLogger(__name__)
 
+
+def _fetch_stop_reason(exc: BaseException) -> str:
+    """Stop the run on a B2 daily cap or a Drive-only quota failure."""
+    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+    from agents.media.drive_source import DriveQuotaError  # noqa: PLC0415
+
+    if isinstance(exc, DriveQuotaError):
+        return "drive_quota"
+    if isinstance(exc, B2DailyCapError):
+        return "b2_daily_cap"
+    return ""
+
 _DEFAULT_MIN_HOURS = 3.0
 _DEFAULT_MAX_HOURS = 6.0
 _DEFAULT_PINS_MIN = 3
 _DEFAULT_PINS_MAX = 5
 _INTER_PIN_COURTESY_SEC = 3   # brief pause before starting sleep countdown
+_LAZY_INVENTORY_SPARE = 2
 
 
 def _write_dry_run_card(account_id: str, post_id: str, pin_bytes: bytes) -> Path:
@@ -356,20 +370,20 @@ class PinterestScheduler:
                     prefix=prefix,
                     client=self.context.get("b2_client"),
                     bucket=self.context.get("b2_bucket"),
+                    folder_id=str(self.context.get("drive_folder_id") or ""),
                 )
             except Exception as exc:  # noqa: BLE001
-                from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-
-                if not isinstance(exc, B2DailyCapError):
+                reason = _fetch_stop_reason(exc)
+                if not reason:
                     raise
-                log.warning("B2 daily cap reached — stopping this run.")
+                log.warning("Library fetch stopped (%s).", reason)
                 return {
                     "published": 0,
                     "skipped": 0,
                     "skipped_by_history": 0,
                     "errors": 0,
                     "remaining": 0,
-                    "stopped": "b2_daily_cap",
+                    "stopped": reason,
                 }
 
         inv = MasterInventory(outputs_dir=self.outputs_dir)
@@ -377,12 +391,35 @@ class PinterestScheduler:
         library_ids = {
             path.stem for path in (self.outputs_dir / "library").glob("post_*.json")
         }
-        known_ids = {entry.get("post_id") for entry in data.get("entries") or []}
-        if not known_ids or not library_ids <= known_ids:
+        ready = inv.get_unposted(data)
+        from agents.posting.pinterest_engine.articles import article_link_required  # noqa: PLC0415
+
+        account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
+        wants_articles = article_link_required(account)
+        prefer_ids = self._linkable_library_ids() if wants_articles else None
+        ready_ids = {entry.get("post_id") for entry in ready}
+        if wants_articles:
+            ready_linkable = sum(1 for post_id in (prefer_ids or []) if post_id in ready_ids)
+            need_build = ready_linkable < self.pins_per_run
+        else:
+            need_build = len(ready) < self.pins_per_run
+        built_entries: int | None = None
+        if need_build:
+            limit = max(self.pins_per_run, 1) + _LAZY_INVENTORY_SPARE
             log.info(
-                "Building master inventory from the library with the Claude pin-copy path."
+                "Building master inventory for the next pins only "
+                "(limit=%d, library=%d, dry_run=%s).",
+                limit,
+                len(library_ids),
+                self.dry_run,
             )
-            data = inv.build(use_ai=True)
+            data = inv.build(
+                use_ai=True,
+                limit=limit,
+                dry_run=self.dry_run,
+                prefer_ids=prefer_ids,
+            )
+            built_entries = len(data.get("entries") or [])
             if not data.get("entries"):
                 log.warning(
                     "No recyclable assets found under %s. "
@@ -413,10 +450,19 @@ class PinterestScheduler:
         else:
             skipped_by_history = 0
 
-        total_eligible = len(unposted)
-        batch = unposted[: self.pins_per_run]
+        self._attach_article_links(unposted)
+        if wants_articles:
+            candidates = [
+                entry for entry in unposted
+                if entry.get("_skip_article") != "skip"
+                and str(entry.get("target_url") or "").strip()
+            ]
+        else:
+            candidates = list(unposted)
+        total_eligible = len(candidates)
+        batch = candidates[: self.pins_per_run]
 
-        unposted_before_history = total_eligible + skipped_by_history
+        unposted_before_history = len(unposted) + skipped_by_history
         log.info(
             "Inventory: %d total | %d unposted-by-flag | %d blocked-by-history | %d selected",
             len(data["entries"]), unposted_before_history,
@@ -424,15 +470,29 @@ class PinterestScheduler:
         )
 
         if not batch:
-            log.warning(
-                "No eligible pins remaining after history filter. "
-                "All unposted entries may already be in scheduled_history.txt."
-            )
-            return {"published": 0, "skipped": 0,
-                    "skipped_by_history": skipped_by_history,
-                    "errors": 0, "remaining": 0}
-
-        self._attach_article_links(data.get("entries") or [])
+            skipped_unlinked = 0
+            if wants_articles and unposted and not skipped_by_history:
+                skipped_unlinked = sum(
+                    1
+                    for entry in unposted
+                    if not str(entry.get("target_url") or "").strip()
+                )
+                log.warning(
+                    "No pins with an article link. Skipped %d unlinked post(s).",
+                    skipped_unlinked,
+                )
+            else:
+                log.warning(
+                    "No eligible pins remaining after history filter. "
+                    "All unposted entries may already be in scheduled_history.txt."
+                )
+            return {
+                "published": 0,
+                "skipped": skipped_unlinked,
+                "skipped_by_history": skipped_by_history,
+                "errors": 0,
+                "remaining": 0,
+            }
         try:
             ledger = self._load_ledger()
         except Exception as exc:  # noqa: BLE001
@@ -476,6 +536,8 @@ class PinterestScheduler:
             "errors": 0,
             "remaining": total_eligible,
         }
+        if built_entries is not None:
+            stats["inventory_built"] = built_entries
 
         for i, entry in enumerate(batch):
             post_id = entry["post_id"]
@@ -502,6 +564,19 @@ class PinterestScheduler:
                 log.info("  Skipping %s — image map says skip.", post_id)
                 stats["skipped"] += 1
                 continue
+            missing_link = entry.get("_skip_article") == "no-link"
+            missing_link = missing_link or not str(entry.get("target_url") or "").strip()
+            if missing_link:
+                from agents.posting.pinterest_engine.articles import article_link_required  # noqa: PLC0415
+
+                account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
+                if article_link_required(account):
+                    log.info(
+                        "  Skipping %s — no article link; pin will not be published.",
+                        post_id,
+                    )
+                    stats["skipped"] += 1
+                    continue
 
             log.info(
                 "[%d/%d] Processing: '%s'  post_id=%s  file=%s",
@@ -547,12 +622,11 @@ class PinterestScheduler:
             try:
                 image_path, delete_after = self._ensure_photo(entry, prefix)
             except Exception as exc:  # noqa: BLE001
-                from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-
-                if not isinstance(exc, B2DailyCapError):
+                reason = _fetch_stop_reason(exc)
+                if not reason:
                     raise
-                log.warning("B2 daily cap reached — stopping this run.")
-                stats["stopped"] = "b2_daily_cap"
+                log.warning("Library fetch stopped (%s).", reason)
+                stats["stopped"] = reason
                 break
             source_hash = ""
             if image_path is not None and image_path.is_file():
@@ -588,25 +662,20 @@ class PinterestScheduler:
                     pin_bytes,
                 )
                 log.info(
-                    "  [DRY RUN] Would publish '%s' (%d bytes pin image) card=%s",
-                    title, len(pin_bytes), card_path,
+                    "  [DRY RUN] Would publish '%s' (%d bytes pin image) card=%s link=%s",
+                    title, len(pin_bytes), card_path, entry.get("target_url") or "",
                 )
                 log.info(
-                    "  [DRY RUN] Would record '%s' in scheduled_history.txt.",
+                    "  [DRY RUN] Not recording '%s' (no inventory save, no ledger, no Facebook).",
                     src_filename,
                 )
-                try:
-                    self._queue_facebook(entry, pin_bytes, ledger, record_note=True)
-                except Exception as exc:  # noqa: BLE001
-                    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-
-                    if not isinstance(exc, B2DailyCapError):
-                        raise
-                    log.warning("B2 daily cap reached — stopping this run.")
-                    stats["stopped"] = "b2_daily_cap"
-                    break
-                inv.mark_posted(data, post_id, "DRY_RUN_PIN_ID")
-                inv.save(data)
+                stats.setdefault("pins", []).append(
+                    {
+                        "post_id": post_id,
+                        "title": title,
+                        "target_url": str(entry.get("target_url") or ""),
+                    }
+                )
                 stats["published"] += 1
 
             else:
@@ -741,24 +810,74 @@ class PinterestScheduler:
                 log.info("  Facebook ledger note failed for %s (%s).", post_id, type(exc).__name__)
         return bool(queued)
 
+    def _article_catalog(self) -> list:
+        """WordPress posts for this run. A caller-supplied catalog is not fetched again."""
+        site = str(self.context.get("site_url") or cfg.TARGET_URL or "").strip()
+        if not site or site.upper() == "TODO":
+            return []
+        catalog = self.context.get("catalog")
+        if catalog is not None:
+            return catalog
+        verify = self.context.get("article_tls_verify", True)
+        if isinstance(verify, str):
+            verify = verify.strip().lower() not in {"0", "false", "no", "off"}
+        from agents.posting.pinterest_engine.articles import fetch_wordpress_catalog  # noqa: PLC0415
+
+        account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
+        catalog = fetch_wordpress_catalog(
+            site,
+            verify=bool(verify),
+            account_id=account,
+            outputs_dir=self.outputs_dir,
+        )
+        self.context["catalog"] = catalog
+        return catalog
+
+    def _linkable_library_ids(self) -> list[str]:
+        """Library post ids that resolve to an article, longest/catalog order aside.
+
+        Scanning the JSON is cheap. Pin copy is generated only for these ids.
+        """
+        from agents.posting.pinterest_engine.articles import attach_article_url  # noqa: PLC0415
+
+        catalog = self._article_catalog()
+        site = str(self.context.get("site_url") or cfg.TARGET_URL or "").strip()
+        account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
+        ranked: list[str] = []
+        library = self.outputs_dir / "library"
+        for path in sorted(library.glob("post_*.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            probe = {
+                "subject_slug": raw.get("subject_slug") or "",
+                "topic": raw.get("topic") or "",
+                "pinterest_title": raw.get("pinterest_title") or "",
+                "post_id": path.stem,
+                "image_relative": raw.get("image_relative") or "",
+                "image_path": raw.get("image_path") or "",
+                "local_image_path": raw.get("local_image_path") or "",
+            }
+            status = attach_article_url(probe, catalog, account, site_url=site)
+            if status is None and str(probe.get("target_url") or "").strip():
+                ranked.append(path.stem)
+        return ranked
+
     def _attach_article_links(self, entries: list[dict]) -> None:
         site = str(self.context.get("site_url") or cfg.TARGET_URL or "").strip()
         if not site or site.upper() == "TODO":
             return
-        verify = self.context.get("article_tls_verify", True)
-        if isinstance(verify, str):
-            verify = verify.strip().lower() not in {"0", "false", "no", "off"}
         account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
-        catalog = self.context.get("catalog")
-        if catalog is None:
-            from agents.posting.pinterest_engine.articles import fetch_wordpress_catalog  # noqa: PLC0415
-
-            catalog = fetch_wordpress_catalog(site, verify=bool(verify), account_id=account)
+        catalog = self._article_catalog()
         from agents.posting.pinterest_engine.articles import attach_article_url  # noqa: PLC0415
 
         for entry in entries:
-            if attach_article_url(entry, catalog, account) == "skip":
-                entry["_skip_article"] = "skip"
+            linked = attach_article_url(entry, catalog, account, site_url=site)
+            if linked in {"skip", "no-link"}:
+                entry["_skip_article"] = linked
 
     def _load_ledger(self):
         import os  # noqa: PLC0415
@@ -784,7 +903,7 @@ class PinterestScheduler:
             if token and board:
                 pins = fetch_board_pins(board, token)
         if pins:
-            ledger.seed_board_pins(pins)
+            ledger.seed_board_pins(pins, persist=not self.dry_run)
         return ledger
 
     def _ensure_photo(self, entry: dict, prefix: str) -> tuple[Path | None, bool]:
@@ -799,6 +918,7 @@ class PinterestScheduler:
             channel=channel,
             client=self.context.get("b2_client"),
             bucket=self.context.get("b2_bucket"),
+            folder_id=str(self.context.get("drive_folder_id") or ""),
         )
         if path is not None and path.is_file() and not is_text_graphic(path):
             return path, delete_after
