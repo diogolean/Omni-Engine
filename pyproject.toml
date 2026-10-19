@@ -4,20 +4,20 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["omni", "tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts"]
+src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 # E501: line length was not enforced on the whole tree. E402: bootstrap
 # and channel scripts import after path setup. E731/E741: legacy lambdas
-# and names. F401, F841, and I001 are not ignored here, so omni/ (now core/publishing/,
-# modules/accounts/ and core/worker.py) and
+# and names. F401, F841, and I001 are not ignored here, so core/publishing/,
+# modules/accounts/, core/worker.py and
 # agents/media/b2_*.py stay on the original rules.
 ignore = ["E501", "E402", "E731", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 # Legacy modules. Do not add core/publishing/, modules/accounts/,
-# core/worker.py, omni/ or agents/media/b2_*.py.
+# core/worker.py or agents/media/b2_*.py.
 "agents/writer/**" = ["F401", "F841", "I001"]
 "agents/posting/**" = ["F401", "F841", "I001"]
 "agents/orchestrator/**" = ["F401", "F841", "I001"]
@@ -67,4 +67,4 @@ ignore = ["E501", "E402", "E731", "E741"]
 "channel_loader.py" = ["F401", "F841", "I001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config"]
+known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config"]
