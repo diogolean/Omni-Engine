@@ -27,6 +27,7 @@ import logging
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from utils.env import env_float
 from typing import Callable, Iterable
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,7 @@ NEAR_DUP_BITS = 24
 _BLOCK = 12
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float((os.getenv(name) or "").strip() or default)
-    except ValueError:
-        return default
+_env_float = env_float
 
 
 def near_dup_bits() -> int:

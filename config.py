@@ -32,6 +32,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from utils.env import env_bool, parse_interval_hours, resolve_path
 
 from dotenv import load_dotenv
 
@@ -78,15 +79,10 @@ def print_dotenv_bootstrap() -> None:
 # Small helpers
 # ---------------------------------------------------------------------------
 
-def _bool_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+_bool_env = env_bool
 
 
-def _resolve_path(value: str | None, default: Path) -> Path:
-    return Path((value or str(default))).expanduser()
+_resolve_path = resolve_path
 
 
 def _parse_schedule_minutes(raw: str | None) -> int | None:
@@ -689,14 +685,7 @@ PUBLISHING_INTERVAL_MINUTES: int | None = _parse_schedule_minutes(PUBLISHING_SCH
 # ---------------------------------------------------------------------------
 # Pinterest safe-drip interval
 # ---------------------------------------------------------------------------
-def _parse_interval_hours(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if not raw:
-        return default
-    try:
-        return float(raw.strip())
-    except ValueError:
-        return default
+_parse_interval_hours = parse_interval_hours
 
 
 MIN_INTERVAL_HOURS: float = _parse_interval_hours("MIN_INTERVAL_HOURS", 3.0)
