@@ -29,8 +29,23 @@ def _judge_ok(path: Path, caption: str, kind: str) -> dict:
     return {"passed": True, "contains_text": False, "relevance_score": 0.91, "kind": kind}
 
 
+def _photo(path: Path, seed: str) -> Path:
+    """A distinct photograph-like file per seed: grain, no flat panels."""
+    import hashlib
+    import random
+
+    rng = random.Random(hashlib.md5(seed.encode()).hexdigest())
+    image = Image.new("RGB", (160, 90))
+    image.putdata([
+        (rng.randrange(256), rng.randrange(256), rng.randrange(256))
+        for _ in range(160 * 90)
+    ])
+    image.save(path, quality=85)
+    return path
+
+
 def _download(item: _Item, folder: Path) -> Path:
-    return _jpeg(folder / f"{item.key}.jpg", (30, 90, 40))
+    return _photo(folder / f"{item.key}.jpg", item.key)
 
 
 def test_the_pool_keeps_real_photos_and_skips_openverse(tmp_path: Path) -> None:
@@ -166,17 +181,17 @@ def test_flux_is_only_the_sky_and_crops_do_not_repeat(tmp_path: Path) -> None:
     ]
     shots = assign_shots(sentences, assets, geography="limestone hills near Şanlıurfa", flux_max=6)
     flux = [item for item in shots if item.mode == "flux"]
-    assert len(flux) == 6
+    # The first beat is the cover: a real photograph, never a Flux sky.
+    assert shots[0].mode == "asset"
+    assert len(flux) == 5
     assert all("Şanlıurfa" in item.prompt or "limestone" in item.prompt for item in flux)
     jar = [item for item in shots if "jar" in item.sentence]
     assert jar
     assert all(item.mode != "flux" for item in jar)
     site = next(item for item in shots if "pillars" in item.sentence)
-    assert site.mode != "flux"
-    assert site.asset_key == "site"
-    reused = [item for item in shots if item.asset_key == "jar"]
-    assert len(reused) == 2
-    assert reused[0].anchor != reused[1].anchor
+    assert site.mode == "asset"
+    keys = [item.asset_key for item in shots if item.asset_key]
+    assert len(keys) == len(set(keys)), "one photograph, one beat"
 
 
 def test_a_failed_sky_falls_back_to_a_relevant_crop(tmp_path: Path) -> None:
@@ -418,7 +433,7 @@ def test_cache_seed_counts_and_a_short_pool_aborts(tmp_path: Path) -> None:
     assert "pool 1 < 8" in str(caught.value)
 
 
-def test_a_source_is_not_used_twice_in_a_row_or_more_than_twice() -> None:
+def test_a_source_is_used_once_per_reel() -> None:
     from modules.reel_artefact.asset_pool import PoolAsset, fit_pool_beats
 
     assets = [
@@ -432,7 +447,7 @@ def test_a_source_is_not_used_twice_in_a_row_or_more_than_twice() -> None:
     keys = [shot.asset_key for shot in shots if shot.asset_key]
     assert keys
     assert all(keys[i] != keys[i + 1] for i in range(len(keys) - 1))
-    assert all(keys.count(key) <= 2 for key in set(keys))
+    assert all(keys.count(key) == 1 for key in set(keys))
     anchors: dict[str, set[str]] = {}
     for shot in shots:
         if not shot.asset_key:
@@ -644,7 +659,7 @@ def test_commons_jar_titles_are_objects_and_a_museum_label_stays() -> None:
 def test_committed_baghdad_cache_names_the_licence(tmp_path: Path) -> None:
     import json
 
-    from modules.reel_artefact.asset_pool import build_asset_pool
+    from modules.reel_artefact.asset_pool import _credit_blurbs, build_asset_pool
     from modules.reel_artefact.fetch import committed_cache_dir
 
     folder = committed_cache_dir("ancient_knowledge", "baghdad_battery")
@@ -677,10 +692,11 @@ def test_committed_baghdad_cache_names_the_licence(tmp_path: Path) -> None:
         object_floor=0,
     )
     assert any(asset.source == "cache" and asset.kind == "object" for asset in pool)
-    jar = next(asset for asset in pool if "01_parthian" in asset.key)
-    assert "pile bagdad" in jar.caption.lower()
-    cutaway = next(asset for asset in pool if "02_parthian" in asset.key)
-    assert "innersystem" in cutaway.caption.lower()
+    blurbs = _credit_blurbs(folder)
+    assert "pile bagdad" in blurbs["01_parthian_jar_copper_iron.jpg"].lower()
+    assert "innersystem" in blurbs["02_parthian_jar.jpg"].lower()
+    # The labelled cutaway is a text panel: never a scene still.
+    assert not any("02_parthian" in asset.key for asset in pool)
 
 
 def test_the_hook_uses_the_jar_photo_and_a_gallery_loses_a_site_line() -> None:
@@ -722,3 +738,108 @@ def test_the_hook_uses_the_jar_photo_and_a_gallery_loses_a_site_line() -> None:
     )
     assert shots[0].asset_key == "jar"
     assert shots[1].asset_key == "arch"
+
+
+def _slide(path: Path) -> Path:
+    """A grey museum label: flat panel, dark text strokes."""
+    from PIL import ImageDraw
+
+    image = Image.new("RGB", (640, 360), (205, 205, 205))
+    draw = ImageDraw.Draw(image)
+    for row in range(40, 330, 22):
+        for col in range(30, 600, 46):
+            draw.rectangle((col, row, col + 30, row + 3), fill=(20, 20, 20))
+            draw.rectangle((col + 4, row - 8, col + 6, row + 3), fill=(20, 20, 20))
+    image.save(path, quality=90)
+    return path
+
+
+def _sketch(path: Path) -> Path:
+    """Pencil on paper: one dominant tone, a few lines."""
+    from PIL import ImageDraw
+
+    image = Image.new("RGB", (360, 640), (246, 243, 236))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((90, 120, 270, 520), outline=(90, 70, 60), width=3)
+    draw.line((180, 60, 180, 600), fill=(60, 60, 60), width=2)
+    image.save(path, quality=90)
+    return path
+
+
+def test_still_guard_sees_repeats_panels_and_sketches(tmp_path: Path) -> None:
+    from modules.reel_artefact import still_guard
+
+    still_guard.reset_cache()
+    first = _photo(tmp_path / "a.jpg", "a")
+    copy = tmp_path / "a_copy.jpg"
+    copy.write_bytes(first.read_bytes())
+    resized = tmp_path / "a_small.jpg"
+    Image.open(first).resize((120, 68)).save(resized, quality=70)
+    other = _photo(tmp_path / "b.jpg", "b")
+    assert still_guard.repeats([first, other, copy, resized]) == [(0, 2), (0, 3)]
+
+    photo = still_guard.traits(other)
+    assert photo is not None and photo.photo and not photo.text_panel
+    slide = still_guard.traits(_slide(tmp_path / "slide.jpg"))
+    assert slide is not None and slide.text_panel and not slide.photo
+    sketch = still_guard.traits(_sketch(tmp_path / "sketch.jpg"))
+    assert sketch is not None and not sketch.photo
+
+
+def test_unique_stills_replaces_a_repeat_and_a_sketch_cover(tmp_path: Path) -> None:
+    from modules.reel_artefact import still_guard
+    from modules.reel_artefact.asset_pool import PoolAsset, unique_stills
+
+    still_guard.reset_cache()
+    sketch = _sketch(tmp_path / "s0.jpg")
+    one = _photo(tmp_path / "s1.jpg", "one")
+    two = tmp_path / "s2.jpg"
+    two.write_bytes(one.read_bytes())
+    spare = _photo(tmp_path / "pool_spare.jpg", "spare")
+    spare2 = _photo(tmp_path / "pool_spare2.jpg", "spare2")
+    pool = [
+        PoolAsset(str(one), "jar", "object", "commons", "one", photo=True),
+        PoolAsset(str(spare), "jar", "object", "commons", "spare", photo=True),
+        PoolAsset(str(spare2), "site", "site", "commons", "spare2", photo=True),
+    ]
+    out, stuck = unique_stills([sketch, one, two], pool)
+    assert not stuck
+    assert out[0] != sketch
+    found = [still_guard.traits(path) for path in out]
+    assert all(item is not None for item in found)
+    assert still_guard.repeats(out) == []
+    assert found[0].photo
+
+
+def test_the_cta_tail_does_not_reuse_the_cover(tmp_path: Path) -> None:
+    from modules.reel_artefact.asset_pool import PoolAsset, fit_pool_beats
+
+    assets = [
+        PoolAsset(str(tmp_path / f"p{i}.jpg"), f"limestone pillar {i}", "site", "commons", f"p{i}")
+        for i in range(6)
+    ]
+    sentences = [f"The limestone pillar number {i} stands." for i in range(5)]
+    sentences.append("Follow for more ancient pillars.")
+    _text, _durs, beats = fit_pool_beats(
+        sentences, [2.0] * len(sentences), assets, geography="hills", flux_max=0, protect_tail=1,
+    )
+    keys = [shot.asset_key for shot in beats if shot.asset_key]
+    assert len(keys) == len(set(keys))
+
+
+def test_an_artefact_story_skips_unnamed_site_shots(tmp_path: Path) -> None:
+    from modules.reel_artefact.asset_pool import PoolAsset, assign_shots
+
+    assets = [
+        PoolAsset(str(tmp_path / f"j{i}.jpg"), f"parthian clay jar {i}", "object", "cache", f"j{i}")
+        for i in range(3)
+    ]
+    assets.append(
+        PoolAsset(str(tmp_path / "arch.jpg"), "arch of ctesiphon", "site", "cache", "arch")
+    )
+    shots = assign_shots(
+        ["A clay jar was found.", "Nobody knows who made it.", "The jar held a copper tube."],
+        assets,
+        flux_max=0,
+    )
+    assert all(shot.asset_key != "arch" for shot in shots)

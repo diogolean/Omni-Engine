@@ -31,6 +31,7 @@ jobs:
       - name: Secret scan
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz -o /tmp/gitleaks.tgz
+          echo "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e  /tmp/gitleaks.tgz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
           # Current tree only. A Facebook page token remains in git history;
           # the owner must revoke it and decide on a history purge. This scan
@@ -39,8 +40,11 @@ jobs:
 
       - name: Test
         run: |
-          # Whole suite. The --deselect lines failed on the base branch
-          # (cursor/hook-parallax-b2fd) before this refactor, in isolation.
+          # Whole suite, including the B2, Drive, and Pinterest tests from main.
+          # The four Ancient Knowledge deselects below (visual-QA chain, both
+          # providers down, flux retry, fair-share stills) stay excluded; they
+          # come from #23 and that owner will fix them there. The other
+          # deselects failed in isolation on the base branch before this refactor.
           pytest -q tests channels_config \
             --deselect tests/test_lofi_emotional_pipeline.py::test_gemini38_provider_uses_only_configured_primary_model \
             --deselect tests/test_reel_visual_qa.py::test_model_chain_uses_gemini_when_qwen_missing \

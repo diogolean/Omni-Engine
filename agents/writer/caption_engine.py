@@ -1544,9 +1544,16 @@ class CaptionEngine:
                     if t:
                         parts_out.append(t)
             text = "\n".join(parts_out).strip()
+        served_by = str(getattr(response, "provider", "") or "gemini")
+        served_model = str(getattr(response, "model_version", "") or "")
+        self._last_text_provider = served_by
         self._log_script_cost(
-            provider="gemini",
-            model=(chain[0] if chain else "gemini"),
+            provider=served_by,
+            model=(
+                served_model.split(":", 1)[-1]
+                if served_by != "gemini" and served_model
+                else (chain[0] if chain else "gemini")
+            ),
             prompt=contents,
             output=text,
         )
@@ -2488,7 +2495,10 @@ class CaptionEngine:
                         raw_response = expanded
                 if raw_response:
                     mode_tag = "humanized"
-                    logger.info("humanize_smart_bait | Gemini PRIMARY OK")
+                    logger.info(
+                        "humanize_smart_bait | text OK via %s",
+                        getattr(self, "_last_text_provider", "gemini"),
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("humanize_smart_bait | Gemini failed (%s).", exc)
                 raw_response = self._ancient_after_gemini(gemini_contents, exc)
@@ -2709,7 +2719,10 @@ class CaptionEngine:
                         raw_response = expanded
                 if raw_response:
                     mode_tag = "humanized"
-                    logger.info("humanize_long_caption | Gemini PRIMARY OK")
+                    logger.info(
+                        "humanize_long_caption | text OK via %s",
+                        getattr(self, "_last_text_provider", "gemini"),
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("humanize_long_caption | Gemini failed (%s).", exc)
                 raw_response = self._ancient_after_gemini(_long_prompt, exc)
@@ -2919,7 +2932,10 @@ class CaptionEngine:
                             "No copyright footer."
                         ) or result
                 if result:
-                    logger.info("humanize_voice_with_fallback | Gemini PRIMARY OK")
+                    logger.info(
+                        "humanize_voice_with_fallback | text OK via %s",
+                        getattr(self, "_last_text_provider", "gemini"),
+                    )
                     return _finish(result, "humanized")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Gemini humanizer failed (economic mode): %s", exc)

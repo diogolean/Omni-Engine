@@ -3481,6 +3481,21 @@ def _produce_variant_worker(
     reel_path: Path | None = None
     _b2_video_url: str = ""  # populated after successful B2 upload of the reel
 
+    if _is_economic_reel and _asset_pool and len(_sequence_image_paths) >= 2:
+        try:
+            from modules.reel_artefact.asset_pool import unique_stills as _unique_stills
+
+            _sequence_image_paths, _stuck_beats = _unique_stills(
+                list(_sequence_image_paths),
+                list(_asset_pool),
+                flux_generate=getattr(adapter, "generate", None) if adapter else None,
+                geography=_pool_geography,
+            )
+            if _stuck_beats:
+                _LOG.warning("REPEAT GUARD | unresolved beats=%s", _stuck_beats)
+        except Exception as _ug_exc:  # noqa: BLE001
+            _LOG.warning("REPEAT GUARD skipped (%s)", type(_ug_exc).__name__)
+
     # ── Sequential scene export + optional human approval gate ─────────────
     # Persist scene_01.png…scene_N.png under:
     #   outputs/<page>/assets/<episode_id>/

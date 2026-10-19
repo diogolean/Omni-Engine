@@ -2,10 +2,10 @@
 """acts steps moved out of main.py. Bodies are unchanged."""
 from __future__ import annotations
 
+from engine.geo_anchors import _GEO_ANCHORS
 from engine.runtime import (
     Any,
     Path,
-    _GEO_ANCHORS,
     _LOGO_ONLY_STILL_POST_TYPES,
     _MEI_DNA_FALLBACK,
     _SEQUENCE_VIDEO_POST_TYPES,
@@ -49,7 +49,6 @@ def _load_engagement_bait_examples(page_ctx: "Any | None" = None) -> str:
         "channels_config/wonder_feed/Quotes_reference/@REDES REF SOURCE FONTE.xlsx"
     )
     try:
-        from pathlib import Path as _P  # noqa: PLC0415
         _xl_abs = REPO_ROOT / _XLSX_REL
         if not _xl_abs.exists():
             _LOG.warning("Engagement bait spreadsheet not found: %s", _xl_abs)

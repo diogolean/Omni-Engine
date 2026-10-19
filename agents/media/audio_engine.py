@@ -1020,6 +1020,15 @@ def generate_voiceover_with_timestamps(
         "Voiceover saved → %s (%d bytes, %d words timed)",
         output_path.name, size, len(word_timings),
     )
+    try:
+        from core.spend_ledger import record_informational
+
+        record_informational(
+            provider="elevenlabs", model=_model, source="voiceover_timestamps",
+            characters=len(text), plan="pro",
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return output_path, word_timings
 
 

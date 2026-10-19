@@ -35,7 +35,8 @@
       "license": "Public domain",
       "author": "Unknown author Unknown author (American Colony Photo Department)",
       "source_url": "https://commons.wikimedia.org/wiki/File%3ACtesiphon%2C_Iraq%2C_1932.jpg",
-      "attribution": "File:Ctesiphon, Iraq, 1932.jpg by Unknown author Unknown author (American Colony Photo Department) — Public domain — Wikimedia Commons"
+      "attribution": "File:Ctesiphon, Iraq, 1932.jpg by Unknown author Unknown author (American Colony Photo Department) — Public domain — Wikimedia Commons",
+      "kind": "site"
     },
     {
       "file": "05_ctesiphon_arch.jpg",
@@ -44,7 +45,8 @@
       "license": "Public domain",
       "author": "Wikimedia Commons",
       "source_url": "https://commons.wikimedia.org/wiki/File%3ACtesiphon.jpg",
-      "attribution": "File:Ctesiphon.jpg by Wikimedia Commons — Public domain — Wikimedia Commons"
+      "attribution": "File:Ctesiphon.jpg by Wikimedia Commons — Public domain — Wikimedia Commons",
+      "kind": "site"
     },
     {
       "file": "06_taq_kasra.jpg",
@@ -53,7 +55,8 @@
       "license": "CC BY-SA 4.0",
       "author": "Hassan Majed",
       "source_url": "https://commons.wikimedia.org/wiki/File%3ATaq_Kasra.jpg",
-      "attribution": "File:Taq Kasra.jpg by Hassan Majed — CC BY-SA 4.0 — Wikimedia Commons"
+      "attribution": "File:Taq Kasra.jpg by Hassan Majed — CC BY-SA 4.0 — Wikimedia Commons",
+      "kind": "site"
     },
     {
       "file": "07_arch_of_ctesiphon.jpg",
@@ -62,7 +65,8 @@
       "license": "Public domain",
       "author": "Pierre Ponafidine",
       "source_url": "https://commons.wikimedia.org/wiki/File%3AArch_of_Ctesiphon.jpg",
-      "attribution": "File:Arch of Ctesiphon.jpg by Pierre Ponafidine — Public domain — Wikimedia Commons"
+      "attribution": "File:Arch of Ctesiphon.jpg by Pierre Ponafidine — Public domain — Wikimedia Commons",
+      "kind": "site"
     },
     {
       "file": "08_ctesiphon_exhibition.jpg",
@@ -71,7 +75,9 @@
       "license": "CC BY-SA 4.0",
       "author": "PersianDutchNetwork",
       "source_url": "https://commons.wikimedia.org/wiki/File%3ACtesiphon_Exhibition_-_Pergamonmuseum_Berlin_2017.jpg",
-      "attribution": "File:Ctesiphon Exhibition - Pergamonmuseum Berlin 2017.jpg by PersianDutchNetwork — CC BY-SA 4.0 — Wikimedia Commons"
+      "attribution": "File:Ctesiphon Exhibition - Pergamonmuseum Berlin 2017.jpg by PersianDutchNetwork — CC BY-SA 4.0 — Wikimedia Commons",
+      "exclude": true,
+      "exclude_reason": "museum hall, not the battery"
     },
     {
       "file": "09_ctesiphon_wall.jpg",
@@ -80,7 +86,8 @@
       "license": "CC0",
       "author": "Metropolitan Museum of Art",
       "source_url": "https://commons.wikimedia.org/wiki/File%3AWall_decoration_from_Ctesiphon_DP-1091-001.jpg",
-      "attribution": "File:Wall decoration from Ctesiphon DP-1091-001.jpg by Metropolitan Museum of Art — CC0 — Wikimedia Commons"
+      "attribution": "File:Wall decoration from Ctesiphon DP-1091-001.jpg by Metropolitan Museum of Art — CC0 — Wikimedia Commons",
+      "kind": "site"
     },
     {
       "file": "10_ziggurat_of_ur.jpg",
@@ -89,7 +96,9 @@
       "license": "CC BY-SA 4.0",
       "author": "Amjedha95",
       "source_url": "https://commons.wikimedia.org/wiki/File%3AZiggurat_of_Ur.jpg",
-      "attribution": "File:Ziggurat of Ur.jpg by Amjedha95 — CC BY-SA 4.0 — Wikimedia Commons"
+      "attribution": "File:Ziggurat of Ur.jpg by Amjedha95 — CC BY-SA 4.0 — Wikimedia Commons",
+      "exclude": true,
+      "exclude_reason": "Ur, not the find site"
     },
     {
       "file": "11_ishtar_gate.jpg",
@@ -98,7 +107,45 @@
       "license": "CC BY-SA 3.0",
       "author": "David Stanley",
       "source_url": "https://commons.wikimedia.org/wiki/File%3AIshtar_Gate.jpg",
-      "attribution": "File:Ishtar Gate.jpg by David Stanley — CC BY-SA 3.0 — Wikimedia Commons"
+      "attribution": "File:Ishtar Gate.jpg by David Stanley — CC BY-SA 3.0 — Wikimedia Commons",
+      "exclude": true,
+      "exclude_reason": "Babylon, not the find site"
+    },
+    {
+      "file": "12_parthian_jar_cleveland_1933_199.jpg",
+      "title": "File:Parthian, 1st-2nd Century - Jar - 1933.199 - Cleveland Museum of Art.jpg",
+      "subject": "Parthian clay jar, 1st-2nd century; same culture and period as the Baghdad Battery, not the battery itself",
+      "license": "CC0",
+      "author": "Cleveland Museum of Art",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Parthian,_1st-2nd_Century_-_Jar_-_1933.199_-_Cleveland_Museum_of_Art.jpg",
+      "attribution": "File:Parthian, 1st-2nd Century - Jar - 1933.199 - Cleveland Museum of Art.jpg by Cleveland Museum of Art — CC0 — Wikimedia Commons"
+    },
+    {
+      "file": "13_parthian_jar_cleveland_1933_203.jpg",
+      "title": "File:Parthian, 1st-2nd Century - Jar - 1933.203 - Cleveland Museum of Art.jpg",
+      "subject": "Parthian clay jar, 1st-2nd century; same culture and period as the Baghdad Battery, not the battery itself",
+      "license": "CC0",
+      "author": "Cleveland Museum of Art",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Parthian,_1st-2nd_Century_-_Jar_-_1933.203_-_Cleveland_Museum_of_Art.jpg",
+      "attribution": "File:Parthian, 1st-2nd Century - Jar - 1933.203 - Cleveland Museum of Art.jpg by Cleveland Museum of Art — CC0 — Wikimedia Commons"
+    },
+    {
+      "file": "14_parthian_jar_cleveland_1933_204.jpg",
+      "title": "File:Parthian, 1st-2nd Century - Jar - 1933.204 - Cleveland Museum of Art.jpg",
+      "subject": "Parthian clay jar, 1st-2nd century; same culture and period as the Baghdad Battery, not the battery itself",
+      "license": "CC0",
+      "author": "Cleveland Museum of Art",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Parthian,_1st-2nd_Century_-_Jar_-_1933.204_-_Cleveland_Museum_of_Art.jpg",
+      "attribution": "File:Parthian, 1st-2nd Century - Jar - 1933.204 - Cleveland Museum of Art.jpg by Cleveland Museum of Art — CC0 — Wikimedia Commons"
+    },
+    {
+      "file": "15_parthian_jar_iran.jpg",
+      "title": "File:Parthian jar Probably Iran 1st 2nd century.jpg",
+      "subject": "Parthian clay jar, 1st-2nd century; same culture and period as the Baghdad Battery, not the battery itself",
+      "license": "CC BY-SA 3.0",
+      "author": "PHGCOM",
+      "source_url": "https://commons.wikimedia.org/wiki/File:Parthian_jar_Probably_Iran_1st_2nd_century.jpg",
+      "attribution": "File:Parthian jar Probably Iran 1st 2nd century.jpg by PHGCOM — CC BY-SA 3.0 — Wikimedia Commons"
     }
   ]
 }

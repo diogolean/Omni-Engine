@@ -6,6 +6,10 @@ one hard cap per reel, ``REEL_REEL_BUDGET_USD`` (default $0.05): a paid LLM
 call that would pass it raises :class:`SpendCapExceeded` before the request
 is sent. ``budget.reset_spend`` clears the reel part; the run part keeps
 growing so a batch can report its total. ``write_ledger`` dumps both to JSON.
+
+Usage on a flat subscription (ElevenLabs on the Pro plan) is logged with
+:func:`record_informational`: it shows in the ledger with its list-price
+equivalent but costs nothing at the margin and never counts toward the cap.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ DEFAULT_REEL_CAP_USD: float = 0.05
 _LOCK = threading.Lock()
 _REEL: list["SpendRecord"] = []
 _RUN: list["SpendRecord"] = []
+_INFO: list["SpendRecord"] = []
 _ATEXIT = False
 
 
@@ -129,6 +134,50 @@ def record(
     return rec
 
 
+def subscription_list_rate(provider: str) -> float:
+    """List price per 1k characters, shown only for scale. Env overrides it."""
+    raw = (os.getenv(f"{str(provider).upper()}_LIST_USD_PER_1K_CHARS") or "").strip()
+    try:
+        return max(0.0, float(raw)) if raw else 0.30
+    except ValueError:
+        return 0.30
+
+
+def record_informational(
+    *,
+    provider: str,
+    model: str,
+    source: str = "",
+    kind: str = "voice",
+    characters: int = 0,
+    plan: str = "subscription",
+) -> SpendRecord:
+    """Log flat-plan usage. Marginal cost $0; never part of the reel cap."""
+    chars = max(0, int(characters or 0))
+    list_usd = chars / 1000.0 * subscription_list_rate(provider)
+    rec = SpendRecord(
+        ts=datetime.now(timezone.utc).isoformat(),
+        provider=str(provider or "unknown"),
+        model=str(model or "unknown"),
+        source=str(source or ""),
+        kind=str(kind or "voice"),
+        input_tokens=chars,
+        output_tokens=0,
+        images=0,
+        cost_usd=0.0,
+        status=f"informational:{plan}:list_usd={list_usd:.4f}",
+    )
+    with _LOCK:
+        _INFO.append(rec)
+    _register_exit_dump()
+    logger.info(
+        "SPEND | provider=%s | model=%s | src=%s | kind=%s | chars=%d | cost=$0 (%s plan, "
+        "informational, not in cap)",
+        rec.provider, rec.model, rec.source, rec.kind, chars, plan,
+    )
+    return rec
+
+
 def reset_reel() -> None:
     with _LOCK:
         _REEL.clear()
@@ -139,6 +188,7 @@ def reset_all() -> None:
     with _LOCK:
         _REEL.clear()
         _RUN.clear()
+        _INFO.clear()
 
 
 def _group(rows: list[SpendRecord]) -> dict[str, dict[str, Any]]:
@@ -155,6 +205,7 @@ def summary() -> dict[str, Any]:
     with _LOCK:
         reel = list(_REEL)
         run = list(_RUN)
+        info = list(_INFO)
     return {
         "reel_cap_usd": reel_cap_usd(),
         "reel_llm_usd": round(sum(r.cost_usd for r in reel), 6),
@@ -163,6 +214,11 @@ def summary() -> dict[str, Any]:
         "reel_by_model": _group(reel),
         "run_by_model": _group(run),
         "run_calls": len(run),
+        "informational": {
+            "note": "flat subscription usage; $0 marginal; not counted toward the reel cap",
+            "by_model": _group(info),
+            "characters": sum(r.input_tokens for r in info),
+        },
     }
 
 
@@ -171,7 +227,8 @@ def write_ledger(path: str | Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
         rows = [asdict(r) for r in _RUN]
-    payload = {"summary": summary(), "calls": rows}
+        info_rows = [asdict(r) for r in _INFO]
+    payload = {"summary": summary(), "calls": rows, "informational": info_rows}
     dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return dest
 

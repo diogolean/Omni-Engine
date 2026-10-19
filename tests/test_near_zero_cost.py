@@ -163,6 +163,12 @@ def test_text_only_gemini_request_is_served_by_the_cheap_chain(prod) -> None:
     assert resp.text == "A short script."
     assert resp.candidates[0].content.parts[0].text == "A short script."
     assert gemini_utils._text_only_blob([b"\x89PNG"]) is None
+    # The live fallback tail can list an image model; the head decides.
+    tail = ["models/gemini-2.5-flash", "models/gemini-nano-banana-2.1"]
+    resp = gemini_utils.generate_content_with_model_fallback(
+        _NoGemini(), tail, contents=["Write it."],
+    )
+    assert resp.provider == "deepinfra"
 
 
 def _noise(path: Path, size=(800, 1400)) -> Path:
@@ -210,3 +216,20 @@ def test_scene_library_reuses_an_approved_scene_after_the_cooldown(
     assert hit is not None and hit.is_file()
     assert lib.find("ancient_knowledge", scene_type="sky", geography="Aegean coast Greece",
                     prompt="Aegean sea at dawn") is None
+
+
+def test_subscription_voice_is_logged_but_not_capped(monkeypatch) -> None:
+    from core import spend_ledger
+
+    spend_ledger.reset_all()
+    monkeypatch.setenv("REEL_REEL_BUDGET_USD", "0.05")
+    spend_ledger.record_informational(
+        provider="elevenlabs", model="eleven_multilingual_v2", characters=990, plan="pro",
+    )
+    assert spend_ledger.reel_total() == 0.0
+    spend_ledger.preflight(0.049, provider="deepinfra", model="x")
+    info = spend_ledger.summary()["informational"]
+    assert info["characters"] == 990
+    assert "elevenlabs:eleven_multilingual_v2" in info["by_model"]
+    assert info["by_model"]["elevenlabs:eleven_multilingual_v2"]["cost_usd"] == 0.0
+    spend_ledger.reset_all()

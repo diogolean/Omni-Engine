@@ -65,6 +65,7 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Module | Responsibility |
 |---|---|
 | `engine/bootstrap.py` | UTF-8, source repair, page pre-parse |
+| `engine/geo_anchors.py` | `_GEO_ANCHORS`. Import the table from this module. |
 | `engine/runtime.py` | Imports that must run after `ACTIVE_PAGE` is set, then the page rebind |
 | `engine/acts.py` | Post-type predicates, act descriptors, topic entities |
 | `engine/voice.py` | Script trim, TTS stitch, voice track |

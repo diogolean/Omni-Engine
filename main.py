@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from pathlib import Path
 
 # Force UTF-8 for the whole process BEFORE any print / path / import side effects.
 # Windows defaults to cp1252 for console I/O, which corrupts accented filenames
@@ -59,7 +58,6 @@ import engine.runtime as _runtime  # noqa: E402
 
 for _name in dir(_runtime):
     if _name.startswith("_") and _name not in {
-        "_GEO_ANCHORS",
         "_LOGO_ONLY_STILL_POST_TYPES",
         "_MEI_BAN_PLAIN_MODERN",
         "_MEI_DNA_FALLBACK",
@@ -81,7 +79,8 @@ for _name in dir(_runtime):
         continue
     globals().setdefault(_name, getattr(_runtime, _name))
 
-from engine.acts import (  # noqa: E402
+from engine.geo_anchors import _GEO_ANCHORS  # noqa: E402, F401
+from engine.acts import (  # noqa: E402, F401
     _is_sequence_video_post,
     _planner_media_url,
     _is_logo_only_still,
@@ -94,7 +93,7 @@ from engine.acts import (  # noqa: E402
     _build_master_mei_script_act_prompts,
     _build_reel_act_descriptors,
 )
-from engine.stills import (  # noqa: E402
+from engine.stills import (  # noqa: E402, F401
     _export_scene_assets_sequential,
     _ensure_sequence_image,
     _is_valid_cached_still,
@@ -111,7 +110,7 @@ from engine.stills import (  # noqa: E402
     _run_acts_parallel,
     _maybe_convert_to_video,
 )
-from engine.reporting import (  # noqa: E402
+from engine.reporting import (  # noqa: E402, F401
     _color,
     _emit_clean_api_error,
     _format_cost_block,
@@ -122,7 +121,7 @@ from engine.reporting import (  # noqa: E402
     _print_video_cost_summary,
     _print_test_footer,
 )
-from engine.voice import (  # noqa: E402
+from engine.voice import (  # noqa: E402, F401
     _trim_script_to_word_limit,
     _filter_audio_tag_timings,
     _stitch_audio_sequential,
@@ -130,7 +129,7 @@ from engine.voice import (  # noqa: E402
     _synthesize_sequence_voice_track,
     _reel_audio_is_f5,
 )
-from engine.orchestrator import (  # noqa: E402
+from engine.orchestrator import (  # noqa: E402, F401
     _produce_variant_worker,
     _produce_agentic,
     _persist_agentic_postplanner,
@@ -138,14 +137,13 @@ from engine.orchestrator import (  # noqa: E402
     run_pipeline,
     run_test_images_debug_mode,
 )
-from engine.cli import (  # noqa: E402
+from engine.cli import (  # noqa: E402, F401
     _together_cli_image_model,
     cli,
 )
 from engine.bootstrap import (  # noqa: E402
     _clean_all_python_sources,
     _preparse_active_page,
-    _repair_drive_text_file,
 )
 
 
