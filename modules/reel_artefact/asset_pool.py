@@ -441,7 +441,8 @@ def assign_shots(
     One source is used once per reel (``REEL_SOURCE_MAX_USES``), never on
     back-to-back beats. The first beat is the cover and must be a photograph.
     A sentence that cannot take a new source is merged into the previous
-    beat; after ``MAX_MERGED_SPAN`` lines it gets a Flux landscape instead.
+    beat; after ``MAX_MERGED_SPAN`` lines only an atmosphere line gets a
+    Flux landscape, any other line keeps holding the previous photo.
     """
     from modules.reel_artefact.flux_policy import safe_flux_prompt
 
@@ -485,9 +486,16 @@ def assign_shots(
             assigned.append(ShotAssignment(sentence=text, mode="fallback"))
             return
         previous = assigned[-1]
-        if int(previous.span or 1) >= MAX_MERGED_SPAN and flux_used < int(flux_max):
+        if (
+            int(previous.span or 1) >= MAX_MERGED_SPAN
+            and wants_flux(text)
+            and flux_used < int(flux_max)
+        ):
             flux_shot(text)
             return
+        # Past the span limit a non-atmosphere line still holds the previous
+        # photo: a longer hold beats a landscape or a site the line never
+        # names (s23c B #4, #7, #10, #11).
         previous.sentence = f"{previous.sentence} {text}".strip()
         previous.span = int(previous.span or 1) + 1
 
@@ -507,7 +515,15 @@ def assign_shots(
     for sentence in sentences:
         text = str(sentence or "").strip()
         cover = shot_state.placed == 0
-        if not cover and wants_flux(text) and flux_used < int(flux_max):
+        names_pool_site = any(
+            asset.kind == "site" and _names_site(text, asset) > 0 for asset in assets
+        )
+        if (
+            not cover
+            and not names_pool_site
+            and wants_flux(text)
+            and flux_used < int(flux_max)
+        ):
             flux_shot(text)
             continue
         want_object = bool(_OBJECT.search(text))
@@ -703,16 +719,37 @@ def _credit_blurbs(cache_dir: Path) -> dict[str, str]:
     return blurbs
 
 
+_REGION_WORDS = frozenset({"iraq", "iran", "mesopotamia", "syria", "turkey", "egypt"})
+
+
+def view_key(asset: PoolAsset) -> frozenset[str]:
+    """What a site photo shows, from its caption: the place and the structure.
+
+    Two different photographs of one facade from a similar viewpoint (the
+    Ctesiphon arch as 04, 05 and 07) defeat every pixel check, the ORB crop
+    match included, so a site's view is also judged by its caption. Years,
+    numbers and the country do not change the view.
+    """
+    if asset.kind != "site":
+        return frozenset()
+    return frozenset(
+        token for token in _tokens(asset.caption)
+        if not token.isdigit() and token not in _REGION_WORDS
+    )
+
+
 def screen_pool(assets: list[PoolAsset]) -> list[PoolAsset]:
     """Pixel checks, no model: drop slides and labelled panels, drop repeats.
 
-    Two files of one photograph (a crop, a re-upload) collapse to the first.
+    Two files of one photograph (a crop, a re-upload) collapse to the first,
+    and so do two site photos of one view (see ``view_key``).
     Every survivor carries its photo-or-drawing verdict for the cover rule.
     """
     from modules.reel_artefact import still_guard
 
     kept: list[PoolAsset] = []
     seen: list[Any] = []
+    views: set[frozenset[str]] = set()
     for asset in assets:
         found = still_guard.traits(asset.path)
         if found is None:
@@ -725,6 +762,12 @@ def screen_pool(assets: list[PoolAsset]) -> list[PoolAsset]:
         if twin is not None:
             logger.info("ASSET POOL dropped %s (same photograph)", Path(asset.path).name)
             continue
+        view = view_key(asset)
+        if view and view in views:
+            logger.info("ASSET POOL dropped %s (same view)", Path(asset.path).name)
+            continue
+        if view:
+            views.add(view)
         seen.append(found)
         asset.photo = bool(found.photo)
         kept.append(asset)
@@ -1080,7 +1123,9 @@ def _unused_asset(sentence: str, pool: list[PoolAsset]) -> PoolAsset | None:
             if _on_topic(sentence, asset, object_topic=object_topic)
         ]
         want_object = object_topic or bool(_OBJECT.search(sentence or ""))
-        ranked = _ranked_assets(sentence, fitting or free, want_object=want_object)
+        # No fitting photo left: report pool_exhausted rather than show an
+        # unnamed site (s23c B #4 and #10 came through this fallback).
+        ranked = _ranked_assets(sentence, fitting, want_object=want_object)
         chosen = ranked[0] if ranked else None
         if chosen is not None:
             _CLAIMED.add(chosen.key)
