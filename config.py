@@ -38,6 +38,9 @@ from dotenv import load_dotenv
 from utils.pipeline_paths import (
     assets_root,
     channel_store_dir,
+)
+from utils.pipeline_paths import (
+    drive_root as _drive_root,
     outputs_root,
     page_assets_dir,
     page_outputs_dir,
@@ -635,9 +638,12 @@ if not PERSONA_DNA_PATH.is_file() and ACTIVE_PAGE == "anna_protocol":
 # Reference avatar: REFERENCE_IMAGE_PATH, then the in-repo page avatar,
 # then the historical Windows Drive file for anna_protocol.
 _page_ref_avatar: Path = ACTIVE_PAGE_DIR / "avatar_reference" / "avatar.png"
-_REFERENCE_AVATAR_WINDOWS = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@_Content 2026\The Holistic Legacy - Anna's Protocol"
-) / "Anna's Automated Image Posts Engine" / "avatar_reference" / "avatar.png"
+# REFERENCE_AVATAR_PATH overrides that last Drive fallback only.
+_REFERENCE_AVATAR_WINDOWS = _resolve_path(
+    os.getenv("REFERENCE_AVATAR_PATH"),
+    _drive_root() / "@_Content 2026" / "The Holistic Legacy - Anna's Protocol"
+    / "Anna's Automated Image Posts Engine" / "avatar_reference" / "avatar.png",
+)
 _ref_avatar_default: Path = (
     _page_ref_avatar if _page_ref_avatar.parent.is_dir() else _REFERENCE_AVATAR_WINDOWS
 )

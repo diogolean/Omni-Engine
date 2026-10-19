@@ -25,3 +25,17 @@ Three requirement files stay separate:
 Commands, channels, and post types: [COMMAND_REFERENCE.md](COMMAND_REFERENCE.md).
 
 Each page is `channels_config/<id>/` with `page_config.py`, `master_dna.json`, and `logo/logo.png`. `python main.py --help` lists the flags. Layout rules: [architecture/REPO_LAYOUT.md](architecture/REPO_LAYOUT.md).
+
+## Machine-specific paths
+
+Nothing in the code needs a particular drive letter. These optional keys move the old Windows defaults:
+
+| Key | What it moves | Default when unset |
+|---|---|---|
+| `OUTPUT_PATH` / `ASSETS_PATH` | factory outputs and assets | `<OMNI_DRIVE_ROOT>/@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT/Unified Multi-Page Factory/...` |
+| `OMNI_DRIVE_ROOT` | Drive tree root used by the fallbacks above, the wealth source folder and the Anna Protocol asset lookup | `G:\My Drive\Z sosFiles\Z_act\@ NETWORK` |
+| `REFERENCE_AVATAR_PATH` | last-resort reference avatar (after `REFERENCE_IMAGE_PATH` and the page avatar) | the Anna Protocol avatar under `OMNI_DRIVE_ROOT` |
+| `FFMPEG_BINARY` | ffmpeg used by `core/utils/fingerprint_engine.py` and `scripts/patch_last_30_audio.py`, tried first | `PATH`, then imageio_ffmpeg, then `C:\ffmpeg\bin\ffmpeg.exe` |
+| `FONT_DIRS` | extra font folders for `utils.pipeline_paths.find_font()` | repo `Fonts/`, then `%WINDIR%\Fonts`, then the usual Linux/macOS folders |
+
+Windows system fonts are resolved through `utils.pipeline_paths.windows_fonts_dir()` (`%WINDIR%\Fonts`). Aiwake keeps its own font list under `channels_config/aiwake/`.

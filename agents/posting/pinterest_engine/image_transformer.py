@@ -20,6 +20,8 @@ import io
 import logging
 from pathlib import Path
 
+from utils.pipeline_paths import windows_fonts_dir
+
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 log = logging.getLogger(__name__)
@@ -87,12 +89,12 @@ _warned_default_font = False
 # render the same hook. System fonts are only a fallback after that.
 _BUNDLED_SERIF = _REPO_ROOT / "Fonts" / "LiberationSerif"
 _SERIF_CANDIDATES = [
-    r"C:\Windows\Fonts\georgia.ttf",
-    r"C:\Windows\Fonts\georgiab.ttf",
-    r"C:\Windows\Fonts\georgiai.ttf",
-    r"C:\Windows\Fonts\palatia.ttf",
-    r"C:\Windows\Fonts\times.ttf",
-    r"C:\Windows\Fonts\timesbd.ttf",
+    str(windows_fonts_dir() / "georgia.ttf"),
+    str(windows_fonts_dir() / "georgiab.ttf"),
+    str(windows_fonts_dir() / "georgiai.ttf"),
+    str(windows_fonts_dir() / "palatia.ttf"),
+    str(windows_fonts_dir() / "times.ttf"),
+    str(windows_fonts_dir() / "timesbd.ttf"),
     str(_BUNDLED_SERIF / "LiberationSerif-Bold.ttf"),
     str(_BUNDLED_SERIF / "LiberationSerif-Regular.ttf"),
     "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
@@ -104,10 +106,10 @@ _SERIF_CANDIDATES = [
 ]
 
 _SANS_CANDIDATES = [
-    r"C:\Windows\Fonts\calibri.ttf",
-    r"C:\Windows\Fonts\calibrib.ttf",
-    r"C:\Windows\Fonts\segoeui.ttf",
-    r"C:\Windows\Fonts\arial.ttf",
+    str(windows_fonts_dir() / "calibri.ttf"),
+    str(windows_fonts_dir() / "calibrib.ttf"),
+    str(windows_fonts_dir() / "segoeui.ttf"),
+    str(windows_fonts_dir() / "arial.ttf"),
     str(_REPO_ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Regular.ttf"),
     str(_REPO_ROOT / "Fonts" / "Poppins" / "Poppins-Regular.ttf"),
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",

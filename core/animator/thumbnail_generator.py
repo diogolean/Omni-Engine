@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import random
 from pathlib import Path
+
+from utils.pipeline_paths import windows_fonts_dir
 from typing import Sequence
 
 import numpy as np
@@ -16,9 +18,9 @@ from .animator_types import SpeakerStyle
 
 def _font(size: int) -> ImageFont.ImageFont:
     for candidate in (
-        Path(r"C:\Windows\Fonts\impact.ttf"),
-        Path(r"C:\Windows\Fonts\arialbd.ttf"),
-        Path(r"C:\Windows\Fonts\seguisb.ttf"),
+        windows_fonts_dir() / "impact.ttf",
+        windows_fonts_dir() / "arialbd.ttf",
+        windows_fonts_dir() / "seguisb.ttf",
     ):
         if candidate.is_file():
             return ImageFont.truetype(str(candidate), size)

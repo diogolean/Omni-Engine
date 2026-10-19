@@ -108,9 +108,19 @@ def assets_root() -> Path:
 
 # Historical Google Drive layout. Used only when the matching env key is unset
 # so existing Windows machines keep resolving the same folders.
-WINDOWS_FACTORY_ROOT: Path = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT"
-) / "Unified Multi-Page Factory"
+# ``OMNI_DRIVE_ROOT`` relocates the whole Drive tree (the ``@ NETWORK`` folder);
+# unset keeps the historical ``G:`` location.
+WINDOWS_DRIVE_ROOT: Path = Path(r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK")
+
+
+def drive_root() -> Path:
+    """``OMNI_DRIVE_ROOT`` (env or ``.env``), else the historical ``G:`` Drive root."""
+    return _env_path("OMNI_DRIVE_ROOT") or WINDOWS_DRIVE_ROOT
+
+
+WINDOWS_FACTORY_ROOT: Path = (
+    drive_root() / "@MEDIAUPSCALE_FACTORY_DYNAMIC_CONTENT" / "Unified Multi-Page Factory"
+)
 WINDOWS_OUTPUTS_ROOT: Path = WINDOWS_FACTORY_ROOT / "outputs"
 WINDOWS_ASSETS_ROOT: Path = WINDOWS_FACTORY_ROOT / "assets"
 
@@ -401,3 +411,63 @@ def safe_rmtree(path: Path | str, *, missing_ok: bool = True) -> None:
             return
         raise FileNotFoundError(str(target))
     shutil.rmtree(target)
+
+
+# ---------------------------------------------------------------------------
+# Machine tools: ffmpeg and fonts
+# ---------------------------------------------------------------------------
+
+# Last-resort Windows install path, tried after PATH and imageio_ffmpeg.
+WINDOWS_FFMPEG_FALLBACK: Path = Path(r"C:\ffmpeg\bin\ffmpeg.exe")
+
+
+def ffmpeg_binary_override() -> Path | None:
+    """``FFMPEG_BINARY`` when set and pointing at a file, else ``None``."""
+    raw = (os.environ.get("FFMPEG_BINARY") or "").strip()
+    if not raw:
+        return None
+    cand = Path(raw).expanduser()
+    return cand if cand.is_file() else None
+
+
+def windows_fonts_dir() -> Path:
+    """System font folder on Windows: ``%WINDIR%\\Fonts`` (default ``C:\\Windows``)."""
+    return Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+
+
+def repo_fonts_dir() -> Path:
+    """Fonts shipped in the repo (``<repo>/Fonts``)."""
+    return _FACTORY_ROOT / "Fonts"
+
+
+def font_dirs() -> list[Path]:
+    """Font search order: ``FONT_DIRS`` (os.pathsep list), repo ``Fonts/``, system dirs."""
+    dirs: list[Path] = []
+    for part in (os.environ.get("FONT_DIRS") or "").split(os.pathsep):
+        if part.strip():
+            dirs.append(Path(part.strip()).expanduser())
+    dirs.append(repo_fonts_dir())
+    dirs.append(windows_fonts_dir())
+    dirs.extend(
+        [Path("/usr/share/fonts"), Path("/usr/local/share/fonts"), Path("/Library/Fonts")]
+    )
+    return dirs
+
+
+def find_font(*names: str) -> Path | None:
+    """First existing font file among ``names``, searched across ``font_dirs()``.
+
+    Each name is tried in order in every directory (top level first, then
+    one recursive pass per directory), so the caller's preference wins.
+    """
+    dirs = [d for d in font_dirs() if d.is_dir()]
+    for name in names:
+        for d in dirs:
+            cand = d / name
+            if cand.is_file():
+                return cand
+        for d in dirs:
+            hit = next(iter(sorted(d.rglob(name))), None)
+            if hit is not None and hit.is_file():
+                return hit
+    return None
