@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from utils.mime import image_mime_for
+
 _LOG = logging.getLogger(__name__)
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
@@ -124,13 +126,7 @@ def default_master_mei_ref_folder(engine_root: "str | Path | None" = None) -> Pa
     return (root / "channels_config" / "master_mei" / "style_reference").resolve()
 
 
-def _mime_for(filename: str) -> str:
-    lo = filename.lower()
-    if lo.endswith(".png"):
-        return "image/png"
-    if lo.endswith(".webp"):
-        return "image/webp"
-    return "image/jpeg"
+_mime_for = image_mime_for
 
 
 def _folder_cache_key(folder: Path) -> str:
