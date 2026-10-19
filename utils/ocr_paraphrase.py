@@ -37,6 +37,7 @@ from utils.gemini_usage import (
 )
 from utils.ocr_text import strip_wrapping_quotes
 from utils.pipeline_paths import assets_path
+from utils.logging_setup import setup_gemini_tool_logging
 
 # ---------------------------------------------------------------------------
 # Keywords removed from every quote before / after paraphrase
@@ -273,13 +274,7 @@ def paraphrase_vault(
     return dest
 
 
-def _configure_logging() -> None:
-    if not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s | %(message)s",
-        )
-    hush_gemini_sdk_logs()
+_configure_logging = setup_gemini_tool_logging
 
 
 def main(argv: list[str] | None = None) -> int:
