@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+from modules.reel_artefact.pricing import FLUX_USD as _FLUX_USD
+
 logger = logging.getLogger(__name__)
 
 _VALID_TIERS = frozenset({"nano", "economic", "premium"})
@@ -76,7 +78,8 @@ def _normalize_tier(value: Any) -> Literal["nano", "economic", "premium"]:
     return "economic"
 
 # Official per-unit formulas (USD)
-FLUX_SCHNELL_USD_PER_IMAGE: float = 0.003
+# Same Flux rate the per-reel budget uses (modules/reel_artefact/pricing.py).
+FLUX_SCHNELL_USD_PER_IMAGE: float = float(_FLUX_USD)
 ELEVENLABS_USD_PER_1K_CHARS: float = 0.030          # → $0.00003 / char
 
 

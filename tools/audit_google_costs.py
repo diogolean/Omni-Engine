@@ -25,9 +25,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
+from utils.gemini_usage import FLASH_INPUT_USD_PER_1M, FLASH_OUTPUT_USD_PER_1M
+
 # Local pricing (keep in sync with core/google_guardrail.py — no import required).
-FLASH_INPUT_USD_PER_1M = 0.075
-FLASH_OUTPUT_USD_PER_1M = 0.30
 IMAGE_FLASH_1K_USD = 0.039
 IMAGE_1K_USD = 0.03
 IMAGE_2K_USD = 0.134
