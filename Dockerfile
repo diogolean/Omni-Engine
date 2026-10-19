@@ -35,4 +35,4 @@ COPY . .
 
 RUN mkdir -p /opt/omni-engine/outputs /opt/omni-engine/credentials
 
-CMD ["python", "-m", "omni.worker", "--role", "scheduler"]
+CMD ["python", "-m", "core.worker", "--role", "scheduler"]

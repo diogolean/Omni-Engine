@@ -1,6 +1,6 @@
 # Omni-Engine
 
-Omni-Engine is the content factory for several public pages. `python main.py` drafts a post, draws or renders it, and writes a Post Planner row. The process that stays up on the Oracle VM is `python -m omni.worker`.
+Omni-Engine is the content factory for several public pages. `python main.py` drafts a post, draws or renders it, and writes a Post Planner row. The process that stays up on the Oracle VM is `python -m core.worker`.
 
 The repository is public. API keys, tokens, and credentials live only in `.env` (gitignored). `.env.example` lists the names and stays empty.
 
@@ -23,8 +23,8 @@ engine/          produce → stills, voice, compile
         outputs/<page>/  (gitignored)   and   Backblaze B2
 
 Oracle VM (docker compose)
-    engine service      python -m omni.worker --role engine
-    scheduler profile   python -m omni.worker --role scheduler
+    engine service      python -m core.worker --role engine
+    scheduler profile   python -m core.worker --role scheduler
                  │
                  ▼
     WordPress bot reads the xlsx → Facebook
@@ -49,7 +49,7 @@ A real render needs the keys in `.env` and ffmpeg on `PATH`. CI installs the sma
 
 ```bash
 docker compose --profile scheduler run --rm --no-deps scheduler \
-  python -m omni.worker --role scheduler --once --dry-run
+  python -m core.worker --role scheduler --once --dry-run
 ```
 
 ## Docs
