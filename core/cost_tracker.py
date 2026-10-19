@@ -163,6 +163,13 @@ _TIER_TEXT_KEY: dict[str, str] = {
 
 
 
+def _plan_list_warn_usd() -> float:
+    try:
+        return float(os.environ.get("ELEVENLABS_LIST_WARN_USD", "0.20"))
+    except ValueError:
+        return 0.20
+
+
 def _ledger_llm_summary() -> dict | None:
     """Real LLM and vision spend of this run, by provider, from spend_ledger."""
     try:
@@ -698,9 +705,20 @@ class CostTracker:
                     "replaces_estimate_usd": round(estimated_text, 6),
                 },
             })
+        plan_list = float(cats.get("informational_usd") or 0.0)
+        plan_warn = plan_list > _plan_list_warn_usd()
+        if plan_warn:
+            # On the flat plan this is not spend and not in the cap, but a run
+            # this heavy burns plan credits fast (or real money if metered).
+            logger.warning(
+                "COST | ElevenLabs list usage $%.4f this run is above $%.2f "
+                "(plan usage, not counted toward the cap)",
+                plan_list, _plan_list_warn_usd(),
+            )
         return {
             "page_id": self.page_id,
             "cost_tier": self.cost_tier,
+            "plan_list_warning": plan_warn,
             "total_estimated_usd": round(marginal, 6),
             "ledger_usd": round(ledger, 6),
             "marginal_usd": round(marginal, 6),

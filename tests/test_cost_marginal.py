@@ -97,3 +97,17 @@ def test_record_uses_the_whole_run_ledger_not_the_estimate(monkeypatch) -> None:
     assert len(text) == 1 and text[0]["model_key"] == "text_openrouter"
     assert record["marginal_usd"] == pytest.approx(0.0035 + 0.006)
     assert record["informational_usd"] == pytest.approx(0.06251)
+
+
+def test_heavy_plan_usage_warns_but_stays_out_of_the_total(monkeypatch, caplog) -> None:
+    monkeypatch.delenv("ELEVENLABS_BILLING", raising=False)
+    monkeypatch.setenv("ELEVENLABS_LIST_WARN_USD", "0.05")
+    tracker = CostTracker(page_id="ancient_knowledge", cost_tier="nano")
+    _reel(tracker)
+    with caplog.at_level("WARNING"):
+        record = tracker.to_dict()
+    assert record["plan_list_warning"] is True
+    assert record["marginal_usd"] == 0.0
+    assert "not counted toward the cap" in caplog.text
+    monkeypatch.setenv("ELEVENLABS_LIST_WARN_USD", "0.20")
+    assert tracker.to_dict()["plan_list_warning"] is False
