@@ -218,6 +218,33 @@ def _overlap(sentence: str, caption: str) -> int:
     return len(_tokens(sentence) & _tokens(caption))
 
 
+# Words that describe any building or photo. A line that only shares these
+# with a caption has not named the place in the picture.
+_GENERIC_SITE = frozenset({
+    "arch", "arches", "archway", "wall", "walls", "decoration", "decorations",
+    "decorative", "pattern", "patterns", "ruin", "ruins", "remains", "site",
+    "sites", "temple", "temples", "palace", "palaces", "building", "buildings",
+    "tower", "towers", "minaret", "minarets", "dome", "domes", "gate", "gates",
+    "city", "cities", "town", "view", "views", "ancient", "century", "centuries",
+    "stone", "stones", "brick", "bricks", "mudbrick", "mosque", "tomb", "tombs",
+    "shrine", "shrines", "street", "market", "region", "area", "today",
+    "stands", "standing", "great", "large", "old", "famous", "museum", "jpg",
+    "jpeg", "png", "iraq", "iran", "mesopotamia",
+})
+
+
+def _name_tokens(text: str) -> set[str]:
+    return {
+        token for token in _tokens(text)
+        if token not in _GENERIC_SITE and not token.isdigit()
+    }
+
+
+def _names_site(sentence: str, asset: PoolAsset) -> int:
+    """How many place names the line shares with the photo's caption."""
+    return len(_name_tokens(sentence) & _name_tokens(asset.caption))
+
+
 _DRAWING = re.compile(
     r"(?:innersystem|inner\s*system|elektroden|cut-?away|cross-?section|"
     r"\b(?:diagrams?|sketches?|illustrations?|schematics?|drawings?)\b)",
@@ -274,7 +301,14 @@ def _asset_rank(sentence: str, asset: PoolAsset, *, want_object: bool) -> tuple:
     object_hit = 1 if want_object and asset.kind == "object" and photo else 0
     outdoors = 0 if _gallery_outdoors(sentence, asset) else 1
     site_hit = 1 if (not want_object) and asset.kind == "site" and photo else 0
-    return (photo, jar, object_hit, outdoors, site_hit, _overlap(sentence, asset.caption))
+    # A line that names the place takes the photo whose caption names it,
+    # and a curated cache photo before a search hit.
+    named = _names_site(sentence, asset) if asset.kind == "site" else 0
+    curated = 1 if (asset.source or "") == "cache" else 0
+    return (
+        photo, jar, object_hit, outdoors, named, site_hit, curated,
+        _overlap(sentence, asset.caption),
+    )
 
 
 def _ranked_assets(
@@ -385,11 +419,13 @@ def _on_topic(sentence: str, asset: PoolAsset, *, object_topic: bool) -> bool:
     """On an artefact story a site photograph must be named by its line.
 
     The Baghdad Battery pool carries Ctesiphon, a minaret and a museum hall;
-    without this they fill every line that does not mention the jar.
+    without this they fill every line that does not mention the jar. Sharing
+    a word like "wall" or "arch" is not naming the site (s23b: a minaret for
+    "Wall decorations from that era").
     """
     if not object_topic or asset.kind == "object":
         return True
-    return _overlap(sentence, asset.caption) > 0
+    return _names_site(sentence, asset) > 0
 
 
 def assign_shots(
@@ -1033,10 +1069,19 @@ def _unused_asset(sentence: str, pool: list[PoolAsset]) -> PoolAsset | None:
 
     Pool jobs run in parallel, so the pick and the claim share one lock.
     """
+    object_topic = _object_topic(pool)
     with _CLAIM_LOCK:
         taken = _PLANNED | _CLAIMED
         free = [asset for asset in pool if asset.key not in taken]
-        chosen = best_asset(sentence, free)
+        # On an artefact story a generic line takes an unused object photo,
+        # not a site the line never names (s23b B #5 and #9: Ctesiphon).
+        fitting = [
+            asset for asset in free
+            if _on_topic(sentence, asset, object_topic=object_topic)
+        ]
+        want_object = object_topic or bool(_OBJECT.search(sentence or ""))
+        ranked = _ranked_assets(sentence, fitting or free, want_object=want_object)
+        chosen = ranked[0] if ranked else None
         if chosen is not None:
             _CLAIMED.add(chosen.key)
         return chosen
