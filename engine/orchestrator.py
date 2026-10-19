@@ -2946,6 +2946,25 @@ def _produce_variant_worker(
                         _idx + 1, _seq_n, _gate.blocked_reason or "rejected",
                     )
                     return
+                if (
+                    _gate.blocked_reason == "pool_exhausted"
+                    and _sequence_image_paths
+                    and Path(_sequence_image_paths[-1]).is_file()
+                ):
+                    # s23d B #10: no fitting photo left. Hold the previous
+                    # beat's photo rather than a flat placeholder or a site
+                    # the line never names.
+                    _held = Path(_sequence_image_paths[-1])
+                    _row["image_path"] = str(_held)
+                    _row["passed"] = True
+                    _row["reuse"] = "hold_previous"
+                    _sequence_image_paths.append(_held)
+                    _ok_acts += 1
+                    _LOG.warning(
+                        "REEL QA HOLD | act %d/%d reason=pool_exhausted — previous photo held",
+                        _idx + 1, _seq_n,
+                    )
+                    return
                 _guaranteed = None
                 try:
                     from modules.reel_artefact.reuse import guarantee_still
