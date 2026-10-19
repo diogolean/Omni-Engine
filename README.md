@@ -52,6 +52,27 @@ docker compose --profile scheduler run --rm --no-deps scheduler \
   python -m omni.worker --role scheduler --once --dry-run
 ```
 
+## Keyless demo
+
+No API keys, no `.env`, nothing published. This needs only the CI requirements and ffmpeg:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-ci.txt
+
+# 1. Reel pipeline end to end on fakes: stages, real ffmpeg render, voice mux, QA gate.
+OMNI_SKIP_DOTENV=1 pytest -q tests/test_engine_pipeline_split.py tests/test_audio_first_pipeline.py \
+  tests/test_reel_ladder.py tests/test_reel_safety_cap_and_ffmpeg.py \
+  tests/test_reel_voice_mux_and_sentence_beats.py tests/test_reel_object_beats_and_encode.py \
+  tests/test_reel_visual_qa.py tests/test_ffmpeg_timeout.py
+
+# 2. One scheduler wake in dry-run against an empty outputs folder.
+OMNI_SKIP_DOTENV=1 OUTPUT_PATH=/tmp/omni-demo \
+  python -m omni.worker --role scheduler --once --dry-run
+```
+
+The scheduler logs which pins it would post and why each account is skipped, then exits 0. `python main.py --test` is not keyless: it still opens a Gemini client, so it needs `google-genai` and a key.
+
 ## Docs
 
 The index is [docs/README.md](docs/README.md).
