@@ -9,7 +9,7 @@ Proposed. Design only: no code moves in this PR. The draft refactor PRs #37–#4
 The repo grew by accretion. Same-purpose code sits in `core/`, `modules/`, `agents/`, `utils/`, `omni/`, `quality/` and `channels_config/`. The audit (2026-10-19) found 13 duplicate groups, about 55 `load_dotenv` call sites, machine paths, and a package name (`omni`) that says nothing about what it does. Four concerns are tangled:
 
 1. **Production**: write, draw, voice, render, QA and cost-cap a piece of content.
-2. **Distribution**: get finished content out (APIs, browser automation, Post Planner export), on a schedule, exactly once.
+2. **Distribution**: get finished content out (APIs, browser automation, Post Planner export), on a schedule, at least once with reconciliation. A crash between publish and the ledger write is repaired by a reconcile step; nothing claims exactly-once.
 3. **Animation**: the parametric puppet engine (`core/animator`). It is the base of a future SaaS product and must not depend on any channel, Aiwake included.
 4. **Deploy/DevOps**: Docker, compose, the VM deploy, GPU serverless, and later Kubernetes.
 
@@ -168,9 +168,9 @@ flowchart LR
 ```
 
 - `animation/` = today's `core/animator/` + the generic parts of `channels_config/aiwake/media` (only where no Aiwake persona/brand is baked in). Public surface: `animation.api` (plus typed models). Anything else is private.
-- `products/aiwake/` = the rest of `channels_config/aiwake` (pipeline, personas, prompts, tools, tests, settings, openrouter/llm_factory, its own logging and `_load_font`). Its data/store stays under `products/aiwake/` or `channels/aiwake/`.
+- `products/aiwake/` = the rest of `channels_config/aiwake` (pipeline, personas, prompts, tools, tests, settings, openrouter/llm_factory, its own logging and `_load_font`). Its runtime state lives in one place: `channels/aiwake/store/` (same rule as every channel, gitignored except `store/portfolio/`). Code lives only in `products/aiwake/`.
 - Today's engine→Aiwake couplings to remove: `modules/metadata_auditor.py` (calls Aiwake backfill), `modules/memory/wsl.py` (imports `channels_config.aiwake.settings`), `tools/validate_aiwake_captions.py`, `scripts/build_post_planner.py`, `scripts/sync_youtube_live_metadata.py`. They move into `products/aiwake/tools/`, or they call a registered hook.
-- Aiwake→engine imports allowed after the move: `shared.*` (paths, env, logging, durable store, memory client), `distribution.publishers.*` (protocol + YouTube adapter), and the distribution contract (`ContentItem`). Imports of `modules.distribution_contract` (35) and `modules.durable_store` (22) map to `shared.contracts` / `shared.store`.
+- Aiwake→engine imports allowed after the move: `shared.*` (paths, env, logging, durable store, memory client), `distribution.publishers.*` (`Publisher` protocol and registry only; concrete adapters are resolved by the registry), and the distribution contract (`ContentItem`). Imports of `modules.distribution_contract` (35) and `modules.durable_store` (22) map to `shared.contracts` (`ContentItem`) and `shared.store` (`durable_store`). Aiwake's `modules.asset_library` imports (`channels_config/aiwake/tools/{backfill_metadata,library_sanitize}.py`) must go through `shared.contracts` too, because `production/library` is off-limits to products.
 - `models_avatar/` (RunPod/Civitai character images) goes to `production/providers/avatar/`. It is a generation provider, not animation.
 
 ### Production
@@ -201,7 +201,8 @@ shared/
 ├── ffmpeg.py      resolve, run with timeout, kill descendants (process_tools)
 ├── retry.py       network backoff (net_retry; never retries billing errors)
 ├── storage/       b2_client, b2_budget, drive_source
-├── contracts.py   ContentItem / distribution_contract, durable_store
+├── contracts.py   ContentItem (versioned) + compatibility adapters
+├── store.py       durable_store (B2/Drive/local)
 ├── memory/        supermemory client
 └── text.py, time.py, mime.py
 ```
@@ -247,7 +248,7 @@ deploy/
 | `channel_loader.py` | `production/pipeline/channel_context.py` |
 | `engine/` | `production/pipeline/` |
 | `core/` | `cost_tracker`, `spend_ledger`, `google_guardrail` → `production/cost/`; `cheap_llm` → `production/providers/llm/`; `remote_gpu_manager`, `comfy_workflow_convert`, `wan_*` → `production/providers/image/` (video); `reel_ffmpeg_render`, `reel_sequence_engine`, `scene_pacing`, `audio_chunker` → `production/media/`; `economic_reel_lofi` → `production/formats/lofi/`; `principles_of_wealth` → `production/formats/wealth/`; `reference_reel_engine` → `production/formats/reference/`; `animator/` → `animation/`; `interfaces`, `page_profile`, `post_type_registry` → `production/pipeline/`; `utils/fingerprint_engine` → `production/formats/wealth/` |
-| `modules/` | `reel_artefact`, `reel_grounding`, `reel_hook`, `shot_planner` → `production/formats/economic_reel/`; `reel_qa`, `reel_visual_qa` → `production/qa/`; `asset_library` → `production/library/`; `distribution_contract`, `durable_store` → `shared/contracts.py`; `memory` → `shared/memory/`; `metadata_auditor` → `tools/` (Aiwake branch → `products/aiwake/tools/`) |
+| `modules/` | `reel_artefact`, `reel_grounding`, `reel_hook`, `shot_planner` → `production/formats/economic_reel/`; `reel_qa`, `reel_visual_qa` → `production/qa/`; `asset_library` → `production/library/`; `distribution_contract` → `shared/contracts.py`; `durable_store` → `shared/store.py`; `memory` → `shared/memory/`; `metadata_auditor` → `tools/` (Aiwake branch → `products/aiwake/tools/`) |
 | `agents/media/` | providers → `production/providers/`; stills/compose/brand → `production/media/`; `b2_*`, `drive_source`, `imgbb_client` → `shared/storage/`; `content_library`, `durable_library`, `content_source` → `production/library/`; `persona_dna`, `mei_narrative` → `production/writers/`; `free_images` → `production/providers/image/free/`; `avatar_engine` → `production/formats/mei/` |
 | `agents/writer/`, `agents/rag/` | `production/writers/` |
 | `agents/orchestrator/` | `production/pipeline/agentic/` |
@@ -275,33 +276,58 @@ Every PR follows the same rules: `git mv` plus a `sys.modules` shim at the old p
 |---|---|---|
 | M0 | This ADR | — |
 | M1 | import-linter contracts in CI, in report-only mode | makes the target measurable before moving anything |
-| M1b | **High priority (performance).** The scheduler resumes from the last publish in the ledger (`next = last_published_at + cadence`) instead of a fixed 7–9h initial delay on startup | Every deploy restarts the scheduler and resets that delay. Until M1b ships, merge in batches per deploy window. |
+| M1b | **High priority (performance).** The scheduler resumes from the last publish in the ledger (for Pinterest, the newest `published_utc` in the B2 `PinLedger`; `next = last + cadence`) instead of the random 3–6h startup delay (`omni/worker.py` `_DEFAULT_MIN_HOURS=3.0`, `_DEFAULT_MAX_HOURS=6.0`) | Every deploy restarts the scheduler and resets that delay. Until M1b ships, merge in batches per deploy window. |
 | M2 | `shared/` with env, paths, logging, ffmpeg, mime, retry; re-target the content of #35/#37/#38/#41/#42 | old `utils.*` become shims |
-| M3 | `shared/storage`, `shared/contracts`, `shared/memory` | B2/Drive/durable store |
-| M4 | `distribution/publishers` (base, registry, api, browser, export) | omni/adapters + agents/posting publishers |
-| M5 | `distribution/accounts` + `distribution/scheduling` (ledger, drip, cadence, queue) | ledger path pinned by test. Adds a per-channel file lock now at `$OUTPUT_PATH/_omni/locks/<canal>.lock`, even with 1 replica: a manual CLI run or `publish_existing` running alongside the scheduler can duplicate pins. A Postgres/B2 lease replaces it later. |
-| M6 | `distribution/workers` (runtime + jobs); `omni.worker` becomes a shim | entrypoint unchanged. Every publishing path (scheduler, CLI, `publish_existing`) takes the `<canal>.lock` from M5 before reading or writing the ledger. |
-| M7 | **Entrypoint switch** to `python -m distribution.workers` | Only the compose `command:` changes. Service names (`engine`, `scheduler`), profiles, bind mounts (`state/`, `channels_env/`, outputs) and the healthcheck stay the same. VM procedure below. |
+| M3 | `shared/store`, `shared/contracts` (**`ContentItem` v1**, see below), `shared/memory` | Exit gate: production writes `ContentItem` v1 and distribution reads it without importing production; old readers still work through adapters. M4 does not start before this passes. |
+| M4 | `distribution/publishers` (base, registry, api, browser, export) — the only home of the `Publisher` protocol | Exit gate: import-linter shows no `distribution → production` import; publisher tests green. |
+| M5 | `distribution/accounts` + `distribution/scheduling` (ledger, drip, cadence, queue) | Exit gate: ledger paths and old/new idempotency keys pinned by tests; all three Pinterest stores unchanged (see *Pinterest state safety*). Adds, as an extra within one host only, a per-channel file lock at `$OUTPUT_PATH/_omni/locks/<canal>.lock`, even with 1 replica: a manual CLI run or `publish_existing` running alongside the scheduler can duplicate pins. It does **not** coordinate the PC and the VM; the single-writer fence below does. |
+| M6 | `distribution/workers` (runtime + jobs); `omni.worker` becomes a shim | entrypoint unchanged. Every publishing path (scheduler, CLI, `publish_existing`) takes the `<canal>.lock` from M5 before reading or writing the ledger. Exit gate: smoke both compose roles (`--role engine` and `--role scheduler`, both run `omni.worker` today) with `--once --dry-run`. |
+| M7 | **Entrypoint switch** to `python -m distribution.workers` | Only the compose `command:` changes. Service names (`engine`, `scheduler`), profiles and bind mounts stay the same. (There is no compose healthcheck today.) Exit gate: VM procedure below, both roles smoked. |
 | M8 | `production/` moves in 3 PRs: providers+cost → qa+media → pipeline+formats+writers+library | `config.py` split last |
-| M9 | `animation/` extraction with `animation.api`; remove the 5 engine→Aiwake couplings | contract: animation imports only shared |
+| M9 | **Split, not rename.** `core/animator` → `animation/`; Aiwake-specific arena names, character manifests, voices, puppet factories (`factory/create_puppet.py`) and harness output paths → `products/aiwake/`; `core.google_guardrail` / `core.utils.fingerprint_engine` imports (used by `renderer.py`, `create_puppet.py`) → `shared`; ffmpeg calls (`renderer.py`, `pipeline.py`, `audio_analyzer.py`, `rhubarb.py`) → `shared/ffmpeg`. `animation.api` starts as a compatibility facade over today's `render_dynamic_animation`; internals go private only after callers move. Remove production's dependencies on Aiwake assets and the 5 engine→Aiwake couplings. | Contract: animation imports only shared. |
 | M10 | `products/aiwake/` move | Aiwake tests and import smoke in their own CI job |
 | M11 | `channels/` (data) and persona loader unification | per-channel byte-identical prompts test |
-| M12 | `deploy/` tree + `deploy.yml` path update | Also updates the scp paths in `deploy.yml`, moves `.github/scripts/remote-deploy.sh` to `deploy/vm/remote-deploy.sh` (the workflow calls it from there) and covers `backup_supermemory.sh`. On the VM, compose stays at `/opt/omni-engine/docker-compose.yml`. Needs a cloud agent with `workflow` scope, plus a VM check. |
+| M12 | `deploy/` tree + `deploy.yml` path update. Compose under `deploy/compose/` changes relative paths: `build.context: .`, the Dockerfile, `env_file: .env`, bind mounts `./outputs`, `./credentials`, `./.env`, `./channels_config→channels_env`, `./state/ancient_knowledge/store`, and `docker/supermemory`. Either set `context: ../..` and `--project-directory` explicitly, or keep the workflow copying compose to the VM root. Test both the local invocation and `/opt/omni-engine/docker-compose.yml`. | Also updates the scp paths in `deploy.yml`, moves `.github/scripts/remote-deploy.sh` to `deploy/vm/remote-deploy.sh` (the workflow calls it from there) and covers `backup_supermemory.sh`. On the VM, compose stays at `/opt/omni-engine/docker-compose.yml`. Needs a cloud agent with `workflow` scope, plus a VM check. |
 | M13 | `scripts/` → `tools/`; `portfolio_showcase` decision | — |
-| M14 | Remove all shims after 1–2 clean scheduler cycles; import-linter becomes blocking | — |
+| M14 | Remove shims only when every consumer has migrated (imports, CLI `python -m` strings, compose/workflow/docs module strings, monkeypatch targets), checked by `rg`, **and** after 1–2 clean scheduler cycles; import-linter becomes blocking | — |
 | M15 | README rewrite (outline below) | — |
+
+Governance: every step that changes a home updates `AGENTS.md` and `docs/architecture/REPO_LAYOUT.md` (and the root-layout test allowlist) in the same PR, not at M15.
+
+#### `ContentItem` v1 (defined in M3, before M4)
+
+Today there are four shapes: the dict rows written by `engine/pipeline/stage_publish.py`; `DistributionRecord` (`modules/distribution_contract.py`, stored in `channels_config/<channel>/store/content_library.json`); `omni.models.Content`; and Pinterest's `outputs/<channel>/{content_library.json,library/}`.
+
+- **Schema:** one pydantic model `shared.contracts.ContentItem` with `schema_version: 1`, based on `DistributionRecord` (the richest of the four).
+- **Canonical path:** `channels/<channel>/store/content_library.json` (today `channels_config/<channel>/store/…`), mirrored through `shared.store`.
+- **Ownership:** production is the only writer of new items; distribution writes only publish-status fields through `shared.contracts` helpers.
+- **Compatibility:** read adapters for the other three shapes; a one-shot migration tool upgrades files in place with a backup; adapters are removed in M14.
+
+#### Pinterest state safety (M5–M7)
+
+The live path is `omni.worker → omni.pinterest_drip → PinterestScheduler`. Its state is **not** `_omni/publish_ledger.json`. It is three stores:
+1. B2 `PinLedger`: `pinterest/ledger/<account>.jsonl` (`agents/posting/pinterest_engine/ledger.py`);
+2. per-channel `master_inventory.json`;
+3. per-channel `scheduled_history.txt`.
+
+Accounts in `config/pinterest_accounts.yaml` use `runner: both`, so the PC and the VM can both publish.
+
+- **Single-writer fence (required for the migration):** set `runner` to `docker` (or `off`) on every account before M5 so only one host writes; restore it only after M14.
+- **Distributed lease (before any cross-host concurrency):** an account/board-scoped lease with compare-and-swap on B2 (or Postgres later), with a TTL and holder id. The local `<canal>.lock` stays only as an extra inside one host.
+- **Reconciliation:** on start, compare the latest Pinterest pins against the `PinLedger` and append missing rows before publishing. Publish→ledger is at-least-once; reconcile is what prevents a repost.
+- **Verification:** back up and compare all three stores, plus `_omni/publish_ledger.json`, before and after each step.
 
 #### M7 VM procedure (run by Automação & Nuvem)
 
-1. Back up `$OUTPUT_PATH/_omni/publish_ledger.json` and record its row count.
+1. Confirm the single-writer fence is on. Back up `$OUTPUT_PATH/_omni/publish_ledger.json`, the B2 `pinterest/ledger/*.jsonl`, and every `master_inventory.json` / `scheduled_history.txt`; record row/line counts.
 2. Set `SCHEDULER_ENABLED=0`.
 3. Merge and deploy.
 4. Inside the container, run `python -m distribution.workers --role scheduler --once --dry-run`.
-5. Confirm the ledger path is unchanged and the row count matches step 1.
+5. Confirm the paths are unchanged and every count matches step 1; smoke `--role engine --once --dry-run` too.
 6. Set `SCHEDULER_ENABLED=1` and restart.
-7. Confirm the next pin is published once and only once.
+7. Confirm the next pin appears once on Pinterest and once in the `PinLedger`; run reconcile if not.
 
-Rollback: redeploy the previous image tag and restore the ledger backup from step 1.
+Rollback: redeploy the previous image tag, run reconcile, and restore the backups from step 1 only for stores the reconcile cannot repair.
 
 #36 (dead files) is independent and can merge any time. #43–#46 (omni → core/modules) are superseded by M4–M7 and should be closed.
 
