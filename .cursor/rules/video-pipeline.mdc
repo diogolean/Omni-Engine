@@ -1,93 +1,31 @@
 ---
-description: Video Engine Pipeline Optimization — enforces duration, motion, prompt, and audio engineering standards for the Unified Multi-Page Factory (ancient_knowledge, wonder_feed, etc.)
+description: Reel pipeline rules: real photos first, Ken Burns, ffmpeg, local QA gates, hard spend cap
 alwaysApply: true
 ---
 
-# Video Engine Pipeline Standards
+# Video pipeline rules
 
-## 1. Video Duration & Audio CTA Guarantee (Target: 80 s)
+Works the same on a local PC and in the cloud. Settings come from env vars; no machine-specific paths.
 
-- **Target duration:** 80 seconds (1 m 20 s) — flexible; never hard-cut audio.
-- **Narration word count:** 130–140 words (narration body only, ~135 WPM → ~65–70 s).
-- **Audio-driven timeline:** `video_render_duration = tts_audio_duration + 1.0 s`  
-  The hard 80 s upper cap is **removed** from the voice-driven path so the video never cuts off the CTA.
-- **Script trimmer:** Call `_trim_script_to_word_limit(script, max_words=140)` on `_voiceover_script` before TTS — strips `[ACT N]` markers from word count, removes middle filler sentences while preserving the opening hook.
+## Images
+- Order: free real photos (Wikimedia Commons, then Openverse) → reusable `scene_library` → Flux-schnell.
+- Flux-schnell only draws the scene types a channel lists as safe (sky, landscape, sea, atmosphere). It never depicts a named artefact, its parts or a specific object (`modules/reel_artefact/flux_policy.py`).
+- Nano Banana is off by default (`REEL_NANOBANANA_MAX_PER_REEL=0`).
+- No fixed image count: each image matches the narration line it sits under. Never show a place or object the line does not name, and never repeat the same picture.
 
-## 2. Sequential CTA Execution (Strict Zero-Overlap Rule)
+## Motion and render
+- Ken Burns is the default motion.
+- The depth-parallax hook is optional and off (`REEL_HOOK_PARALLAX=1` to enable).
+- Render with ffmpeg (`REEL_RENDERER=ffmpeg`, the default). MoviePy is legacy only. `REEL_FFMPEG_TIMEOUT_S` (default 600) stops a hung render.
+- The timeline is audio-driven: never cut the narration or the CTA.
 
-- **Separate audio blocks:** CTA is NOT embedded in the narration script text.
-  - Pass `cta_line=""` to `generate_sequence_voiceover` — no inline CTA instruction.
-  - Generate narration TTS → `*_narration.mp3`
-  - Generate CTA TTS separately (same voice/model) → `*_cta.mp3`
-- **Mandatory 1.0 s gap:** Stitch via `_stitch_audio_sequential(narr, cta, out, silence_s=1.0)`  
-  Formula: `total_audio = narration_audio + 1.0 s_silence + cta_audio`
-- **Mandatory CTA text (ancient_knowledge):** `"Follow Ancient Knowledge for more hidden mysteries."`
-- Stitched file is passed as `voice_audio` to `compile_sequence_reel`; timeline is audio-driven.
+## QA judges
+- Local Python gates run first (`modules/reel_qa/local_gate.py`, `still_guard`).
+- Then the cheap LLM chain (`REEL_QA_MODEL_CHAIN`, default `qwen`). Gemini is not a judge unless opted in. The judge fails closed.
 
-## 3. Dynamic Parallax Depth & Aggressive Motion
+## Cost
+- Hard cap per reel: `REEL_REEL_BUDGET_USD` (default $0.05), enforced by `core/spend_ledger.py`.
+- ElevenLabs on a subscription is logged as informational at list price and sits outside the cap (`ELEVENLABS_BILLING`). A warning fires above `ELEVENLABS_LIST_WARN_USD`.
 
-- **3D depth layering:** Every image prompt MUST specify both foreground elements (dust particles, stone arch, human observer) AND background elements (temple silhouette, starfield, distant horizon) so the camera movement creates visible parallax separation.
-- **Motion profiles** (cycle with `act_index % 4`):
-  | # | Name | Zoom | Pan mul |
-  |---|------|------|---------|
-  | 0 | Rapid Push-In | 1.00 → 1.42 | 1.65× |
-  | 1 | Wide Pull-Out Reveal | 1.48 → 1.02 | 1.00× reversed |
-  | 2 | Sweeping Lateral Parallax | 1.10 → 1.32 | 4.60× |
-  | 3 | Overhead Crane Sweep | 1.18 → 1.40 | 2.30× reversed |
-- **Base pan amplitudes:** `_PAN_AMP_X = 60 px`, `_PAN_AMP_Y = 42 px`.
-- Replace all static slow-zooms with rapid push-ins, wide pull-out reveals, sweeping lateral parallax movements.
-
-## 4. Visual-to-Narration Context Matching
-
-- Entity extraction runs via `_extract_topic_visual_entities(subject)` before each image generation batch.
-- Known geo-anchors (Nazca, Pyramids, Baalbek, Easter Island, Stonehenge, Göbekli Tepe, Atlantis, Crystal Skulls, etc.) map to specific camera-perspective directives.
-- **No generic stone walls** when specific subjects are named — the prompt must illustrate the exact entity spoken.
-- Parallax depth directive appended to every act prompt:
-  ```
-  DEPTH LAYERS: foreground — [dust particles / stone arch / observer]. 
-  Background — [ancient temple / starfield / horizon line].
-  ```
-
-## 5. Camera Framing & Safe Zones
-
-- Default all image prompts to **Wide Aerial, High-Altitude, Panoramic, or Environmental** angles.
-- Primary subjects must be **centrally framed** to stay clear of social platform UI overlays (Reels/Shorts like/comment buttons).
-- **No extreme micro close-ups** that obscure environmental scale or main subject identity.
-
-## 6. Audio Engineering Standards
-
-| Parameter | Value |
-|-----------|-------|
-| Background music volume | `0.70` (≈ −3 dB relative to voiceover) |
-| Narration speed | `1.05×` (`_NARRATION_SPEED` in `audio_engine.py`) |
-| Sub-bass transition booms | 65 Hz, 400 ms, 0.15 amplitude — synthesised with NumPy at every scene cut |
-| Ambient track | ElevenLabs SFX API `/v1/sound-generation`, 20 s loop, `prompt_influence=0.7` |
-
-## 7. Post-FX Toggles (page_config.py per page)
-
-| Flag | Purpose | ancient_knowledge default |
-|------|---------|--------------------------|
-| `ENABLE_FLICKER` | Torch brightness oscillation | `True` |
-| `ENABLE_LIGHT_RAYS` | Volumetric warm-gold beam | `True` |
-| `ENABLE_DUST_PARTICLES` | Upward-drifting 55-particle tile | `True` |
-| `ENABLE_LIGHT_REFRACTION` | Prismatic crystal glow | `False` (enable per crystal-subject topic) |
-
-## 8. Asset Isolation
-
-- Every reel run creates a new `seq_run_YYYYMMDD_HHMMSS/` subfolder inside `subject_assets/`.
-- Stale `seq_run_*` directories are deleted via `shutil.rmtree` before generating new act images.
-- Act images (acts 2–N) are always written to the isolated run dir, never to the parent `subject_assets/`.
-
-## 9. Image Generation Budget (Dense Scene Sync)
-
-- **Dense target:** ~1 image every 3.5–4.0 s of speech → **12–18 acts** for a 60–80 s reel.
-- **Act duration at compile:** `total_audio_duration / n_acts` (audio-driven; never hard-cut VO).
-- **Spoken-beat prompts:** Each act image receives the exact ~4 s script snippet being spoken.
-- Cap via `REEL_IMAGE_COUNT` (default **18**); `REEL_SECONDS_PER_ACT` defaults to **4.0**.
-- Bulk concurrency: `max_workers ≤ 3` to avoid 429 rate-limit storms.
-- Override hard duration cap only with explicit `duration_override` on `compile_sequence_reel`.
-
-## 10. 429 / Blinded Act Fallback
-
-- Image provider: on 429 / `RESOURCE_EXHAUSTED`, sleep **3.0 s** and retry up to **3** times before rotating models.
-- Missing act images never raise `FileNotFoundError` — fall back to Act 1 / base / solid placeholder so MoviePy always completes.
+## Style
+- Cyberpunk visuals and music belong to Master Mei only. Documentary channels get no cyberpunk prefix.
