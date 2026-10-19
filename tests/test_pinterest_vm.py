@@ -31,23 +31,23 @@ from agents.posting.pinterest_engine.scheduler import (
     _entry_is_video_only,
     _title_is_filename,
 )
-from omni.accounts import pinterest_account_env, remember_rotated_token
-from omni.adapters.pinterest import PinterestAccountPublisher
-from omni.models import Account, Content
-from omni.pinterest_accounts import (
+from modules.accounts.tokens import pinterest_account_env, remember_rotated_token
+from core.publishing.adapters.pinterest import PinterestAccountPublisher
+from core.publishing.models import Account, Content
+from modules.accounts.pinterest_accounts import (
     account_blockers,
     active_pinterest_accounts,
     load_pinterest_accounts,
 )
-from omni.pinterest_drip import (
+from core.publishing.pinterest_drip import (
     account_runs_here,
     fetch_wordpress_catalog,
     is_text_graphic,
     match_article_slug,
     publish_account,
 )
-from omni.publisher import MemoryIdempotencyStore
-from omni.worker import run_pinterest_drip, run_scheduler
+from core.publishing.publisher import MemoryIdempotencyStore
+from core.worker import run_pinterest_drip, run_scheduler
 
 _SITE = "https://ancientknowledge.eokviral.com"
 _IMAGE_KEY = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
@@ -394,7 +394,7 @@ def test_worker_drip_delegates_to_image_pipeline(monkeypatch: pytest.MonkeyPatch
         seen["dry_run"] = dry_run
         return {"published": 0, "errors": 0}
 
-    monkeypatch.setattr("omni.pinterest_drip.publish_account", fake)
+    monkeypatch.setattr("core.publishing.pinterest_drip.publish_account", fake)
 
     def boom(self):
         raise AssertionError("video scheduler must not run")
@@ -427,7 +427,7 @@ def test_app_credentials_overlay_and_refresh_writeback(
     env_file.write_text("PINTEREST_ACCESS_TOKEN=old\n", encoding="utf-8")
     root_env = root / ".env"
     root_env.write_text("PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE=old\n", encoding="utf-8")
-    monkeypatch.setattr("omni.accounts.repo_root", lambda: root)
+    monkeypatch.setattr("modules.accounts.tokens.repo_root", lambda: root)
     monkeypatch.setenv("PINTEREST_ACCESS_TOKEN", "rotated-access")
     monkeypatch.setenv("_OMNI_APPLIED_PINTEREST_TOKEN", "old-access")
     monkeypatch.setenv("PINTEREST_REFRESH_TOKEN", "rotated-refresh")
@@ -683,7 +683,7 @@ def test_rendered_card_matches_the_original_template(
 def test_scheduler_waits_before_the_first_publish(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[object] = []
 
-    monkeypatch.setattr("omni.worker.interval_seconds", lambda rng=None: 12)
+    monkeypatch.setattr("core.worker.interval_seconds", lambda rng=None: 12)
 
     def fake_sleep(seconds, stop):
         calls.append(("sleep", seconds))
@@ -694,8 +694,8 @@ def test_scheduler_waits_before_the_first_publish(monkeypatch: pytest.MonkeyPatc
         calls.append(("cycle", dry_run))
         return []
 
-    monkeypatch.setattr("omni.worker._sleep_until", fake_sleep)
-    monkeypatch.setattr("omni.worker.run_cycle", fake_cycle)
+    monkeypatch.setattr("core.worker._sleep_until", fake_sleep)
+    monkeypatch.setattr("core.worker.run_cycle", fake_cycle)
     run_scheduler(once=False, dry_run=False)
     assert calls == [("sleep", 12), ("cycle", False), ("sleep", 12)]
 
@@ -705,9 +705,9 @@ def test_once_dry_run_does_not_wait(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("dry-run once must not sleep before publishing")
 
     cycles: list[bool] = []
-    monkeypatch.setattr("omni.worker.interval_seconds", _no_interval)
+    monkeypatch.setattr("core.worker.interval_seconds", _no_interval)
     monkeypatch.setattr(
-        "omni.worker.run_cycle",
+        "core.worker.run_cycle",
         lambda *, dry_run=False: cycles.append(dry_run) or [],
     )
     run_scheduler(once=True, dry_run=True)

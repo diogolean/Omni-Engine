@@ -1,1 +1,1 @@
-"""Platform adapters. Each one delegates to the publisher that already ships."""
+"""Temporary shim package: moved to ``core.publishing.adapters``. Removed in PR-O4."""
