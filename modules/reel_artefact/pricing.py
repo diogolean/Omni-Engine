@@ -39,6 +39,7 @@ _FREE_PROVIDERS = {
     "openverse",
     "europeana",
     "wikimedia",
+    "cache",
 }
 
 

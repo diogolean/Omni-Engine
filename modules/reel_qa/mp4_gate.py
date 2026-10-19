@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -27,7 +28,10 @@ _AUDIO_STREAM = re.compile(
 
 
 def ffmpeg_executable() -> str | None:
-    """ffmpeg on PATH, else the imageio-ffmpeg binary shipped with the app."""
+    """``FFMPEG_BINARY``, else ffmpeg on PATH, else imageio-ffmpeg."""
+    override = (os.getenv("FFMPEG_BINARY") or "").strip()
+    if override and Path(override).is_file():
+        return override
     found = shutil.which("ffmpeg")
     if found:
         return found
@@ -45,7 +49,10 @@ def ffmpeg_executable() -> str | None:
 
 
 def ffprobe_executable() -> str | None:
-    """ffprobe on PATH, or a sibling of the resolved ffmpeg binary."""
+    """``FFPROBE_BINARY``, ffprobe on PATH, or a sibling of ffmpeg."""
+    override = (os.getenv("FFPROBE_BINARY") or "").strip()
+    if override and Path(override).is_file():
+        return override
     found = shutil.which("ffprobe")
     if found:
         return found
@@ -598,6 +605,28 @@ def gate_final_mp4(
                 cue.midpoint_s,
                 beat_index,
             )
+        if beat and bool(beat.get("is_cta")):
+            fault = frame_fault(clean)
+            frames.append(
+                {
+                    "index": i,
+                    "text": text,
+                    "at_s": round(cue.midpoint_s, 3),
+                    "passed": not fault,
+                    "score": (beat or {}).get("score"),
+                    "reason": fault or "cta",
+                    "qa_status": fault or "cta",
+                    "frame_path": str(shot),
+                    "beat_index": beat_index,
+                }
+            )
+            _LOG.info(
+                "MP4 frame | t=%.2f beat=%s | cta | %s",
+                cue.midpoint_s,
+                beat_index,
+                fault or "skipped content check",
+            )
+            continue
         from modules.reel_qa.relevance import call_judge
 
         planned = str(

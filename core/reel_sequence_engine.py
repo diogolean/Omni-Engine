@@ -1336,6 +1336,23 @@ Write the complete {n_acts}-act script now:"""
 
     _filmable = script_filmable_rule()
     _asset_block = asset_prompt_block(asset_captions)
+    if (channel_name or "").strip().lower() == "ancient_knowledge":
+        _anchor_rule = (
+            f"Begin ACT 1 by naming this episode's topic ({topic}). "
+            "The first sentence must include that name. Do not open on a "
+            "different monument. The land and terrain must match the real "
+            "place of the topic: do not say sand, dunes, or a desert unless "
+            "that place is a sand desert."
+        )
+    else:
+        _anchor_rule = (
+            "Begin ACT 1 with a REAL, RECOGNISABLE WORLD ANCHOR "
+            '(e.g., "The Great Pyramid of Giza", "The stone blocks of Baalbek", '
+            '"Easter Island\'s moai") and then immediately introduce the '
+            "HIGH-CONCEPT IMPOSSIBLE element that cannot be explained by "
+            "mainstream history. This anchor → impossibility structure drives "
+            "maximum curiosity and engagement."
+        )
     return f"""You are writing a compelling {duration_s:.0f}-second documentary-style voiceover script.
 
 TOPIC: {topic}
@@ -1351,7 +1368,7 @@ STRICT RULES:
 2. {pacing_note}
 3. NEVER claim any conspiracy or theory is factual. Use language like: "some researchers believe", "ancient records suggest", "according to legend", "one theory proposes".
 4. Each act must feel visually distinct — the narrator should describe a different aspect, location, or era.
-5. Begin ACT 1 with a REAL, RECOGNISABLE WORLD ANCHOR (e.g., "The Great Pyramid of Giza", "The stone blocks of Baalbek", "Easter Island's moai") and then immediately introduce the HIGH-CONCEPT IMPOSSIBLE element that cannot be explained by mainstream history. This anchor → impossibility structure drives maximum curiosity and engagement.
+5. {_anchor_rule}
 6. Maintain an investigative, immersive, documentary tone throughout.
 7. NO headers, NO bullet points, NO markdown — pure spoken prose only.
 8. Output ONLY the script with [ACT N] markers. No preamble, no labels, no meta commentary.

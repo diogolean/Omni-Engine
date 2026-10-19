@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 
@@ -155,8 +156,8 @@ def test_flux_is_only_the_sky_and_crops_do_not_repeat(tmp_path: Path) -> None:
     sentences = [
         "Clouds gather on the horizon.",
         "The clay jar sat in the pit.",
-        "The clay jar is lifted from the soil.",
         "The pillars stand in the enclosure.",
+        "The clay jar is lifted from the soil.",
         "A storm crosses the landscape.",
         "The sky clears at dusk.",
         "Dawn light fills the atmosphere.",
@@ -299,3 +300,176 @@ def test_subcategory_titles_come_from_the_category(monkeypatch) -> None:
             return _Resp()
 
     assert commons_subcategories("Baghdad Battery", _Client()) == ["Category:Jars"]
+
+
+def test_military_titles_never_enter_the_pool(tmp_path: Path) -> None:
+    from modules.reel_artefact.asset_pool import build_asset_pool
+    from modules.reel_artefact.fetch import ancient_title_reject
+
+    assert ancient_title_reject("Rocket Attack in Babil, Baghdad, Iraq") == "rocket attack"
+    assert ancient_title_reject("Abraham Lincoln", "Category:Portrait photographs")
+    assert ancient_title_reject("PartherJar InnerSystem") == ""
+    items = [
+        _Item("war", "Rocket Attack in Babil, Baghdad, Iraq"),
+        _Item("lincoln", "Abraham Lincoln"),
+        _Item("jar", "PartherJar InnerSystem", "object"),
+    ]
+    pool = build_asset_pool(
+        queries=["battery"],
+        categories=[],
+        dest=tmp_path,
+        search=lambda _query: items,
+        category=lambda _name: [],
+        subcategories=lambda _name: [],
+        openverse=lambda _query: [],
+        download=_download,
+        judge=_judge_ok,
+        nano=None,
+        target_min=1,
+        object_floor=0,
+    )
+    captions = " ".join(item.caption for item in pool)
+    assert "Rocket Attack" not in captions
+    assert "Lincoln" not in captions
+    assert "PartherJar" in captions
+
+
+def test_a_labeled_museum_jar_stays_in_the_pool(tmp_path: Path) -> None:
+    from modules.reel_artefact.asset_pool import build_asset_pool
+
+    item = _Item("jar", "PartherJar InnerSystem", "object")
+
+    def judge(_path: Path, caption: str, kind: str) -> dict:
+        return {
+            "passed": False,
+            "contains_text": True,
+            "non_photoreal": True,
+            "rejection_reason": "contains_text,non_photoreal",
+            "relevance_score": 0.91,
+            "kind": kind,
+        }
+
+    pool = build_asset_pool(
+        queries=["battery"],
+        categories=[],
+        dest=tmp_path,
+        search=lambda _query: [item],
+        category=lambda _name: [],
+        subcategories=lambda _name: [],
+        openverse=lambda _query: [],
+        download=_download,
+        judge=judge,
+        nano=None,
+        target_min=1,
+        object_floor=0,
+    )
+    assert [asset.caption for asset in pool] == ["PartherJar InnerSystem"]
+    assert pool[0].kind == "object"
+
+
+def test_cache_seed_counts_and_a_short_pool_aborts(tmp_path: Path) -> None:
+    from modules.reel_artefact.asset_pool import PoolTooSmall, build_asset_pool
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _jpeg(cache / "variation_ref.jpg", (90, 70, 40))
+    calls = {"n": 0}
+
+    def nano(_prompt: str, dest: Path) -> Path:
+        calls["n"] += 1
+        raise RuntimeError("nanobanana_failed:gemini-3.1-flash-lite-image:402 RESOURCE_EXHAUSTED")
+
+    seeded = build_asset_pool(
+        queries=["battery"],
+        categories=[],
+        dest=tmp_path / "pool",
+        search=lambda _query: [],
+        category=lambda _name: [],
+        subcategories=lambda _name: [],
+        openverse=lambda _query: [],
+        download=_download,
+        judge=_judge_ok,
+        nano=nano,
+        cache_dir=cache,
+        object_floor=1,
+        target_min=1,
+        strict=True,
+    )
+    assert calls["n"] == 0
+    assert seeded[0].source == "cache"
+    assert seeded[0].kind == "object"
+    with pytest.raises(PoolTooSmall):
+        build_asset_pool(
+            queries=["battery"],
+            categories=[],
+            dest=tmp_path / "short",
+            search=lambda _query: [_Item("one", "one site photo", "site")],
+            category=lambda _name: [],
+            subcategories=lambda _name: [],
+            openverse=lambda _query: [],
+            download=_download,
+            judge=_judge_ok,
+            nano=nano,
+            object_floor=3,
+            target_min=8,
+            strict=True,
+        )
+    assert calls["n"] == 1
+
+
+def test_a_source_is_not_used_twice_in_a_row_or_more_than_twice() -> None:
+    from modules.reel_artefact.asset_pool import PoolAsset, fit_pool_beats
+
+    assets = [
+        PoolAsset("a.jpg", "limestone enclosure", "site", "commons", "a"),
+        PoolAsset("b.jpg", "carved pillar", "site", "commons", "b"),
+        PoolAsset("c.jpg", "stone circle", "site", "commons", "c"),
+    ]
+    sentences = [f"The enclosure stands in photograph {i}." for i in range(10)]
+    durations = [1.0] * 10
+    snippets, durs, shots = fit_pool_beats(sentences, durations, assets)
+    keys = [shot.asset_key for shot in shots if shot.asset_key]
+    assert keys
+    assert all(keys[i] != keys[i + 1] for i in range(len(keys) - 1))
+    assert all(keys.count(key) <= 2 for key in set(keys))
+    anchors: dict[str, set[str]] = {}
+    for shot in shots:
+        if not shot.asset_key:
+            continue
+        anchors.setdefault(shot.asset_key, set()).add(shot.anchor)
+    for key, used in anchors.items():
+        assert len(used) == keys.count(key)
+    assert abs(sum(durs) - 10.0) < 0.01
+    assert len(snippets) == len(shots) < 10
+
+
+def test_pool_photos_are_billed_as_their_source(tmp_path: Path) -> None:
+    from modules.reel_artefact.asset_pool import PoolAsset, ShotAssignment, place_assignment
+    from modules.reel_artefact.pricing import generation_bill
+
+    source = _jpeg(tmp_path / "jar.jpg", (40, 80, 30))
+    pool = [PoolAsset(str(source), "clay jar", "object", "commons", "jar")]
+    result = place_assignment(
+        ShotAssignment(sentence="The clay jar.", mode="asset", asset_key="jar", anchor="left"),
+        tmp_path / "beat.jpg",
+        pool,
+    )
+    key, count = generation_bill(result.path, 0, attempts=1)
+    assert key == "image_commons"
+    assert count == 1
+
+
+def test_object_beats_do_not_show_a_landscape() -> None:
+    from modules.reel_artefact.asset_pool import PoolAsset, assign_shots
+
+    assets = [
+        PoolAsset("land.jpg", "open farmland", "site", "commons", "land"),
+        PoolAsset("jar.jpg", "clay jar", "object", "commons", "jar"),
+    ]
+    shots = assign_shots(
+        ["The clay jar held the metal rod.", "Farmland surrounds the mound."],
+        assets,
+    )
+    jar = shots[0]
+    assert jar.asset_key == "jar"
+    assert jar.mode == "asset"

@@ -61,26 +61,79 @@ def render_workers() -> int:
     return max(1, min(4, os.cpu_count() or 1))
 
 
+def ffmpeg_exe() -> str:
+    """ffmpeg for ``REEL_RENDERER=ffmpeg``.
+
+    Order: ``FFMPEG_BINARY``, ``PATH``, then the imageio-ffmpeg binary.
+    A miss raises. MoviePy is only used when the flag asks for it.
+    """
+    override = (os.getenv("FFMPEG_BINARY") or "").strip()
+    if override:
+        if Path(override).is_file():
+            return override
+        raise RuntimeError(f"FFMPEG_BINARY is not a file: {override}")
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    bundled = _imageio_ffmpeg()
+    if bundled:
+        return bundled
+    raise RuntimeError(
+        "REEL_RENDERER=ffmpeg but ffmpeg is not on PATH, "
+        "FFMPEG_BINARY is unset, and imageio-ffmpeg has no binary"
+    )
+
+
+def ffprobe_exe() -> str:
+    """ffprobe for duration checks. ``FFPROBE_BINARY``, PATH, then a sibling."""
+    override = (os.getenv("FFPROBE_BINARY") or "").strip()
+    if override:
+        if Path(override).is_file():
+            return override
+        raise RuntimeError(f"FFPROBE_BINARY is not a file: {override}")
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    try:
+        sibling = Path(ffmpeg_exe()).with_name("ffprobe")
+    except RuntimeError:
+        sibling = Path("")
+    if sibling.is_file():
+        return str(sibling)
+    raise RuntimeError(
+        "ffprobe is not on PATH and FFPROBE_BINARY is unset"
+    )
+
+
+def _imageio_ffmpeg() -> str:
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        return ""
+    try:
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001
+        return ""
+    if exe and Path(exe).is_file():
+        return str(exe)
+    return ""
+
+
 def attempt_ffmpeg(render):
     """Run the ffmpeg renderer.
 
-    ``None`` means MoviePy should compile the reel: the flag asked for it,
-    or ffmpeg raised. The warning is the operator signal for the fallback.
+    ``None`` means the flag asked for MoviePy. When the renderer is ffmpeg,
+    a missing binary or a render error raises. It does not fall back.
     """
     if sequence_renderer() != "ffmpeg":
         return None
-    try:
-        return render()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("FFMPEG render failed (%s) — MoviePy fallback", exc)
-        return None
+    ffmpeg_exe()
+    return render()
 
 
 def media_duration_s(path: Path) -> float:
     """Duration from ffprobe, so the ffmpeg path does not import MoviePy."""
-    exe = shutil.which("ffprobe")
-    if not exe:
-        raise RuntimeError("ffprobe is not installed")
+    exe = ffprobe_exe()
     proc = subprocess.run(
         [
             exe, "-v", "error",
@@ -97,8 +150,9 @@ def media_duration_s(path: Path) -> float:
 
 def ffmpeg_has_libass() -> bool:
     """True when this ffmpeg can burn ASS. The Oracle image must say yes."""
-    exe = shutil.which("ffmpeg")
-    if not exe:
+    try:
+        exe = ffmpeg_exe()
+    except RuntimeError:
         return False
     try:
         proc = subprocess.run(
@@ -222,9 +276,9 @@ WrapStyle: 0
 
 [V4+ Styles]
 {style}
-Style: Sub,DejaVu Sans,56,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
-Style: Hook,DejaVu Sans,72,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,8,40,40,220,1
-Style: Cta,DejaVu Sans,56,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
+Style: Sub,DejaVu Sans,64,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
+Style: Hook,DejaVu Sans,80,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,8,40,40,220,1
+Style: Cta,DejaVu Sans,64,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -304,7 +358,7 @@ def _render_beat(
 ) -> None:
     rate = max(1, int(fps))
     frames = max(2, int(round(dur * rate)))
-    exe = shutil.which("ffmpeg") or "ffmpeg"
+    exe = ffmpeg_exe()
     cmd = [exe, "-y", "-v", "error"]
     if video is not None and video.is_file():
         cmd += ["-i", str(video)]
@@ -457,8 +511,9 @@ def _boom_wav(path: Path, duration: float, cuts: list[float]) -> None:
 
 def output_has_audio(path: Path) -> bool | None:
     """True when ffprobe sees an audio stream. None when ffprobe is missing."""
-    exe = shutil.which("ffprobe")
-    if not exe:
+    try:
+        exe = ffprobe_exe()
+    except RuntimeError:
         return None
     proc = subprocess.run(
         [
@@ -517,9 +572,7 @@ def compile_ffmpeg_reel(
         raise RuntimeError(
             "voice track required — refusing to compile a reel without narration"
         )
-    exe = shutil.which("ffmpeg")
-    if not exe:
-        raise RuntimeError("ffmpeg is not installed")
+    exe = ffmpeg_exe()
     if not ffmpeg_has_libass():
         raise RuntimeError("ffmpeg has no libass filter")
     durations = [max(0.2, float(d)) for d in act_durations]

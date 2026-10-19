@@ -25,8 +25,9 @@ def prepare_reel_frame(img: Image.Image, anchor: str = "center") -> tuple[Image.
     """Return a 1080×1920 RGB frame and how it was fit.
 
     A centered near-portrait photo is center-cropped to 9:16. A centered
-    landscape stays whole on a blurred cover. Other anchors slide a 9:16
-    window so the same photograph can serve another beat. A source whose
+    landscape uses the same vertical window, so a wide photo is not a
+    sharp strip between blurred bands. Other anchors slide that window
+    so the same photograph can serve another beat. A source whose
     long side is under 1080px and at least 720px is upscaled with Lanczos
     and a light sharpen. No paid upscaler.
     """
@@ -40,7 +41,7 @@ def prepare_reel_frame(img: Image.Image, anchor: str = "center") -> tuple[Image.
     if choice == "center" and 0.45 <= ratio <= 0.70:
         frame, how = _smart_crop(image), "smart_crop"
     elif choice == "center":
-        frame, how = _blur_fill(image), "blur_fill"
+        frame, how = _window(image, "center"), "window"
     else:
         frame, how = _window(image, choice), "window"
     if UPSCALE_MIN_LONG <= source_long < STILL_DIRECT_LONG:

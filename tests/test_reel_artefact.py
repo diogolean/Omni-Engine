@@ -157,9 +157,9 @@ def test_year_range_is_spoken_with_to_and_the_subtitle_keeps_digits() -> None:
     assert "-" in subtitle_text(original)
 
 
-def test_landscape_photo_becomes_a_blurred_9_16_frame() -> None:
+def test_landscape_photo_becomes_a_vertical_crop() -> None:
     frame, how = prepare_reel_frame(Image.new("RGB", (1600, 900), (10, 20, 30)))
-    assert how == "blur_fill"
+    assert how == "window"
     assert frame.size == (1080, 1920)
 
 

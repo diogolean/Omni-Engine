@@ -364,7 +364,9 @@ def test_ffmpeg_is_the_default_and_an_error_falls_back(monkeypatch: pytest.Monke
     assert sequence_renderer() == "moviepy"
     assert attempt_ffmpeg(lambda: Path("should-not-run.mp4")) is None
     monkeypatch.setenv("REEL_RENDERER", "ffmpeg")
-    assert attempt_ffmpeg(lambda: (_ for _ in ()).throw(RuntimeError("no libass"))) is None
+    monkeypatch.setattr("core.reel_ffmpeg_render.ffmpeg_exe", lambda: "ffmpeg")
+    with pytest.raises(RuntimeError, match="no libass"):
+        attempt_ffmpeg(lambda: (_ for _ in ()).throw(RuntimeError("no libass")))
     target = Path("reel.mp4")
     assert attempt_ffmpeg(lambda: target) == target
     graph = ken_burns_filter(0, 90)

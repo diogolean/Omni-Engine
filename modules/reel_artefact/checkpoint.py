@@ -148,6 +148,23 @@ class ReelCheckpoint:
             bucket[_script_key(input_script)] = record
             self._write(data)
 
+    def save_script(self, script: str) -> None:
+        """Remember a narration that already passed, so a DNS blip can resume it."""
+        text = (script or "").strip()
+        if len(text.split()) < 40:
+            return
+        with self._lock:
+            data = self._load()
+            data["script"] = text
+            self._write(data)
+
+    def load_script(self) -> str:
+        if checkpoint_mode() == "ignore":
+            return ""
+        with self._lock:
+            text = self._load().get("script") or ""
+        return str(text).strip()
+
     def load_tts(self, input_script: str) -> dict | None:
         if checkpoint_mode() == "ignore":
             return None

@@ -1553,8 +1553,19 @@ def _synthesize_sequence_voice_track(
         )
 
     # ── Attempt 1 — synthesize once, measure ─────────────────────────────
+    # Ancient Knowledge retries a DNS failure. Master Mei stays one attempt.
     current = script or ""
-    voice_only_1, narr_wts, narr_dur = _synth_narr(current, attempt_label=1)
+    voice_only_1, narr_wts, narr_dur = None, [], 0.0
+    _tts_tries = 3 if is_ak else 1
+    for _tts_try in range(1, _tts_tries + 1):
+        voice_only_1, narr_wts, narr_dur = _synth_narr(current, attempt_label=_tts_try)
+        if voice_only_1 is not None:
+            break
+        if is_ak and _tts_try < _tts_tries:
+            from modules.reel_artefact.net_retry import retry_sleep as _retry_sleep
+
+            _LOG.warning("Pre-image TTS network retry %d", _tts_try)
+            _retry_sleep(_tts_try)
     if voice_only_1 is None:
         return (None, [], 0.0, 0.0, current, None, 0.0, _cta_silence_s)
     cta_path, cta_dur = _synth_cta_once()
@@ -3430,6 +3441,14 @@ def _produce_variant_worker(
                             "ancient_knowledge",
                             _reel_img_dir / "pool",
                         )
+                        if not _asset_pool:
+                            from modules.reel_artefact.asset_pool import (
+                                PoolTooSmall as _PoolTooSmall,
+                            )
+
+                            raise _PoolTooSmall(
+                                "asset pool empty after cache, search, and nano"
+                            )
                         _LOG.info(
                             "ASSET POOL | n=%d | %s",
                             len(_asset_pool),
@@ -3528,15 +3547,104 @@ def _produce_variant_worker(
                         len(_early_seq_script.split()), _seq_n,
                     )
             except Exception as _early_exc:  # noqa: BLE001
+                if page_ctx and (page_ctx.page_id or "").lower() == "ancient_knowledge":
+                    raise
                 _LOG.warning(
                     "SEQUENCE_REEL early script failed (%s) — falling back to topic.",
                     _early_exc,
                 )
                 _early_seq_script = ""
 
-        _spoken_snippets = _segment_script_into_act_snippets(
+        _ak_page = bool(
+            page_ctx and (page_ctx.page_id or "").lower() == "ancient_knowledge"
+        )
+        if _ak_page:
+            from modules.reel_artefact.script_grounding import (
+                grounding_problem as _grounding_problem,
+            )
+            from modules.reel_artefact.script_grounding import (
+                script_is_usable as _script_usable,
+            )
+
+            _topic_text = str(resolved_subject or "")
+            if _early_seq_script and _grounding_problem(
+                _early_seq_script, _topic_text, channel="ancient_knowledge",
+            ):
+                _ground_why = _grounding_problem(
+                    _early_seq_script, _topic_text, channel="ancient_knowledge",
+                )
+                _LOG.warning("SCRIPT GROUNDING | %s | one retry", _ground_why)
+                if caption_engine is not None:
+                    _early_seq_script = caption_engine.generate_sequence_voiceover(
+                        resolved_subject,
+                        page_niche=page_ctx.content_niche,
+                        persona_voice=page_ctx.tts_voice_preference or (
+                            "investigative, neutral, immersive"
+                        ),
+                        n_acts=_seq_n,
+                        duration_s=page_ctx.reel_duration,
+                        total_words_target=_seq_words,
+                        economic=economic,
+                        niche_disclaimer=page_ctx.niche_disclaimer,
+                        cta_line="",
+                        narrative_mode=page_ctx.narrative_mode,
+                        batch_angle_block=_batch_angle_block,
+                        uniqueness_rejection=_ground_why,
+                        previously_generated_hooks=list(generated_hooks_cache or []),
+                        asset_captions=_asset_captions or None,
+                    ) or ""
+                    if _early_seq_script:
+                        from modules.reel_artefact.script_length import soft_ceiling
+
+                        _early_seq_script = soft_ceiling(_early_seq_script)
+            _ground_left = _grounding_problem(
+                _early_seq_script or "", _topic_text, channel="ancient_knowledge",
+            ) if _early_seq_script else "empty script"
+            if not _script_usable(_early_seq_script or "", _topic_text) or _ground_left:
+                _saved_script = ""
+                try:
+                    from modules.reel_artefact.checkpoint import (
+                        ReelCheckpoint as _ScriptCkpt,
+                    )
+
+                    _saved_script = _ScriptCkpt.for_reel(
+                        "ancient_knowledge", stem,
+                    ).load_script()
+                except Exception:  # noqa: BLE001
+                    _saved_script = ""
+                _saved_ok = _script_usable(_saved_script, _topic_text) and not (
+                    _grounding_problem(
+                        _saved_script, _topic_text, channel="ancient_knowledge",
+                    )
+                )
+                if _saved_ok:
+                    _early_seq_script = _saved_script
+                    _LOG.info(
+                        "SCRIPT resume | words=%d", len(_saved_script.split()),
+                    )
+                else:
+                    raise RuntimeError(
+                        "narration script empty or ungrounded after retries — "
+                        "refusing to plan images from the topic"
+                        + (f" ({_ground_left})" if _ground_left else "")
+                    )
+            else:
+                try:
+                    from modules.reel_artefact.checkpoint import (
+                        ReelCheckpoint as _ScriptCkpt,
+                    )
+
+                    _ScriptCkpt.for_reel("ancient_knowledge", stem).save_script(
+                        _early_seq_script,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        _beat_source = _early_seq_script if _ak_page else (
             _early_seq_script
-            or (caption if caption and caption != "(skipped)" else resolved_subject),
+            or (caption if caption and caption != "(skipped)" else resolved_subject)
+        )
+        _spoken_snippets = _segment_script_into_act_snippets(
+            _beat_source,
             _seq_n,
         )
 
@@ -3555,9 +3663,7 @@ def _produce_variant_worker(
                 _cta_audio_dur,
                 _cta_silence_s,
             ) = _synthesize_sequence_voice_track(
-                _early_seq_script or (
-                    caption if caption and caption != "(skipped)" else resolved_subject
-                ),
+                _beat_source,
                 reel_dir=_clips_dir,
                 stem=stem,
                 variant=variant,
@@ -3812,14 +3918,43 @@ def _produce_variant_worker(
 
         if _asset_pool and _spoken_snippets:
             try:
-                from modules.reel_artefact.asset_pool import assign_shots as _assign_shots
+                from modules.reel_artefact.asset_pool import fit_pool_beats as _fit_beats
 
-                _asset_assignments = _assign_shots(
+                _protect_cta = (
+                    1
+                    if _cta_beat_index is not None
+                    and int(_cta_beat_index) == len(_spoken_snippets) - 1
+                    else 0
+                )
+                _fit_snips, _fit_durs, _asset_assignments = _fit_beats(
                     list(_spoken_snippets),
+                    list(_ak_act_durs or []),
                     list(_asset_pool),
                     geography=_pool_geography,
                     flux_max=6,
+                    protect_tail=_protect_cta,
                 )
+                _durs_match = bool(_ak_act_durs) and abs(
+                    sum(_fit_durs) - sum(_ak_act_durs)
+                ) < 0.05
+                if (
+                    _fit_snips
+                    and _fit_durs
+                    and len(_fit_snips) == len(_fit_durs) == len(_asset_assignments)
+                    and _durs_match
+                ):
+                    _spoken_snippets = list(_fit_snips)
+                    _ak_act_durs = list(_fit_durs)
+                    _seq_n = len(_spoken_snippets)
+                    if _protect_cta:
+                        _cta_beat_index = len(_spoken_snippets) - 1
+                elif len(_asset_assignments) != len(_spoken_snippets):
+                    _LOG.warning(
+                        "ASSET SHOTS length mismatch | shots=%d beats=%d",
+                        len(_asset_assignments),
+                        len(_spoken_snippets),
+                    )
+                    _asset_assignments = []
                 _LOG.info(
                     "ASSET SHOTS | n=%d flux=%d",
                     len(_asset_assignments),
@@ -4622,6 +4757,7 @@ def _produce_variant_worker(
                 _row = _gate.beat_row(index=_idx, text=_text)
                 _meta_row = _sr_act_meta.get(_idx) or {}
                 _row["prompt"] = str(_meta_row.get("prompt") or "")
+                _row["is_cta"] = bool(_meta_row.get("is_cta"))
                 try:
                     from modules.reel_artefact.source import source_meta as _source_meta
 
@@ -4863,19 +4999,21 @@ def _produce_variant_worker(
                 try:
                     from modules.reel_artefact.policy import artefact_images_enabled
 
-                    if _ladder_on and artefact_images_enabled() and _image_bill:
+                    if artefact_images_enabled() and _image_bill and (
+                        _ladder_on or _asset_pool
+                    ):
                         for _bill_key, _bill_n in _image_bill.items():
                             if int(_bill_n) > 0:
                                 cost_tracker.track_image(
                                     model_key=_bill_key,
                                     count=int(_bill_n),
                                 )
-                    elif _ok_acts:
+                    elif _ok_acts and not _asset_pool:
                         cost_tracker.track_image(
                             model_key="image_flux_schnell", count=_ok_acts,
                         )
                 except Exception:  # noqa: BLE001
-                    if _ok_acts:
+                    if _ok_acts and not _asset_pool:
                         cost_tracker.track_image(
                             model_key="image_flux_schnell", count=_ok_acts,
                         )

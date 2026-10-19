@@ -1628,13 +1628,22 @@ def generate_dynamic_music_prompt(
         )
 
         client = make_gemini_client_with_fallback(api_key)
-        chain = build_model_chain(client, capability_type="text", preferred=None)
-        if not chain:
+        # Ancient Knowledge (mystery) must not call gemini-2.5-pro: that id 404s.
+        # Master Mei keeps the discovered chain.
+        if profile == "mystery":
             chain = [
                 "models/gemini-2.5-flash",
-                "models/gemini-2.0-flash",
                 "models/gemini-flash-latest",
+                "models/gemini-2.0-flash",
             ]
+        else:
+            chain = build_model_chain(client, capability_type="text", preferred=None)
+            if not chain:
+                chain = [
+                    "models/gemini-2.5-flash",
+                    "models/gemini-2.0-flash",
+                    "models/gemini-flash-latest",
+                ]
         response = generate_content_with_model_fallback(
             client, chain, contents=[user_block],
         )

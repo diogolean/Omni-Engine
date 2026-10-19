@@ -383,6 +383,55 @@ def commons_subcategories(category: str, client: HttpClient) -> list[str]:
     return found
 
 
+_ANCIENT_TITLE_REJECT = (
+    "dvids",
+    "soldier",
+    "soldiers",
+    "army",
+    "military",
+    "battalion",
+    "regiment",
+    "brigade",
+    "squadron",
+    "air force",
+    "rocket attack",
+    "missile",
+    "rifle",
+    "humvee",
+    "abraham lincoln",
+    "president lincoln",
+    "portrait",
+    "mugshot",
+    "marine corps",
+    "infantry",
+    "night vision",
+    "iraq war",
+)
+_ANCIENT_CATEGORY_REJECT = (
+    "dvids",
+    "military",
+    "portrait",
+    "united states army",
+    "u.s. army",
+)
+
+
+def ancient_title_reject(title: str, categories: str = "") -> str:
+    """Why an ancient-topic candidate is dropped, or "" when it can stay.
+
+    Commons search for Baghdad also returns DVIDS combat photos and
+    Abraham Lincoln portraits. Those never reach the judge.
+    """
+    blob = f"{title or ''} {categories or ''}".lower()
+    for token in _ANCIENT_TITLE_REJECT:
+        if token in blob:
+            return token
+    for token in _ANCIENT_CATEGORY_REJECT:
+        if token in (categories or "").lower():
+            return token
+    return ""
+
+
 def search_topic_images(
     queries: list[str],
     categories: list[str],
@@ -403,6 +452,11 @@ def search_topic_images(
             if not item.download_url or not _bitmap(item):
                 continue
             if license_allowed(item.license_raw) is None:
+                continue
+            categories = " ".join(getattr(item, "categories", None) or [])
+            reason = ancient_title_reject(item.title, categories)
+            if reason:
+                logger.info("Topic images dropped %s (%s)", item.title, reason)
                 continue
             key = (item.download_url or item.title).split("?")[0].lower()
             if not key or key in seen:

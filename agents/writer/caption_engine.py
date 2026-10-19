@@ -2105,6 +2105,7 @@ class CaptionEngine:
                 out = text_attr() if callable(text_attr) else (text_attr or "")
                 return (out or "").strip()
             except Exception as _exc:
+                self._last_script_error = _exc
                 logger.warning(
                     "generate_sequence_voiceover | Gemini attempt %d failed (%s)",
                     attempt, _exc,
@@ -2120,7 +2121,30 @@ class CaptionEngine:
         # falls outside tolerance). Warrior mode (Master Mei) keeps its
         # strict length gate because MEI has structural act-length
         # requirements that are NOT duration-derived.
-        raw = _try_gemini(attempt=1)
+        raw = ""
+        self._last_script_error = None
+        _net_tries = 3 if _rag_channel_name == "ancient_knowledge" else 1
+        for _net_i in range(1, _net_tries + 1):
+            raw = _try_gemini(attempt=_net_i)
+            _net_err = getattr(self, "_last_script_error", None)
+            if raw and _word_count(raw) >= 40:
+                break
+            if (
+                _rag_channel_name == "ancient_knowledge"
+                and _net_err is not None
+                and _net_i < _net_tries
+            ):
+                from modules.reel_artefact.net_retry import is_network_error, retry_sleep
+
+                if is_network_error(_net_err):
+                    logger.warning(
+                        "generate_sequence_voiceover | network retry %d (%s)",
+                        _net_i, type(_net_err).__name__,
+                    )
+                    retry_sleep(_net_i)
+                    self._last_script_error = None
+                    continue
+            break
         _chars = len(_metrics_script(raw))
         _first_wc = _word_count(raw)
         _first_pass = _passes_length(raw)

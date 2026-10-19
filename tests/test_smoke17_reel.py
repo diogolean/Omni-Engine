@@ -517,4 +517,182 @@ def test_yellow_captions_sit_in_a_dark_box() -> None:
     assert "&H0000E6FF" in script
     assert "&H80000000" in script
     assert ",3,14,1," in script
+    assert "DejaVu Sans,64" in script
     assert ken_burns_filter(0, 8).endswith("format=yuv420p")
+    hook = ass_document([("Hook", 0.0, 1.0, "Göbekli Tepe")])
+    assert "DejaVu Sans,80" in hook
+
+
+def test_ffmpeg_flag_fails_loud_and_honors_the_env_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from core.reel_ffmpeg_render import attempt_ffmpeg, ffmpeg_exe, ffprobe_exe
+
+    monkeypatch.setenv("REEL_RENDERER", "ffmpeg")
+    monkeypatch.delenv("FFMPEG_BINARY", raising=False)
+    monkeypatch.delenv("FFPROBE_BINARY", raising=False)
+    monkeypatch.setattr("core.reel_ffmpeg_render.shutil.which", lambda _name: None)
+    monkeypatch.setattr("core.reel_ffmpeg_render._imageio_ffmpeg", lambda: "")
+    with pytest.raises(RuntimeError, match="ffmpeg is not on PATH"):
+        ffmpeg_exe()
+    binary = tmp_path / "ffmpeg"
+    probe = tmp_path / "ffprobe"
+    binary.write_bytes(b"")
+    probe.write_bytes(b"")
+    monkeypatch.setenv("FFMPEG_BINARY", str(binary))
+    monkeypatch.setenv("FFPROBE_BINARY", str(probe))
+    assert ffmpeg_exe() == str(binary)
+    assert ffprobe_exe() == str(probe)
+    monkeypatch.setattr("core.reel_ffmpeg_render.ffmpeg_exe", lambda: str(binary))
+    with pytest.raises(RuntimeError, match="render broke"):
+        attempt_ffmpeg(lambda: (_ for _ in ()).throw(RuntimeError("render broke")))
+
+
+def test_a_wide_photo_is_a_vertical_crop_not_a_blurred_band() -> None:
+    from modules.reel_artefact.crop import prepare_reel_frame
+
+    image = Image.new("RGB", (400, 120), (20, 20, 220))
+    image.paste(Image.new("RGB", (80, 120), (220, 30, 30)), (0, 0))
+    frame, how = prepare_reel_frame(image, anchor="center")
+    assert how == "window"
+    assert frame.size == (1080, 1920)
+    corner = frame.getpixel((8, 8))
+    assert corner[2] > corner[0]
+
+
+def test_the_cta_frame_is_not_failed_for_anachronism(tmp_path: Path) -> None:
+    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+
+    still = tmp_path / "still.jpg"
+    frame = tmp_path / "cta.jpg"
+    Image.new("RGB", (64, 96), (10, 10, 10)).save(still)
+    Image.new("RGB", (64, 96), (40, 70, 90)).save(frame)
+    seen = {"n": 0}
+
+    def _frame(_video: Path, _at: float, dest: Path) -> Path:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(frame.read_bytes())
+        return dest
+
+    def _judge(*_args, **_kwargs):
+        seen["n"] += 1
+        return {
+            "is_relevant": False,
+            "relevance_score": 0.1,
+            "qa_status": "scored",
+            "rejection_reason": "anachronism",
+        }
+
+    decision = gate_final_mp4(
+        tmp_path / "reel.mp4",
+        [SubtitleCue(text="Follow for more", start_s=8.0, end_s=10.0)],
+        probe_fn=lambda _path: {
+            "error": "",
+            "duration_s": 90.0,
+            "has_audio": True,
+            "mean_volume_db": -16.0,
+        },
+        evaluate_fn=_judge,
+        frame_fn=_frame,
+        beats=[{
+            "index": 4,
+            "text": "Follow for more hidden mysteries.",
+            "is_cta": True,
+            "passed": True,
+            "image_path": str(still),
+        }],
+    )
+    assert seen["n"] == 0
+    assert decision["passed"] is True
+
+
+def test_the_hook_names_gobekli_and_rejects_turkish_sands() -> None:
+    from modules.reel_artefact.script_grounding import (
+        grounding_problem,
+        hook_names_topic,
+        script_is_usable,
+        terrain_conflicts,
+    )
+
+    topic = "Göbekli Tepe's carved stone pillars, 9600 BC"
+    bad = (
+        "The Great Pyramid of Giza is a legendary marvel. "
+        "Some researchers believe the stones were buried beneath the Turkish sands. "
+        "The pillars still stand."
+    )
+    good = (
+        "Göbekli Tepe's carved pillars rose on a limestone hill near Şanlıurfa. "
+        "Farmland and the Germuş mountains surround the enclosures. "
+        "The T-shaped stones carry reliefs of animals, and the site dates to 9600 BC. "
+        "Builders set each pillar into the hill before the villages spread across the plain."
+    )
+    assert hook_names_topic(bad, topic) is False
+    assert hook_names_topic(good, topic) is True
+    assert terrain_conflicts(bad, "rolling limestone hills and farmland, no lake") == "sands"
+    assert grounding_problem(good, topic, channel="ancient_knowledge") == ""
+    assert script_is_usable("BC. Baghdad.", topic) is False
+    assert script_is_usable(good, topic) is True
+
+
+def test_mystery_music_does_not_call_gemini_pro(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agents.media.audio_engine import generate_dynamic_music_prompt
+
+    seen: dict = {}
+
+    def _client(_key: str) -> object:
+        return object()
+
+    def _generate(_client_obj: object, chain: list[str], contents: object = None) -> object:
+        seen["chain"] = list(chain)
+
+        class _Response:
+            text = "Dark drones and a slow frame drum. Slow tempo 55 BPM."
+
+        return _Response()
+
+    monkeypatch.setattr(
+        "agents.media.audio_engine.app_config.GEMINI_API_KEY", "test-key", raising=False,
+    )
+    monkeypatch.setattr(
+        "agents.media.providers.gemini_utils.make_gemini_client_with_fallback", _client,
+    )
+    monkeypatch.setattr(
+        "agents.media.providers.gemini_utils.generate_content_with_model_fallback",
+        _generate,
+    )
+    text = generate_dynamic_music_prompt(
+        "Göbekli Tepe", style_profile="mystery", channel_name="ancient_knowledge",
+    )
+    assert seen["chain"]
+    assert all("2.5-pro" not in item for item in seen["chain"])
+    assert "models/gemini-2.5-flash" in seen["chain"]
+    assert len(text) >= 20
+
+
+def test_nano_stops_on_a_billing_error() -> None:
+    from modules.reel_artefact.nanobanana import fatal_nano_error, run_model_chain
+
+    calls: list[str] = []
+
+    def _call(model: str) -> bool:
+        calls.append(model)
+        raise RuntimeError("402 RESOURCE_EXHAUSTED")
+
+    with pytest.raises(RuntimeError, match="nanobanana_failed"):
+        run_model_chain(["cheap", "mid", "dear"], _call)
+    assert calls == ["cheap"]
+    assert fatal_nano_error(OSError("[Errno 11001] getaddrinfo failed")) is True
+
+
+def test_the_documentary_prompt_names_the_topic_not_giza() -> None:
+    from core.reel_sequence_engine import build_sequence_script_prompt
+
+    prompt = build_sequence_script_prompt(
+        "Göbekli Tepe's carved stone pillars, 9600 BC",
+        "history",
+        channel_name="ancient_knowledge",
+    )
+    assert "first sentence must include that name" in prompt
+    assert "The Great Pyramid of Giza" not in prompt
+    other = build_sequence_script_prompt("A topic", "history", channel_name="other")
+    assert "The Great Pyramid of Giza" in other

@@ -57,6 +57,10 @@ class PoolAsset:
     key: str
 
 
+class PoolTooSmall(RuntimeError):
+    """The photograph pool is still below its minimum after escalation."""
+
+
 @dataclass
 class ShotAssignment:
     sentence: str
@@ -65,6 +69,7 @@ class ShotAssignment:
     anchor: str = ""
     prompt: str = ""
     asset_key: str = ""
+    span: int = 1
 
 
 def asset_prompt_block(captions: list[str] | None) -> str:
@@ -95,17 +100,29 @@ def wants_flux(sentence: str) -> bool:
     return bool(_ATMOSPHERE.search(sentence or ""))
 
 
-def accept_verdict(verdict: dict[str, Any] | None) -> bool:
-    """One judge pass. Text panels fail. A roof over the stones can pass."""
+def accept_verdict(verdict: dict[str, Any] | None, *, artefact: bool = False) -> bool:
+    """One judge pass. Text panels fail. A labeled museum photo of the object can pass."""
     row = verdict or {}
-    if row.get("contains_text"):
-        return False
     reason = str(row.get("rejection_reason") or "")
-    if "contains_text" in reason:
+    text_hit = bool(row.get("contains_text")) or "contains_text" in reason
+    drawn = bool(row.get("non_photoreal")) or "non_photoreal" in reason
+    kind = str(row.get("kind") or "")
+    waived = False
+    if artefact and kind == "object" and (text_hit or drawn):
+        # A museum label or a diagram of the artefact is still the object.
+        text_hit = False
+        drawn = False
+        waived = True
+    if text_hit or drawn:
+        return False
+    hard = ("anachronism", "anatomy", "setting_contradicts", "shape_mismatch")
+    if any(item in reason for item in hard):
         return False
     score = row.get("relevance_score", row.get("score"))
     if score is not None and float(score) < _SCORE_FLOOR:
         return False
+    if waived:
+        return True
     return bool(row.get("passed") or row.get("is_relevant"))
 
 
@@ -157,6 +174,43 @@ def pick_anchor(
     return "left" if previous == (asset_key, "center") else "center"
 
 
+MAX_SOURCE_USES = 2
+
+
+def _kind_for(asset_key: str, assets: list[PoolAsset]) -> str:
+    for asset in assets:
+        if asset.key == asset_key:
+            return asset.kind
+    return ""
+
+
+def _legal_asset(
+    asset: PoolAsset,
+    *,
+    kind: str,
+    counts: dict[str, int],
+    previous_key: str,
+    anchors_used: dict[str, set[str]],
+) -> bool:
+    if kind and asset.kind != kind:
+        return False
+    if counts.get(asset.key, 0) >= MAX_SOURCE_USES:
+        return False
+    if asset.key == previous_key:
+        return False
+    if len(anchors_used.get(asset.key, set())) >= len(_ANCHORS):
+        return False
+    return True
+
+
+def _fresh_anchor(asset_key: str, anchors_used: dict[str, set[str]]) -> str:
+    used = anchors_used.get(asset_key, set())
+    for name in _ANCHORS:
+        if name not in used:
+            return name
+    return ""
+
+
 def assign_shots(
     sentences: list[str],
     assets: list[PoolAsset],
@@ -164,13 +218,42 @@ def assign_shots(
     geography: str = "",
     flux_max: int = FLUX_MAX,
 ) -> list[ShotAssignment]:
-    """Real photographs for objects and the site. Flux only for the sky."""
+    """Real photographs for objects and the site. Flux only for the sky.
+
+    One source is used at most twice, never on back-to-back beats, and the
+    two crops use different windows. A sentence that cannot take a new
+    source is merged into the previous beat.
+    """
     from modules.reel_artefact.flux_policy import safe_flux_prompt
 
     flux_used = 0
-    previous: tuple[str, str] | None = None
-    used: dict[tuple[str, str], int] = {}
+    previous_key = ""
+    counts: dict[str, int] = {}
+    anchors_used: dict[str, set[str]] = {}
     assigned: list[ShotAssignment] = []
+
+    def place(asset: PoolAsset, text: str) -> None:
+        nonlocal previous_key
+        anchor = _fresh_anchor(asset.key, anchors_used)
+        anchors_used.setdefault(asset.key, set()).add(anchor)
+        counts[asset.key] = counts.get(asset.key, 0) + 1
+        previous_key = asset.key
+        assigned.append(ShotAssignment(
+            sentence=text,
+            mode="asset",
+            caption=asset.caption,
+            anchor=anchor,
+            asset_key=asset.key,
+        ))
+
+    def merge(text: str) -> None:
+        if not assigned:
+            assigned.append(ShotAssignment(sentence=text, mode="fallback"))
+            return
+        previous = assigned[-1]
+        previous.sentence = f"{previous.sentence} {text}".strip()
+        previous.span = int(previous.span or 1) + 1
+
     for sentence in sentences:
         text = str(sentence or "").strip()
         if wants_flux(text) and flux_used < int(flux_max):
@@ -180,23 +263,103 @@ def assign_shots(
                 mode="flux",
                 prompt=safe_flux_prompt(text, geography=geography, scene="landscape"),
             ))
-            previous = None
+            previous_key = ""
             continue
-        asset = best_asset(text, assets)
-        if asset is None:
-            assigned.append(ShotAssignment(sentence=text, mode="fallback"))
+        want_object = bool(_OBJECT.search(text))
+        ranked = sorted(
+            assets,
+            key=lambda asset: (
+                _overlap(text, asset.caption),
+                1 if want_object and asset.kind == "object" else 0,
+                1 if (not want_object) and asset.kind == "site" else 0,
+            ),
+            reverse=True,
+        )
+        kind = "object" if want_object else ""
+        chosen = next((
+            asset for asset in ranked
+            if _legal_asset(
+                asset,
+                kind=kind,
+                counts=counts,
+                previous_key=previous_key,
+                anchors_used=anchors_used,
+            )
+        ), None)
+        if chosen is None and want_object and assigned:
+            previous = assigned[-1]
+            if _kind_for(previous.asset_key, assets) == "object":
+                merge(text)
+                continue
+        if chosen is None:
+            chosen = next((
+                asset for asset in ranked
+                if _legal_asset(
+                    asset,
+                    kind="",
+                    counts=counts,
+                    previous_key=previous_key,
+                    anchors_used=anchors_used,
+                )
+            ), None)
+        if chosen is None:
+            merge(text)
             continue
-        anchor = pick_anchor(asset.key, previous, used)
-        used[(asset.key, anchor)] = used.get((asset.key, anchor), 0) + 1
-        previous = (asset.key, anchor)
-        assigned.append(ShotAssignment(
-            sentence=text,
-            mode="asset",
-            caption=asset.caption,
-            anchor=anchor,
-            asset_key=asset.key,
-        ))
+        if want_object and chosen.kind != "object":
+            merge(text)
+            continue
+        place(chosen, text)
     return assigned
+
+
+def fit_pool_beats(
+    snippets: list[str],
+    durations: list[float],
+    assets: list[PoolAsset],
+    *,
+    geography: str = "",
+    flux_max: int = FLUX_MAX,
+    protect_tail: int = 0,
+) -> tuple[list[str], list[float], list[ShotAssignment]]:
+    """Merge beats the pool cannot cover, and keep the closing CTA beat."""
+    protect = max(0, int(protect_tail))
+    sentences = [str(item or "") for item in snippets]
+    durs = [float(item) for item in durations]
+    if len(durs) < len(sentences):
+        pad = durs[-1] if durs else 1.0
+        durs = (durs + [pad] * len(sentences))[: len(sentences)]
+    if protect and len(sentences) > protect:
+        head, tail = sentences[:-protect], sentences[-protect:]
+        head_d, tail_d = durs[:-protect], durs[-protect:]
+    else:
+        head, tail = sentences, []
+        head_d, tail_d = durs, []
+    shots = assign_shots(head, assets, geography=geography, flux_max=flux_max)
+    merged_s: list[str] = []
+    merged_d: list[float] = []
+    cursor = 0
+    for shot in shots:
+        span = max(1, int(shot.span or 1))
+        chunk = head_d[cursor:cursor + span]
+        merged_s.append(shot.sentence)
+        merged_d.append(sum(chunk) if chunk else 0.0)
+        cursor += span
+    if cursor < len(head_d) and merged_d:
+        merged_d[-1] += sum(head_d[cursor:])
+    flux_left = max(0, int(flux_max) - sum(1 for shot in shots if shot.mode == "flux"))
+    tail_shots = assign_shots(tail, assets, geography=geography, flux_max=flux_left) if tail else []
+    tail_s: list[str] = []
+    tail_out: list[float] = []
+    cursor = 0
+    for shot in tail_shots:
+        span = max(1, int(shot.span or 1))
+        chunk = tail_d[cursor:cursor + span]
+        tail_s.append(shot.sentence)
+        tail_out.append(sum(chunk) if chunk else 0.0)
+        cursor += span
+    if cursor < len(tail_d) and tail_out:
+        tail_out[-1] += sum(tail_d[cursor:])
+    return merged_s + tail_s, merged_d + tail_out, shots + tail_shots
 
 
 def fallback_assignment(
@@ -235,6 +398,46 @@ def _candidate_caption(item: Any) -> str:
     return " ".join(part for part in (title, description) if part).strip() or title
 
 
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def pool_short_reason(
+    kept: list[PoolAsset],
+    *,
+    target_min: int = TARGET_MIN,
+    object_floor: int = OBJECT_FLOOR,
+) -> str:
+    objects = sum(1 for item in kept if item.kind == "object")
+    if len(kept) < int(target_min):
+        return f"pool {len(kept)} < {int(target_min)}"
+    if objects < int(object_floor):
+        return f"objects {objects} < {int(object_floor)}"
+    return ""
+
+
+def _seed_cache(cache_dir: Path | None, folder: Path) -> list[PoolAsset]:
+    """Curated artefact_cache files count as object photographs."""
+    if cache_dir is None or not Path(cache_dir).is_dir():
+        return []
+    seeded: list[PoolAsset] = []
+    for path in sorted(Path(cache_dir).iterdir()):
+        if not path.is_file() or path.suffix.lower() not in _IMAGE_SUFFIXES:
+            continue
+        dest = folder / f"cache_{path.name}"
+        if not dest.is_file():
+            dest.write_bytes(path.read_bytes())
+        seeded.append(PoolAsset(
+            path=str(dest),
+            caption=path.stem.replace("_", " "),
+            kind="object",
+            source="cache",
+            key=f"cache:{path.name.lower()}",
+        ))
+    if seeded:
+        logger.info("ASSET POOL cache seed | n=%d | dir=%s", len(seeded), cache_dir)
+    return seeded
+
+
 def build_asset_pool(
     *,
     queries: list[str],
@@ -253,15 +456,33 @@ def build_asset_pool(
     object_floor: int = OBJECT_FLOOR,
     nano_max: int = NANO_MAX,
     openverse_floor: int = OPENVERSE_FLOOR,
+    cache_dir: Path | None = None,
+    strict: bool = False,
 ) -> list[PoolAsset]:
-    """Download and judge each candidate once. Stop at the usable target."""
+    """Download and judge each candidate once. Stop at the usable target.
+
+    A short pool is filled from the artefact cache, then one cheap Nano
+    Banana pass. ``strict`` raises when the pool is still too small.
+    """
+    from modules.reel_artefact.fetch import ancient_title_reject
+    from modules.reel_artefact.nanobanana import fatal_nano_error
+
     folder = Path(dest)
     folder.mkdir(parents=True, exist_ok=True)
+    kept = _seed_cache(cache_dir, folder)
     commons: list[Any] = []
-    seen: set[str] = set()
+    seen: set[str] = {item.key for item in kept}
 
     def take(items: list[Any]) -> None:
         for item in items or []:
+            caption = _candidate_caption(item)
+            categories_text = " ".join(
+                str(part) for part in (getattr(item, "categories", None) or [])
+            )
+            reason = ancient_title_reject(caption, categories_text)
+            if reason:
+                logger.info("ASSET POOL dropped %s (%s)", caption[:80], reason)
+                continue
             key = _candidate_key(item)
             if not key or key in seen:
                 continue
@@ -275,13 +496,23 @@ def build_asset_pool(
         for sub in list(subcategories(name) or [])[:6]:
             take(category(sub))
 
-    kept = _judge_candidates(
-        commons, folder, download, judge, source="commons", limit=int(target_max),
-    )
+    room = max(0, int(target_max) - len(kept))
+    if room:
+        kept.extend(_judge_candidates(
+            commons, folder, download, judge, source="commons", limit=room,
+        ))
     if len(kept) < int(openverse_floor):
         extra: list[Any] = []
         for query in [item for item in queries if str(item).strip()][:3]:
             for item in openverse(query) or []:
+                caption = _candidate_caption(item)
+                categories_text = " ".join(
+                    str(part) for part in (getattr(item, "categories", None) or [])
+                )
+                reason = ancient_title_reject(caption, categories_text)
+                if reason:
+                    logger.info("ASSET POOL dropped %s (%s)", caption[:80], reason)
+                    continue
                 key = _candidate_key(item)
                 if key and key not in seen:
                     seen.add(key)
@@ -294,7 +525,13 @@ def build_asset_pool(
     objects = sum(1 for item in kept if item.kind == "object")
     prompts = [item for item in (object_prompts or []) if str(item).strip()] or ["the object"]
     calls = 0
-    while objects < int(object_floor) and calls < int(nano_max) and nano is not None:
+    nano_dead = False
+    while (
+        objects < int(object_floor)
+        and calls < int(nano_max)
+        and nano is not None
+        and not nano_dead
+    ):
         prompt = prompts[calls % len(prompts)]
         calls += 1
         path = folder / f"nano_{calls:02d}.jpg"
@@ -302,11 +539,14 @@ def build_asset_pool(
             written = nano(prompt, path)
         except Exception as exc:  # noqa: BLE001
             logger.info("ASSET POOL nano failed (%s)", type(exc).__name__)
+            if fatal_nano_error(exc) or "nanobanana_failed" in str(exc).lower():
+                nano_dead = True
             continue
         if written is None or not Path(written).is_file():
             continue
         verdict = judge(Path(written), prompt, "object") or {}
-        if not accept_verdict(verdict):
+        verdict.setdefault("kind", "object")
+        if not accept_verdict(verdict, artefact=True):
             continue
         kept.append(PoolAsset(
             path=str(written),
@@ -324,6 +564,14 @@ def build_asset_pool(
         sum(1 for item in kept if item.kind == "object"),
         target_min,
     )
+    if strict:
+        reason = pool_short_reason(
+            kept, target_min=int(target_min), object_floor=int(object_floor),
+        )
+        if reason:
+            raise PoolTooSmall(
+                f"asset pool too small ({reason}) after cache, search, and nano"
+            )
     return kept[: int(target_max)]
 
 
@@ -350,7 +598,8 @@ def _judge_candidates(
         if path is None or not Path(path).is_file():
             continue
         verdict = judge(Path(path), caption, kind) or {}
-        if not accept_verdict(verdict):
+        verdict.setdefault("kind", kind)
+        if not accept_verdict(verdict, artefact=(kind == "object")):
             continue
         judged_kind = str(verdict.get("kind") or kind or "site")
         kept.append(PoolAsset(
@@ -424,6 +673,7 @@ def place_assignment(
         anchor = pick_anchor(chosen.key, (chosen.key, anchor), {(chosen.key, anchor): 1})
     write_asset_crop(chosen.path, target, anchor)
     provider = "fallback" if assignment.mode == "flux" else (assignment.mode or "asset")
+    _write_pool_source(target, chosen, provider=provider)
     return StillGateResult(
         path=target,
         extra_generations=0,
@@ -459,6 +709,22 @@ def make_pool_job(
         judge_fn=judge_fn,
         beat_index=beat_index,
     )
+
+
+def _write_pool_source(path: Path, asset: PoolAsset, *, provider: str) -> None:
+    """Sidecar so the cost line names the photograph's source, not Flux."""
+    from modules.reel_artefact.source import write_source_sidecar
+
+    source = (asset.source or "").strip().lower()
+    if source == "nano":
+        billed = "nanobanana"
+    elif source in {"commons", "openverse", "cache", "met", "wikimedia", "europeana"}:
+        billed = source
+    elif provider == "fallback":
+        billed = "commons"
+    else:
+        billed = source or "commons"
+    write_source_sidecar(path, {"provider": billed, "model_id": "", "source": source})
 
 
 def _asset_by_key(pool: list[PoolAsset], key: str) -> PoolAsset | None:
@@ -573,6 +839,11 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
         generate_artefact_image(prompt, path)
         return path if path.is_file() else None
 
+    cache_dir = None
+    if entity is not None and getattr(entity, "id", ""):
+        from modules.reel_artefact.fetch import artefact_cache_dir
+
+        cache_dir = artefact_cache_dir(channel, str(entity.id))
     try:
         return build_asset_pool(
             queries=queries,
@@ -586,7 +857,11 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
             judge=judge,
             nano=nano,
             object_prompts=prompts,
+            cache_dir=cache_dir,
+            strict=True,
         )
+    except PoolTooSmall:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("ASSET POOL skipped (%s)", type(exc).__name__)
         return []

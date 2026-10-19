@@ -30,6 +30,39 @@ def model_chain() -> list[str]:
     return models or list(NANOBANANA_MODELS)
 
 
+def fatal_nano_error(exc: BaseException) -> bool:
+    """Billing and DNS failures will not succeed on the next model."""
+    text = f"{type(exc).__name__} {exc}".lower()
+    needles = (
+        "resource_exhausted",
+        "402",
+        "getaddrinfo",
+        "connecterror",
+        "nameresolution",
+        "name resolution",
+        "temporary failure in name",
+    )
+    return any(needle in text for needle in needles)
+
+
+def run_model_chain(models: list[str], call) -> str:
+    """Try the cheapest model first. Stop the chain on a billing or DNS error."""
+    last_error = "no_model"
+    for model in models:
+        try:
+            saved = call(model)
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{model}:{type(exc).__name__}"
+            logger.info("Nano Banana %s failed (%s)", model, type(exc).__name__)
+            if fatal_nano_error(exc):
+                raise RuntimeError(f"nanobanana_failed:{last_error}") from exc
+            continue
+        if saved:
+            return model
+        last_error = f"{model}:no_image"
+    raise RuntimeError(f"nanobanana_failed:{last_error}")
+
+
 def generate_artefact_image(
     prompt: str,
     dest: Path,
@@ -61,25 +94,19 @@ def generate_artefact_image(
             types.Part.from_bytes(data=Path(reference).read_bytes(), mime_type=mime),
             types.Part.from_text(text=prompt),
         ]
-    last_error = "no_model"
-    for model in model_chain():
-        try:
-            response = guarded_generate_content(
-                client,
-                model=model,
-                contents=contents,
-                config=config,
-                kind="image",
-                source="reel_artefact.nanobanana",
-            )
-        except Exception as exc:  # noqa: BLE001
-            last_error = f"{model}:{type(exc).__name__}"
-            logger.info("Nano Banana %s failed (%s)", model, type(exc).__name__)
-            continue
-        if _save_response(response, dest):
-            return model
-        last_error = f"{model}:no_image"
-    raise RuntimeError(f"nanobanana_failed:{last_error}")
+
+    def call(model: str) -> bool:
+        response = guarded_generate_content(
+            client,
+            model=model,
+            contents=contents,
+            config=config,
+            kind="image",
+            source="reel_artefact.nanobanana",
+        )
+        return _save_response(response, dest)
+
+    return run_model_chain(model_chain(), call)
 
 
 def _save_response(response: Any, dest: Path) -> bool:
