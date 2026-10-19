@@ -11,9 +11,9 @@
 # Google Drive shortcut files (not real blobs; break `git add -A`)
 *.gsheet
 
-# Local credential JSON (service accounts / ad-hoc secrets)
-credentials/*.json
-!credentials/tokens/.gitkeep
+# Local credential JSON (service accounts / ad-hoc secrets).
+# The whole tree stays out. Nothing under credentials/ is tracked.
+credentials/
 
 # Google OAuth2 — client secrets and per-page YouTube access tokens
 client_secret*.json
@@ -62,6 +62,7 @@ pyvenv.cfg
 !.cursor/rules/**
 .idea/
 .vscode/
+.claude/
 
 # Heavy media outputs (generated at runtime). Video never belongs in git.
 outputs/
@@ -151,6 +152,13 @@ desktop.ini
 .env
 .env.*
 !.env.example
+# `.env.*` does not match `.env.bak_20261017_prepinterest` (no second dot).
+.env.bak*
+.env*.bak
+.env.*.bak
+*.env.bak
+.env.backup
+.env.backup*
 client_secret*.json
 *.pem
 *.key
