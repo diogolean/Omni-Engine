@@ -1027,11 +1027,17 @@ def _snapshot_verified_models(
         model_override=img_override,
         log=True,
     )
-    humanizer = (
-        f"Gemini `{text_route.model_id}` (captions + research) [{text_route.tier}]"
-        if economic_brain_mode
-        else f"Anthropic Claude `{app_config.CLAUDE_MODEL}` / Gemini `{text_route.model_id}` [{text_route.tier}]"
+    _ak_page = bool(
+        page_ctx and (page_ctx.page_id or "").strip().lower() == "ancient_knowledge"
     )
+    if _ak_page:
+        humanizer = "Ancient Knowledge narration (live text provider)"
+    else:
+        humanizer = (
+            f"Gemini `{text_route.model_id}` (captions + research) [{text_route.tier}]"
+            if economic_brain_mode
+            else f"Anthropic Claude `{app_config.CLAUDE_MODEL}` / Gemini `{text_route.model_id}` [{text_route.tier}]"
+        )
     if img_override and app_config.is_gemini_image_model(img_override):
         img_pref = app_config.normalize_image_model_id(img_override)
     else:
@@ -3537,9 +3543,14 @@ def _produce_variant_worker(
                         break
                 if _early_seq_script:
                     if page_ctx and (page_ctx.page_id or "").lower() == "ancient_knowledge":
-                        from modules.reel_artefact.script_length import soft_ceiling
+                        from modules.reel_artefact.script_length import (
+                            AK_NARRATION_S,
+                            soft_ceiling,
+                        )
 
-                        _early_seq_script = soft_ceiling(_early_seq_script)
+                        _early_seq_script = soft_ceiling(
+                            _early_seq_script, max_seconds=AK_NARRATION_S,
+                        )
                     else:
                         _early_seq_script = _trim_script_to_word_limit(
                             _early_seq_script,
@@ -3583,6 +3594,18 @@ def _produce_variant_worker(
                     _retry_note = (
                         f'The first sentence must contain "{_topic_text}".'
                     )
+                elif _ground_why.startswith("camera"):
+                    _retry_note = (
+                        "Rewrite without camera directions. Do not mention fog "
+                        "rolling, golden hour, aerial views, foliage, rock "
+                        "formations, or water flowing as a shot."
+                    )
+                elif _ground_why.startswith("tone"):
+                    _retry_note = (
+                        "Rewrite in a National Geographic tone. Use "
+                        "'some researchers suggest'. Do not say archaeology "
+                        "refuses, and do not say a building powered devices."
+                    )
                 _LOG.warning("SCRIPT GROUNDING | %s | one retry", _ground_why)
                 if caption_engine is not None:
                     _early_seq_script = caption_engine.generate_sequence_voiceover(
@@ -3604,9 +3627,14 @@ def _produce_variant_worker(
                         asset_captions=_asset_captions or None,
                     ) or ""
                     if _early_seq_script:
-                        from modules.reel_artefact.script_length import soft_ceiling
+                        from modules.reel_artefact.script_length import (
+                            AK_NARRATION_S,
+                            soft_ceiling,
+                        )
 
-                        _early_seq_script = soft_ceiling(_early_seq_script)
+                        _early_seq_script = soft_ceiling(
+                            _early_seq_script, max_seconds=AK_NARRATION_S,
+                        )
             _ground_left = _grounding_problem(
                 _early_seq_script or "", _topic_text, channel="ancient_knowledge",
             ) if _early_seq_script else "empty script"
@@ -3655,6 +3683,16 @@ def _produce_variant_worker(
                         + (f" ({_ground_left})" if _ground_left else "")
                     )
             else:
+                try:
+                    from modules.reel_artefact.provider_health import text_writer_banner
+
+                    _writer = text_writer_banner()
+                    if _writer:
+                        bm.humanizer_summary = _writer
+                        humanizer_notes = _writer
+                        _LOG.info("Models banner | humanizer=%s", _writer)
+                except Exception:  # noqa: BLE001
+                    pass
                 try:
                     from modules.reel_artefact.checkpoint import (
                         ReelCheckpoint as _ScriptCkpt,
@@ -4794,6 +4832,17 @@ def _produce_variant_worker(
                 except Exception:  # noqa: BLE001
                     pass
                 _beat_qa_rows.append(_row)
+                if (
+                    _gate.publishable
+                    and not _verdict_row.get("ladder")
+                    and str(_row.get("image_provider") or "").strip()
+                ):
+                    try:
+                        from modules.reel_artefact.logbook import note_accepted as _note_accepted
+
+                        _note_accepted(str(_row.get("image_provider") or ""))
+                    except Exception:  # noqa: BLE001
+                        pass
                 if _gate.publishable and _gate.path is not None and Path(_gate.path).is_file():
                     try:
                         from modules.reel_grounding.still_cache import write_spoken_sidecar
@@ -6736,27 +6785,40 @@ def _produce_variant_worker(
             ),
         )
 
-    if caption_mode_tag not in ("researcher_fallback", "skipped"):
-        try:
-            xlsx_path: Path | None = None
-            with write_lock:
-                xlsx_path = append_postplanner_xlsx_row(
-                    postplanner_dir,
-                    run_stamp=run_stamp,
-                    posting_time=posting_slot_display,
-                    caption=caption_str,
-                    media_url=_planner_media_url(
-                        post_type,
-                        imgbb_url=imgbb_url,
-                        local_image=str(img_path_display or ""),
-                        b2_video_url=_b2_video_url,
-                        video_path=video_path_str,
-                    ),
-                )
-            if xlsx_path:
-                _LOG.info("PostPlanner XLSX row written: %s", xlsx_path.name)
-        except Exception as xlsx_exc:  # noqa: BLE001
-            _LOG.warning("PostPlanner XLSX write failed (variant %s): %s", variant + 1, xlsx_exc)
+    from modules.reel_qa.publish import write_postplanner_xlsx_if_allowed
+
+    def _write_timestamped_xlsx() -> None:
+        xlsx_path: Path | None = None
+        with write_lock:
+            xlsx_path = append_postplanner_xlsx_row(
+                postplanner_dir,
+                run_stamp=run_stamp,
+                posting_time=posting_slot_display,
+                caption=caption_str,
+                media_url=_planner_media_url(
+                    post_type,
+                    imgbb_url=imgbb_url,
+                    local_image=str(img_path_display or ""),
+                    b2_video_url=_b2_video_url,
+                    video_path=video_path_str,
+                ),
+            )
+        if xlsx_path:
+            _LOG.info("PostPlanner XLSX row written: %s", xlsx_path.name)
+
+    try:
+        if not write_postplanner_xlsx_if_allowed(
+            post_type=post_type,
+            report=_qa_report,
+            caption_mode=caption_mode_tag,
+            write=_write_timestamped_xlsx,
+        ) and caption_mode_tag not in ("researcher_fallback", "skipped"):
+            _LOG.info(
+                "PostPlanner XLSX skipped | QA blocked | verdict=%s",
+                (_qa_report or {}).get("verdict"),
+            )
+    except Exception as xlsx_exc:  # noqa: BLE001
+        _LOG.warning("PostPlanner XLSX write failed (variant %s): %s", variant + 1, xlsx_exc)
 
     if skip_image:
         img_report = "(skipped)"

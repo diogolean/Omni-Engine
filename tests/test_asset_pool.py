@@ -677,3 +677,48 @@ def test_committed_baghdad_cache_names_the_licence(tmp_path: Path) -> None:
         object_floor=0,
     )
     assert any(asset.source == "cache" and asset.kind == "object" for asset in pool)
+    jar = next(asset for asset in pool if "01_parthian" in asset.key)
+    assert "pile bagdad" in jar.caption.lower()
+    cutaway = next(asset for asset in pool if "02_parthian" in asset.key)
+    assert "innersystem" in cutaway.caption.lower()
+
+
+def test_the_hook_uses_the_jar_photo_and_a_gallery_loses_a_site_line() -> None:
+    from modules.reel_artefact.asset_pool import PoolAsset, assign_shots
+
+    assets = [
+        PoolAsset(
+            "02.jpg",
+            "02 parthian jar. File:PartherJar InnerSystem.jpg",
+            "object", "cache", "cut",
+        ),
+        PoolAsset(
+            "03.jpg",
+            "03 copper cylinder. File:Parther Cu-Fe-Elektroden.jpg",
+            "object", "cache", "diagram",
+        ),
+        PoolAsset(
+            "08.jpg",
+            "Ctesiphon exhibition at the Pergamonmuseum gallery",
+            "object", "cache", "gallery",
+        ),
+        PoolAsset(
+            "01.jpg",
+            "01 parthian jar copper iron. File:Ironie pile Bagdad.jpg",
+            "object", "cache", "jar",
+        ),
+        PoolAsset(
+            "05.jpg",
+            "The arch of Ctesiphon in the desert",
+            "object", "cache", "arch",
+        ),
+    ]
+    shots = assign_shots(
+        [
+            "The Baghdad Battery is a clay jar with a copper cylinder.",
+            "The arch at Ctesiphon still stands in the desert.",
+        ],
+        assets,
+    )
+    assert shots[0].asset_key == "jar"
+    assert shots[1].asset_key == "arch"

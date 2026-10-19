@@ -214,11 +214,15 @@ def seal_sentence_timeline(
     snips = [str(item or "") for item in snippets]
     durs = [float(item) for item in durations]
     text = " ".join((cta_text or "").split())
-    already = bool(snips) and " ".join(snips[-1].split()) == text
+    already = bool(text and snips) and " ".join(snips[-1].split()) == text
     remain = float(audio_len) - sum(durs)
     if text and not already and remain > 0.05:
         snips.append(text)
         durs.append(remain)
+    elif remain > 0.05 and durs:
+        # The spoken line already is the CTA, or the voice is simply longer
+        # than the slots. Stretch the last hold so the mux does not crash.
+        durs[-1] = durs[-1] + remain
     check_timeline(durs, sentence_starts, audio_len)
     return snips, durs
 

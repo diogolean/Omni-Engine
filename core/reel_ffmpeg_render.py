@@ -260,13 +260,35 @@ def phrase_cues(
     return cues
 
 
-def ass_document(cues: list[tuple[str, float, float, str]]) -> str:
-    """One ASS script. libass burns it; there is no per-frame caption blend."""
+def ass_document(
+    cues: list[tuple[str, float, float, str]],
+    *,
+    scale: float = 1.0,
+) -> str:
+    """One ASS script. libass burns it; there is no per-frame caption blend.
+
+    ``scale`` is 1.5 for Ancient Knowledge. Other channels stay at 64 and 80.
+    """
     style = (
         "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
         "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
         "MarginR, MarginV, Encoding"
+    )
+    factor = float(scale or 1.0)
+    sub = max(24, int(round(64 * factor)))
+    hook = max(32, int(round(80 * factor)))
+    sub_style = (
+        f"Style: Sub,DejaVu Sans,{sub},&H0000E6FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1"
+    )
+    hook_style = (
+        f"Style: Hook,DejaVu Sans,{hook},&H00FFFFFF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,3,14,1,8,40,40,220,1"
+    )
+    cta_style = (
+        f"Style: Cta,DejaVu Sans,{sub},&H0000E6FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1"
     )
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -276,9 +298,9 @@ WrapStyle: 0
 
 [V4+ Styles]
 {style}
-Style: Sub,DejaVu Sans,64,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
-Style: Hook,DejaVu Sans,80,&H00FFFFFF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,8,40,40,220,1
-Style: Cta,DejaVu Sans,64,&H0000E6FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,14,1,2,40,40,280,1
+{sub_style}
+{hook_style}
+{cta_style}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -332,14 +354,21 @@ def _run(cmd: list[str]) -> None:
         raise RuntimeError(tail or f"ffmpeg exit {proc.returncode}")
 
 
-def _beat_ass(path: Path, cues: list[tuple[str, float, float, str]], t0: float, dur: float) -> None:
+def _beat_ass(
+    path: Path,
+    cues: list[tuple[str, float, float, str]],
+    t0: float,
+    dur: float,
+    *,
+    scale: float = 1.0,
+) -> None:
     local: list[tuple[str, float, float, str]] = []
     end = t0 + dur
     for style, start, stop, text in cues:
         if stop <= t0 or start >= end:
             continue
         local.append((style, max(0.0, start - t0), min(dur, stop - t0), text))
-    path.write_text(ass_document(local), encoding="utf-8")
+    path.write_text(ass_document(local, scale=scale), encoding="utf-8")
 
 
 def _render_beat(
@@ -563,6 +592,7 @@ def compile_ffmpeg_reel(
     require_voice: bool = False,
     synthesize_drone: bool = False,
     transition_booms: bool = False,
+    caption_scale: float = 1.0,
 ) -> Path:
     """Render the reel. Raises on any ffmpeg error."""
     if not image_paths:
@@ -599,7 +629,7 @@ def compile_ffmpeg_reel(
     with tempfile.TemporaryDirectory(prefix="reel_ff_") as tmp_name:
         tmp = Path(tmp_name)
         ass_all = tmp / "reel.ass"
-        ass_all.write_text(ass_document(cues), encoding="utf-8")
+        ass_all.write_text(ass_document(cues, scale=caption_scale), encoding="utf-8")
         segments: list[Path] = []
         jobs = []
         cursor = 0.0
@@ -607,7 +637,7 @@ def compile_ffmpeg_reel(
             dur = durations[index]
             seg = tmp / f"seg_{index:02d}.mp4"
             ass_path = tmp / f"b{index:02d}.ass"
-            _beat_ass(ass_path, cues, cursor, dur)
+            _beat_ass(ass_path, cues, cursor, dur, scale=caption_scale)
             video = videos[index] if index < len(videos) else None
             video_path = Path(video) if video else None
             jobs.append((index, Path(image), video_path, dur, ass_path, seg))

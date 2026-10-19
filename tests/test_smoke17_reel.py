@@ -521,6 +521,9 @@ def test_yellow_captions_sit_in_a_dark_box() -> None:
     assert ken_burns_filter(0, 8).endswith("format=yuv420p")
     hook = ass_document([("Hook", 0.0, 1.0, "Göbekli Tepe")])
     assert "DejaVu Sans,80" in hook
+    larger = ass_document([("Sub", 0.0, 1.0, "the jar")], scale=1.5)
+    assert "DejaVu Sans,96" in larger
+    assert "DejaVu Sans,120" in ass_document([("Hook", 0.0, 1.0, "the jar")], scale=1.5)
 
 
 def test_ffmpeg_flag_fails_loud_and_honors_the_env_binary(
@@ -1181,3 +1184,230 @@ def test_openrouter_text_excludes_reasoning(
     assert "provider=openrouter" in caplog.text
     assert "qwen/qwen3.5-flash-02-23" in caplog.text
     assert "plan the acts" in caplog.text
+
+
+def test_a_spoken_follow_line_is_removed_and_a_long_voice_extends_the_last_slot() -> None:
+    from modules.reel_artefact.script_grounding import strip_spoken_cta
+    from modules.reel_qa.beats import seal_sentence_timeline
+
+    spoken = strip_spoken_cta(
+        "Göbekli Tepe stands on a limestone hill. "
+        "The pillars are older than pottery. "
+        "Follow Ancient Knowledge for more hidden mysteries."
+    )
+    assert "Follow Ancient Knowledge" not in spoken
+    assert spoken.startswith("Göbekli Tepe")
+    assert "Follow the river" in strip_spoken_cta(
+        "Follow the river to the arch. The stones remain."
+    )
+
+    snippets, durations = seal_sentence_timeline(
+        [
+            "Göbekli Tepe stands on a limestone hill.",
+            "Follow Ancient Knowledge for more hidden mysteries.",
+        ],
+        [40.0, 55.41],
+        [0.0, 40.0],
+        99.17,
+        "Follow Ancient Knowledge for more hidden mysteries.",
+    )
+    assert snippets[-1] == "Follow Ancient Knowledge for more hidden mysteries."
+    assert len(snippets) == 2
+    assert sum(durations) == pytest.approx(99.17)
+    assert durations[-1] == pytest.approx(59.17)
+
+
+def test_camera_directions_and_hard_claims_ask_for_a_rewrite() -> None:
+    from core.reel_sequence_engine import build_sequence_script_prompt
+    from modules.reel_artefact.script_grounding import grounding_problem
+
+    topic = "The Baghdad Battery"
+    camera = (
+        "The Baghdad Battery is a clay jar from Parthian Mesopotamia. "
+        "Some researchers suggest the copper cylinder could hold a charge. "
+        "Fog rolls over the Tigris where the jars were buried. "
+        "The arch at Ctesiphon still stands beside the river."
+    )
+    assert grounding_problem(camera, topic, channel="ancient_knowledge") == (
+        "camera direction in the narration"
+    )
+    tone = (
+        "The Baghdad Battery is a clay jar from Parthian Mesopotamia. "
+        "Mainstream archaeology often refuses to acknowledge the find. "
+        "Could the Ziggurat of Ur have powered similar devices? "
+        "The copper cylinder still sits inside the clay."
+    )
+    assert grounding_problem(tone, topic, channel="ancient_knowledge").startswith("tone")
+    calm = (
+        "The Baghdad Battery is a clay jar from Parthian Mesopotamia. "
+        "Some researchers suggest the copper cylinder and iron rod were a cell. "
+        "The jars were found near Ctesiphon, and the arch still stands there."
+    )
+    assert grounding_problem(calm, topic, channel="ancient_knowledge") == ""
+
+    prompt = build_sequence_script_prompt(
+        topic, "ancient mysteries", channel_name="ancient_knowledge", duration_s=85,
+    )
+    low = prompt.lower()
+    assert "do not write camera directions" in low
+    assert "sky, weather, fog" not in low
+    assert "an aerial view of the real region" not in low
+    assert "close natural detail: rock, water, or foliage" not in low
+    assert "some researchers suggest" in low
+    assert "national geographic" in low
+    assert "at most 149" in low
+    other = build_sequence_script_prompt(
+        "The Great Pyramid", "history", channel_name="other", duration_s=85,
+    )
+    assert "golden-hour" in other.lower()
+
+
+def test_an_unjudgeable_final_frame_warns_and_does_not_block(tmp_path: Path) -> None:
+    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+    from modules.reel_visual_qa import _strip_json
+
+    fenced = _strip_json('note ```json\n{"relevance_score": 0.8,}\n``` thanks')
+    assert fenced["relevance_score"] == 0.8
+    truncated = _strip_json('{"relevance_score": 0.4, "is_relevant": true')
+    assert truncated["relevance_score"] == 0.4
+
+    still = tmp_path / "still.jpg"
+    other = tmp_path / "other.jpg"
+    Image.new("RGB", (64, 96), (20, 40, 200)).save(still, format="JPEG")
+    Image.new("RGB", (64, 96), (220, 180, 20)).save(other, format="JPEG")
+
+    def _frame(video: Path, at_s: float, dest: Path) -> Path:
+        del video, at_s
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(other.read_bytes())
+        return dest
+
+    probe = {
+        "error": "",
+        "duration_s": 90.0,
+        "has_audio": True,
+        "mean_volume_db": -16.0,
+    }
+    beats = [{
+        "index": 13,
+        "text": "The arch still stands beside the river.",
+        "passed": True,
+        "image_path": str(still),
+        "score": 0.91,
+        "prompt": "Ctesiphon",
+    }]
+    warned = gate_final_mp4(
+        tmp_path / "reel.mp4",
+        [SubtitleCue(text="arch still stands", start_s=62.0, end_s=66.0)],
+        probe_fn=lambda _path: probe,
+        evaluate_fn=lambda *_args, **_kwargs: {
+            "qa_status": "unavailable",
+            "rejection_reason": "qa_unavailable:gemini_dead,qwen:RuntimeError",
+            "relevance_score": 0.0,
+            "is_relevant": False,
+        },
+        frame_fn=_frame,
+        beats=beats,
+    )
+    assert warned["passed"] is True
+    assert warned["frames"][0]["reason"] == "unjudgeable"
+    assert "frame_subtitle_mismatch" not in warned["reasons"]
+
+    scored = gate_final_mp4(
+        tmp_path / "reel.mp4",
+        [SubtitleCue(text="arch still stands", start_s=62.0, end_s=66.0)],
+        probe_fn=lambda _path: probe,
+        evaluate_fn=lambda *_args, **_kwargs: {
+            "qa_status": "scored",
+            "rejection_reason": "setting_contradicts",
+            "relevance_score": 0.2,
+            "is_relevant": False,
+        },
+        frame_fn=_frame,
+        beats=beats,
+    )
+    assert scored["passed"] is False
+    assert "frame_subtitle_mismatch" in scored["reasons"]
+
+
+def test_openrouter_vision_gives_each_judge_time_and_one_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    import sys
+    import types
+
+    image = tmp_path / "frame.jpg"
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(image, format="JPEG")
+    calls = {"n": 0, "timeouts": []}
+
+    class _Completions:
+        @staticmethod
+        def create(**_kwargs: object) -> object:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise TimeoutError("slow")
+
+            class _Msg:
+                content = '{"relevance_score": 0.91, "is_relevant": true}'
+
+            class _Choice:
+                message = _Msg()
+
+            class _Resp:
+                choices = [_Choice()]
+
+            return _Resp()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        def __init__(self, **_kwargs: object) -> None:
+            self.chat = _Chat()
+
+        def with_options(self, **kwargs: object) -> "_Client":
+            calls["timeouts"].append(kwargs.get("timeout"))
+            return self
+
+    fake = types.ModuleType("openai")
+    fake.OpenAI = _Client  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake)
+    from agents.media.providers.visual_eval import OpenRouterVisualEval
+
+    judge = OpenRouterVisualEval(
+        api_key="test-key",
+        model_id="qwen/qwen3.5-flash-02-23",
+        timeout_s=10,
+    )
+    result = judge.evaluate("Judge this still.", [image])
+    assert calls["n"] == 2
+    assert calls["timeouts"]
+    assert min(calls["timeouts"]) >= 25
+    assert "0.91" in result.text
+    assert "qwen2.5-vl-7b" in ",".join(judge._model_chain())
+
+
+def test_a_blocked_reel_does_not_write_the_postplanner_xlsx(tmp_path: Path) -> None:
+    from modules.reel_qa.publish import write_postplanner_xlsx_if_allowed
+
+    dest = tmp_path / "postplan_20261019_065111.xlsx"
+
+    def _write() -> None:
+        dest.write_text("row", encoding="utf-8")
+
+    blocked = write_postplanner_xlsx_if_allowed(
+        post_type="SEQUENCE_REEL",
+        report={"verdict": "fail", "publishable": False},
+        caption_mode="humanized",
+        write=_write,
+    )
+    assert blocked is False
+    assert not dest.exists()
+    passed = write_postplanner_xlsx_if_allowed(
+        post_type="SEQUENCE_REEL",
+        report={"verdict": "pass", "publishable": True},
+        caption_mode="humanized",
+        write=_write,
+    )
+    assert passed is True
+    assert dest.is_file()

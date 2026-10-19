@@ -33,6 +33,8 @@ _BILLING = (
 
 _DEAD: dict[str, str] = {}
 _PREFLIGHT_OK = False
+_LAST_WRITER: tuple[str, str] = ("", "")
+_RESOLVED_CLAUDE = ""
 _PROBE = "Reply with the single word ok."
 
 
@@ -66,9 +68,38 @@ def dead_reason(provider: str) -> str:
 
 def reset_providers() -> None:
     """Tests start from a live set."""
-    global _PREFLIGHT_OK
+    global _PREFLIGHT_OK, _LAST_WRITER, _RESOLVED_CLAUDE
     _DEAD.clear()
     _PREFLIGHT_OK = False
+    _LAST_WRITER = ("", "")
+    _RESOLVED_CLAUDE = ""
+
+
+def remember_text_writer(provider: str, model: str) -> None:
+    """The provider that actually wrote the Ancient Knowledge narration."""
+    global _LAST_WRITER
+    _LAST_WRITER = ((provider or "").strip().lower(), (model or "").strip())
+
+
+def text_writer_banner() -> str:
+    """Humanizer line for the provider that wrote the script. Empty before that."""
+    provider, model = _LAST_WRITER
+    if not provider:
+        return ""
+    pretty = {
+        "openrouter": "OpenRouter",
+        "deepseek": "DeepSeek",
+        "anthropic": "Anthropic",
+        "gemini": "Gemini",
+    }.get(provider, provider)
+    if model:
+        return f"{pretty} `{model}`"
+    return pretty
+
+
+def resolved_claude_model() -> str:
+    """A Claude id that answered /v1/messages. Empty until the probe finds one."""
+    return _RESOLVED_CLAUDE
 
 
 def complete_ak_text(
@@ -102,7 +133,13 @@ def complete_ak_text(
         if refine is not None:
             text = (refine(text) or "").strip()
         if text and (accept is None or accept(text)):
-            logger.info("AK text | provider=%s | chars=%d", name, len(text))
+            remember_text_writer(name, _model_label(name))
+            logger.info(
+                "AK text | provider=%s | model=%s | chars=%d",
+                name,
+                _model_label(name),
+                len(text),
+            )
             return text
         if text:
             logger.info(
@@ -130,7 +167,7 @@ def _model_label(provider: str) -> str:
     if name == "deepseek":
         return str(getattr(app_config, "DEEPSEEK_FLASH_MODEL", "") or "")
     if name == "anthropic":
-        return str(getattr(app_config, "CLAUDE_MODEL", "") or "")
+        return _RESOLVED_CLAUDE or str(getattr(app_config, "CLAUDE_MODEL", "") or "")
     if name == "gemini":
         return (
             os.getenv("GEMINI_ECONOMIC_BRAIN_MODEL")
@@ -324,16 +361,106 @@ def _probe_deepseek() -> str:
     return (resp.choices[0].message.content or "").strip()
 
 
+def _message_not_found(exc: BaseException) -> bool:
+    code = getattr(exc, "status_code", None)
+    if code is None:
+        response = getattr(exc, "response", None)
+        code = getattr(response, "status_code", None)
+    if code == 404:
+        return True
+    text = str(exc).lower()
+    return "not_found" in text or "not found" in text or "404" in text
+
+
+def _claude_message(client: object, model: str) -> str:
+    message = client.messages.create(  # type: ignore[attr-defined]
+        model=model,
+        max_tokens=8,
+        messages=[{"role": "user", "content": _PROBE}],
+    )
+    chunks = [
+        getattr(block, "text", "")
+        for block in (getattr(message, "content", []) or [])
+    ]
+    return "\n".join(part for part in chunks if part).strip()
+
+
+def _claude_candidates(client: object, skip: set[str]) -> list[str]:
+    """Sonnet, then Haiku, from /v1/models. A list response is not a live probe."""
+    try:
+        page = client.models.list()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return []
+    models = list(getattr(page, "data", None) or page or [])
+    ranked: list[tuple[int, str]] = []
+    for item in models:
+        mid = str(getattr(item, "id", "") or "").strip()
+        low = mid.lower()
+        if not mid or mid in skip or "claude" not in low:
+            continue
+        if "latest" in low:
+            rank = 5
+        elif "sonnet-4" in low or "sonnet-4-5" in low:
+            rank = 0
+        elif "sonnet" in low:
+            rank = 1
+        elif "haiku" in low:
+            rank = 2
+        else:
+            rank = 3
+        ranked.append((rank, mid))
+    ranked.sort(key=lambda pair: pair[0])
+    return [mid for _rank, mid in ranked]
+
+
 def _probe_anthropic() -> str:
+    """POST /v1/messages. A 200 from /v1/models is not enough.
+
+    ``claude-3-5-sonnet-latest`` answers the model list and 404s on messages.
+    On that 404, try the configured alias and then ids from the model list.
+    """
+    global _RESOLVED_CLAUDE
     from anthropic import Anthropic
 
     import config as app_config
 
     client = Anthropic(api_key=app_config.ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model=app_config.CLAUDE_MODEL,
-        max_tokens=8,
-        messages=[{"role": "user", "content": _PROBE}],
-    )
-    chunks = [getattr(block, "text", "") for block in (getattr(message, "content", []) or [])]
-    return "\n".join(part for part in chunks if part).strip()
+    primary = (
+        app_config.CLAUDE_MODEL
+        or getattr(app_config, "SAFE_CLAUDE_MODEL", "")
+        or "claude-sonnet-4-5"
+    ).strip()
+    safe = (getattr(app_config, "SAFE_CLAUDE_MODEL", "") or "claude-sonnet-4-5").strip()
+    ordered: list[str] = []
+    for model in (primary, safe):
+        if model and model not in ordered:
+            ordered.append(model)
+    tried: set[str] = set()
+    last: BaseException | None = None
+    for model in ordered:
+        tried.add(model)
+        try:
+            text = _claude_message(client, model)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if _message_not_found(exc):
+                logger.info("anthropic messages 404 | model=%s", model)
+                continue
+            raise
+        _RESOLVED_CLAUDE = model
+        return text or "ok"
+    for model in _claude_candidates(client, tried):
+        try:
+            text = _claude_message(client, model)
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if _message_not_found(exc):
+                logger.info("anthropic messages 404 | model=%s", model)
+                continue
+            raise
+        _RESOLVED_CLAUDE = model
+        logger.info("anthropic model resolved | %s", model)
+        return text or "ok"
+    if last is not None:
+        raise last
+    raise RuntimeError("anthropic messages probe failed")

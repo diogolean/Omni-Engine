@@ -367,6 +367,9 @@ def decide_mp4_gate(
                 label = f"frame_{reason}"
                 if label not in reasons:
                     reasons.append(label)
+            elif reason == "unjudgeable" or reason.startswith("qa_unavailable"):
+                # A timeout or broken JSON is a warning. It does not block.
+                continue
             else:
                 semantic = True
         if semantic:
@@ -650,7 +653,32 @@ def gate_final_mp4(
             scene_type=str((beat or {}).get("scene_type") or "landscape"),
             geography=str((beat or {}).get("geography") or ""),
         ) or {}
-        passed = verdict_passed(verdict) and verdict.get("qa_status") != "unavailable"
+        status = str(verdict.get("qa_status") or "")
+        reason = str(verdict.get("rejection_reason") or "")
+        unjudgeable = status == "unavailable" or reason.startswith("qa_unavailable")
+        if unjudgeable:
+            fault = frame_fault(clean)
+            _LOG.warning(
+                "MP4 frame | t=%.2f beat=%s | unjudgeable | %s",
+                cue.midpoint_s,
+                beat_index,
+                reason or status or "no verdict",
+            )
+            frames.append(
+                {
+                    "index": i,
+                    "text": text,
+                    "at_s": round(cue.midpoint_s, 3),
+                    "passed": not fault,
+                    "score": verdict.get("relevance_score"),
+                    "reason": fault or "unjudgeable",
+                    "qa_status": fault or "unjudgeable",
+                    "frame_path": str(shot),
+                    "beat_index": beat_index,
+                }
+            )
+            continue
+        passed = verdict_passed(verdict)
         frames.append(
             {
                 "index": i,

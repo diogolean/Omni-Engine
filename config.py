@@ -126,7 +126,7 @@ if GEMINI_IMAGE_SIZE not in {"1K", "2K"}:
 GEMINI_FLASH_IMAGE_1K_USD: float = 0.039
 GEMINI_PRO_IMAGE_1K_USD: float = 0.03
 GEMINI_PRO_IMAGE_2K_USD: float = 0.134
-SAFE_CLAUDE_MODEL: str = "claude-3-5-sonnet-latest"
+SAFE_CLAUDE_MODEL: str = "claude-sonnet-4-5"
 
 # CLI --image-model aliases → native Gemini image SKUs
 IMAGE_MODEL_ALIASES: dict[str, str] = {
@@ -777,16 +777,29 @@ def get_best_claude_model(anthropic_client: object | None = None) -> str:
     try:
         page = anthropic_client.models.list()  # type: ignore[union-attr]
         models = list(getattr(page, "data", None) or page)
-        for priority in ("sonnet", "haiku"):
-            for m in models:
-                mid = str(getattr(m, "id", "") or "").lower()
-                if priority in mid and "claude" in mid:
-                    logger.debug("Dynamic Claude model resolved: %s", mid)
-                    return mid
+        ranked: list[tuple[int, str]] = []
         for m in models:
-            mid = str(getattr(m, "id", "") or "")
-            if "claude" in mid.lower():
-                return mid
+            mid = str(getattr(m, "id", "") or "").strip()
+            low = mid.lower()
+            if "claude" not in low:
+                continue
+            # "claude-3-5-sonnet-latest" is listed and 404s on /v1/messages.
+            if "latest" in low:
+                rank = 5
+            elif "sonnet-4" in low:
+                rank = 0
+            elif "sonnet" in low:
+                rank = 1
+            elif "haiku" in low:
+                rank = 2
+            else:
+                rank = 3
+            ranked.append((rank, mid))
+        if ranked:
+            ranked.sort(key=lambda pair: pair[0])
+            chosen = ranked[0][1]
+            logger.debug("Dynamic Claude model resolved: %s", chosen)
+            return chosen
     except Exception as exc:  # noqa: BLE001
         logger.debug("Claude model discovery failed (%s); using configured fallback.", exc)
     return CLAUDE_MODEL or SAFE_CLAUDE_MODEL

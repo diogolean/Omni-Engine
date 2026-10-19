@@ -13,7 +13,6 @@ from __future__ import annotations
 import base64
 import logging
 import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -23,6 +22,9 @@ _LOG = logging.getLogger(__name__)
 OPENROUTER_DEFAULT_BASE_URL: str = "https://openrouter.ai/api/v1"
 DEFAULT_OPENROUTER_VISION_MODEL: str = "qwen/qwen3.5-flash-02-23"
 DEFAULT_OPENROUTER_VISION_FALLBACK: str = "qwen/qwen3.5-9b"
+# A second cheap vision judge. The 9b fallback stays in the chain.
+DEFAULT_OPENROUTER_VISION_SECOND: str = "qwen/qwen2.5-vl-7b-instruct"
+OPENROUTER_VISION_FLOOR_S: float = 28.0
 DEFAULT_GEMINI_VISION_MODEL: str = "models/gemini-2.5-flash"
 
 
@@ -108,6 +110,17 @@ def _is_model_unavailable_error(exc: BaseException) -> bool:
     return any(n in msg for n in needles)
 
 
+def _vision_json_ok(text: str) -> bool:
+    """True when the reply is an object, including a truncated or fenced one."""
+    try:
+        from modules.reel_visual_qa import _strip_json
+
+        _strip_json(text)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
 def _read_data_url(path: Path) -> str | None:
     try:
         raw = path.read_bytes()
@@ -152,8 +165,19 @@ class OpenRouterVisualEval:
             _cfg("VISUAL_EVAL_MODEL_FALLBACK", DEFAULT_OPENROUTER_VISION_FALLBACK)
             or DEFAULT_OPENROUTER_VISION_FALLBACK
         )
+        second = (
+            _cfg("VISUAL_EVAL_MODEL_SECOND", DEFAULT_OPENROUTER_VISION_SECOND)
+            or DEFAULT_OPENROUTER_VISION_SECOND
+        )
         chain: list[str] = []
-        for mid in (self.model_id, fallback, DEFAULT_OPENROUTER_VISION_MODEL, DEFAULT_OPENROUTER_VISION_FALLBACK):
+        for mid in (
+            self.model_id,
+            second,
+            fallback,
+            DEFAULT_OPENROUTER_VISION_MODEL,
+            DEFAULT_OPENROUTER_VISION_SECOND,
+            DEFAULT_OPENROUTER_VISION_FALLBACK,
+        ):
             name = (mid or "").strip()
             if name and name not in chain:
                 chain.append(name)
@@ -201,61 +225,62 @@ class OpenRouterVisualEval:
 
         client = self._client_or_raise()
         last_exc: BaseException | None = None
-        started = time.monotonic()
-        budget = max(1.0, float(self.timeout_s))
+        # Each judge gets its own window. A shared 10s budget used to expire
+        # on the first model, so the second judge never ran.
+        per_model = max(OPENROUTER_VISION_FLOOR_S, float(self.timeout_s))
         for mid in self._model_chain():
-            remaining = budget - (time.monotonic() - started)
-            if remaining <= 0.3:
-                last_exc = TimeoutError(
-                    f"OpenRouter visual eval exceeded {budget:.0f}s budget"
-                )
-                break
-            req_timeout = max(1.0, min(remaining, budget))
-            tagged = client
-            try:
-                tagged = client.with_options(timeout=req_timeout)
-            except Exception:  # noqa: BLE001
+            for attempt in (1, 2):
                 tagged = client
-            kwargs: dict = {
-                "model": mid,
-                "messages": [{"role": "user", "content": content}],
-                "temperature": 0.1,
-                "max_tokens": 2048,
-            }
-            try:
                 try:
-                    resp = tagged.chat.completions.create(
-                        **kwargs,
-                        response_format={"type": "json_object"},
-                    )
-                except Exception as fmt_exc:
-                    if _is_model_unavailable_error(fmt_exc):
-                        raise
-                    resp = tagged.chat.completions.create(**kwargs)
-                text = ""
-                try:
-                    text = (resp.choices[0].message.content or "").strip()
+                    tagged = client.with_options(timeout=per_model)
                 except Exception:  # noqa: BLE001
+                    tagged = client
+                kwargs: dict = {
+                    "model": mid,
+                    "messages": [{"role": "user", "content": content}],
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                }
+                try:
+                    try:
+                        resp = tagged.chat.completions.create(
+                            **kwargs,
+                            response_format={"type": "json_object"},
+                        )
+                    except Exception as fmt_exc:
+                        if _is_model_unavailable_error(fmt_exc):
+                            raise
+                        resp = tagged.chat.completions.create(**kwargs)
                     text = ""
-                if text:
-                    self.model_id = mid
-                    return VisualEvalResult(text=text, provider=self.name, model_id=mid)
-                last_exc = RuntimeError(
-                    f"OpenRouter visual eval returned empty text | model={mid}"
-                )
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                if _is_model_unavailable_error(exc):
-                    if _engine_debug():
-                        _LOG.warning("OpenRouter visual eval 404/unavailable | model=%s | %s", mid, exc)
-                    else:
-                        _LOG.debug("OpenRouter visual eval fallback | model=%s | %s", mid, exc)
+                    try:
+                        text = (resp.choices[0].message.content or "").strip()
+                    except Exception:  # noqa: BLE001
+                        text = ""
+                    if text and _vision_json_ok(text):
+                        self.model_id = mid
+                        return VisualEvalResult(text=text, provider=self.name, model_id=mid)
+                    last_exc = RuntimeError(
+                        f"OpenRouter visual eval unusable text | model={mid}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    if _is_model_unavailable_error(exc):
+                        if _engine_debug():
+                            _LOG.warning(
+                                "OpenRouter visual eval 404/unavailable | model=%s | %s",
+                                mid,
+                                exc,
+                            )
+                        break
+                if attempt == 1:
+                    _LOG.warning(
+                        "OpenRouter visual eval retry | model=%s | %s",
+                        mid,
+                        last_exc,
+                    )
                     continue
-                if _engine_debug():
-                    _LOG.warning("OpenRouter visual eval failed | model=%s | %s", mid, exc)
-                else:
-                    _LOG.debug("OpenRouter visual eval failed | model=%s | %s", mid, exc)
-                continue
+                _LOG.warning("OpenRouter visual eval failed | model=%s | %s", mid, last_exc)
+            continue
         raise RuntimeError(
             f"OpenRouter visual eval exhausted models {self._model_chain()}: {last_exc}"
         ) from last_exc

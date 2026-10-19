@@ -14,6 +14,10 @@ from typing import Callable
 _SENTENCE = re.compile(r"[^.!?]+[.!?]+|[^.!?]+$")
 SOFT_NARRATION_S = 90.0
 SOFT_WORDS_PER_S = 2.4
+# Ancient Knowledge speaks nearer 1.9 words/second than the 2.4 seed.
+# 62 seconds of narration is about 150 words, and with the separate
+# closing line the reel lands near the 85-second target.
+AK_NARRATION_S = 62.0
 
 
 def word_band(target: int, tolerance: float = 0.15) -> tuple[int, int]:

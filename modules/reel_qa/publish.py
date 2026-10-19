@@ -36,6 +36,27 @@ def planner_row_allowed(*, post_type: str, report: dict[str, Any] | None) -> boo
     return report_allows_publish(report)
 
 
+def write_postplanner_xlsx_if_allowed(
+    *,
+    post_type: str,
+    report: dict[str, Any] | None,
+    caption_mode: str,
+    write,
+) -> bool:
+    """Write the timestamped workbook only when QA would publish the reel.
+
+    A blocked reel used to skip the bulk workbook and still leave a
+    ``postplan_*.xlsx`` beside it. ``write`` is called only when the row
+    is allowed. Returns whether it ran.
+    """
+    if str(caption_mode or "") in {"researcher_fallback", "skipped"}:
+        return False
+    if not planner_row_allowed(post_type=post_type, report=report):
+        return False
+    write()
+    return True
+
+
 def row_publishable(row: dict[str, Any] | None) -> bool:
     """YouTube and other exporters: reel rows need ``qa_verdict=pass``."""
     data = row or {}

@@ -47,7 +47,8 @@ def summary_line() -> str:
         snap = dict(_ACCEPTED)
     return (
         "ARTEFACT_REEL | real={real} | nb-ref={nb_ref} | nb-text={nb_text} | "
-        "flux={flux} | reuse={reuse} | event={event}"
+        "flux={flux} | reuse={reuse} | event={event} | cache={cache} | "
+        "commons={commons} | openverse={openverse}"
     ).format(
         real=snap.get("real", 0),
         nb_ref=snap.get("nb-ref", 0),
@@ -55,4 +56,7 @@ def summary_line() -> str:
         flux=snap.get("flux", 0),
         reuse=snap.get("reuse", 0),
         event=snap.get("event", 0),
+        cache=snap.get("cache", 0),
+        commons=snap.get("commons", 0),
+        openverse=snap.get("openverse", 0),
     )

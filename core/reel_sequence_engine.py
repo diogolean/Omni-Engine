@@ -1261,6 +1261,22 @@ def build_sequence_script_prompt(
             f"(total ~{total_words} words across all acts)."
         )
 
+    _ak = (
+        (channel_name or "").strip().lower() == "ancient_knowledge"
+        and _mode != "warrior_discipline"
+    )
+    if _ak:
+        from modules.reel_artefact.script_length import AK_NARRATION_S, soft_word_ceiling
+
+        total_words = min(int(total_words), soft_word_ceiling(AK_NARRATION_S))
+        words_per_act = max(1, int(total_words) // max(1, n_acts))
+        pacing_note = (
+            f"Write at most {total_words} spoken words, about "
+            f"{int(AK_NARRATION_S)} seconds before the separate closing line. "
+            f"Each act is about {words_per_act} words. "
+            "Do not pad the script with weather, light, or camera directions."
+        )
+
     _directive_block = f"\nCHANNEL DIRECTIVE:\n{niche_disclaimer}\n" if niche_disclaimer else ""
     _batch_block = f"\n{batch_angle_block}\n" if batch_angle_block else ""
     _reject_block = (
@@ -1332,9 +1348,22 @@ STRICT RULES:
 Write the complete {n_acts}-act script now:"""
 
     from modules.reel_artefact.asset_pool import asset_prompt_block
-    from modules.reel_artefact.flux_policy import script_filmable_rule
+    from modules.reel_artefact.flux_policy import ak_narration_rule, script_filmable_rule
 
-    _filmable = script_filmable_rule()
+    if _ak:
+        _filmable = ak_narration_rule()
+        _speculation = (
+            'Use "some researchers suggest" and "ancient records suggest". '
+            "National Geographic tone: curious, precise, and not sensational. "
+            "Do not say mainstream archaeology refuses, denies, or hides evidence. "
+            "Do not claim a building or a ziggurat powered devices."
+        )
+    else:
+        _filmable = script_filmable_rule()
+        _speculation = (
+            'Use language like: "some researchers believe", '
+            '"ancient records suggest", "according to legend", "one theory proposes".'
+        )
     _asset_block = asset_prompt_block(asset_captions)
     if (channel_name or "").strip().lower() == "ancient_knowledge":
         _anchor_rule = (
@@ -1366,7 +1395,7 @@ NARRATOR VOICE: {persona_voice}
 STRICT RULES:
 1. Divide the script into exactly {n_acts} acts using markers: [ACT 1], [ACT 2], ... [ACT {n_acts}].
 2. {pacing_note}
-3. NEVER claim any conspiracy or theory is factual. Use language like: "some researchers believe", "ancient records suggest", "according to legend", "one theory proposes".
+3. NEVER claim any conspiracy or theory is factual. {_speculation}
 4. Each act must feel visually distinct — the narrator should describe a different aspect, location, or era.
 5. {_anchor_rule}
 6. Maintain an investigative, immersive, documentary tone throughout.
@@ -2786,6 +2815,9 @@ def compile_sequence_reel(
             require_voice=True,
             synthesize_drone=True,
             transition_booms=True,
+            caption_scale=(
+                1.5 if (page_id or "").strip().lower() == "ancient_knowledge" else 1.0
+            ),
         )
 
     _ffmpeg_out = attempt_ffmpeg(_render_with_ffmpeg)

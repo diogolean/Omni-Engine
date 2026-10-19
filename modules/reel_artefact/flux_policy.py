@@ -261,6 +261,18 @@ def script_filmable_rule() -> str:
     )
 
 
+def ak_narration_rule() -> str:
+    """Spoken prose for Ancient Knowledge. No shot-list vocabulary."""
+    return (
+        "Write spoken documentary prose. Name the place, the object, and "
+        "what the evidence shows. Do not write camera directions or a shot "
+        "list: no fog rolling, no golden-hour light, no aerial views, no "
+        "foliage growing, no water flowing as a shot, no rock formations as "
+        "a shot, no close natural detail, and no 'ruins of the real region'. "
+        "Do not speak a follow or subscribe line. That line is added later."
+    )
+
+
 def load_flux_policy(channel: str) -> dict[str, tuple[str, ...]]:
     """Allowed and forbidden Flux scene types for ``channel``.
 

@@ -212,23 +212,76 @@ def _overlap(sentence: str, caption: str) -> int:
     return len(_tokens(sentence) & _tokens(caption))
 
 
+_DRAWING = re.compile(
+    r"(?:innersystem|inner\s*system|elektroden|cut-?away|cross-?section|"
+    r"\b(?:diagrams?|sketches?|illustrations?|schematics?|drawings?)\b)",
+    re.I,
+)
+_GALLERY = re.compile(
+    r"\b(?:museums?|galleries|gallery|exhibition|exhibits?|pergamon|"
+    r"display\s+cases?|visitors?)\b",
+    re.I,
+)
+_OUTDOORS = re.compile(
+    r"\b(?:soil|soils|desert|deserts|site|sites|ruins|landscape|landscapes|"
+    r"sand|excavations?|fields?)\b",
+    re.I,
+)
+_JAR_PHOTO = re.compile(
+    r"(?:pile\s+bagdad|ironie\s+pile|parthian\s+jar\s+copper)",
+    re.I,
+)
+
+
+def _asset_blob(asset: PoolAsset) -> str:
+    return " ".join((asset.caption or "", asset.path or "", asset.key or ""))
+
+
+def is_drawing(asset: PoolAsset) -> bool:
+    """A cutaway, diagram, or sketch. A labelled jar photograph is not one."""
+    return _DRAWING.search(_asset_blob(asset)) is not None
+
+
+def _jar_photo(asset: PoolAsset) -> bool:
+    if is_drawing(asset):
+        return False
+    return _JAR_PHOTO.search(_asset_blob(asset)) is not None
+
+
+def _gallery_outdoors(sentence: str, asset: PoolAsset) -> bool:
+    """A gallery interior is a poor picture of soil, desert, or the site."""
+    if not _OUTDOORS.search(sentence or ""):
+        return False
+    return _GALLERY.search(_asset_blob(asset)) is not None
+
+
+def _asset_rank(sentence: str, asset: PoolAsset, *, want_object: bool) -> tuple:
+    photo = 0 if is_drawing(asset) else 1
+    jar = 1 if want_object and _jar_photo(asset) else 0
+    object_hit = 1 if want_object and asset.kind == "object" and photo else 0
+    outdoors = 0 if _gallery_outdoors(sentence, asset) else 1
+    site_hit = 1 if (not want_object) and asset.kind == "site" and photo else 0
+    return (photo, jar, object_hit, outdoors, site_hit, _overlap(sentence, asset.caption))
+
+
+def _ranked_assets(
+    sentence: str,
+    assets: list[PoolAsset],
+    *,
+    want_object: bool,
+) -> list[PoolAsset]:
+    return sorted(
+        assets,
+        key=lambda asset: _asset_rank(sentence, asset, want_object=want_object),
+        reverse=True,
+    )
+
+
 def best_asset(sentence: str, assets: list[PoolAsset]) -> PoolAsset | None:
     if not assets:
         return None
-    prefer = "object" if _OBJECT.search(sentence or "") else ""
-    if not prefer and _SITE.search(sentence or ""):
-        prefer = "site"
-    if not prefer and wants_flux(sentence or ""):
-        prefer = "site"
-    ranked = sorted(
-        assets,
-        key=lambda asset: (
-            _overlap(sentence, asset.caption),
-            1 if prefer and asset.kind == prefer else 0,
-        ),
-        reverse=True,
-    )
-    return ranked[0]
+    want_object = bool(_OBJECT.search(sentence or ""))
+    return _ranked_assets(sentence, assets, want_object=want_object)[0]
 
 
 def pick_anchor(
@@ -340,15 +393,7 @@ def assign_shots(
             previous_key = ""
             continue
         want_object = bool(_OBJECT.search(text))
-        ranked = sorted(
-            assets,
-            key=lambda asset: (
-                _overlap(text, asset.caption),
-                1 if want_object and asset.kind == "object" else 0,
-                1 if (not want_object) and asset.kind == "site" else 0,
-            ),
-            reverse=True,
-        )
+        ranked = _ranked_assets(text, assets, want_object=want_object)
         kind = "object" if want_object else ""
         chosen = next((
             asset for asset in ranked
@@ -515,10 +560,34 @@ def _crop_labels(path: Path) -> None:
         logger.info("ASSET POOL label crop skipped (%s)", type(exc).__name__)
 
 
+def _credit_blurbs(cache_dir: Path) -> dict[str, str]:
+    """Title and subject from credits.json, so a cutaway is not just a filename."""
+    import json
+
+    path = Path(cache_dir) / "credits.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    blurbs: dict[str, str] = {}
+    for row in payload.get("photos") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("file") or "").strip().lower()
+        if not name:
+            continue
+        bits = [row.get("title"), row.get("subject")]
+        blurbs[name] = " ".join(str(bit) for bit in bits if bit)
+    return blurbs
+
+
 def _seed_cache(cache_dir: Path | None, folder: Path) -> list[PoolAsset]:
     """Curated artefact_cache files count as object photographs."""
     if cache_dir is None or not Path(cache_dir).is_dir():
         return []
+    blurbs = _credit_blurbs(Path(cache_dir))
     seeded: list[PoolAsset] = []
     for path in sorted(Path(cache_dir).iterdir()):
         if not path.is_file() or path.suffix.lower() not in _IMAGE_SUFFIXES:
@@ -526,9 +595,13 @@ def _seed_cache(cache_dir: Path | None, folder: Path) -> list[PoolAsset]:
         dest = folder / f"cache_{path.name}"
         if not dest.is_file():
             dest.write_bytes(path.read_bytes())
+        caption = path.stem.replace("_", " ")
+        extra = blurbs.get(path.name.lower(), "")
+        if extra:
+            caption = f"{caption}. {extra}"
         seeded.append(PoolAsset(
             path=str(dest),
-            caption=path.stem.replace("_", " "),
+            caption=caption,
             kind="object",
             source="cache",
             key=f"cache:{path.name.lower()}",

@@ -28,6 +28,36 @@ _LABELS = frozenset({
 # A real narration is near the 90-second ceiling. A longer draft is still the
 # model's reasoning, and prefixing the topic onto it would hide that.
 _HOOK_REPAIR_WORDS = 400
+_SPOKEN_CTA = re.compile(
+    r"^(?:follow ancient knowledge\b|follow for more\b|follow us\b|"
+    r"subscribe\b|like and subscribe\b)",
+    re.I,
+)
+_CAMERA_DIRECTION = re.compile(
+    r"(?:"
+    r"golden[\s-]?hour"
+    r"|aerial\s+views?"
+    r"|fog\s+(?:often\s+)?rolls?"
+    r"|foliage\s+grows?"
+    r"|\bwater\s+flows?\b"
+    r"|close\s+natural\s+detail"
+    r"|ruins of the real region"
+    r"|\brock\s+formations?\b"
+    r"|\b(?:wide|establishing)\s+shots?\b"
+    r"|\b(?:the camera|camera pans|drone shot)\b"
+    r")",
+    re.I,
+)
+_PSEUDO_SCIENCE = re.compile(
+    r"(?:"
+    r"mainstream\s+archaeolog\w*\s+(?:often\s+)?"
+    r"(?:refuses|refused|denies|denied|hides|rejects)"
+    r"|archaeolog\w*\s+(?:refuses|denies|hides)\b"
+    r"|(?:have|has|had)\s+powered\b"
+    r"|powered\s+(?:similar\s+)?devices"
+    r")",
+    re.I,
+)
 
 
 def _fold(text: str) -> str:
@@ -124,6 +154,32 @@ def terrain_conflicts(script: str, geography: str) -> str:
     return ""
 
 
+def strip_spoken_cta(script: str) -> str:
+    """Drop a spoken follow line. The CTA track is appended on its own."""
+    sentences = [
+        item.strip()
+        for item in re.split(r"(?<=[.!?])\s+", (script or "").strip())
+        if item.strip()
+    ]
+    kept = [item for item in sentences if not _SPOKEN_CTA.search(item)]
+    return " ".join(kept).strip()
+
+
+def camera_direction_problem(script: str) -> str:
+    """A shot-list sentence is not narration."""
+    for sentence in re.split(r"(?<=[.!?])\s+", script or ""):
+        if _CAMERA_DIRECTION.search(sentence):
+            return "camera direction in the narration"
+    return ""
+
+
+def tone_problem(script: str) -> str:
+    """Speculation stays in the 'some researchers suggest' frame."""
+    if _PSEUDO_SCIENCE.search(script or ""):
+        return "tone: soften the claim"
+    return ""
+
+
 def script_is_usable(script: str, topic: str = "") -> bool:
     """A real narration, not fragments of the topic string."""
     words = [item for item in (script or "").split() if item]
@@ -149,6 +205,13 @@ def grounding_problem(script: str, topic: str, *, channel: str = "") -> str:
     """Why this narration cannot be filmed, or "" when it can."""
     if not hook_names_topic(script, topic):
         return "hook does not name the topic"
+    if (channel or "").strip().lower() in {"", "ancient_knowledge"}:
+        camera = camera_direction_problem(script)
+        if camera:
+            return camera
+        tone = tone_problem(script)
+        if tone:
+            return tone
     geography = ""
     if (channel or "").strip().lower() in {"", "ancient_knowledge"}:
         try:

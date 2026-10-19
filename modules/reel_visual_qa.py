@@ -287,17 +287,64 @@ def _strip_json(text: str) -> dict[str, Any]:
     import re
 
     raw = (text or "").strip()
+    raw = (
+        raw.replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+    )
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw, re.IGNORECASE)
     if fence:
         raw = fence.group(1).strip()
-    start, end = raw.find("{"), raw.rfind("}")
-    if start >= 0 and end > start:
-        raw = raw[start : end + 1]
+    start = raw.find("{")
+    if start < 0:
+        raise ValueError("VisualQA JSON had no object")
+    raw = _balanced_object(raw[start:])
     raw = re.sub(r",\s*([}\]])", r"\1", raw)
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = json.loads(_close_truncated_json(raw))
     if not isinstance(data, dict):
         raise ValueError("VisualQA JSON was not an object")
     return data
+
+
+def _balanced_object(raw: str) -> str:
+    """The first JSON object, even when prose follows the closing brace."""
+    depth = 0
+    in_str = False
+    esc = False
+    for index, char in enumerate(raw):
+        if in_str:
+            if esc:
+                esc = False
+            elif char == "\\":
+                esc = True
+            elif char == '"':
+                in_str = False
+            continue
+        if char == '"':
+            in_str = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return raw[: index + 1]
+    return raw
+
+
+def _close_truncated_json(raw: str) -> str:
+    """Close a reply that ran out of tokens mid-object."""
+    import re
+
+    text = re.sub(r",\s*$", "", (raw or "").rstrip())
+    if text.count('"') % 2 == 1:
+        text += '"'
+    text += "]" * max(0, text.count("[") - text.count("]"))
+    text += "}" * max(0, text.count("{") - text.count("}"))
+    return re.sub(r",\s*([}\]])", r"\1", text)
 
 
 def evaluate_chunk_relevance(

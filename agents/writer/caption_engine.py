@@ -1563,8 +1563,17 @@ class CaptionEngine:
         """Claude text fallback used when DeepSeek fails (economic or premium)."""
         if self._anthropic is None:
             return ""
+        model = self._writer_model
+        try:
+            from modules.reel_artefact.provider_health import resolved_claude_model
+
+            resolved = resolved_claude_model()
+            if resolved:
+                model = resolved
+        except Exception:  # noqa: BLE001
+            model = self._writer_model
         message = self._anthropic.messages.create(
-            model=self._writer_model,
+            model=model,
             max_tokens=max_tokens,
             temperature=temperature,
             system=system or "You are a precise creative writer. Follow the user instructions exactly.",
@@ -1577,7 +1586,7 @@ class CaptionEngine:
         text = "\n".join(c for c in chunks if c).strip()
         self._log_script_cost(
             provider="claude",
-            model=str(self._writer_model),
+            model=str(model),
             prompt=user_prompt,
             output=text,
         )
@@ -2208,9 +2217,10 @@ class CaptionEngine:
                 from modules.reel_artefact.script_grounding import (
                     extract_narration,
                     repair_hook_if_only_miss,
+                    strip_spoken_cta,
                 )
 
-                spoken = _metrics_script(extract_narration(text))
+                spoken = strip_spoken_cta(_metrics_script(extract_narration(text)))
                 return repair_hook_if_only_miss(
                     spoken, topic, channel="ancient_knowledge",
                 )
@@ -2296,11 +2306,17 @@ class CaptionEngine:
         else:
             clean = _metrics_script(raw)
             from modules.reel_artefact.script_date import ensure_topic_date
-            from modules.reel_artefact.script_length import soft_ceiling
+            from modules.reel_artefact.script_length import AK_NARRATION_S, soft_ceiling
 
             clean = ensure_topic_date(clean, topic)
             # Soft ceiling only. No rewrite, and no cut inside a sentence.
-            clean = soft_ceiling(clean)
+            if _rag_channel_name == "ancient_knowledge":
+                from modules.reel_artefact.script_grounding import strip_spoken_cta
+
+                clean = strip_spoken_cta(clean)
+                clean = soft_ceiling(clean, max_seconds=AK_NARRATION_S)
+            else:
+                clean = soft_ceiling(clean)
             clean = ensure_topic_date(clean, topic)
         logger.info(
             "generate_sequence_voiceover | final script %d words / %d chars "
