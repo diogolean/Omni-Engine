@@ -707,7 +707,9 @@ def test_cost_lines_split_nano_flux_retries_real_and_tts() -> None:
     assert "Image Gen (reuse)" in rendered and "(17 stills)" in rendered
     assert "20 generation" not in rendered
     assert cats["tts_chars"] == 1200
-    assert cats["audio_cost"] == pytest.approx(1200 * 0.00003)
+    # ElevenLabs is on the flat plan: $0 at the margin, list price kept aside.
+    assert cats["audio_cost"] == 0.0
+    assert cats["informational_usd"] == pytest.approx(1200 * 0.00003)
 
 
 def test_flux_retries_bill_and_a_real_photo_does_not(tmp_path: Path) -> None:

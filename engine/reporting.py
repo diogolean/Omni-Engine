@@ -150,6 +150,10 @@ def _format_cost_block(
             audio_bits.append(
                 f"{music_beds} music {'API' if music_api else 'local $0'}"
             )
+        if cats.get("audio_on_plan"):
+            audio_bits.append(
+                f"plan, ${float(cats.get('informational_usd') or 0.0):.4f} list, not in cap"
+            )
         audio_note = ", ".join(audio_bits)
 
         total = research_cost + image_cost + (0.0 if omit_audio else audio_cost)
@@ -171,7 +175,7 @@ def _format_cost_block(
             )
         lines += [
             "",
-            "  - Research & Script (Gemini 2.5 Flash):".ljust(42)
+            f"  - Research & Script ({cats.get('text_label') or 'Gemini 2.5 Flash'}):".ljust(42)
             + f"${research_cost:.4f}  ({research_tokens:,} tokens)",
         ]
         if split_images:
