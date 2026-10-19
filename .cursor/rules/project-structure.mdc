@@ -15,7 +15,7 @@ The repository root holds entry points, config, containers, CI, docs, and top-le
 - Put tests in `tests/` or `channels_config/<channel>/tests/`. Pytest must collect them from there.
 - Secrets belong in `.env` only. Never hardcode tokens.
 - Channel store state in `channels_config/<channel>/store/` stays gitignored and dockerignored, and only lives in the owner's Drive backup. `channels_config/aiwake/store/portfolio/` stays tracked and in the image. Files already tracked in `core/economic_reel_lofi/store/` stay in git, and `aphorism_recent.json` stays gitignored. `.cursor/rules/` is versioned. `scene_library/`, `artefact_cache/`, and `reel_checkpoints/` under a channel store stay gitignored.
-- Do not rename `omni/`, `agents/media/`, compose services `engine` and `scheduler`, the `memory` profile, `channels_config/*/store`, `scene_library`, or `artefact_cache`.
+- Do not rename `agents/media/`, compose services `engine` and `scheduler`, the `memory` profile, `channels_config/*/store`, `scene_library`, or `artefact_cache`.
 - Delete a temp folder once nothing references it.
 
 Never create `_tmp*`, `_cp_preview`, `_review`, or log folders at the repository root. Never commit `outputs/`, video, `*.npz`, `*.psd`, or error screenshots.

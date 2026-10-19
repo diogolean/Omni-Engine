@@ -28,10 +28,10 @@ Optional heavy dependencies (moviepy, OpenCV, google-genai) are skipped with `py
 Read `docs/architecture/REPO_LAYOUT.md` first.
 
 - Root: entry points, config, containers, CI, docs, and the packages on that allowlist.
-- New pipeline steps: `engine/`, or the package that already owns the concern (`modules/reel_qa/`, `agents/posting/`, `agents/media/`, `omni/`).
+- New pipeline steps: `engine/`, or the package that already owns the concern (`modules/reel_qa/`, `agents/posting/`, `agents/media/`, `core/publishing/`).
 - Tests: `tests/` or `channels_config/<channel>/tests/`. Name the file for the behavior, not a round number.
 - Scratch, logs, renders, and review dumps: `outputs/<channel>/` via `temp_path` and `review_path`.
 
-Do not rename `omni/`, `agents/media/`, `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml`, `channels_config/*/store`, `scene_library`, or `artefact_cache`. Compose service names `engine` and `scheduler`, and the `memory` profile, stay as they are. A push to `main` deploys the Oracle VM.
+Do not rename `agents/media/`, `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml`, `channels_config/*/store`, `scene_library`, or `artefact_cache`. Compose service names `engine` and `scheduler`, and the `memory` profile, stay as they are, and so do the `$OUTPUT_PATH/_omni` ledger and the `OMNI_*` env names. A push to `main` deploys the Oracle VM.
 
 `ACTIVE_PAGE` is set in `main.py` before `engine.runtime` imports the media stack. Later imports read that name at import time. Do not reorder that bootstrap.

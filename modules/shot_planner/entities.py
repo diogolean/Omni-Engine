@@ -8,6 +8,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from utils.pipeline_paths import repo_root as _paths_repo_root
+
 _ERA_WORDS = frozenset({
     "bce", "ce", "bc", "ad", "century", "centuries", "ancient", "antiquity",
     "medieval", "prehistoric", "classical", "hellenistic", "roman", "greek",
@@ -75,7 +77,7 @@ class Entity:
 
 
 def repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return _paths_repo_root()
 
 
 def _fold(text: str) -> str:

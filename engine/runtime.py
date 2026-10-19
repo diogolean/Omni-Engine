@@ -52,7 +52,7 @@ from agents.writer.caption_engine import (
 )
 from agents.media.b2_client import B2StorageCapError, B2VideoUploader
 from agents.media.imgbb_client import upload_image_file_to_imgbb
-from omni.adapters.youtube import publish_envelope as _yt_upload_short
+from core.publishing.adapters.youtube import publish_envelope as _yt_upload_short
 from agents.posting.youtube_publisher import (
     build_credentials as _yt_build_credentials,
     build_youtube_client as _yt_build_client,
