@@ -1095,9 +1095,10 @@ class TogetherImageGenerator:
             pass
         self.model = normalize_together_model_id(model or default_together_image_model())
         self.client = None
+        # DeepInfra is checked when a Schnell image is requested, not here, so
+        # building the adapter (page_id routing, tests, dry runs) needs no key.
         self._deepinfra_client = None
         if _is_flux_schnell_model(self.model):
-            self._deepinfra_client = self._build_deepinfra_client()
             if self.api_key:
                 self.client = self._build_together_client()
         else:
