@@ -28,6 +28,7 @@ import random
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from agents.posting.facebook_scheduler import config
@@ -456,9 +457,8 @@ class FacebookScheduler:
         dry_run: bool = False,
         background_preset: str = "",
         training_mode: bool = False,
-        workflow_path: "Path | None" = None,
+        workflow_path: Path | None = None,
     ) -> None:
-        from pathlib import Path as _Path
         self.page           = page
         self.dry_run        = dry_run
         self.background_preset = background_preset
@@ -1434,7 +1434,7 @@ def _find_dolphin_cdp_port(
 
     Raises RuntimeError if no port is found.
     """
-    import os, socket
+    import socket
     import requests as _req
 
     # 1. Manual override

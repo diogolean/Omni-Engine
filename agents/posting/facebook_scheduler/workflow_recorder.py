@@ -708,8 +708,8 @@ def _replay_click(
             print(f"  [Replay] JS click succeeded for '{label}' at ({coord_x}, {coord_y})")
             return
         print(
-            f"  [Replay] WARNING: JS click missed (elementFromPoint returned null). "
-            f"Falling through to deep CSS pass..."
+            "  [Replay] WARNING: JS click missed (elementFromPoint returned null). "
+            "Falling through to deep CSS pass..."
         )
 
     # ======================================================
@@ -839,7 +839,7 @@ def _replay_keypress(page: "Page", action: dict, dry_run: bool, label: str) -> N
     """
     key = action.get("key", "")
     if not key:
-        print(f"  [Replay] Skipping empty keypress action.")
+        print("  [Replay] Skipping empty keypress action.")
         return
 
     if dry_run:
@@ -902,7 +902,7 @@ def run_recording_session(
             existing_data = json.loads(workflow_path.read_text(encoding="utf-8"))
             recorded_at   = existing_data.get("recorded_at", "unknown date")
             action_count  = existing_data.get("action_count", "?")
-            print(f"  An existing recording was found:")
+            print("  An existing recording was found:")
             print(f"    File     : {workflow_path}")
             print(f"    Recorded : {recorded_at}")
             print(f"    Actions  : {action_count}")

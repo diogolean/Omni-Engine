@@ -40,7 +40,7 @@ class ImageSizeAndCostTests(unittest.TestCase):
     def test_1k_prices(self) -> None:
         self.assertAlmostEqual(
             app_config.estimate_gemini_image_usd("models/gemini-2.5-flash-image"),
-            0.005,
+            0.039,
         )
         self.assertAlmostEqual(
             app_config.estimate_gemini_image_usd("models/gemini-3-pro-image-preview"),

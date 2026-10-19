@@ -35,8 +35,10 @@ CONTENT_NICHE: str = (
 DEFAULT_AVATAR_MODE: str = "OFF"
 DEFAULT_FORMAT: str = "IMAGE_BACKGROUND"
 IMAGE_ASPECT_RATIO: str = "4:5"
-# Search public-domain and CC libraries before Flux. See
+# Search public-domain and CC libraries before Flux for cards. See
 # docs/architecture/ADR-free-images-first.md.
+# Reel beats stay on Flux unless REEL_FREE_IMAGES=1. A Commons hit on the
+# place name does not illustrate an artefact beat.
 IMAGE_SOURCE_POLICY: str = "free_first"
 USES_AVATAR_REFERENCE: bool = False
 
@@ -161,7 +163,7 @@ REEL_DURATION: float = 85.0          # planning target (= video_length default)
 PACING_SEQUENCE: list = [3, 3, 4, 4]  # legacy fallback shape only — AK now uses plan_bucket_act_durations (self-calibrating body weights, no slack absorption)
 REUSE_EXISTING_IMAGES: bool = True
 ENABLE_SUBTITLE_PADDING: bool = True
-ENCODING_PRESET: str = "ultrafast"
+ENCODING_PRESET: str = "veryfast"
 # Shared pacing engine (core/scene_pacing.py). CLI --scene-duration wins.
 SCENE_DURATION: str = "progressive"
 SCENE_PROGRESSIVE_START_S: float = 4.0
@@ -193,6 +195,9 @@ REEL_TIER2_SECONDS_PER_ACT: float = 10.0  # slower body, ~8-12 s / still clamped
 # constants pinned to REEL_DURATION_TARGET_MIN was the Round-6 root cause
 # of the silent under-delivery bug at long durations.
 CONTENT_LIBRARY_LOOKBACK: int = 40   # reject repeating a monument/theme in last N posts
+# A deliberate revisit of the same theme (CLI topic, or the pool running dry)
+# is kept. REEL_ANGLE_MEMORY records the lens used and asks the next script
+# for a different hook, sub-question, evidence focus, or narrative frame.
 
 # WAN_REEL duration window — separate from ECONOMIC_REEL (do not merge).
 # Animated blocks use FIXED clip length (never progressive image pacing).
@@ -237,11 +242,11 @@ AMBIENT_MUSIC_STYLE: str = "mystery"  # music_prompt soft-enforce profile
 # ---------------------------------------------------------------------------
 # SEQUENCE_REEL — visual identity layer
 # ---------------------------------------------------------------------------
-VIGNETTE_STRENGTH: float = 0.60      # dark corner vignette (0 = off, 1 = full black corners)
-GRAIN_INTENSITY: float = 22.0        # film grain amplitude in pixel value units (default 18)
+VIGNETTE_STRENGTH: float = 0.0       # off: a heavy vignette made the frames murky
+GRAIN_INTENSITY: float = 0.0         # off: film grain was hiding the still
 ENABLE_TOP_HOOK_TEXT: bool = False   # do not burn headline at top; only lower-third subtitles
 ENABLE_FLICKER: bool = True          # ±5 % torch/flame brightness oscillation — archival atmosphere
-ENABLE_LIGHT_RAYS: bool = True       # warm-gold volumetric beam sweeping across each scene
+ENABLE_LIGHT_RAYS: bool = False      # a pale vertical streak; off for Ancient Knowledge
 ENABLE_DUST_PARTICLES: bool = True   # floating dust drifting upward — ruin/chamber atmosphere
 ENABLE_LIGHT_REFRACTION: bool = False  # prismatic crystal glow (enable per-topic if crystal subject)
 

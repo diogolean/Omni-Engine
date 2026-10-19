@@ -63,7 +63,7 @@ pyvenv.cfg
 .idea/
 .vscode/
 
-# Heavy media outputs (generated at runtime)
+# Heavy media outputs (generated at runtime). Video never belongs in git.
 outputs/
 logs/
 clips/
@@ -72,6 +72,19 @@ clips/
 *.wav
 *.aac
 *.mov
+*.npz
+*.psd
+*.psb
+
+# Scheduler error dumps. Runtime shots go to outputs/<channel>/screenshots/.
+agents/posting/facebook_scheduler/screenshots/
+**/click_failed_*.png
+**/click_wait_failed_*.png
+**/*_error_*.png
+
+# Chat-recovery scratch and one-off transcript miners.
+*_recovered*.txt
+**/__mine_*
 
 # Excel output files
 PostPlanner_B2_*.xlsx

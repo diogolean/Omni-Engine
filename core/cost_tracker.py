@@ -95,6 +95,15 @@ _PRICE: dict[str, float] = {
     "image_deepinfra_flux2dev":  0.008_8,
     "image_sdxl":          0.008_0,
     "image_nano":          FLUX_SCHNELL_USD_PER_IMAGE,
+    # Gemini image output, standard paid tier, October 2026 docs.
+    # Nano Banana (gemini-2.5-flash-image) is $0.039. The 2.1 successor
+    # at 1K is $0.0336. Flux stays $0.003.
+    "image_nanobanana":    0.039,
+    "image_nanobanana_lite": 0.0336,
+    # A real free-licence photograph. $0 is intentional, not a missing price.
+    "image_commons":       0.0,
+    # A copy of a still this reel already paid for. Not a Commons download.
+    "image_reuse":         0.0,
     "image_economic":      FLUX_SCHNELL_USD_PER_IMAGE,
     "image_premium":       FLUX_SCHNELL_USD_PER_IMAGE,
     "image_gemini_flash":  FLUX_SCHNELL_USD_PER_IMAGE,
@@ -213,12 +222,9 @@ class CostTracker:
         try:
             n = max(1, _safe_int(count, 1))
             key = model_key or _TIER_IMAGE_KEY.get(self.cost_tier, "image_flux_schnell")
-            price_per = _safe_float(
-                _PRICE.get(key, _PRICE["image_flux_schnell"]),
-                _PRICE["image_flux_schnell"],
-            )
-            if price_per <= 0:
-                price_per = _PRICE["image_flux_schnell"]
+            if key not in _PRICE:
+                key = "image_flux_schnell"
+            price_per = _safe_float(_PRICE[key], 0.0)
             total = price_per * n
             return self._add("image_generation", key, float(n), total)
         except Exception as exc:  # noqa: BLE001
@@ -442,6 +448,10 @@ class CostTracker:
                 src = list(self._entries)
         research_cost = research_tokens = 0.0
         image_cost = image_count = 0.0
+        flux_count = flux_cost = 0.0
+        nano_count = nano_cost = 0.0
+        real_count = 0.0
+        reuse_count = 0.0
         tts_cost = tts_chars = 0.0
         sfx_cost = sfx_calls = 0.0
         music_cost = music_beds = 0.0
@@ -459,6 +469,16 @@ class CostTracker:
             elif op == "image_generation":
                 image_cost += cost
                 image_count += units
+                if mk in {"image_nanobanana", "image_nanobanana_lite"}:
+                    nano_count += units
+                    nano_cost += cost
+                elif mk == "image_commons":
+                    real_count += units
+                elif mk == "image_reuse":
+                    reuse_count += units
+                else:
+                    flux_count += units
+                    flux_cost += cost
             elif op == "audio_generation":
                 tts_cost += cost
                 tts_chars += units
@@ -470,8 +490,10 @@ class CostTracker:
                 music_beds += units
                 if "api" in mk:
                     music_api = True
-        if image_count > 0 and image_cost <= 0:
-            image_cost = image_count * FLUX_SCHNELL_USD_PER_IMAGE
+        if flux_count > 0 and flux_cost <= 0 and nano_cost <= 0:
+            invented = flux_count * FLUX_SCHNELL_USD_PER_IMAGE
+            image_cost += invented
+            flux_cost += invented
         if tts_chars > 0 and tts_cost <= 0:
             tts_cost = tts_chars * (ELEVENLABS_USD_PER_1K_CHARS / 1000.0)
         if research_tokens > 0 and research_cost <= 0:
@@ -483,6 +505,14 @@ class CostTracker:
             "research_tokens": int(research_tokens),
             "image_cost": image_cost,
             "image_count": int(image_count),
+            "image_flux_count": int(flux_count),
+            "image_flux_cost": flux_cost,
+            "image_nano_count": int(nano_count),
+            "image_nano_cost": nano_cost,
+            "image_real_count": int(real_count),
+            "image_real_cost": 0.0,
+            "image_reuse_count": int(reuse_count),
+            "image_reuse_cost": 0.0,
             "tts_cost": tts_cost,
             "tts_chars": int(tts_chars),
             "sfx_cost": sfx_cost,
@@ -601,6 +631,41 @@ def slot_unit_label(post_type: str | None) -> tuple[str, str]:
     return "Reel", ""
 
 
+def image_cost_lines(cats: dict | None) -> list[str]:
+    """One line per image provider. Reuse is not labelled as Commons or Flux."""
+    row = cats or {}
+    nano_n = int(row.get("image_nano_count") or 0)
+    flux_n = int(row.get("image_flux_count") or 0)
+    real_n = int(row.get("image_real_count") or 0)
+    reuse_n = int(row.get("image_reuse_count") or 0)
+    if nano_n <= 0 and flux_n <= 0 and real_n <= 0 and reuse_n <= 0:
+        return []
+    lines: list[str] = []
+    if nano_n:
+        lines.append(
+            "  - Image Gen (Nano Banana):".ljust(42)
+            + f"${float(row.get('image_nano_cost') or 0):.4f}  "
+            f"({nano_n} generation{'s' if nano_n != 1 else ''})"
+        )
+    if flux_n:
+        lines.append(
+            "  - Image Gen (FLUX Schnell):".ljust(42)
+            + f"${float(row.get('image_flux_cost') or 0):.4f}  "
+            f"({flux_n} attempt{'s' if flux_n != 1 else ''})"
+        )
+    if real_n:
+        lines.append(
+            "  - Image Gen (Commons/real):".ljust(42)
+            + f"$0.0000  ({real_n} still{'s' if real_n != 1 else ''})"
+        )
+    if reuse_n:
+        lines.append(
+            "  - Image Gen (reuse):".ljust(42)
+            + f"$0.0000  ({reuse_n} still{'s' if reuse_n != 1 else ''})"
+        )
+    return lines
+
+
 def print_cost_summary(
     variant_index: int,
     total_variants: int,
@@ -615,6 +680,8 @@ def print_cost_summary(
     post_type: str = "",
     tts_chars: int = 0,
     audio_label: str = "",
+    categories: dict | None = None,
+    reel_stills: int | None = None,
 ) -> None:
     """Print per-slot cost, then batch totals when more than one slot exists."""
     try:
@@ -624,7 +691,8 @@ def print_cost_summary(
         batch = max(0, _safe_int(total_batch_images, 0))
         cost = max(0.0, _safe_float(total_reel_cost, 0.0))
         img_usd = max(0.0, _safe_float(image_cost, 0.0))
-        if img_usd <= 0 and imgs > 0:
+        split_lines = image_cost_lines(categories)
+        if img_usd <= 0 and imgs > 0 and not split_lines:
             img_usd = imgs * FLUX_SCHNELL_USD_PER_IMAGE
         pt = (post_type or "").upper().strip()
         unit, suffix = slot_unit_label(pt)
@@ -645,6 +713,8 @@ def print_cost_summary(
                 f"  Visual Assets: {imgs} AI Image{'s' if imgs != 1 else ''} "
                 f"({pt})"
             )
+        elif is_econ_reel and reel_stills is not None:
+            asset_line = f"  Stills in reel: {max(0, int(reel_stills))}"
         elif is_econ_reel:
             asset_line = (
                 f"  Visual Assets: {imgs} AI Image{'s' if imgs != 1 else ''} "
@@ -665,7 +735,14 @@ def print_cost_summary(
             audio_engine = str(audio_label or "F5TTS")
             print(f"  Audio Synthesis: {chars:,} chars ({audio_engine})")
         print(f"  - Research & Script (Gemini): ${research_usd:.4f}")
-        print(f"  - Image Gen (FLUX Schnell):   ${img_usd:.4f}  ({imgs} generation{'s' if imgs != 1 else ''})")
+        if split_lines:
+            for _image_line in split_lines:
+                print(_image_line)
+        else:
+            print(
+                f"  - Image Gen (FLUX Schnell):   ${img_usd:.4f}  "
+                f"({imgs} generation{'s' if imgs != 1 else ''})"
+            )
         if is_econ_reel:
             print(f"  - Voice & Audio:              ${voice_usd:.4f}")
             print("  - Video Render (MoviePy):     $0.0000")

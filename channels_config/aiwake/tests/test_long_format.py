@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+pytest.importorskip('cv2')  # optional media stack; CI image does not install it
+
 from channels_config.aiwake.__main__ import build_parser
 from channels_config.aiwake.contracts import PostType, SpeakerRole, Utterance
 from channels_config.aiwake.memory import DebateMemory

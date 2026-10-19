@@ -5,12 +5,17 @@ alwaysApply: true
 
 # Project structure
 
-The repository root holds entry points, config, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, and packages such as `agents/`, `channels_config/`, `config/`, `core/`, `omni/`, `utils/`, `tests/`).
+Follow `docs/architecture/REPO_LAYOUT.md` and `AGENTS.md`.
+
+The repository root holds entry points, config, containers, CI, docs, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, `engine/`, `agents/`, `channels_config/`, `config/`, `core/`, `omni/`, `utils/`, `tests/`, `docs/`).
 
 - Write temp files with `temp_path(channel, *parts)` from `utils/pipeline_paths.py`. That resolves to `outputs/<channel>/_tmp/`.
 - Write preview and review dumps with `review_path(channel, *parts)`. That resolves to `outputs/<channel>/_review/`.
 - Write logs under `outputs/logs/` via `pipeline_logs_dir()`.
 - Put tests in `tests/` or `channels_config/<channel>/tests/`. Pytest must collect them from there.
+- Secrets belong in `.env` only. Never hardcode tokens.
+- First-level files in `channels_config/<channel>/store/`, `core/economic_reel_lofi/store/`, and `.cursor/rules/` are versioned. `scene_library/`, `artefact_cache/`, and `reel_checkpoints/` under a channel store stay gitignored.
+- Do not rename `omni/`, `agents/media/`, compose services `engine` and `scheduler`, the `memory` profile, `channels_config/*/store`, `scene_library`, or `artefact_cache`.
 - Delete a temp folder once nothing references it.
 
-Never create `_tmp*`, `_cp_preview`, `_review`, or log folders at the repository root. See `docs/PROJECT_STRUCTURE.md`.
+Never create `_tmp*`, `_cp_preview`, `_review`, or log folders at the repository root. Never commit `outputs/`, video, `*.npz`, `*.psd`, or error screenshots.

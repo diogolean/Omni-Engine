@@ -547,6 +547,7 @@ def test_google_provider_is_opt_in_with_safe_flash_defaults() -> None:
 
 
 def test_google_provider_normalises_response_and_finish_reason() -> None:
+    pytest.importorskip("google.genai")
     captured: dict[str, object] = {}
 
     class _Models:

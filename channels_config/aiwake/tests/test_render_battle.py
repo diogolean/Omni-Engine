@@ -34,6 +34,9 @@ Usage::
 """
 from __future__ import annotations
 
+import pytest
+pytest.importorskip('cv2')  # optional media stack; CI image does not install it
+
 import asyncio
 import hashlib
 import json

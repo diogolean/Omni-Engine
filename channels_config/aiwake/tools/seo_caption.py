@@ -291,7 +291,7 @@ def viewer_question(
     second = extra[1] if len(extra) > 1 else "bill"
     question = frames[start % len(frames)].format(keyword=keyword, word=f"{word} and the {second}")
     if question in used:
-        question = question.rstrip("?") + f" this time?"
+        question = question.rstrip("?") + " this time?"
     return question
 
 

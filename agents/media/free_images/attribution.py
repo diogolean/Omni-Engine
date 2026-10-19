@@ -22,7 +22,9 @@ def credit_line(
     source_url: str = "",
 ) -> str:
     shown_title = (title or "").strip() or "Untitled"
-    shown_author = (author or "").strip() or "Unknown"
+    from agents.media.free_images.providers import clean_author
+
+    shown_author = clean_author(author) or "Unknown"
     shown_license = display_license(license_name) if license_name in {
         "public_domain", "cc0", "cc_by", "cc_by_sa", "pexels", "unsplash",
     } else ((license_name or "").strip() or "see source")

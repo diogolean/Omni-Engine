@@ -1,6 +1,10 @@
 """Rendered seat: left faces right, right faces left, forbidden sides raise."""
 
+
 from __future__ import annotations
+
+import pytest
+pytest.importorskip('cv2')  # optional media stack; CI image does not install it
 
 import pytest
 

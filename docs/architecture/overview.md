@@ -1,6 +1,6 @@
 # Architecture
 
-Where Omni-Engine runs, how a piece of content moves, and which decisions are already settled. Diagrams are in [diagrams.md](diagrams.md). Decision records are in [decisions/](decisions/). A map of `main.py`, and a proposal to split it, is in [main-module-map.md](main-module-map.md).
+Where Omni-Engine runs, how a piece of content moves, and which decisions are already settled. Diagrams are in [diagrams.md](diagrams.md). Decision records are in [decisions/](decisions/). `main.py` is the CLI entry. The steps it used to hold live in `engine/`. The map is [main-module-map.md](main-module-map.md). The root allowlist is [REPO_LAYOUT.md](REPO_LAYOUT.md).
 
 Older showcase notes that used to live in this folder now live under `portfolio_showcase/`. See [DEPRECATED.md](DEPRECATED.md).
 
@@ -56,7 +56,7 @@ Reel rows reach Post Planner and YouTube only when the QA report says `verdict=p
 
 ## Content path (reel)
 
-1. `main.py` drafts a voiceover and synthesizes it (ElevenLabs or the remote GPU voice).
+1. `engine/orchestrator.py` (entered from `main.py`) drafts a voiceover and synthesizes it (ElevenLabs or the remote GPU voice).
 2. `modules/reel_qa/beats.py` cuts the narration into sentence groups of about 4–6 seconds, one still each.
 3. `modules/reel_visual_qa.generate_and_gate` draws each still and scores it against that sentence (Qwen via OpenRouter, then Gemini Flash).
 4. The sequence compiler burns subtitles and mixes audio into an MP4.

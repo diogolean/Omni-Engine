@@ -1020,6 +1020,15 @@ def generate_voiceover_with_timestamps(
         "Voiceover saved → %s (%d bytes, %d words timed)",
         output_path.name, size, len(word_timings),
     )
+    try:
+        from core.spend_ledger import record_informational
+
+        record_informational(
+            provider="elevenlabs", model=_model, source="voiceover_timestamps",
+            characters=len(text), plan="pro",
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return output_path, word_timings
 
 
@@ -1628,13 +1637,22 @@ def generate_dynamic_music_prompt(
         )
 
         client = make_gemini_client_with_fallback(api_key)
-        chain = build_model_chain(client, capability_type="text", preferred=None)
-        if not chain:
+        # Ancient Knowledge (mystery) must not call gemini-2.5-pro: that id 404s.
+        # Master Mei keeps the discovered chain.
+        if profile == "mystery":
             chain = [
                 "models/gemini-2.5-flash",
-                "models/gemini-2.0-flash",
                 "models/gemini-flash-latest",
+                "models/gemini-2.0-flash",
             ]
+        else:
+            chain = build_model_chain(client, capability_type="text", preferred=None)
+            if not chain:
+                chain = [
+                    "models/gemini-2.5-flash",
+                    "models/gemini-2.0-flash",
+                    "models/gemini-flash-latest",
+                ]
         response = generate_content_with_model_fallback(
             client, chain, contents=[user_block],
         )

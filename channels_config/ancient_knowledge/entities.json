@@ -1,0 +1,478 @@
+[
+  {
+    "id": "antikythera_mechanism",
+    "name": "Antikythera Mechanism",
+    "aliases": [
+      "antikythera mechanism",
+      "antikythera"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "corroded bronze gear fragments in a museum case",
+    "era": "Hellenistic Greece, about 100 BC",
+    "setting": "museum case",
+    "confusions": [
+      "clock face",
+      "vault door",
+      "wristwatch",
+      "clock tower"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "corroded bronze gear fragments of a mechanical device",
+    "commons_search": [
+      "Antikythera mechanism NAMA",
+      "Antikythera mechanism fragments",
+      "Mechanism of Antikythera"
+    ],
+    "commons_categories": [
+      "Category:Antikythera Mechanism"
+    ],
+    "commons_titles": [
+      "File:Mechanism of Antikythera, 150-100 BC, NAMA, 191431.jpg"
+    ],
+    "text_only_safe": false,
+    "edit_negatives": [
+      "corroded fragments only",
+      "never intact gears"
+    ],
+    "event_period": "1900-1901",
+    "event_search": [
+      "Antikythera shipwreck 1901",
+      "Anticythera shipwreck standard diving dress",
+      "Antikythera wreck 1901 photograph"
+    ],
+    "event_categories": [
+      "Category:Antikythera wreck"
+    ],
+    "event_negatives": [
+      "no modern scuba",
+      "no modern dive mask",
+      "no wetsuit",
+      "no modern boat",
+      "no outboard motor"
+    ],
+    "geography": "the Greek islands, the Aegean, and the Antikythera and Kythira coast",
+    "coastal": true,
+    "usable_photos": 6
+  },
+  {
+    "id": "coso_artifact",
+    "name": "Coso artifact",
+    "aliases": [
+      "coso artifact",
+      "coso artefact",
+      "coso"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "a small manufactured piece sealed inside a split rock geode",
+    "era": "found in 1961, Olancha California",
+    "setting": "split rock geode on a research table",
+    "confusions": [
+      "cannon",
+      "classical statue",
+      "cyberpunk character"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "a small manufactured piece sealed inside a split rock geode",
+    "commons_search": [
+      "Coso artifact"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "klerksdorp_spheres",
+    "name": "Klerksdorp spheres",
+    "aliases": [
+      "klerksdorp spheres",
+      "klerksdorp",
+      "grooved spheres",
+      "grooved sphere"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "small grooved metal spheres",
+    "era": "pyrophyllite deposit, South Africa",
+    "setting": "museum tray of small metal spheres",
+    "confusions": [
+      "cannon",
+      "foggy monument"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "small grooved metal spheres",
+    "commons_search": [
+      "Klerksdorp spheres Ottosdal"
+    ],
+    "commons_titles": [
+      "File:Ottosdal2.jpg"
+    ]
+  },
+  {
+    "id": "serapeum_boxes",
+    "name": "Serapeum granite boxes",
+    "aliases": [
+      "serapeum",
+      "granite boxes",
+      "granite box"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "massive rough granite boxes in an underground stone gallery",
+    "era": "Saqqara, Egypt",
+    "setting": "underground stone gallery",
+    "confusions": [
+      "clock face",
+      "hovering craft",
+      "city street"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "massive rough granite boxes in an underground stone gallery",
+    "commons_search": [
+      "Serapeum granite boxes"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "quimbaya_ornaments",
+    "name": "Quimbaya golden ornaments",
+    "aliases": [
+      "quimbaya",
+      "golden jet",
+      "jet planes",
+      "colombian golden"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "small pre-Columbian gold pendants and figurines resting in a museum case",
+    "era": "pre-Columbian Colombia",
+    "setting": "museum case",
+    "confusions": [
+      "fighter jet",
+      "modern aircraft",
+      "sci-fi hangar",
+      "spaceship",
+      "steampunk",
+      "runway"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "a small gold pendant with delta wings, a tail fin, and a stylised head",
+    "commons_search": [
+      "Quimbaya gold pendant",
+      "precolombina cultura quimbaya",
+      "Quimbaya airplanes",
+      "golden jets",
+      "Museo del Oro Quimbaya"
+    ],
+    "commons_categories": [
+      "Category:Quimbaya",
+      "Category:Quimbaya culture",
+      "Category:Museo del Oro"
+    ],
+    "commons_titles": [
+      "File:Precolombina cultura prc.jpg"
+    ],
+    "text_only_safe": false,
+    "geography": "the Colombian Andes and the Cauca and Quindío valley, cloud forest",
+    "coastal": false,
+    "usable_photos": 0,
+    "edit_negatives": [
+      "no propeller",
+      "no modern aircraft",
+      "no straight wings",
+      "no cockpit"
+    ]
+  },
+  {
+    "id": "london_hammer",
+    "name": "London Hammer",
+    "aliases": [
+      "london hammer"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "an iron hammer head and wooden handle encased in stone at London, Texas",
+    "era": "found at London, Texas",
+    "setting": "the Texas find-spot, a rock concretion around the hammer",
+    "confusions": [
+      "the city of London",
+      "urban alley",
+      "city street"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "an iron hammer head and wooden handle encased in stone at London, Texas",
+    "commons_search": [
+      "London Hammer"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "great_pyramid",
+    "name": "Great Pyramid",
+    "aliases": [
+      "great pyramid",
+      "pyramid of giza",
+      "pyramid of khufu",
+      "khufu"
+    ],
+    "kind": "place",
+    "canonical_visual": "the limestone mass of the Great Pyramid at Giza",
+    "era": "Old Kingdom Egypt",
+    "setting": "Giza plateau",
+    "confusions": [
+      "hovering craft",
+      "sci-fi spaceship",
+      "doorway frame"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "the limestone mass of the Great Pyramid at Giza",
+    "commons_search": [
+      "Great Pyramid"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "great_sphinx",
+    "name": "Great Sphinx",
+    "aliases": [
+      "great sphinx",
+      "sphinx enclosure",
+      "the sphinx"
+    ],
+    "kind": "place",
+    "canonical_visual": "the limestone Sphinx and its enclosure walls at Giza",
+    "era": "Giza, Egypt",
+    "setting": "the Sphinx enclosure",
+    "confusions": [
+      "greek sphinx statue",
+      "doorway frame"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "the limestone Sphinx and its enclosure walls at Giza",
+    "commons_search": [
+      "Great Sphinx"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "nazca_lines",
+    "name": "Nazca Lines",
+    "aliases": [
+      "nazca lines",
+      "nazca"
+    ],
+    "kind": "place",
+    "canonical_visual": "geoglyphs on the pale Nazca desert, seen from above",
+    "era": "Nazca desert, Peru",
+    "setting": "pale desert pampa",
+    "confusions": [
+      "pyramid",
+      "sphinx",
+      "standing monument"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "geoglyphs on the pale Nazca desert, seen from above",
+    "commons_search": [
+      "Nazca Lines"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "gobekli_tepe",
+    "name": "Göbekli Tepe",
+    "aliases": [
+      "gobekli tepe",
+      "göbekli tepe",
+      "gobekli"
+    ],
+    "kind": "place",
+    "canonical_visual": "T-shaped limestone pillars in a buried circular enclosure",
+    "era": "about 9600 BC, southeastern Turkey",
+    "setting": "buried circular enclosure",
+    "confusions": [
+      "pyramid",
+      "sphinx",
+      "egyptian temple"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "T-shaped limestone pillars in a buried circular enclosure",
+    "geography": "rolling limestone hills and farmland near Şanlıurfa, with the Germuş mountains in southeastern Turkey, no lake",
+    "coastal": false,
+    "commons_search": [
+      "Göbekli Tepe",
+      "Göbekli Tepe pillars",
+      "Göbekli Tepe enclosure"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "saqqara_bird",
+    "name": "Saqqara Bird",
+    "aliases": [
+      "saqqara bird"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "a small wooden bird with a vertical tail",
+    "era": "Saqqara, Egypt",
+    "setting": "museum case",
+    "confusions": [
+      "modern airplane",
+      "great pyramid",
+      "jet airliner"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "a small wooden bird with a vertical tail",
+    "commons_search": [
+      "Saqqara Bird"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "dendera_relief",
+    "name": "Dendera relief",
+    "aliases": [
+      "dendera"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "a carved wall relief at Dendera, the motif cut into stone",
+    "era": "Dendera temple, Egypt",
+    "setting": "carved stone wall",
+    "confusions": [
+      "modern light bulb",
+      "great pyramid",
+      "glass lamp"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "a carved wall relief at Dendera, the motif cut into stone",
+    "commons_search": [
+      "Dendera relief"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "baghdad_battery",
+    "name": "Baghdad Battery",
+    "aliases": [
+      "baghdad battery"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "a small clay jar with a copper cylinder and an iron rod",
+    "era": "Parthian Mesopotamia",
+    "setting": "museum case",
+    "confusions": [
+      "modern car battery",
+      "clock face"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "a clay jar with a copper cylinder and an iron rod",
+    "commons_search": [
+      "Baghdad battery",
+      "Baghdad Battery",
+      "Parthian battery",
+      "Khujut Rabu jar",
+      "pile de Bagdad",
+      "Parthian battery jar"
+    ],
+    "commons_categories": [
+      "Category:Baghdad Battery"
+    ],
+    "commons_titles": [
+      "File:Ironie pile Bagdad.jpg"
+    ],
+    "text_only_safe": true,
+    "geography": "the flat Tigris river plain at Khujut Rabu near Ctesiphon, date palms and mudbrick, outside Baghdad",
+    "coastal": false,
+    "edit_negatives": []
+  },
+  {
+    "id": "easter_island_moai",
+    "name": "Easter Island moai",
+    "aliases": [
+      "moai",
+      "easter island"
+    ],
+    "kind": "place",
+    "canonical_visual": "monolithic stone moai standing on the Easter Island slope",
+    "era": "Rapa Nui",
+    "setting": "grassy island slope above the ocean",
+    "confusions": [
+      "egyptian statue",
+      "pyramid"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "monolithic stone moai standing on the Easter Island slope",
+    "commons_search": [
+      "Easter Island moai"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "baalbek_trilithon",
+    "name": "Baalbek trilithon",
+    "aliases": [
+      "baalbek",
+      "trilithon"
+    ],
+    "kind": "place",
+    "canonical_visual": "three enormous limestone blocks in the Baalbek podium",
+    "era": "Baalbek, Lebanon",
+    "setting": "the stone podium in open air",
+    "confusions": [
+      "pyramid",
+      "hovering craft"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "three enormous limestone blocks in the Baalbek podium",
+    "commons_search": [
+      "Baalbek trilithon"
+    ],
+    "commons_titles": []
+  },
+  {
+    "id": "puma_punku",
+    "name": "Puma Punku",
+    "aliases": [
+      "puma punku",
+      "pumapunku"
+    ],
+    "kind": "place",
+    "canonical_visual": "precisely cut andesite H-blocks on the Puma Punku platform",
+    "era": "Tiwanaku, Bolivia",
+    "setting": "high Andean stone platform",
+    "confusions": [
+      "pyramid",
+      "egyptian temple"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "precisely cut andesite H-blocks on the Puma Punku platform",
+    "commons_search": [
+      "Puma Punku"
+    ],
+    "commons_titles": []
+  }
+]

@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """The final YouTube grid is two private slots a day, with the given order first."""
+
+import pytest
+pytest.importorskip('imageio_ffmpeg')  # optional media stack; CI image does not install it
 from datetime import datetime, timedelta
 
 from channels_config.aiwake.tools.final_schedule import BRT, RESCHEDULE_ONLY, build_plan, next_slots

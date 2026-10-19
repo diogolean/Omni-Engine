@@ -31,8 +31,6 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, TypedDict
 
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
@@ -452,6 +450,8 @@ class OCREngine:
         model: str = GEMINI_OCR_MODEL,
     ) -> None:
         self.model: str = model
+        from google import genai
+
         self._client = genai.Client(api_key=_resolve_api_key(api_key))
 
     def process_directory(
@@ -571,6 +571,8 @@ class OCREngine:
         return processed, failed, usage
 
     def _ocr_chunk(self, pending: list[tuple[str, Path]]) -> tuple[dict[str, str], GeminiUsage]:
+        from google.genai import types
+
         keys = [key for key, _path in pending]
         contents: list[Any] = [
             OCR_USER_PROMPT + "\nKeys:\n" + "\n".join(keys),

@@ -52,8 +52,121 @@ def test_unparseable_vision_is_not_a_pass(tmp_path: Path, monkeypatch) -> None:
     assert str(verdict["rejection_reason"]).startswith("qa_unavailable")
 
 
-def test_model_chain_uses_gemini_when_qwen_missing(tmp_path: Path, monkeypatch) -> None:
+def test_a_planned_scene_is_scored_against_the_shot_not_the_line(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    img = _png(tmp_path / "hall.png")
+    seen: dict[str, str] = {}
+
+    class _ShotProvider:
+        provider = "gemini"
+        model_id = "models/gemini-2.5-flash"
+
+        def evaluate(self, prompt, paths, labels=None):
+            del paths, labels
+            seen["prompt"] = prompt
+            return SimpleNamespace(
+                text=(
+                    '{"image_description": "a museum hall seen from across the room",'
+                    '"shows_expected_subject": true, "anachronism": false,'
+                    '"non_photoreal": false, "anatomy_defect": false,'
+                    '"setting_contradicts_beat": false, "contains_forbidden_object": false,'
+                    '"is_relevant": true, "relevance_score": 0.91,'
+                    '"detected_subjects": ["museum hall"], "rejection_reason": null}'
+                ),
+                provider="gemini",
+                model_id="models/gemini-2.5-flash",
+            )
+
+    monkeypatch.setattr(
+        "modules.reel_qa.relevance._provider",
+        lambda name: _ShotProvider(),
+    )
+    verdict = evaluate_chunk_relevance(
+        img,
+        "Corroded fragments sat in a museum drawer.",
+        "EXPECTED SUBJECT: a museum archive seen from afar.",
+        score_against="shot",
+        shot_subject="a museum archive seen from afar",
+        shot_setting="a museum archive seen from across the hall",
+        shot_era="Hellenistic Greece",
+    )
+    assert "PLANNED SHOT" in seen["prompt"]
+    assert "context only" in seen["prompt"].lower()
+    assert verdict["is_relevant"] is True
+    assert verdict["publishable"] is True
+
+
+def test_a_flux_scene_that_shows_a_forbidden_object_fails(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    img = _png(tmp_path / "book.png")
+
+    class _ObjectProvider:
+        def evaluate(self, prompt, paths, labels=None):
+            del prompt, paths, labels
+            return SimpleNamespace(
+                text=(
+                    '{"image_description": "a gold ornament lying on an open book",'
+                    '"shows_expected_subject": true, "anachronism": false,'
+                    '"non_photoreal": false, "anatomy_defect": false,'
+                    '"setting_contradicts_beat": false, "contains_forbidden_object": false,'
+                    '"is_relevant": true, "relevance_score": 0.9,'
+                    '"detected_subjects": ["book"], "rejection_reason": null}'
+                ),
+                provider="gemini",
+                model_id="models/gemini-2.5-flash",
+            )
+
+    monkeypatch.setattr(
+        "modules.reel_qa.relevance._provider",
+        lambda name: _ObjectProvider(),
+    )
+    verdict = evaluate_chunk_relevance(
+        img,
+        "Some researchers believe the record is incomplete.",
+        "EXPECTED SUBJECT: an old manuscript on a desk.",
+        score_against="shot",
+        shot_subject="an old manuscript on a desk",
+        shot_setting="a wooden desk",
+        shot_era="Hellenistic",
+    )
+    assert verdict["is_relevant"] is False
+    assert "contains_forbidden_object" in str(verdict["rejection_reason"])
+
+
+def _quiet_qa_env(monkeypatch) -> None:
+    """Skip the local still gate and start from the default qwen-only chain."""
+    from modules.reel_artefact.provider_health import reset_providers
+
+    monkeypatch.setenv("REEL_LOCAL_GATE", "0")
+    monkeypatch.delenv("REEL_QA_MODEL_CHAIN", raising=False)
+    reset_providers()
+
+
+def test_default_chain_fail_closes_when_qwen_unavailable(tmp_path: Path, monkeypatch) -> None:
+    """The default chain is qwen only. A missing qwen fails closed and never calls Gemini."""
     img = _png(tmp_path / "still.png")
+    _quiet_qa_env(monkeypatch)
+    called: list[str] = []
+
+    def _provider(name: str):
+        called.append(name)
+        return None
+
+    monkeypatch.setattr("modules.reel_qa.relevance._provider", _provider)
+    verdict = evaluate_chunk_relevance(img, "Bronze gears off Antikythera.", "gears")
+    assert verdict["is_relevant"] is False
+    reason = str(verdict["rejection_reason"])
+    assert "qwen_unavailable" in reason
+    assert "gemini_unavailable" not in reason
+    assert "gemini" not in called
+
+
+def test_gemini_fallback_when_model_chain_includes_it(tmp_path: Path, monkeypatch) -> None:
+    img = _png(tmp_path / "still.png")
+    _quiet_qa_env(monkeypatch)
+    monkeypatch.setenv("REEL_QA_MODEL_CHAIN", "qwen,gemini")
 
     def _provider(name: str):
         if name == "qwen":
@@ -69,11 +182,21 @@ def test_model_chain_uses_gemini_when_qwen_missing(tmp_path: Path, monkeypatch) 
 
 def test_both_providers_down_fail_closed(tmp_path: Path, monkeypatch) -> None:
     img = _png(tmp_path / "still.png")
+    _quiet_qa_env(monkeypatch)
     monkeypatch.setattr("modules.reel_qa.relevance._provider", lambda name: None)
     verdict = evaluate_chunk_relevance(img, "Divers found the dial.", "dial")
     assert verdict["is_relevant"] is False
-    assert "qwen_unavailable" in verdict["rejection_reason"]
-    assert "gemini_unavailable" in verdict["rejection_reason"]
+    reason = str(verdict["rejection_reason"])
+    assert "qwen_unavailable" in reason
+    assert "gemini_unavailable" not in reason
+
+    monkeypatch.setenv("REEL_QA_MODEL_CHAIN", "qwen,gemini")
+    fallback = evaluate_chunk_relevance(img, "Divers found the dial.", "dial")
+    assert fallback["is_relevant"] is False
+    fallback_reason = str(fallback["rejection_reason"])
+    assert "qwen_unavailable" in fallback_reason
+    assert "gemini_unavailable" in fallback_reason
+    assert fallback_reason.index("qwen") < fallback_reason.index("gemini")
 
 
 def test_retry_refines_sentence_and_entity_and_skips_placeholder(

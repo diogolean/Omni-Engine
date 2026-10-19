@@ -1173,6 +1173,8 @@ def build_sequence_script_prompt(
     batch_angle_block: str = "",
     uniqueness_rejection: str = "",
     channel_name: str = "",
+    angle_block: str = "",
+    asset_captions: "list[str] | None" = None,
 ) -> str:
     """
     Build an LLM prompt that produces an N-act spoken script.
@@ -1259,11 +1261,30 @@ def build_sequence_script_prompt(
             f"(total ~{total_words} words across all acts)."
         )
 
+    _ak = (
+        (channel_name or "").strip().lower() == "ancient_knowledge"
+        and _mode != "warrior_discipline"
+    )
+    if _ak:
+        from modules.reel_artefact.script_length import AK_NARRATION_S, soft_word_ceiling
+
+        total_words = min(int(total_words), soft_word_ceiling(AK_NARRATION_S))
+        words_per_act = max(1, int(total_words) // max(1, n_acts))
+        pacing_note = (
+            f"Write at most {total_words} spoken words, about "
+            f"{int(AK_NARRATION_S)} seconds before the separate closing line. "
+            f"Each act is about {words_per_act} words. "
+            "Do not pad the script with weather, light, or camera directions."
+        )
+
     _directive_block = f"\nCHANNEL DIRECTIVE:\n{niche_disclaimer}\n" if niche_disclaimer else ""
     _batch_block = f"\n{batch_angle_block}\n" if batch_angle_block else ""
     _reject_block = (
         f"\nUNIQUENESS REJECTION (REGENERATE):\n{uniqueness_rejection}\n"
         if uniqueness_rejection else ""
+    )
+    _angle_section = (
+        f"\n{angle_block.strip()}\n" if (angle_block or "").strip() else ""
     )
     # RAG-driven per-channel script/voice guidance (see docstring in
     # core/channel_rag_bridge.py). Falls back to empty string when
@@ -1326,6 +1347,41 @@ STRICT RULES:
 {anti_repeat_block}
 Write the complete {n_acts}-act script now:"""
 
+    from modules.reel_artefact.asset_pool import asset_prompt_block
+    from modules.reel_artefact.flux_policy import ak_narration_rule, script_filmable_rule
+
+    if _ak:
+        _filmable = ak_narration_rule()
+        _speculation = (
+            'Use "some researchers suggest" and "ancient records suggest". '
+            "National Geographic tone: curious, precise, and not sensational. "
+            "Do not say mainstream archaeology refuses, denies, or hides evidence. "
+            "Do not claim a building or a ziggurat powered devices."
+        )
+    else:
+        _filmable = script_filmable_rule()
+        _speculation = (
+            'Use language like: "some researchers believe", '
+            '"ancient records suggest", "according to legend", "one theory proposes".'
+        )
+    _asset_block = asset_prompt_block(asset_captions)
+    if (channel_name or "").strip().lower() == "ancient_knowledge":
+        _anchor_rule = (
+            f"Begin ACT 1 by naming this episode's topic ({topic}). "
+            "The first sentence must include that name. Do not open on a "
+            "different monument. The land and terrain must match the real "
+            "place of the topic: do not say sand, dunes, or a desert unless "
+            "that place is a sand desert."
+        )
+    else:
+        _anchor_rule = (
+            "Begin ACT 1 with a REAL, RECOGNISABLE WORLD ANCHOR "
+            '(e.g., "The Great Pyramid of Giza", "The stone blocks of Baalbek", '
+            '"Easter Island\'s moai") and then immediately introduce the '
+            "HIGH-CONCEPT IMPOSSIBLE element that cannot be explained by "
+            "mainstream history. This anchor → impossibility structure drives "
+            "maximum curiosity and engagement."
+        )
     return f"""You are writing a compelling {duration_s:.0f}-second documentary-style voiceover script.
 
 TOPIC: {topic}
@@ -1335,16 +1391,20 @@ NARRATOR VOICE: {persona_voice}
 {_rag_script_block}
 {_batch_block}
 {_reject_block}
+{_angle_section}
 STRICT RULES:
 1. Divide the script into exactly {n_acts} acts using markers: [ACT 1], [ACT 2], ... [ACT {n_acts}].
 2. {pacing_note}
-3. NEVER claim any conspiracy or theory is factual. Use language like: "some researchers believe", "ancient records suggest", "according to legend", "one theory proposes".
+3. NEVER claim any conspiracy or theory is factual. {_speculation}
 4. Each act must feel visually distinct — the narrator should describe a different aspect, location, or era.
-5. Begin ACT 1 with a REAL, RECOGNISABLE WORLD ANCHOR (e.g., "The Great Pyramid of Giza", "The stone blocks of Baalbek", "Easter Island's moai") and then immediately introduce the HIGH-CONCEPT IMPOSSIBLE element that cannot be explained by mainstream history. This anchor → impossibility structure drives maximum curiosity and engagement.
+5. {_anchor_rule}
 6. Maintain an investigative, immersive, documentary tone throughout.
 7. NO headers, NO bullet points, NO markdown — pure spoken prose only.
 8. Output ONLY the script with [ACT N] markers. No preamble, no labels, no meta commentary.
+9. FILMABLE PICTURES: {_filmable}
+10. DATE: The first two sentences must state the topic's date in the topic's own words, such as "2nd century BC" or "600-1000 AD". Do not leave the date until later in the narration.
 {anti_repeat_block}
+{_asset_block}
 Write the complete {n_acts}-act script now:"""
 
 
@@ -1507,6 +1567,65 @@ def _sanitize_subtitle_timings(
 # ---------------------------------------------------------------------------
 # Per-act clip builder
 # ---------------------------------------------------------------------------
+
+def ken_burns_window(
+    base_rgb: "np.ndarray",
+    *,
+    scale: float,
+    max_scale: float,
+    pan_x: int = 0,
+    pan_y: int = 0,
+    width: int = _REEL_WIDTH,
+    height: int = _REEL_HEIGHT,
+) -> "np.ndarray":
+    """One 1080×1920 frame from a buffer that was scaled once.
+
+    The source is not resized again at a larger size. A closer scale is a
+    smaller numpy window, then one bilinear downsample when the window is
+    not already the reel size.
+    """
+    base_h, base_w = base_rgb.shape[:2]
+    safe_scale = max(0.05, float(scale))
+    ceiling = max(safe_scale, float(max_scale))
+    crop_w = int(round(width * ceiling / safe_scale))
+    crop_h = int(round(height * ceiling / safe_scale))
+    crop_w = min(base_w, max(2, crop_w))
+    crop_h = min(base_h, max(2, crop_h))
+    mapped_x = int(round(pan_x * ceiling / safe_scale))
+    mapped_y = int(round(pan_y * ceiling / safe_scale))
+    left = max(0, min((base_w - crop_w) // 2 + mapped_x, base_w - crop_w))
+    top = max(0, min((base_h - crop_h) // 2 + mapped_y, base_h - crop_h))
+    window = base_rgb[top:top + crop_h, left:left + crop_w]
+    if window.shape[0] == height and window.shape[1] == width:
+        return window
+    frame = Image.fromarray(window, mode="RGB").resize((width, height), Image.BILINEAR)
+    return np.asarray(frame)
+
+
+def sequence_encode_params(duration_s: float, preset: str = "") -> dict[str, str]:
+    """H.264 settings for a 1080×1920 reel under 60 MB.
+
+    ``veryfast`` is the default. ``superfast`` and ``ultrafast`` stay, because
+    they are faster. Anything slower is brought up to ``veryfast``. The rate
+    cap is about 8 Mbps on a one-minute reel and lower on a longer one, so
+    an 80-second file still fits.
+    """
+    chosen = (preset or "").strip().lower()
+    if chosen not in {"ultrafast", "superfast", "veryfast"}:
+        chosen = "veryfast"
+    seconds = max(1.0, float(duration_s or 0.0))
+    video_budget = 52 * 1024 * 1024
+    kbps = int(video_budget * 8 / seconds / 1000)
+    kbps = max(2500, min(8000, kbps))
+    return {
+        "preset": chosen,
+        "crf": "22",
+        "maxrate": f"{kbps}k",
+        "bufsize": f"{kbps * 2}k",
+        "width": "1080",
+        "height": "1920",
+    }
+
 
 def _build_act_clip(
     image_path: Path,
@@ -1706,6 +1825,15 @@ def _build_act_clip(
     # ── Diagonal pan direction (acts rotate through 8 compass directions) ─────
     # ── Motion profile (cycles across acts for varied camera dynamics) ────────
     _mp = _MOTION_PROFILES[act_index % len(_MOTION_PROFILES)]
+    if not protect_headroom:
+        try:
+            from modules.reel_artefact.motion import motion_override
+
+            _slow = motion_override(image_path)
+        except Exception:  # noqa: BLE001
+            _slow = None
+        if _slow:
+            _mp = _slow
     if protect_headroom:
         _mp_zoom_start = _MEI_LAST_ZOOM_START
         _mp_zoom_end = _MEI_LAST_ZOOM_END
@@ -1718,6 +1846,19 @@ def _build_act_clip(
         _mp_pan_mul    = _mp["pan_mul"]
         _mp_rev        = -1 if _mp["reverse_dir"] else 1
         _pan_dir = _PAN_DIRS[act_index % len(_PAN_DIRS)]
+
+    # Scale the still once, to the closest this act will get. Each frame is a
+    # crop of that buffer. The old path called LANCZOS on a larger image for
+    # every frame, which is what made an 80-second reel take about 19 minutes.
+    _max_scale = max(float(_mp_zoom_start), float(_mp_zoom_end), 1.0)
+    _base = img.resize(
+        (
+            max(1, int(round(img.width * _max_scale))),
+            max(1, int(round(img.height * _max_scale))),
+        ),
+        Image.BILINEAR,
+    )
+    _base_rgb = np.asarray(_base.convert("RGB"))
 
     # ── Frame renderer ────────────────────────────────────────────────────────
     def _make_frame(t: float) -> np.ndarray:
@@ -1740,22 +1881,16 @@ def _build_act_clip(
         drift_x = int(_DRIFT_AMP_X * math.sin(2 * math.pi * _DRIFT_FREQ_X * t + act_index * 1.3))
         drift_y = int(_DRIFT_AMP_Y * math.cos(2 * math.pi * _DRIFT_FREQ_Y * t + act_index * 0.9))
 
-        # ── 3. Scale, crop with compound offset ──────────────────────────────
-        scaled_w = int(img.width  * _scale)
-        scaled_h = int(img.height * _scale)
-        scaled   = img.resize((scaled_w, scaled_h), Image.LANCZOS)
-        cx = max(0, min(
-            (scaled_w - _REEL_WIDTH)  // 2 + pan_x_total + drift_x,
-            scaled_w - _REEL_WIDTH,
-        ))
-        _headroom_bias = -int(scaled_h * 0.04) if protect_headroom else 0
-        cy = max(0, min(
-            (scaled_h - _REEL_HEIGHT) // 2 + pan_y_total + drift_y + _headroom_bias,
-            scaled_h - _REEL_HEIGHT,
-        ))
-        cropped = scaled.crop((cx, cy, cx + _REEL_WIDTH, cy + _REEL_HEIGHT))
-
-        arr = np.array(cropped.convert("RGB"), dtype=np.float32)
+        # ── 3. Crop the pre-scaled buffer. No per-frame upscale. ────────────
+        _headroom_bias = -int(_REEL_HEIGHT * 0.04) if protect_headroom else 0
+        window = ken_burns_window(
+            _base_rgb,
+            scale=_scale,
+            max_scale=_max_scale,
+            pan_x=pan_x_total + drift_x,
+            pan_y=pan_y_total + drift_y + _headroom_bias,
+        )
+        arr = window.astype(np.float32)
 
         # ── 4. Dark overlay ───────────────────────────────────────────────────
         arr *= (1.0 - overlay_opacity)
@@ -1923,6 +2058,7 @@ def _build_wan_video_act_clip(
     subtitle_fill: tuple,
     subtitle_stroke_width: int,
     subtitle_stroke_fill: "tuple | None",
+    hold_last_frame: bool = False,
 ):
     """
     Wrap a pre-generated Wan mp4 as a reel act: cover-crop to 9:16, match hold
@@ -1980,8 +2116,9 @@ def _build_wan_video_act_clip(
         return ""
 
     def _src_t(t: float) -> float:
-        if src_dur >= act_duration:
-            return min(max(0.0, t), src_dur - 0.001)
+        if src_dur >= act_duration or hold_last_frame:
+            # The parallax hook eases to a stop; hold that frame, never loop.
+            return min(max(0.0, t), src_dur - 0.05)
         # Loop short Wan clips to fill the narration hold.
         return max(0.0, float(t) % src_dur)
 
@@ -2285,6 +2422,9 @@ def compile_sequence_reel(
     # Optional per-act Wan (or other) video files. ``None`` / missing file →
     # Ken Burns still via ``_build_act_clip``. ECONOMIC_REEL leaves this unset.
     act_video_paths: "list[Path | None] | None" = None,
+    # Optional 2.5D depth-parallax clip for act 0 (the hook). None → read
+    # REEL_HOOK_PARALLAX (default off). Any failure keeps the Ken Burns hook.
+    hook_parallax: "bool | None" = None,
 ) -> Path:
     """
     Compile an N-image sequence reel from a list of background images.
@@ -2316,10 +2456,20 @@ def compile_sequence_reel(
         Slow-moving warm-gold Gaussian light beam column sweeping across the
         canvas.  Default: False.
     """
-    from moviepy import AudioFileClip, concatenate_videoclips  # type: ignore[import]
-
     if not image_paths:
         raise ValueError("compile_sequence_reel: image_paths must not be empty.")
+    # Bound before any branch. The duration probe used to import AudioFileClip
+    # only when ffprobe failed, so the MoviePy fallback then raised NameError
+    # and the reel shipped with a drone and no voice.
+    try:
+        from moviepy import AudioFileClip, concatenate_videoclips  # type: ignore[import]
+    except ImportError:
+        AudioFileClip = None  # type: ignore[assignment,misc]
+        concatenate_videoclips = None  # type: ignore[assignment]
+    if voice_audio is None or not Path(voice_audio).is_file():
+        raise RuntimeError(
+            "voice track required — refusing to compile a reel without narration"
+        )
     if (page_id or "").strip().lower() == "ancient_knowledge":
         from agents.media.audio_engine import (  # noqa: PLC0415
             assert_voice_and_subtitles_ready as _assert_ak_av,
@@ -2376,13 +2526,24 @@ def compile_sequence_reel(
     _voice_actual_dur: float = 0.0
     if voice_audio and voice_audio.is_file():
         try:
-            _tmp_ac = AudioFileClip(str(voice_audio))
-            _voice_actual_dur = _tmp_ac.duration
-            _tmp_ac.close()
+            from core.reel_ffmpeg_render import media_duration_s
+
+            _voice_actual_dur = media_duration_s(Path(voice_audio))
             total_duration = _voice_actual_dur
-        except Exception as _ae:
-            logger.warning("Could not read voice audio duration: %s — using floor", _ae)
-            total_duration = _configured_dur
+        except Exception as _probe_exc:  # noqa: BLE001
+            try:
+                if AudioFileClip is None:
+                    raise RuntimeError("moviepy is not installed")
+                _tmp_ac = AudioFileClip(str(voice_audio))
+                _voice_actual_dur = float(_tmp_ac.duration)
+                _tmp_ac.close()
+                total_duration = _voice_actual_dur
+            except Exception as _ae:  # noqa: BLE001
+                logger.warning(
+                    "Could not read voice audio duration: %s / %s — using floor",
+                    _probe_exc, _ae,
+                )
+                total_duration = _configured_dur
     else:
         total_duration = _configured_dur
 
@@ -2435,6 +2596,11 @@ def compile_sequence_reel(
                 act_video_paths = list(act_video_paths)[:_pair]
             n_acts = _pair
         total_duration = float(sum(_act_durs))
+        if _voice_actual_dur > 0.5 and abs(total_duration - _voice_actual_dur) >= 0.3:
+            raise RuntimeError(
+                "timeline mismatch | "
+                f"video={total_duration:.2f}s voice={_voice_actual_dur:.2f}s"
+            )
         # Derive CTA visual t0 from the plan: everything up to the last still.
         _cta_visual_t0 = float(sum(_act_durs[:-1])) if len(_act_durs) > 1 else 0.0
         logger.info(
@@ -2572,6 +2738,98 @@ def compile_sequence_reel(
     clips: list = []
     _wan_src_clips: list = []
     _video_override = list(act_video_paths) if act_video_paths else []
+    _hold_first = False
+    try:
+        from modules.reel_hook.parallax import hook_video_override  # noqa: PLC0415
+
+        if episode_dir:
+            _hook_dir = Path(episode_dir) / "hook"
+        elif output_path:
+            _hook_dir = Path(output_path).parent / "hook"
+        else:
+            _hook_dir = Path(tempfile.gettempdir()) / "omni_hook_parallax"
+        _video_override, _hold_first = hook_video_override(
+            list(image_paths),
+            _video_override,
+            act_duration=float(_act_durs[0]) if _act_durs else act_duration_locked,
+            out_dir=_hook_dir,
+            enabled=hook_parallax,
+            size=(_REEL_WIDTH, _REEL_HEIGHT),
+            fps=int(fps),
+        )
+    except Exception as _hook_exc:  # noqa: BLE001
+        logger.warning("HOOK parallax skipped (%s) — Ken Burns hook.", _hook_exc)
+
+    from core.reel_ffmpeg_render import attempt_ffmpeg, compile_ffmpeg_reel
+
+    def _render_with_ffmpeg() -> Path:
+        dest = _resolve_sequence_mp4_path(
+            output_path, page_id=page_id, episode_dir=episode_dir,
+        )
+        os.makedirs(os.path.dirname(str(dest)) or ".", exist_ok=True)
+        _voice_gain = (
+            float(voice_volume_gain)
+            if voice_volume_gain is not None
+            else _VOICE_VOLUME_GAIN
+        )
+        _bed_vol = (
+            float(ambient_volume) if ambient_volume is not None else _AMBIENT_VOLUME
+        )
+        _duck = (
+            float(ambient_duck_ratio)
+            if ambient_duck_ratio is not None
+            else _AMBIENT_DUCK_RATIO_DEFAULT
+        )
+        _duck_until = (
+            float(ambient_duck_until_s)
+            if ambient_duck_until_s is not None
+            else float(_voice_actual_dur or total_duration)
+        )
+        videos = [Path(item) if item else None for item in _video_override]
+        return compile_ffmpeg_reel(
+            image_paths=[Path(item) for item in image_paths],
+            act_durations=list(_act_durs),
+            output_path=dest,
+            word_timings=wt,
+            hook_text=hook_text,
+            enable_hook_text=enable_hook_text,
+            cta_text=cta_text,
+            cta_start_s=_resolved_cta_t0,
+            act_video_paths=videos,
+            logo_path=Path(logo_image_path) if logo_image_path else None,
+            fps=int(fps),
+            enable_flicker=bool(enable_flicker),
+            grain_intensity=float(grain_intensity or 0.0),
+            vignette_strength=float(vignette_strength or 0.0),
+            ffmpeg_preset=ffmpeg_preset or "veryfast",
+            voice_audio=Path(voice_audio) if voice_audio else None,
+            ambient_audio=Path(ambient_audio) if ambient_audio else None,
+            voice_volume_gain=_voice_gain,
+            ambient_volume=_bed_vol,
+            ambient_duck_ratio=_duck,
+            ambient_duck_until_s=_duck_until,
+            words_per_phrase=int(words_per_phrase or 4),
+            sfx_loop_audio=Path(sfx_loop_audio) if sfx_loop_audio else None,
+            impact_sfx_audio=Path(impact_sfx_audio) if impact_sfx_audio else None,
+            ambient_profile=str(ambient_profile or "mystery"),
+            require_voice=True,
+            synthesize_drone=True,
+            transition_booms=True,
+            caption_scale=(
+                1.5 if (page_id or "").strip().lower() == "ancient_knowledge" else 1.0
+            ),
+        )
+
+    _ffmpeg_out = attempt_ffmpeg(_render_with_ffmpeg)
+    if _ffmpeg_out is not None:
+        logger.info("Sequence reel ffmpeg path → %s", _ffmpeg_out)
+        return _ffmpeg_out
+    if concatenate_videoclips is None or AudioFileClip is None:
+        raise RuntimeError(
+            "ffmpeg render failed and moviepy is not installed — "
+            "refusing to publish a reel without the voice track"
+        )
+
     for i, img_path in enumerate(image_paths):
         _this_act_dur = float(_act_durs[i]) if i < len(_act_durs) else act_duration_locked
         act_wt: list = []
@@ -2604,6 +2862,7 @@ def compile_sequence_reel(
                     subtitle_fill=subtitle_fill,
                     subtitle_stroke_width=subtitle_stroke_width,
                     subtitle_stroke_fill=subtitle_stroke_fill,
+                    hold_last_frame=bool(_hold_first and i == 0),
                 )
                 src_keep = getattr(clip, "_wan_src_clip", None)
                 if src_keep is not None:
@@ -2854,7 +3113,11 @@ def compile_sequence_reel(
                 vc.duration, _voice_gain,
             )
         except Exception as _ae:
-            logger.warning("Voice audio load failed: %s", _ae)
+            raise RuntimeError(f"voice track failed to load: {_ae}") from _ae
+    else:
+        raise RuntimeError(
+            "voice track required — refusing to compile a reel without narration"
+        )
 
     if ambient_audio and not ambient_audio.is_file():
         logger.warning(
@@ -3124,16 +3387,34 @@ def compile_sequence_reel(
     logger.info("Writing sequence reel → %s (audio_fps=%d)", output_path, _AUDIO_SAMPLE_RATE)
     os.makedirs(os.path.dirname(str(output_path)), exist_ok=True)
     try:
-        _enc_preset = (ffmpeg_preset or "medium").strip() or "medium"
+        _enc = sequence_encode_params(total_duration, ffmpeg_preset)
+        logger.info(
+            "Sequence encode | %sx%s | preset=%s | crf=%s | maxrate=%s",
+            _enc["width"],
+            _enc["height"],
+            _enc["preset"],
+            _enc["crf"],
+            _enc["maxrate"],
+        )
         final_video.write_videofile(
             str(output_path),
             fps         = fps,
             codec       = "libx264",
             audio_codec = "aac",
             audio_fps   = _AUDIO_SAMPLE_RATE,
-            preset      = _enc_preset,
+            preset      = _enc["preset"],
             threads     = 8,
-            ffmpeg_params=["-ar", str(_AUDIO_SAMPLE_RATE), "-preset", _enc_preset],
+            ffmpeg_params=[
+                "-crf", _enc["crf"],
+                "-maxrate", _enc["maxrate"],
+                "-bufsize", _enc["bufsize"],
+                "-pix_fmt", "yuv420p",
+                "-color_range", "tv",
+                "-colorspace", "bt709",
+                "-color_primaries", "bt709",
+                "-color_trc", "bt709",
+                "-ar", str(_AUDIO_SAMPLE_RATE),
+            ],
             logger      = None,
             temp_audiofile_path=moviepy_temp_audio_dir(),
         )

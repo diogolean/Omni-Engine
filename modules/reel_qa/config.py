@@ -6,15 +6,25 @@ import os
 
 RELEVANCE_THRESHOLD: float = 0.70
 MAX_ATTEMPTS: int = 3
-MODEL_CHAIN: tuple[str, ...] = ("qwen", "gemini")
+# Near-zero cost (2026-10-19): the cheap OpenRouter/DeepInfra vision chain
+# (Gemma 3 12B first, about $0.00003 a still) is the only default judge.
+# Gemini Flash with thinking cost about eighty times more per still.
+# ``REEL_QA_MODEL_CHAIN=qwen,gemini`` puts Gemini back as a fallback.
+MODEL_CHAIN: tuple[str, ...] = ("qwen",)
+JUDGE_TIMEOUT_S: float = 25.0
 GEMINI_MODEL: str = "models/gemini-2.5-flash"
 MIN_SECONDS_PER_IMAGE: float = 4.0
 MAX_SECONDS_PER_IMAGE: float = 5.0
 MIN_DURATION_S: float = 15.0
 # volumedetect mean below this is treated as a silent or near-silent mix.
 MIN_MEAN_VOLUME_DB: float = -45.0
-FRAME_SAMPLES: int = 4
+# Two sampled frames of the final MP4 are judged, not four.
+FRAME_SAMPLES: int = 2
 WORDS_PER_SECOND: float = 2.4
+# Extra judge calls after a timeout or an unparseable reply. The still is
+# not regenerated for that, and a real low score still fails closed. The
+# judge chain already falls through four cheap models, so one retry is enough.
+JUDGE_RETRIES: int = 1
 
 
 def _raw(name: str) -> str:
@@ -107,3 +117,13 @@ def min_mean_volume_db() -> float:
 
 def frame_samples() -> int:
     return _int("REEL_QA_FRAME_SAMPLES", FRAME_SAMPLES, low=1, high=12)
+
+
+def judge_retries() -> int:
+    """How many extra judge calls to spend on a technical failure."""
+    return _int("REEL_QA_JUDGE_RETRIES", JUDGE_RETRIES, low=0, high=4)
+
+
+def judge_timeout_s() -> float:
+    """Seconds one vision judge call may take. ``REEL_QA_JUDGE_TIMEOUT`` wins."""
+    return _float("REEL_QA_JUDGE_TIMEOUT", JUDGE_TIMEOUT_S, low=1.0, high=90.0)

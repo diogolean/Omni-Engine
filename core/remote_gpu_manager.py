@@ -331,6 +331,7 @@ def run_parallel_jobs(
 
     Returns ``{id: result_or_exception}`` — never raises.
     """
+    import contextvars
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     results: dict[Any, Any] = {}
@@ -343,7 +344,12 @@ def run_parallel_jobs(
         len(jobs), workers,
     )
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(fn): idx for idx, fn in jobs.items()}
+        # Copy the caller's context into the worker. This interpreter does
+        # not give a new thread the parent's contextvars on its own.
+        futures = {}
+        for idx, fn in jobs.items():
+            ctx = contextvars.copy_context()
+            futures[pool.submit(ctx.run, fn)] = idx
         for fut in as_completed(futures):
             idx = futures[fut]
             try:

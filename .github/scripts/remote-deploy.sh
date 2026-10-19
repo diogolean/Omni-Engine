@@ -23,7 +23,8 @@ fi
 
 mkdir -p credentials outputs \
   channels_config/ancient_knowledge \
-  channels_config/anna_protocol
+  channels_config/anna_protocol \
+  state/ancient_knowledge/store
 touch releases.log
 printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${IMAGE_TAG}" >> releases.log
 

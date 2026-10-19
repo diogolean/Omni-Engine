@@ -22,6 +22,9 @@ class StillGateResult:
     blocked_reason: str = ""
     attempts: list[dict[str, Any]] = field(default_factory=list)
     verdict: dict[str, Any] = field(default_factory=dict)
+    # True when the first scored verdict passed. None when the judge never
+    # returned a score (that attempt is left out of the hit rate).
+    first_pass: bool | None = None
 
     def __iter__(self):
         yield self.path
@@ -41,4 +44,5 @@ class StillGateResult:
             "model_id": last.get("model_id"),
             "qa_status": last.get("qa_status") or "",
             "attempts": len(self.attempts),
+            "first_pass": self.first_pass,
         }

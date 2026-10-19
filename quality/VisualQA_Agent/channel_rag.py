@@ -338,6 +338,27 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
             "oopart": "Antikythera, crystal skulls, vimana — artefact as visual hero",
             "lost_city": "Yonaguni, Dwarka, El Dorado — submerged or jungle-swallowed ruins",
         },
+        # Flux only paints scene types it can pass. Other channels copy this key.
+        "flux_scenes": {
+            "allowed": [
+                "landscapes and the real place",
+                "the sea, the coast, or underwater ambience",
+                "sky, weather, fog, and golden-hour light",
+                "an aerial view of the real region",
+                "close natural detail: rock, water, or foliage",
+                "ruins or architecture of the real region",
+            ],
+            "forbidden": [
+                "a named artefact",
+                "parts of an artefact such as gears or pendants",
+                "any specific object",
+                "a complete mechanism",
+                "clean brass gears",
+                "an invented gold figurine, gold bird, or silver disc",
+                "readable text",
+                "detailed faces",
+            ],
+        },
         # ── script_rules ────────────────────────────────────────────────
         # Consolidated from the hardcoded AK narration voice, the
         # Round-5/6 uniqueness gate, and the Final Round two-tier pacing
@@ -405,6 +426,15 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
                 "one weird trick",
                 "ancient civilizations were more advanced than we thought",
             ],
+            "filmable_lines": (
+                "Each spoken line pairs with one concrete picture. Abstract "
+                "claims (theories, legends, records, lost knowledge) use a "
+                "Flux-safe scene of the real region: the landscape, the sea "
+                "or coast, sky and weather, an aerial view, close natural "
+                "detail of rock water or foliage, golden hour or fog, or "
+                "ruins of that region. Never a manuscript, hands, a museum "
+                "hall, or a named artefact, its gears, or its pendants."
+            ),
         },
         # ── motion_rules ────────────────────────────────────────────────
         # Consolidated from _MOTION_PROFILES in agents.media.animation_fx
@@ -641,6 +671,9 @@ def _normalize_rules(rules: dict[str, Any]) -> dict[str, Any]:
             continue
         if isinstance(val, (str, list, dict)):
             out[section] = val
+    flux_scenes = rules.get("flux_scenes")
+    if isinstance(flux_scenes, dict):
+        out["flux_scenes"] = flux_scenes
     return out
 
 

@@ -670,6 +670,22 @@ _CYBER_WASTELAND_CUE_RE = re.compile(
 )
 
 
+def flux_visual_role(channel: str | None, requested: str | None = None) -> str:
+    """Role for the Flux sanitizer.
+
+    Master Mei keeps master / disciple / slave. Every other channel is
+    documentary: no cyberpunk prefix and no Mei style anchor. The channel
+    RAG already carries the look.
+    """
+    role = (requested or "").strip().lower()
+    if role in {"master", "disciple", "slave", "documentary"}:
+        return role
+    page = (channel or "").strip().lower()
+    if page and page != "master_mei":
+        return "documentary"
+    return ""
+
+
 def _infer_visual_role(text: str) -> str:
     """Best-effort role inference when caller omits visual_role."""
     lo = (text or "").lower()
@@ -710,7 +726,7 @@ def sanitize_prompt_for_flux(
         return text
 
     role = (visual_role or "").strip().lower() or _infer_visual_role(text)
-    if role not in ("master", "disciple", "slave"):
+    if role not in {"master", "disciple", "slave", "documentary"}:
         role = _infer_visual_role(text)
 
     # CRITICAL — wipe legacy wonder_feed graphite / pencil-drawing pollution
@@ -833,6 +849,13 @@ def sanitize_prompt_for_flux(
     text = re.sub(r"(?:\s*[,.]){2,}", ", ", text)
     text = re.sub(r"\s+,", ",", text)
     text = text.strip(" ,.\u2014-")
+
+    # Documentary channels keep the prompt the channel wrote. No Mei anchor,
+    # no cyberpunk prefix, no forced wide-angle lock.
+    if role == "documentary":
+        from agents.media.prompt_builder import finalize_flux_prompt
+
+        return finalize_flux_prompt(text, require_prefix=False)
 
     # Preserve intentional extreme close-ups (Scene 7 cyborg lock); otherwise
     # strip banned tight framing and prefer wide cinematic scope.
@@ -1557,9 +1580,18 @@ class TogetherImageAdapter:
             )
 
         # LAST-LINE SAFETY NET: role-aware sanitizer — never bolt cyberpunk onto
-        # Master Mei / Disciple prompts (subject-contamination fix).
+        # Master Mei / Disciple prompts (subject-contamination fix). Ancient
+        # Knowledge and every other non-Mei channel stay documentary.
+        page = ""
+        try:
+            from core.google_guardrail import active_channel
+
+            page = active_channel()
+        except Exception:  # noqa: BLE001
+            page = ""
         final_prompt = sanitize_prompt_for_flux(
-            final_prompt, visual_role=visual_role
+            final_prompt,
+            visual_role=flux_visual_role(page, visual_role) or None,
         )
 
         from utils.pipeline_paths import default_page_dir, page_assets_dir

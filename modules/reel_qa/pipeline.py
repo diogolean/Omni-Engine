@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
+from modules.reel_qa.metrics import first_pass_summary, format_first_pass
 from modules.reel_qa.mp4_gate import cues_from_beats, cues_from_word_timings, gate_final_mp4
 from modules.reel_qa.relevance import evaluate_chunk_relevance, verdict_passed
 from modules.reel_qa.report import new_report, report_targets, write_qa_report
@@ -90,6 +91,12 @@ def seal_compiled_reel(
         video = Path(video_path) if video_path else None
         if video is not None and str(video):
             cues = cues_from_word_timings(word_timings) or cues_from_beats(rows)
+            narration_end = 0.0
+            for row in word_timings or []:
+                try:
+                    narration_end = max(narration_end, float(row[2]))
+                except (TypeError, ValueError, IndexError):
+                    continue
             mp4 = gate_final_mp4(
                 video,
                 cues,
@@ -97,6 +104,8 @@ def seal_compiled_reel(
                 evaluate_fn=evaluate_fn,
                 frame_fn=frame_fn,
                 work_dir=(Path(output_dir) / f"{stem}_frames") if output_dir else None,
+                beats=rows,
+                narration_end_s=narration_end or None,
             )
         else:
             mp4 = _fail_mp4(blocked_reason or "missing_video")
@@ -120,6 +129,7 @@ def seal_compiled_reel(
             blocked_reason="; ".join(unique),
             channel=channel,
         )
+        report["first_pass"] = first_pass_summary(rows)
     except Exception as exc:  # noqa: BLE001
         _LOG.error("REEL QA seal failed (%s) — fail closed", exc)
         report = new_report(
@@ -131,10 +141,15 @@ def seal_compiled_reel(
             blocked_reason=f"qa_unavailable:{type(exc).__name__}",
             channel=channel,
         )
+    summary = report.get("first_pass") or first_pass_summary(rows)
+    report["first_pass"] = summary
     write_qa_report(
         report,
         report_targets(video_path=video_path, output_dir=output_dir, stem=stem),
     )
+    rate_line = format_first_pass(summary)
+    _LOG.info(rate_line)
+    print(rate_line, flush=True)
     _LOG.info(
         "REEL QA report | verdict=%s post_type=%s path=%s",
         report.get("verdict"),

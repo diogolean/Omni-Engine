@@ -89,6 +89,9 @@ def test_yaml_override_is_the_fallback_when_the_catalog_misses(
     skipped = {"subject_slug": "no-such-place", "topic": "Garden roses"}
     assert attach_article_url(skipped, [], "ancient_knowledge", site_url=_SITE) == "no-link"
     assert skipped["target_url"] == ""
+    # An earlier test can leave CHANNEL_ID on another page, whose pack carries
+    # a sales URL. The row names its channel so _pin_link stays on that page.
+    skipped["channel_id"] = "ancient_knowledge"
     monkeypatch.setenv("PINTEREST_TARGET_URL", "https://sales.example/buy")
     assert _pin_link(skipped) == ""
 

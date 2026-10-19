@@ -81,7 +81,6 @@ _BAN_LEAK_PHRASES: tuple[str, ...] = (
 
 def _neutralize_ban_leaks(text: str) -> str:
     """Prefix accidental positive ban-list tokens with NO so FLUX does not paint them."""
-    import re
 
     out = text or ""
     for phrase in sorted(_BAN_LEAK_PHRASES, key=len, reverse=True):

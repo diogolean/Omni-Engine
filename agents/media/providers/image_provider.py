@@ -16,7 +16,10 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
+
+if TYPE_CHECKING:
+    import google.genai as genai
 
 from PIL import Image
 
@@ -453,7 +456,7 @@ def _gemini_cost_usd(model_id: str | None) -> float:
     try:
         return float(app_config.estimate_gemini_image_usd(model_id))
     except Exception:
-        return 0.03 if _gemini_cost_key(model_id) == "image_gemini_pro" else 0.005
+        return 0.03 if _gemini_cost_key(model_id) == "image_gemini_pro" else 0.039
 
 
 class ImageProvider(ABC):
@@ -503,7 +506,8 @@ class GeminiImageAdapter(ImageProvider):
         self._extra_kwargs = dict(kwargs)
 
         if self._gemini_mode:
-            self._model_id = requested or "models/gemini-3-pro-image-preview"
+            # Cheapest Gemini image SKU unless the caller names one.
+            self._model_id = requested or "models/gemini-3.1-flash-lite-image"
             self._image_chain = _gemini_image_chain(self._model_id)
             self._router_tier = "premium" if "pro" in self._model_id.lower() else "cheap"
             self.last_gemini_image_model_used = self._model_id

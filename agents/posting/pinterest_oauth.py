@@ -227,7 +227,7 @@ def main():
     t.start()
 
     print(f"Local callback server listening on {REDIRECT_URI}")
-    print(f"\nOpening Pinterest authorization page...")
+    print("\nOpening Pinterest authorization page...")
     print(f"URL: {AUTH_URL}\n")
     time.sleep(1)
     webbrowser.open(AUTH_URL)
@@ -241,7 +241,7 @@ def main():
 
     if not _captured_code:
         print("\nTimeout: no code received within 120 seconds.")
-        print(f"Open this URL manually, authorize, then paste the 'code=' value here.")
+        print("Open this URL manually, authorize, then paste the 'code=' value here.")
         print(f"\n{AUTH_URL}\n")
         code = input("Paste code here: ").strip()
         if not code:
@@ -268,7 +268,7 @@ def main():
         print(f"No access_token in response: {result}")
         sys.exit(1)
 
-    print(f"\nToken received!")
+    print("\nToken received!")
     print(f"  Type          : {token_type}")
     print(f"  Expires in    : {expires_in}s")
     print(f"  Refresh in    : {refresh_in}s (~{int(refresh_in)//86400} days)" if str(refresh_in).isdigit() else "")

@@ -806,6 +806,37 @@ def build_reel_narration_prompt(
     else:
         _angle = _rnd_angle.choice(_REEL_PSYCH_ANGLES)
 
+    _prior_angles = ""
+    if _mode == "investigative":
+        _cid = ""
+        try:
+            _cid = str(getattr(_active_channel(channel), "channel_id", "") or "")
+        except Exception:  # noqa: BLE001
+            _cid = ""
+        from modules.reel_grounding.config import angle_memory_for
+
+        if angle_memory_for(_cid, _mode):
+            _pool: list[str] = []
+            try:
+                if _is_isolated_channel(channel):
+                    _pool = [
+                        str(item).strip()
+                        for item in (
+                            _active_channel(channel).get_narrative_angles("investigative") or []
+                        )
+                        if str(item).strip()
+                    ]
+            except Exception:  # noqa: BLE001
+                _pool = []
+            if not _pool:
+                _pool = list(_REEL_INVESTIGATION_ANGLES)
+            from modules.reel_grounding.memory import plan_episode_angle
+
+            _plan = plan_episode_angle(channel=_cid, topic=topic, pool=_pool)
+            if _plan.angle:
+                _angle = _plan.angle
+            _prior_angles = _plan.prior_block
+
     _bait_block = ""
     if engagement_bait_examples:
         _bait_block = dedent(f"""
@@ -948,6 +979,7 @@ def build_reel_narration_prompt(
             ── MANDATORY INVESTIGATION ANGLE (use this as your narrative lens) ──
             Explore this specific concept: {_angle}
             Weave it naturally into the narration without naming it directly.
+            {_prior_angles}
 
             ─── YOUR TASK ───
             Produce a JSON object with exactly three fields:
@@ -1179,9 +1211,9 @@ def build_long_caption_prompt(
             )
         else:
             cta_close = (  # type: ignore[assignment]
-                f"\nParagraph 3 (CTA) must end with a curiosity invitation."
+                "\nParagraph 3 (CTA) must end with a curiosity invitation."
                 if cta_enabled
-                else f"\nDo not add a follow CTA."
+                else "\nDo not add a follow CTA."
             )
         return dedent(
             f"""
@@ -1512,9 +1544,16 @@ class CaptionEngine:
                     if t:
                         parts_out.append(t)
             text = "\n".join(parts_out).strip()
+        served_by = str(getattr(response, "provider", "") or "gemini")
+        served_model = str(getattr(response, "model_version", "") or "")
+        self._last_text_provider = served_by
         self._log_script_cost(
-            provider="gemini",
-            model=(chain[0] if chain else "gemini"),
+            provider=served_by,
+            model=(
+                served_model.split(":", 1)[-1]
+                if served_by != "gemini" and served_model
+                else (chain[0] if chain else "gemini")
+            ),
             prompt=contents,
             output=text,
         )
@@ -1531,8 +1570,17 @@ class CaptionEngine:
         """Claude text fallback used when DeepSeek fails (economic or premium)."""
         if self._anthropic is None:
             return ""
+        model = self._writer_model
+        try:
+            from modules.reel_artefact.provider_health import resolved_claude_model
+
+            resolved = resolved_claude_model()
+            if resolved:
+                model = resolved
+        except Exception:  # noqa: BLE001
+            model = self._writer_model
         message = self._anthropic.messages.create(
-            model=self._writer_model,
+            model=model,
             max_tokens=max_tokens,
             temperature=temperature,
             system=system or "You are a precise creative writer. Follow the user instructions exactly.",
@@ -1545,7 +1593,7 @@ class CaptionEngine:
         text = "\n".join(c for c in chunks if c).strip()
         self._log_script_cost(
             provider="claude",
-            model=str(self._writer_model),
+            model=str(model),
             prompt=user_prompt,
             output=text,
         )
@@ -1588,6 +1636,13 @@ class CaptionEngine:
             + f"\n{corpus_close}"
         )
         model = research_model_override or self._research_model
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            fallback = self._complete_ancient_text(full_prompt)
+            if fallback:
+                logger.info("synthesize_facts | fallback OK (topic='%s')", topic)
+                return fallback
         try:
             chain = chain_with_preferred_first(self._text_model_chain, model)
             response = generate_content_with_model_fallback(
@@ -1633,7 +1688,15 @@ class CaptionEngine:
                 return result
         except Exception as exc:  # noqa: BLE001
             logger.warning("synthesize_facts | Gemini failed (%s).", exc)
+            fallback = self._ancient_after_gemini(full_prompt, exc)
+            if fallback:
+                logger.info("synthesize_facts | fallback OK (topic='%s')", topic)
+                return fallback
 
+        if self._is_ancient_knowledge():
+            fallback = self._complete_ancient_text(full_prompt)
+            if fallback:
+                return fallback
         return ""
 
     def synthesize_facts_batch(
@@ -1666,6 +1729,12 @@ class CaptionEngine:
             context = context[:_MAX_PROMPT_CHARS]
 
         chain = list(self._text_model_chain)
+        _batch_prompt = instruction + f"\n\n{corpus_open}\n" + context + f"\n{corpus_close}"
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            fallback = self._complete_ancient_text(_batch_prompt)
+            return [fallback] if fallback else []
         try:
             response = generate_content_with_model_fallback(
                 self._gemini,
@@ -1674,7 +1743,8 @@ class CaptionEngine:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Batch research API call failed: %s", exc)
-            return []
+            fallback = self._ancient_after_gemini(_batch_prompt, exc)
+            return [fallback] if fallback else []
 
         text_attr = getattr(response, "text", None)
         raw_text = text_attr() if callable(text_attr) else text_attr
@@ -1792,6 +1862,67 @@ class CaptionEngine:
 
         return (caption or "").strip()
 
+    def _is_ancient_knowledge(self) -> bool:
+        try:
+            return str(getattr(self._channel, "channel_id", "") or "") == "ancient_knowledge"
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _text_fallbacks(self):
+        """OpenRouter, then DeepSeek, then Anthropic. Same prompt the caller built."""
+        from modules.reel_artefact.provider_health import openrouter_text
+
+        def _deepseek(body: str) -> str:
+            return self._deepseek_complete(body, max_tokens=1800)
+
+        def _claude(body: str) -> str:
+            text = self._claude_text_complete(body, max_tokens=1800)
+            if not text:
+                raise RuntimeError("ANTHROPIC_API_KEY missing")
+            return text
+
+        return [
+            ("openrouter", openrouter_text),
+            ("deepseek", _deepseek),
+            ("anthropic", _claude),
+        ]
+
+    def _complete_ancient_text(
+        self,
+        prompt: str,
+        *,
+        gemini=None,
+        accept=None,
+        refine=None,
+    ) -> str:
+        """Ancient Knowledge only. Cheap providers first, Gemini after them.
+
+        Near-zero cost: OpenRouter and DeepSeek write the draft. Gemini runs
+        only when both fail, and Claude (Sonnet prices) stays the last resort.
+        Gemini is skipped once it has been marked dead.
+        """
+        if not self._is_ancient_knowledge():
+            return ""
+        from modules.reel_artefact.provider_health import complete_ak_text
+
+        fallbacks = self._text_fallbacks()
+        cheap = [pair for pair in fallbacks if pair[0] != "anthropic"]
+        last = [pair for pair in fallbacks if pair[0] == "anthropic"]
+        callers = list(cheap)
+        if gemini is not None:
+            callers.append(("gemini", gemini))
+        callers.extend(last)
+        return complete_ak_text(prompt, callers, accept=accept, refine=refine)
+
+    def _ancient_after_gemini(self, prompt: str, exc: BaseException | None) -> str:
+        if not self._is_ancient_knowledge():
+            return ""
+        from modules.reel_artefact.provider_health import is_billing_or_auth, mark_dead
+
+        if exc is not None and is_billing_or_auth(exc):
+            mark_dead("gemini", str(exc))
+        return self._complete_ancient_text(prompt)
+
     def generate_sequence_voiceover(
         self,
         topic: str,
@@ -1808,6 +1939,7 @@ class CaptionEngine:
         batch_angle_block: str = "",
         uniqueness_rejection: str = "",
         previously_generated_hooks: "list[str] | None" = None,
+        asset_captions: "list[str] | None" = None,
     ) -> str:
         """
         Generate a full-length documentary narration script for SEQUENCE_REEL TTS.
@@ -1843,6 +1975,32 @@ class CaptionEngine:
             _rag_channel_name = str(getattr(self._channel, "channel_id", "") or "")
         except Exception:  # noqa: BLE001
             _rag_channel_name = ""
+        _angle_block = ""
+        _chosen_angle = ""
+        from modules.reel_grounding.config import angle_memory_for
+
+        if angle_memory_for(_rag_channel_name, narrative_mode):
+            _pool: list[str] = []
+            try:
+                _pool = [
+                    str(item).strip()
+                    for item in (self._channel.get_narrative_angles("investigative") or [])
+                    if str(item).strip()
+                ]
+            except Exception:  # noqa: BLE001
+                _pool = []
+            if not _pool:
+                _pool = list(_REEL_INVESTIGATION_ANGLES)
+            from modules.reel_grounding.memory import plan_episode_angle
+
+            _plan = plan_episode_angle(
+                channel=_rag_channel_name,
+                topic=topic,
+                pool=_pool,
+            )
+            _chosen_angle = _plan.angle
+            _angle_block = _plan.prompt_block
+        self.last_reel_angle = _chosen_angle
         prompt = build_sequence_script_prompt(
             topic=topic,
             niche=page_niche or topic,
@@ -1856,6 +2014,8 @@ class CaptionEngine:
             batch_angle_block=batch_angle_block,
             uniqueness_rejection=uniqueness_rejection,
             channel_name=_rag_channel_name,
+            angle_block=_angle_block,
+            asset_captions=asset_captions,
         )
 
         # Append CTA instruction so the single voice script ends with the follow call.
@@ -1995,7 +2155,13 @@ class CaptionEngine:
                 return False
             return wc >= _min_words  # hard word-count floor only, no char-count escape hatch
 
-        def _try_gemini(*, attempt: int = 1, expand: bool = False, prev_text: str = "") -> str:
+        def _try_gemini(
+            *,
+            attempt: int = 1,
+            expand: bool = False,
+            prev_text: str = "",
+            raise_errors: bool = False,
+        ) -> str:
             try:
                 from agents.media.providers.gemini_utils import chain_with_preferred_first
                 from agents.media.providers.gemini_utils import generate_content_with_model_fallback
@@ -2044,22 +2210,64 @@ class CaptionEngine:
                 out = text_attr() if callable(text_attr) else (text_attr or "")
                 return (out or "").strip()
             except Exception as _exc:
+                self._last_script_error = _exc
                 logger.warning(
                     "generate_sequence_voiceover | Gemini attempt %d failed (%s)",
                     attempt, _exc,
                 )
+                if raise_errors:
+                    raise
                 return ""
 
-        # ── Gemini ONLY (no Claude / DeepSeek fallbacks) ─────────────────────
-        # Round 7 (Measure-Then-Correct 2026-08-15): the word-floor retry
-        # loop below has been REMOVED for non-warrior channels. Word count
-        # from a single Gemini call is now a seed hint (main.py's
-        # _synthesize_sequence_voice_track measures the ACTUAL TTS
-        # duration and does one corrective regen with observed WPS if it
-        # falls outside tolerance). Warrior mode (Master Mei) keeps its
-        # strict length gate because MEI has structural act-length
-        # requirements that are NOT duration-derived.
-        raw = _try_gemini(attempt=1)
+        # Ancient Knowledge falls through to OpenRouter, then DeepSeek, then
+        # Anthropic, with this same prompt. A 402 marks Gemini dead and does
+        # not retry. Warrior / Master Mei stays on Gemini.
+        raw = ""
+        self._last_script_error = None
+        if _rag_channel_name == "ancient_knowledge" and not _warrior:
+            def _gemini_script(_body: str) -> str:
+                return _try_gemini(attempt=1, raise_errors=True)
+
+            def _refine_script(text: str) -> str:
+                from modules.reel_artefact.script_grounding import (
+                    extract_narration,
+                    repair_hook_if_only_miss,
+                    strip_spoken_cta,
+                )
+
+                spoken = strip_spoken_cta(_metrics_script(extract_narration(text)))
+                return repair_hook_if_only_miss(
+                    spoken, topic, channel="ancient_knowledge",
+                )
+
+            def _accept_script(text: str) -> bool:
+                from modules.reel_artefact.script_grounding import (
+                    grounding_problem,
+                    script_is_usable,
+                )
+
+                spoken = _metrics_script(text)
+                if _word_count(spoken) < 40 or not script_is_usable(spoken, topic):
+                    return False
+                problem = grounding_problem(
+                    spoken, topic, channel="ancient_knowledge",
+                )
+                if problem:
+                    logger.info("AK text grounding | %s", problem)
+                    return False
+                return True
+
+            raw = self._complete_ancient_text(
+                _full_prompt,
+                gemini=_gemini_script,
+                accept=_accept_script,
+                refine=_refine_script,
+            )
+        else:
+            _net_tries = 1
+            for _net_i in range(1, _net_tries + 1):
+                raw = _try_gemini(attempt=_net_i)
+                break
         _chars = len(_metrics_script(raw))
         _first_wc = _word_count(raw)
         _first_pass = _passes_length(raw)
@@ -2087,7 +2295,7 @@ class CaptionEngine:
 
         if not raw or _word_count(raw) < 40:
             logger.error(
-                "generate_sequence_voiceover | Gemini-only stack failed or returned stubs "
+                "generate_sequence_voiceover | text providers failed or returned stubs "
                 "(%d words / %d chars) — returning empty.",
                 _word_count(raw),
                 len(_metrics_script(raw)),
@@ -2112,9 +2320,22 @@ class CaptionEngine:
             clean = inject_philosophical_breaks(clean)
         else:
             clean = _metrics_script(raw)
+            from modules.reel_artefact.script_date import ensure_topic_date
+            from modules.reel_artefact.script_length import AK_NARRATION_S, soft_ceiling
+
+            clean = ensure_topic_date(clean, topic)
+            # Soft ceiling only. No rewrite, and no cut inside a sentence.
+            if _rag_channel_name == "ancient_knowledge":
+                from modules.reel_artefact.script_grounding import strip_spoken_cta
+
+                clean = strip_spoken_cta(clean)
+                clean = soft_ceiling(clean, max_seconds=AK_NARRATION_S)
+            else:
+                clean = soft_ceiling(clean)
+            clean = ensure_topic_date(clean, topic)
         logger.info(
             "generate_sequence_voiceover | final script %d words / %d chars "
-            "(target_words=%d min_words=%d) [Gemini-only]",
+            "(target_words=%d min_words=%d)",
             _word_count(clean), len(_metrics_script(clean)),
             total_words_target, _min_words,
         )
@@ -2251,30 +2472,38 @@ class CaptionEngine:
 
         raw_response = ""
         mode_tag = "humanized"
+        econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
+        gemini_contents = f"{_smart_bait_system}\n\n{prompt}"
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
 
-        # --- Gemini ONLY (models/gemini-2.5-flash) — no Claude / DeepSeek ---
-        try:
-            econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
-            gemini_contents = f"{_smart_bait_system}\n\n{prompt}"
-            raw_response = self._gemini_text_complete(gemini_contents, model_id=econ)
-            if raw_response and len(raw_response.strip()) < 150:
-                logger.warning(
-                    "humanize_smart_bait | Gemini draft < 150 chars — re-prompting to expand."
-                )
-                expand_prompt = (
-                    gemini_contents
-                    + "\n\nCRITICAL: Expand your previous answer. "
-                    "Return a richer JSON payload with more detail (≥150 characters total)."
-                )
-                expanded = self._gemini_text_complete(expand_prompt, model_id=econ)
-                if expanded and len(expanded.strip()) > len(raw_response.strip()):
-                    raw_response = expanded
-            if raw_response:
-                mode_tag = "humanized"
-                logger.info("humanize_smart_bait | Gemini PRIMARY OK")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("humanize_smart_bait | Gemini failed (%s).", exc)
-            raw_response = ""
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            raw_response = self._complete_ancient_text(gemini_contents)
+        else:
+            try:
+                raw_response = self._gemini_text_complete(gemini_contents, model_id=econ)
+                if raw_response and len(raw_response.strip()) < 150:
+                    logger.warning(
+                        "humanize_smart_bait | Gemini draft < 150 chars — re-prompting to expand."
+                    )
+                    expand_prompt = (
+                        gemini_contents
+                        + "\n\nCRITICAL: Expand your previous answer. "
+                        "Return a richer JSON payload with more detail (≥150 characters total)."
+                    )
+                    expanded = self._gemini_text_complete(expand_prompt, model_id=econ)
+                    if expanded and len(expanded.strip()) > len(raw_response.strip()):
+                        raw_response = expanded
+                if raw_response:
+                    mode_tag = "humanized"
+                    logger.info(
+                        "humanize_smart_bait | text OK via %s",
+                        getattr(self, "_last_text_provider", "gemini"),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("humanize_smart_bait | Gemini failed (%s).", exc)
+                raw_response = self._ancient_after_gemini(gemini_contents, exc)
+            if not raw_response and self._is_ancient_knowledge():
+                raw_response = self._complete_ancient_text(gemini_contents)
 
         if not raw_response:
             return "", "", "researcher_fallback", ""
@@ -2468,30 +2697,37 @@ class CaptionEngine:
 
         raw_response = ""
         mode_tag = "humanized"
+        _long_prompt = f"{_long_caption_system}\n\n{prompt}"
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
 
-        # --- Gemini ONLY — no Claude / DeepSeek ---
-        try:
-            econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
-            raw_response = self._gemini_text_complete(
-                f"{_long_caption_system}\n\n{prompt}", model_id=econ,
-            )
-            if raw_response and len(raw_response.strip()) < 150:
-                logger.warning(
-                    "humanize_long_caption | Gemini draft < 150 chars — re-prompting to expand."
-                )
-                expanded = self._gemini_text_complete(
-                    f"{_long_caption_system}\n\n{prompt}\n\n"
-                    "CRITICAL: Expand the essay substantially (≥150 characters).",
-                    model_id=econ,
-                )
-                if expanded and len(expanded.strip()) > len(raw_response.strip()):
-                    raw_response = expanded
-            if raw_response:
-                mode_tag = "humanized"
-                logger.info("humanize_long_caption | Gemini PRIMARY OK")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("humanize_long_caption | Gemini failed (%s).", exc)
-            raw_response = ""
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            raw_response = self._complete_ancient_text(_long_prompt)
+        else:
+            try:
+                econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
+                raw_response = self._gemini_text_complete(_long_prompt, model_id=econ)
+                if raw_response and len(raw_response.strip()) < 150:
+                    logger.warning(
+                        "humanize_long_caption | Gemini draft < 150 chars — re-prompting to expand."
+                    )
+                    expanded = self._gemini_text_complete(
+                        _long_prompt
+                        + "\n\nCRITICAL: Expand the essay substantially (≥150 characters).",
+                        model_id=econ,
+                    )
+                    if expanded and len(expanded.strip()) > len(raw_response.strip()):
+                        raw_response = expanded
+                if raw_response:
+                    mode_tag = "humanized"
+                    logger.info(
+                        "humanize_long_caption | text OK via %s",
+                        getattr(self, "_last_text_provider", "gemini"),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("humanize_long_caption | Gemini failed (%s).", exc)
+                raw_response = self._ancient_after_gemini(_long_prompt, exc)
+            if not raw_response and self._is_ancient_knowledge():
+                raw_response = self._complete_ancient_text(_long_prompt)
 
         if not raw_response:
             return "", "researcher_fallback"
@@ -2656,8 +2892,25 @@ class CaptionEngine:
                 )
             return cleaned, tag
 
+        _voice_prompt = build_gemini_humanizer_instruction(
+            topic,
+            raw_fact_sheet,
+            variation_index=variation_index,
+            total_variants=total_variants,
+            cta_keyword=kw,
+            cta_enabled=cta_enabled,
+            channel=self._channel,
+            cta_caption_format=cta_caption_format,
+        )
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            fallback = self._complete_ancient_text(_voice_prompt)
+            if fallback:
+                return _finish(fallback, "humanized")
+            return "", "researcher_fallback"
+
         if economic:
-            # Gemini PRIMARY ONLY for economic captions (all pages)
             try:
                 result = _gemini_call(raw_fact_sheet)
                 if result and len(result.strip()) < 150:
@@ -2679,13 +2932,20 @@ class CaptionEngine:
                             "No copyright footer."
                         ) or result
                 if result:
-                    logger.info("humanize_voice_with_fallback | Gemini PRIMARY OK")
+                    logger.info(
+                        "humanize_voice_with_fallback | text OK via %s",
+                        getattr(self, "_last_text_provider", "gemini"),
+                    )
                     return _finish(result, "humanized")
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Gemini humanizer failed (economic mode): %s — no Claude/DeepSeek fallback.",
-                    exc,
-                )
+                logger.warning("Gemini humanizer failed (economic mode): %s", exc)
+                fallback = self._ancient_after_gemini(_voice_prompt, exc)
+                if fallback:
+                    return _finish(fallback, "humanized")
+            if self._is_ancient_knowledge():
+                fallback = self._complete_ancient_text(_voice_prompt)
+                if fallback:
+                    return _finish(fallback, "humanized")
             return "", "researcher_fallback"
 
         # Premium path: Gemini-only (Claude / DeepSeek removed from text stack)
@@ -2710,7 +2970,14 @@ class CaptionEngine:
                 return _finish(result, "humanized")
         except Exception as gem_exc:  # noqa: BLE001
             logger.warning("Gemini humanizer failed: %s", gem_exc)
+            fallback = self._ancient_after_gemini(_voice_prompt, gem_exc)
+            if fallback:
+                return _finish(fallback, "humanized")
 
+        if self._is_ancient_knowledge():
+            fallback = self._complete_ancient_text(_voice_prompt)
+            if fallback:
+                return _finish(fallback, "humanized")
         return "", "researcher_fallback"
 
     def humanize_cta_caption(

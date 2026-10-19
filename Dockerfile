@@ -14,10 +14,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUTF8=1 \
     OMNI_ROOT=/opt/omni-engine
 
+# libass9 is what gives ffmpeg the ass filter. Sequence captions burn one
+# ASS file, so the ARM image has to keep it even if the ffmpeg package
+# later splits the library out.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \
+        libass9 \
         fonts-liberation \
         fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
