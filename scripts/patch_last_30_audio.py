@@ -33,11 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import (
-    WINDOWS_FFMPEG_FALLBACK,
-    ffmpeg_binary_override,
-    page_outputs_dir,
-)
+from utils.ffmpeg import resolve_ffmpeg, resolve_ffprobe
+from utils.pipeline_paths import page_outputs_dir
 
 try:
     from dotenv import load_dotenv
@@ -57,42 +54,10 @@ SFX_FADE_IN_S = 0.2
 _VARIANT_RE = re.compile(r"_v(\d+)$", re.IGNORECASE)
 
 
-def _resolve_ffmpeg() -> str:
-    override = ffmpeg_binary_override()
-    if override is not None:
-        return str(override)
-    ff = shutil.which("ffmpeg")
-    if ff:
-        return ff
-    try:
-        import imageio_ffmpeg  # type: ignore
-
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and Path(exe).is_file():
-            return str(exe)
-    except Exception:
-        pass
-    for cand in (
-        Path.home() / "AppData/Local/Programs/Stremio/ffmpeg.exe",
-        WINDOWS_FFMPEG_FALLBACK,
-    ):
-        if cand.is_file():
-            return str(cand)
-    raise RuntimeError("ffmpeg not found on PATH / imageio_ffmpeg / common install paths.")
+_resolve_ffmpeg = resolve_ffmpeg
 
 
-def _resolve_ffprobe(ffmpeg: str) -> str | None:
-    fp = shutil.which("ffprobe")
-    if fp:
-        return fp
-    # Same folder as ffmpeg (if a full install)
-    sibling = Path(ffmpeg).with_name("ffprobe.exe")
-    if sibling.is_file():
-        return str(sibling)
-    sibling2 = Path(ffmpeg).with_name("ffprobe")
-    if sibling2.is_file():
-        return str(sibling2)
-    return None
+_resolve_ffprobe = resolve_ffprobe
 
 
 def _audio_duration_s(path: Path, *, ffmpeg: str, ffprobe: str | None) -> float:
