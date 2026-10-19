@@ -78,8 +78,9 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | `engine/voice.py` | Script trim, TTS stitch, voice track |
 | `engine/stills.py` | Still cache, parallel act jobs |
 | `engine/reporting.py` | Cost and run summaries |
-| `engine/orchestrator.py` | `produce`, the variant worker, agentic stills |
-| `engine/cli.py` | Argument parser and `cli()` |
+| `engine/orchestrator.py` | Re-exports `produce`, the variant worker, agentic stills, and `--test-images` |
+| `engine/pipeline/` | Stage modules behind that re-export. `variant.py` sequences them. See [main-module-map.md](main-module-map.md) |
+| `engine/cli.py` | `cli()`. Flags are in `engine/cli_parser.py`. The run sequence is `engine/cli_run.py` |
 | `engine/log.py` | Logger proxy bound to `main`'s logger |
 
 `from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged.

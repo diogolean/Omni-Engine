@@ -31,33 +31,39 @@ def test_visual_gate_forwards_episode_subject(monkeypatch) -> None:
     assert seen["episode_subject"] == "The London Hammer"
 
 
+def _gate_callee_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
 def test_main_gate_calls_match_visual_qa_signature() -> None:
-    """Every keyword main.py passes into the still gate is a real parameter."""
+    """Every keyword the variant worker passes into the still gate is a real parameter."""
     allowed = set(inspect.signature(generate_and_gate).parameters)
-    tree = ast.parse(Path("engine/orchestrator.py").read_text(encoding="utf-8"))
     found = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = ""
-        if isinstance(func, ast.Name):
-            name = func.id
-        elif isinstance(func, ast.Attribute):
-            name = func.attr
-        if name == "partial":
-            if not node.args or not isinstance(node.args[0], ast.Name):
+    root = Path("engine/pipeline")
+    for path in sorted(root.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
                 continue
-            if node.args[0].id != "_qwen_gate":
+            func = node.func
+            name = _gate_callee_name(func)
+            if name == "partial":
+                if not node.args:
+                    continue
+                if _gate_callee_name(node.args[0]) != "_qwen_gate":
+                    continue
+            elif name not in {"_qwen_gate", "_still_gate", "_slide_gate"}:
                 continue
-        elif name not in {"_qwen_gate", "_still_gate", "_slide_gate"}:
-            continue
-        keywords = [kw.arg for kw in node.keywords if kw.arg]
-        if "chunk_text" not in keywords:
-            continue
-        found += 1
-        unknown = [key for key in keywords if key not in allowed]
-        assert unknown == []
+            keywords = [kw.arg for kw in node.keywords if kw.arg]
+            if "chunk_text" not in keywords:
+                continue
+            found += 1
+            unknown = [key for key in keywords if key not in allowed]
+            assert unknown == []
     assert found >= 2
 
 
