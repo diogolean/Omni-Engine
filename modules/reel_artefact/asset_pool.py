@@ -64,6 +64,9 @@ class PoolAsset:
     kind: str
     source: str
     key: str
+    # Pixel verdict from still_guard: None until checked. False is a sketch,
+    # a diagram, or a slide. Never the cover or the hook.
+    photo: bool | None = None
 
 
 class PoolTooSmall(RuntimeError):
@@ -257,8 +260,15 @@ def _gallery_outdoors(sentence: str, asset: PoolAsset) -> bool:
     return _GALLERY.search(_asset_blob(asset)) is not None
 
 
+def is_photo(asset: PoolAsset) -> bool:
+    """The pixel check when it ran, else the caption guess."""
+    if asset.photo is not None:
+        return bool(asset.photo)
+    return not is_drawing(asset)
+
+
 def _asset_rank(sentence: str, asset: PoolAsset, *, want_object: bool) -> tuple:
-    photo = 0 if is_drawing(asset) else 1
+    photo = 1 if is_photo(asset) else 0
     jar = 1 if want_object and _jar_photo(asset) else 0
     object_hit = 1 if want_object and asset.kind == "object" and photo else 0
     outdoors = 0 if _gallery_outdoors(sentence, asset) else 1
@@ -303,7 +313,18 @@ def pick_anchor(
     return "left" if previous == (asset_key, "center") else "center"
 
 
-MAX_SOURCE_USES = 2
+MAX_SOURCE_USES = 1
+MAX_MERGED_SPAN = 3
+
+
+def max_source_uses() -> int:
+    """One photograph, one beat. REEL_SOURCE_MAX_USES=2 restores two crops."""
+    import os
+
+    try:
+        return max(1, int((os.getenv("REEL_SOURCE_MAX_USES") or "").strip() or MAX_SOURCE_USES))
+    except ValueError:
+        return MAX_SOURCE_USES
 
 
 def _kind_for(asset_key: str, assets: list[PoolAsset]) -> str:
@@ -323,7 +344,7 @@ def _legal_asset(
 ) -> bool:
     if kind and asset.kind != kind:
         return False
-    if counts.get(asset.key, 0) >= MAX_SOURCE_USES:
+    if counts.get(asset.key, 0) >= max_source_uses():
         return False
     if asset.key == previous_key:
         return False
@@ -340,33 +361,66 @@ def _fresh_anchor(asset_key: str, anchors_used: dict[str, set[str]]) -> str:
     return ""
 
 
+@dataclass
+class _ShotState:
+    """What a reel has already shown. Shared by the body and the CTA tail."""
+
+    counts: dict[str, int]
+    anchors_used: dict[str, set[str]]
+    previous_key: str = ""
+    placed: int = 0
+
+    @classmethod
+    def fresh(cls) -> "_ShotState":
+        return cls(counts={}, anchors_used={})
+
+
+def _object_topic(assets: list[PoolAsset]) -> bool:
+    """An artefact story (the jar), not a site story (the enclosures)."""
+    return sum(1 for asset in assets if asset.kind == "object") >= OBJECT_FLOOR
+
+
+def _on_topic(sentence: str, asset: PoolAsset, *, object_topic: bool) -> bool:
+    """On an artefact story a site photograph must be named by its line.
+
+    The Baghdad Battery pool carries Ctesiphon, a minaret and a museum hall;
+    without this they fill every line that does not mention the jar.
+    """
+    if not object_topic or asset.kind == "object":
+        return True
+    return _overlap(sentence, asset.caption) > 0
+
+
 def assign_shots(
     sentences: list[str],
     assets: list[PoolAsset],
     *,
     geography: str = "",
     flux_max: int = FLUX_MAX,
+    state: _ShotState | None = None,
 ) -> list[ShotAssignment]:
     """Real photographs for objects and the site. Flux only for the sky.
 
-    One source is used at most twice, never on back-to-back beats, and the
-    two crops use different windows. A sentence that cannot take a new
-    source is merged into the previous beat.
+    One source is used once per reel (``REEL_SOURCE_MAX_USES``), never on
+    back-to-back beats. The first beat is the cover and must be a photograph.
+    A sentence that cannot take a new source is merged into the previous
+    beat; after ``MAX_MERGED_SPAN`` lines it gets a Flux landscape instead.
     """
     from modules.reel_artefact.flux_policy import safe_flux_prompt
 
+    shot_state = state if state is not None else _ShotState.fresh()
+    counts = shot_state.counts
+    anchors_used = shot_state.anchors_used
+    object_topic = _object_topic(assets)
     flux_used = 0
-    previous_key = ""
-    counts: dict[str, int] = {}
-    anchors_used: dict[str, set[str]] = {}
     assigned: list[ShotAssignment] = []
 
     def place(asset: PoolAsset, text: str) -> None:
-        nonlocal previous_key
         anchor = _fresh_anchor(asset.key, anchors_used)
         anchors_used.setdefault(asset.key, set()).add(anchor)
         counts[asset.key] = counts.get(asset.key, 0) + 1
-        previous_key = asset.key
+        shot_state.previous_key = asset.key
+        shot_state.placed += 1
         assigned.append(ShotAssignment(
             sentence=text,
             mode="asset",
@@ -375,58 +429,74 @@ def assign_shots(
             asset_key=asset.key,
         ))
 
+    def flux_shot(text: str) -> None:
+        nonlocal flux_used
+        flux_used += 1
+        shot_state.previous_key = ""
+        shot_state.placed += 1
+        assigned.append(ShotAssignment(
+            sentence=text,
+            mode="flux",
+            prompt=safe_flux_prompt(text, geography=geography, scene="landscape"),
+        ))
+
     def merge(text: str) -> None:
         if not assigned:
+            if flux_used < int(flux_max) and geography:
+                flux_shot(text)
+                return
             assigned.append(ShotAssignment(sentence=text, mode="fallback"))
             return
         previous = assigned[-1]
+        if int(previous.span or 1) >= MAX_MERGED_SPAN and flux_used < int(flux_max):
+            flux_shot(text)
+            return
         previous.sentence = f"{previous.sentence} {text}".strip()
         previous.span = int(previous.span or 1) + 1
 
+    def legal(asset: PoolAsset, kind: str, text: str, cover: bool) -> bool:
+        if cover and not is_photo(asset):
+            return False
+        if not _on_topic(text, asset, object_topic=object_topic):
+            return False
+        return _legal_asset(
+            asset,
+            kind=kind,
+            counts=counts,
+            previous_key=shot_state.previous_key,
+            anchors_used=anchors_used,
+        )
+
     for sentence in sentences:
         text = str(sentence or "").strip()
-        if wants_flux(text) and flux_used < int(flux_max):
-            flux_used += 1
-            assigned.append(ShotAssignment(
-                sentence=text,
-                mode="flux",
-                prompt=safe_flux_prompt(text, geography=geography, scene="landscape"),
-            ))
-            previous_key = ""
+        cover = shot_state.placed == 0
+        if not cover and wants_flux(text) and flux_used < int(flux_max):
+            flux_shot(text)
             continue
         want_object = bool(_OBJECT.search(text))
         ranked = _ranked_assets(text, assets, want_object=want_object)
         kind = "object" if want_object else ""
-        chosen = next((
-            asset for asset in ranked
-            if _legal_asset(
-                asset,
-                kind=kind,
-                counts=counts,
-                previous_key=previous_key,
-                anchors_used=anchors_used,
-            )
-        ), None)
-        if chosen is None and want_object and assigned:
+        chosen = next((a for a in ranked if legal(a, kind, text, cover)), None)
+        if chosen is None and want_object and assigned and not cover:
             previous = assigned[-1]
             if _kind_for(previous.asset_key, assets) == "object":
                 merge(text)
                 continue
         if chosen is None:
+            chosen = next((a for a in ranked if legal(a, "", text, cover)), None)
+        if chosen is None and cover:
+            # The hook still needs a photograph: any unused one beats a sketch.
             chosen = next((
-                asset for asset in ranked
-                if _legal_asset(
-                    asset,
-                    kind="",
-                    counts=counts,
-                    previous_key=previous_key,
-                    anchors_used=anchors_used,
+                a for a in ranked
+                if is_photo(a) and _legal_asset(
+                    a, kind="", counts=counts,
+                    previous_key=shot_state.previous_key, anchors_used=anchors_used,
                 )
             ), None)
         if chosen is None:
             merge(text)
             continue
-        if want_object and chosen.kind != "object":
+        if want_object and chosen.kind != "object" and not cover:
             merge(text)
             continue
         place(chosen, text)
@@ -455,7 +525,8 @@ def fit_pool_beats(
     else:
         head, tail = sentences, []
         head_d, tail_d = durs, []
-    shots = assign_shots(head, assets, geography=geography, flux_max=flux_max)
+    state = _ShotState.fresh()
+    shots = assign_shots(head, assets, geography=geography, flux_max=flux_max, state=state)
     merged_s: list[str] = []
     merged_d: list[float] = []
     cursor = 0
@@ -468,7 +539,10 @@ def fit_pool_beats(
     if cursor < len(head_d) and merged_d:
         merged_d[-1] += sum(head_d[cursor:])
     flux_left = max(0, int(flux_max) - sum(1 for shot in shots if shot.mode == "flux"))
-    tail_shots = assign_shots(tail, assets, geography=geography, flux_max=flux_left) if tail else []
+    tail_shots = (
+        assign_shots(tail, assets, geography=geography, flux_max=flux_left, state=state)
+        if tail else []
+    )
     tail_s: list[str] = []
     tail_out: list[float] = []
     cursor = 0
@@ -562,8 +636,8 @@ def _crop_labels(path: Path) -> None:
         logger.info("ASSET POOL label crop skipped (%s)", type(exc).__name__)
 
 
-def _credit_blurbs(cache_dir: Path) -> dict[str, str]:
-    """Title and subject from credits.json, so a cutaway is not just a filename."""
+def _credit_rows(cache_dir: Path) -> dict[str, dict[str, Any]]:
+    """credits.json rows by lower-case file name."""
     import json
 
     path = Path(cache_dir) / "credits.json"
@@ -573,27 +647,71 @@ def _credit_blurbs(cache_dir: Path) -> dict[str, str]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    blurbs: dict[str, str] = {}
+    rows: dict[str, dict[str, Any]] = {}
     for row in payload.get("photos") or []:
         if not isinstance(row, dict):
             continue
         name = str(row.get("file") or "").strip().lower()
-        if not name:
-            continue
+        if name:
+            rows[name] = row
+    return rows
+
+
+def _credit_blurbs(cache_dir: Path) -> dict[str, str]:
+    """Title and subject from credits.json, so a cutaway is not just a filename."""
+    blurbs: dict[str, str] = {}
+    for name, row in _credit_rows(cache_dir).items():
         bits = [row.get("title"), row.get("subject")]
         blurbs[name] = " ".join(str(bit) for bit in bits if bit)
     return blurbs
 
 
+def screen_pool(assets: list[PoolAsset]) -> list[PoolAsset]:
+    """Pixel checks, no model: drop slides and labelled panels, drop repeats.
+
+    Two files of one photograph (a crop, a re-upload) collapse to the first.
+    Every survivor carries its photo-or-drawing verdict for the cover rule.
+    """
+    from modules.reel_artefact import still_guard
+
+    kept: list[PoolAsset] = []
+    seen: list[Any] = []
+    for asset in assets:
+        found = still_guard.traits(asset.path)
+        if found is None:
+            kept.append(asset)
+            continue
+        if found.text_panel:
+            logger.info("ASSET POOL dropped %s (text panel)", Path(asset.path).name)
+            continue
+        twin = next((prior for prior in seen if still_guard.same_picture(found, prior)), None)
+        if twin is not None:
+            logger.info("ASSET POOL dropped %s (same photograph)", Path(asset.path).name)
+            continue
+        seen.append(found)
+        asset.photo = bool(found.photo)
+        kept.append(asset)
+    return kept
+
+
 def _seed_cache(cache_dir: Path | None, folder: Path) -> list[PoolAsset]:
-    """Curated artefact_cache files count as object photographs."""
+    """Curated artefact_cache files count as object photographs.
+
+    A credits.json row may set ``"kind": "site"`` for a context shot, or
+    ``"exclude": true`` to keep a file on disk but out of every reel.
+    """
     if cache_dir is None or not Path(cache_dir).is_dir():
         return []
+    rows = _credit_rows(Path(cache_dir))
     blurbs = _credit_blurbs(Path(cache_dir))
     seeded: list[PoolAsset] = []
     for path in sorted(Path(cache_dir).iterdir()):
         if not path.is_file() or path.suffix.lower() not in _IMAGE_SUFFIXES:
             continue
+        row = rows.get(path.name.lower()) or {}
+        if row.get("exclude"):
+            continue
+        kind = "site" if str(row.get("kind") or "").strip().lower() == "site" else "object"
         dest = folder / f"cache_{path.name}"
         if not dest.is_file():
             dest.write_bytes(path.read_bytes())
@@ -604,7 +722,7 @@ def _seed_cache(cache_dir: Path | None, folder: Path) -> list[PoolAsset]:
         seeded.append(PoolAsset(
             path=str(dest),
             caption=caption,
-            kind="object",
+            kind=kind,
             source="cache",
             key=f"cache:{path.name.lower()}",
         ))
@@ -659,6 +777,7 @@ def build_asset_pool(
                 continue
             seen_seed.add(asset.key)
             kept.append(asset)
+    kept = screen_pool(kept)
     commons: list[Any] = []
     seen: set[str] = {item.key for item in kept}
 
@@ -711,6 +830,7 @@ def build_asset_pool(
             kept.extend(_judge_candidates(
                 extra, folder, download, judge, source="openverse", limit=room,
             ))
+    kept = screen_pool(kept)
     objects = sum(1 for item in kept if item.kind == "object")
     prompts = [item for item in (object_prompts or []) if str(item).strip()] or ["the object"]
     calls = 0
@@ -1064,3 +1184,69 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("ASSET POOL skipped (%s)", type(exc).__name__)
         return []
+
+
+def unique_stills(
+    paths: list[Path],
+    pool: list[PoolAsset],
+    *,
+    flux_generate: Callable[..., Any] | None = None,
+    geography: str = "",
+    flux_max: int = FLUX_MAX,
+) -> tuple[list[Path], list[int]]:
+    """Last pass before export: one picture once per reel, a photo for a cover.
+
+    A later copy of a picture already on screen (md5 or pHash within
+    ``REEL_NEAR_DUP_BITS``) is replaced by an unused pool photograph, then a
+    Flux landscape. A cover that is a sketch or a labelled panel is replaced
+    the same way. Returns the new paths and the beats left unresolved.
+    """
+    from modules.reel_artefact import still_guard
+    from modules.reel_artefact.flux_policy import safe_flux_prompt
+
+    out = [Path(item) for item in paths]
+    if not out:
+        return out, []
+    flux_left = [max(0, int(flux_max))]
+
+    def fresh_for(index: int, used: list[Any]) -> Path | None:
+        target = out[index].with_name(f"{out[index].stem}_unique{out[index].suffix or '.jpg'}")
+        for asset in sorted(pool, key=lambda a: 0 if is_photo(a) else 1):
+            if index == 0 and not is_photo(asset):
+                continue
+            found = still_guard.traits(asset.path)
+            if found is None or found.text_panel:
+                continue
+            if any(still_guard.same_picture(found, other) for other in used):
+                continue
+            written = write_asset_crop(asset.path, target, "center")
+            crop = still_guard.traits(written)
+            if crop is not None and not any(still_guard.same_picture(crop, o) for o in used):
+                _write_pool_source(written, asset, provider="asset")
+                return written
+        if flux_generate is not None and flux_left[0] > 0 and index > 0:
+            flux_left[0] -= 1
+            shot = ShotAssignment(
+                sentence="",
+                mode="flux",
+                prompt=safe_flux_prompt("", geography=geography, scene="landscape"),
+            )
+            try:
+                written = _call_flux(flux_generate, shot.prompt, target)
+            except Exception as exc:  # noqa: BLE001
+                logger.info("REPEAT GUARD | flux failed (%s)", type(exc).__name__)
+                return None
+            return written if Path(written).is_file() else None
+        return None
+
+    cover = still_guard.traits(out[0])
+    if cover is not None and (cover.text_panel or not cover.photo):
+        others = [still_guard.traits(item) for item in out[1:]]
+        swap = fresh_for(0, [item for item in others if item is not None])
+        if swap is not None:
+            logger.info("COVER GUARD | cover was not a photograph; replaced (%s)", swap.name)
+            out[0] = swap
+        else:
+            logger.warning("COVER GUARD | no unused photograph for the cover")
+    return still_guard.enforce_unique(out, fresh_for)
+
