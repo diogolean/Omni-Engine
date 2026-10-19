@@ -216,3 +216,20 @@ def test_scene_library_reuses_an_approved_scene_after_the_cooldown(
     assert hit is not None and hit.is_file()
     assert lib.find("ancient_knowledge", scene_type="sky", geography="Aegean coast Greece",
                     prompt="Aegean sea at dawn") is None
+
+
+def test_subscription_voice_is_logged_but_not_capped(monkeypatch) -> None:
+    from core import spend_ledger
+
+    spend_ledger.reset_all()
+    monkeypatch.setenv("REEL_REEL_BUDGET_USD", "0.05")
+    spend_ledger.record_informational(
+        provider="elevenlabs", model="eleven_multilingual_v2", characters=990, plan="pro",
+    )
+    assert spend_ledger.reel_total() == 0.0
+    spend_ledger.preflight(0.049, provider="deepinfra", model="x")
+    info = spend_ledger.summary()["informational"]
+    assert info["characters"] == 990
+    assert "elevenlabs:eleven_multilingual_v2" in info["by_model"]
+    assert info["by_model"]["elevenlabs:eleven_multilingual_v2"]["cost_usd"] == 0.0
+    spend_ledger.reset_all()
