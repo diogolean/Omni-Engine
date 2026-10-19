@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -973,15 +974,21 @@ def place_assignment(
                     "relevance_score": 0.9,
                 }],
             )
-    chosen = _asset_by_key(pool, assignment.asset_key) or best_asset(assignment.sentence, pool)
-    if chosen is None and pool:
-        chosen = pool[beat_index % len(pool)]
+    chosen = _asset_by_key(pool, assignment.asset_key)
+    if chosen is not None:
+        claim_key(chosen.key)
+    else:
+        chosen = _unused_asset(assignment.sentence, pool)
     if chosen is None:
+        if pool:
+            logger.warning(
+                "ASSET POOL | beat %d fallback found no unused photograph", int(beat_index) + 1,
+            )
         return StillGateResult(
             path=None,
             extra_generations=0,
             publishable=False,
-            blocked_reason="empty_pool",
+            blocked_reason="pool_exhausted" if pool else "empty_pool",
         )
     anchor = assignment.anchor or pick_anchor(chosen.key, None, {})
     if assignment.mode == "flux":
@@ -1003,6 +1010,38 @@ def place_assignment(
     )
 
 
+_CLAIM_LOCK = threading.Lock()
+_PLANNED: set[str] = set()
+_CLAIMED: set[str] = set()
+
+
+def reset_claims() -> None:
+    """Forget the photographs claimed by the last reel. Call at reel start."""
+    with _CLAIM_LOCK:
+        _PLANNED.clear()
+        _CLAIMED.clear()
+
+
+def claim_key(key: str) -> None:
+    if key:
+        with _CLAIM_LOCK:
+            _CLAIMED.add(key)
+
+
+def _unused_asset(sentence: str, pool: list[PoolAsset]) -> PoolAsset | None:
+    """The best pool photograph no other beat has planned or used.
+
+    Pool jobs run in parallel, so the pick and the claim share one lock.
+    """
+    with _CLAIM_LOCK:
+        taken = _PLANNED | _CLAIMED
+        free = [asset for asset in pool if asset.key not in taken]
+        chosen = best_asset(sentence, free)
+        if chosen is not None:
+            _CLAIMED.add(chosen.key)
+        return chosen
+
+
 def make_pool_job(
     assignment: ShotAssignment,
     dest: Path | str,
@@ -1014,6 +1053,9 @@ def make_pool_job(
 ) -> Callable[[], Any]:
     import functools
 
+    if assignment.asset_key:
+        with _CLAIM_LOCK:
+            _PLANNED.add(assignment.asset_key)
     return functools.partial(
         place_assignment,
         assignment,
@@ -1039,7 +1081,12 @@ def _write_pool_source(path: Path, asset: PoolAsset, *, provider: str) -> None:
         billed = "commons"
     else:
         billed = source or "commons"
-    write_source_sidecar(path, {"provider": billed, "model_id": "", "source": source})
+    write_source_sidecar(path, {
+        "provider": billed,
+        "model_id": "",
+        "source": source,
+        "pool_key": asset.key,
+    })
 
 
 def _asset_by_key(pool: list[PoolAsset], key: str) -> PoolAsset | None:
@@ -1196,8 +1243,9 @@ def unique_stills(
 ) -> tuple[list[Path], list[int]]:
     """Last pass before export: one picture once per reel, a photo for a cover.
 
-    A later copy of a picture already on screen (md5 or pHash within
-    ``REEL_NEAR_DUP_BITS``) is replaced by an unused pool photograph, then a
+    A later copy of a picture already on screen (md5, pHash within
+    ``REEL_NEAR_DUP_BITS``, the same padded-or-cropped core, an ORB crop
+    match, or the same pool key) is replaced by an unused pool photograph, then a
     Flux landscape. A cover that is a sketch or a labelled panel is replaced
     the same way. Returns the new paths and the beats left unresolved.
     """
@@ -1214,15 +1262,16 @@ def unique_stills(
         for asset in sorted(pool, key=lambda a: 0 if is_photo(a) else 1):
             if index == 0 and not is_photo(asset):
                 continue
-            found = still_guard.traits(asset.path)
+            found = still_guard.with_source_key(still_guard.traits(asset.path), asset.key)
             if found is None or found.text_panel:
                 continue
             if any(still_guard.same_picture(found, other) for other in used):
                 continue
             written = write_asset_crop(asset.path, target, "center")
+            _write_pool_source(written, asset, provider="asset")
             crop = still_guard.traits(written)
             if crop is not None and not any(still_guard.same_picture(crop, o) for o in used):
-                _write_pool_source(written, asset, provider="asset")
+                claim_key(asset.key)
                 return written
         if flux_generate is not None and flux_left[0] > 0 and index > 0:
             flux_left[0] -= 1

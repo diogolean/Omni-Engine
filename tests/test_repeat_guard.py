@@ -16,7 +16,14 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from modules.reel_artefact import still_guard
+from modules.reel_artefact import asset_pool, still_guard
+from modules.reel_artefact.asset_pool import (
+    PoolAsset,
+    ShotAssignment,
+    make_pool_job,
+    unique_stills,
+    write_asset_crop,
+)
 from modules.reel_artefact.crop import _blur_fill, prepare_reel_frame
 
 S23B_A_SOURCES = [(1280, 1687), (1280, 850), (3264, 2448), (2736, 3648)]
@@ -104,3 +111,67 @@ def test_different_photographs_stay_different(tmp_path: Path) -> None:
         paths.append(_save(frame, tmp_path / f"p{seed}.jpg"))
         paths.append(_save(_blur_fill(_photo(size, seed=2000 + seed)), tmp_path / f"q{seed}.jpg"))
     assert still_guard.repeats(paths) == []
+
+
+def test_two_windows_of_one_pool_photo_share_the_pool_key(tmp_path: Path) -> None:
+    """s23b B #5/#9: two windows of the 960x700 Ctesiphon photo barely overlap."""
+    source = _save(_photo((960, 700), seed=1932), tmp_path / "pool" / "cache_04.jpg")
+    asset = PoolAsset(
+        path=str(source), caption="ctesiphon 1932", kind="site",
+        source="cache", key="cache:04_ctesiphon_1932.jpg",
+    )
+    left = write_asset_crop(source, tmp_path / "act06.jpg", "center")
+    right = write_asset_crop(source, tmp_path / "act10.jpg", "left")
+    asset_pool._write_pool_source(left, asset, provider="asset")
+    asset_pool._write_pool_source(right, asset, provider="fallback")
+    first = still_guard.traits(left)
+    second = still_guard.traits(right)
+    assert first.source_key == second.source_key == "cache:04_ctesiphon_1932.jpg"
+    assert still_guard.same_picture(first, second)
+
+
+def _pool(tmp_path: Path, count: int) -> list[PoolAsset]:
+    assets = []
+    for index in range(count):
+        path = _save(_photo((960, 700), seed=300 + index), tmp_path / "pool" / f"site_{index}.jpg")
+        assets.append(PoolAsset(
+            path=str(path), caption=f"ctesiphon view {index}", kind="site",
+            source="cache", key=f"cache:site_{index}.jpg",
+        ))
+    return assets
+
+
+def test_flux_fallback_never_reuses_a_planned_or_used_photo(tmp_path: Path) -> None:
+    """The tail beat's Flux failed and the fallback picked a photo already on screen."""
+    pool = _pool(tmp_path, 3)
+    planned = ShotAssignment(sentence="ctesiphon view", mode="asset", asset_key=pool[0].key)
+    sky = ShotAssignment(sentence="ctesiphon view at dusk", mode="flux", prompt="sky")
+
+    def _failed_flux(prompt, output_stem=None, output_directory=None, **_kwargs):
+        return None
+
+    first = make_pool_job(planned, tmp_path / "act01.jpg", pool, None, "", 0)
+    second = make_pool_job(sky, tmp_path / "act02.jpg", pool, _failed_flux, "", 1)
+    third = make_pool_job(sky, tmp_path / "act03.jpg", pool, _failed_flux, "", 2)
+    fourth = make_pool_job(sky, tmp_path / "act04.jpg", pool, _failed_flux, "", 3)
+    results = [job() for job in (second, first, third, fourth)]
+    keys = [
+        still_guard.source_key_for(result.path) for result in results if result.publishable
+    ]
+    assert len(keys) == len(set(keys)) == 3
+    assert results[-1].publishable is False
+    assert results[-1].blocked_reason == "pool_exhausted"
+
+
+def test_unique_stills_replaces_a_second_window_with_an_unused_photo(tmp_path: Path) -> None:
+    pool = _pool(tmp_path, 3)
+    first = write_asset_crop(pool[0].path, tmp_path / "act01.jpg", "center")
+    asset_pool._write_pool_source(first, pool[0], provider="asset")
+    second = write_asset_crop(pool[1].path, tmp_path / "act02.jpg", "center")
+    asset_pool._write_pool_source(second, pool[1], provider="asset")
+    again = write_asset_crop(pool[0].path, tmp_path / "act03.jpg", "left")
+    asset_pool._write_pool_source(again, pool[0], provider="fallback")
+    out, stuck = unique_stills([first, second, again], pool)
+    assert stuck == []
+    assert out[2] != again
+    assert still_guard.source_key_for(out[2]) == pool[2].key

@@ -1233,8 +1233,10 @@ def _produce_variant_worker(
         from modules.reel_artefact.checkpoint import mark_tts_resumed as _mark_tts
         from modules.reel_artefact.diversity import reset_diversity as _reset_diverse
         from modules.reel_artefact.logbook import reset as _reset_sources
+        from modules.reel_artefact.asset_pool import reset_claims as _reset_claims
         from modules.reel_artefact.reuse import reset_approved as _reset_approved
 
+        _reset_claims()
         _reset_nano()
         _reset_spend()
         _reset_uses()
