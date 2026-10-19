@@ -19,7 +19,7 @@ The job name on pull requests stays `lint and tests` (`.github/workflows/validat
 - `./channels_config` at `channels_env/` inside the container, beside the image's channel package
 - `./state/ancient_knowledge/store` onto `channels_config/ancient_knowledge/store`
 
-That last mount is the Ancient Knowledge store only. Aiwake's committed store stays in the image. The worker entry is `python -m omni.worker`, a shim over `core.worker`; PR-O3 switches compose and the Dockerfile to `python -m core.worker`. The `$OUTPUT_PATH/_omni` ledger and the `OMNI_*` env names do not change.
+That last mount is the Ancient Knowledge store only. Aiwake's committed store stays in the image. The worker entry is `python -m core.worker` (compose and the Dockerfile). `python -m omni.worker` still works as a shim until PR-O4. The `$OUTPUT_PATH/_omni` ledger and the `OMNI_*` env names do not change.
 
 The scheduler is Compose profile `scheduler`. Deploy does not start it unless `SCHEDULER_ENABLED=1`. Supermemory is profile `memory` and is also not started by deploy.
 
@@ -34,7 +34,7 @@ Dry-run one Pinterest wake. No Pinterest call, no ledger write:
 
 ```bash
 docker compose --profile scheduler run --rm --no-deps scheduler \
-  python -m omni.worker --role scheduler --once --dry-run
+  python -m core.worker --role scheduler --once --dry-run
 ```
 
 Cards land in `outputs/pinterest/dryrun/`. One wake posts `PINTEREST_PINS_PER_RUN` image pins (default 1) for each ready account in `config/pinterest_accounts.yaml`.
