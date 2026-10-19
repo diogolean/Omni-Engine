@@ -1,24 +1,6 @@
-"""Pick the publisher for a platform name."""
+"""Temporary shim: moved to ``core.publishing.registry``. Removed in PR-O4."""
+import sys as _sys
 
-from __future__ import annotations
+import core.publishing.registry as _mod
 
-from omni.publisher import Publisher
-
-
-def publisher_for(platform: str, **kwargs) -> Publisher:
-    name = platform.strip().lower()
-    if name == "pinterest":
-        from omni.adapters.pinterest import PinterestAccountPublisher
-
-        return PinterestAccountPublisher(**kwargs)
-    if name == "youtube":
-        from omni.adapters.youtube import YouTubeAccountPublisher
-
-        return YouTubeAccountPublisher(**kwargs)
-    if name == "facebook":
-        raise NotImplementedError(
-            "Facebook stays on the Playwright / Post Planner path "
-            "(agents/posting/facebook_scheduler). brandings.yaml can mark it "
-            "active later; there is no API publisher yet."
-        )
-    raise KeyError(f"No publisher registered for platform {platform!r}")
+_sys.modules[__name__] = _mod

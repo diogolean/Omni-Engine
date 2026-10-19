@@ -1,12 +1,9 @@
-"""Omni-Engine publishing package.
-
-Gradual home for a shared publisher interface. Existing CLIs
-(``agents/posting/pinterest_main.py``, ``main.py``) keep their current
-behavior; new callers go through :class:`omni.publisher.Publisher`.
+"""Temporary shim package: code moved to ``core.publishing``, ``core.worker`` and
+``modules.accounts``. Removed in PR-O4.
 """
 
-from omni.models import Account, Content, PublishResult
-from omni.publisher import Publisher, TransientPublishError
+from core.publishing.models import Account, Content, PublishResult
+from core.publishing.publisher import Publisher, TransientPublishError
 
 __all__ = [
     "Account",

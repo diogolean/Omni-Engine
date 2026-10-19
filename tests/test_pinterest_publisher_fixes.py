@@ -21,7 +21,7 @@ from agents.posting.pinterest_engine.inventory import (
     reset_ai_circuit,
 )
 from agents.posting.pinterest_engine.publisher import _pin_link
-from omni.pinterest_drip import publish_account
+from core.publishing.pinterest_drip import publish_account
 from tests.test_pinterest_vm import (
     FakeS3,
     _ancient,
@@ -395,7 +395,7 @@ def test_hook_stays_short_and_off_the_upper_focal_band(tmp_path: Path) -> None:
 def test_worker_dry_run_one_account_does_not_start_the_scheduler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omni.worker import main
+    from core.worker import main
 
     seen: dict = {}
 
@@ -408,9 +408,9 @@ def test_worker_dry_run_one_account_does_not_start_the_scheduler(
     def boom(*_args, **_kwargs):
         raise AssertionError("scheduler must not start")
 
-    monkeypatch.setattr("omni.worker.run_pinterest_drip", drip)
-    monkeypatch.setattr("omni.worker.run_scheduler", boom)
-    monkeypatch.setattr("omni.worker.run_engine", boom)
+    monkeypatch.setattr("core.worker.run_pinterest_drip", drip)
+    monkeypatch.setattr("core.worker.run_scheduler", boom)
+    monkeypatch.setattr("core.worker.run_engine", boom)
     main(["--role", "engine", "--dry-run", "--account", "ancient_knowledge", "--pins", "5"])
     assert seen == {"id": "ancient_knowledge", "pins": 5, "dry_run": True}
 

@@ -11,16 +11,16 @@ from pathlib import Path
 import pytest
 import requests
 
-from omni.adapters.pinterest import PinterestAccountPublisher
-from omni.adapters.youtube import YouTubeAccountPublisher
-from omni.config import load_brandings
-from omni.models import Account, Content
-from omni.publisher import (
+from core.publishing.adapters.pinterest import PinterestAccountPublisher
+from core.publishing.adapters.youtube import YouTubeAccountPublisher
+from core.publishing.brandings import load_brandings
+from core.publishing.models import Account, Content
+from core.publishing.publisher import (
     FileIdempotencyStore,
     MemoryIdempotencyStore,
     PostJsonPublisher,
 )
-from omni.registry import publisher_for
+from core.publishing.registry import publisher_for
 
 
 class _Response:
