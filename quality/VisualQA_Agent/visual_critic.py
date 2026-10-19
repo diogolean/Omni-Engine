@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import re
 from pathlib import Path
 from typing import Any, Sequence
@@ -893,6 +894,75 @@ def _apply_hard_cap(verdict: CriticVerdict, hard_cap: float) -> CriticVerdict:
     return verdict
 
 
+CHEAP_CRITIC_MAX_REFS: int = 2
+
+
+def critic_provider() -> str:
+    """``cheap`` (default, OpenRouter vision chain) or ``gemini`` (opt-in)."""
+    raw = (os.getenv("VISUALQA_CRITIC_PROVIDER") or "cheap").strip().lower()
+    return "gemini" if raw == "gemini" else "cheap"
+
+
+def _cheap_critic_verdict(
+    contents: Sequence[Any],
+    generated_image: Path | str | bytes,
+    refs: Sequence[Path],
+    *,
+    candidate_label: str,
+    channel_name: str,
+) -> "CriticVerdict":
+    """Judge with the cheap vision chain and parse the same CriticVerdict JSON.
+
+    Only the candidate and the first ``CHEAP_CRITIC_MAX_REFS`` style refs are
+    sent (edge/torso crops are Gemini-only), which keeps one call near
+    $0.0001. Raises when no cheap backend is configured; callers that soft-fail
+    keep their local checks.
+    """
+    import tempfile
+
+    from agents.media.providers.visual_eval import resolve_visual_eval_provider
+
+    backend = resolve_visual_eval_provider(provider="openrouter")
+    if backend is None:
+        raise RuntimeError("cheap critic unavailable: OPENROUTER_API_KEY missing")
+    text_parts = [c for c in contents if isinstance(c, str)]
+    schema = json.dumps(CriticVerdict.model_json_schema().get("properties", {}))
+    prompt = (
+        "\n".join(text_parts)
+        + "\n\nReply with ONE JSON object only, keys: " + schema
+    )
+    tmp: Path | None = None
+    if isinstance(generated_image, (bytes, bytearray)):
+        fd, name = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        tmp = Path(name)
+        tmp.write_bytes(bytes(generated_image))
+        candidate = tmp
+    else:
+        candidate = Path(generated_image)
+    images = [candidate, *list(refs)[:CHEAP_CRITIC_MAX_REFS]]
+    labels = ["IMAGE 1 — CANDIDATE"] + [
+        f"REFERENCE STYLE IMAGE {i}" for i in range(1, len(images))
+    ]
+    _console.print(
+        f"[cyan]CRITIC[/cyan] cheap vision | candidate={candidate_label} | "
+        f"refs={len(images) - 1} | channel={channel_name} | "
+        f"backend={getattr(backend, 'name', 'openrouter')}"
+    )
+    try:
+        result = backend.evaluate(prompt, images, labels=labels)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+    _LOG.info("CRITIC | cheap model=%s provider=%s", result.model_id, result.provider)
+    from modules.reel_visual_qa import _strip_json
+
+    data = _strip_json(result.text)
+    data.setdefault("passed", False)
+    data.setdefault("score", 0.0)
+    return CriticVerdict.model_validate(data)
+
+
 def evaluate_image(
     generated_image: Path | str | bytes,
     *,
@@ -909,7 +979,11 @@ def evaluate_image(
     licensed_objects: Sequence[str] | None = None,
 ) -> CriticVerdict:
     """
-    Judge a generated image with Gemini Vision against ALL style refs + rules.
+    Judge a generated image against the style refs + channel rules.
+
+    The judge is the cheap vision chain by default (OpenRouter Gemma 3 12B,
+    then Qwen / GLM, see ``agents.media.providers.visual_eval``), never Gemini.
+    ``VISUALQA_CRITIC_PROVIDER=gemini`` opts back into Gemini Vision.
 
     If ``config.VISUAL_QA_ENABLED`` is falsy, the API call is bypassed entirely
     and a mock PASS verdict is returned so every downstream pipeline (orchestrator,
@@ -938,11 +1012,6 @@ def evaluate_image(
         )
         _LOG.info("CRITIC | bypassed (VISUAL_QA_ENABLED=false) channel=%s", channel_name)
         return bypass
-
-    if not config.GEMINI_API_KEY:
-        raise RuntimeError(
-            "GEMINI_API_KEY missing — set env or factory .env before critic runs."
-        )
 
     threshold = (
         float(quality_threshold)
@@ -1032,52 +1101,62 @@ def evaluate_image(
         )
     )
 
-    from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
-
-    client = make_guarded_gemini_client(config.GEMINI_API_KEY)
-    model_id = config.GEMINI_CRITIC_MODEL
-    if not model_id.startswith("models/"):
-        model_id = f"models/{model_id}"
-
-    _console.print(
-        f"[cyan]CRITIC[/cyan] Gemini Vision | candidate={candidate_label} | "
-        f"refs={len(refs)} (ALL loaded) | channel={channel_name} | model={model_id}"
-        + (" | profile=lofi_economic" if is_lofi else "")
-        + (" | profile=ancient_mystery" if is_ancient else "")
-        + (f" | subject={requested_subject}" if requested_subject else "")
-        + (f" | object={requested_object}" if requested_object else "")
-    )
-
-    response = guarded_generate_content(
-        client,
-        model=model_id,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=CriticVerdict,
-            temperature=0.15,
-        ),
-        source="visual_critic.evaluate_image",
-    )
-
-    parsed = getattr(response, "parsed", None)
-    if isinstance(parsed, CriticVerdict):
-        verdict = parsed
-    elif parsed is not None and hasattr(parsed, "model_dump"):
-        verdict = CriticVerdict.model_validate(parsed.model_dump())
+    if critic_provider() != "gemini":
+        verdict = _cheap_critic_verdict(
+            contents, generated_image, refs, candidate_label=candidate_label,
+            channel_name=channel_name,
+        )
     else:
-        text = (getattr(response, "text", None) or "").strip()
-        if not text:
-            raise RuntimeError("Gemini critic returned empty response")
-        # Tolerate fenced JSON
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:].lstrip()
-        try:
-            verdict = CriticVerdict.model_validate_json(text)
-        except Exception:
-            verdict = CriticVerdict.model_validate(json.loads(text))
+        if not config.GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY missing — VISUALQA_CRITIC_PROVIDER=gemini needs it."
+            )
+        from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
+
+        client = make_guarded_gemini_client(config.GEMINI_API_KEY)
+        model_id = config.GEMINI_CRITIC_MODEL
+        if not model_id.startswith("models/"):
+            model_id = f"models/{model_id}"
+
+        _console.print(
+            f"[cyan]CRITIC[/cyan] Gemini Vision | candidate={candidate_label} | "
+            f"refs={len(refs)} (ALL loaded) | channel={channel_name} | model={model_id}"
+            + (" | profile=lofi_economic" if is_lofi else "")
+            + (" | profile=ancient_mystery" if is_ancient else "")
+            + (f" | subject={requested_subject}" if requested_subject else "")
+            + (f" | object={requested_object}" if requested_object else "")
+        )
+
+        response = guarded_generate_content(
+            client,
+            model=model_id,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=CriticVerdict,
+                temperature=0.15,
+            ),
+            source="visual_critic.evaluate_image",
+        )
+
+        parsed = getattr(response, "parsed", None)
+        if isinstance(parsed, CriticVerdict):
+            verdict = parsed
+        elif parsed is not None and hasattr(parsed, "model_dump"):
+            verdict = CriticVerdict.model_validate(parsed.model_dump())
+        else:
+            text = (getattr(response, "text", None) or "").strip()
+            if not text:
+                raise RuntimeError("Gemini critic returned empty response")
+            # Tolerate fenced JSON
+            if text.startswith("```"):
+                text = text.strip("`")
+                if text.lower().startswith("json"):
+                    text = text[4:].lstrip()
+            try:
+                verdict = CriticVerdict.model_validate_json(text)
+            except Exception:
+                verdict = CriticVerdict.model_validate(json.loads(text))
 
     if not is_lofi and not is_ancient:
         verdict = _apply_hard_cap(verdict, hard_cap)

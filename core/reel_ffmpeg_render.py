@@ -360,6 +360,7 @@ def _run(cmd: list[str]) -> None:
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, check=False, timeout=_ffmpeg_timeout_s(),
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"ffmpeg timed out after {exc.timeout:.0f}s") from exc
@@ -756,6 +757,10 @@ def compile_ffmpeg_reel(
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
             "-shortest",
+            # Every stem is apad-ed or looped, so the mix never ends on its own.
+            # ffmpeg 7.1 on Windows ignores -shortest against a copied video
+            # stream and runs forever; -t pins the output to the video length.
+            "-t", f"{total:.3f}",
             str(out),
         ]
         _run(cmd)

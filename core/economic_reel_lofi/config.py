@@ -540,8 +540,12 @@ LOFI_DEV_IMAGE_MODEL: str = _ACTIVE_STYLE.model
 LOFI_DEV_IMAGE_STEPS: int = int(_ACTIVE_STYLE.steps)
 LOFI_DEV_GUIDANCE_SCALE: float = float(_ACTIVE_STYLE.guidance_scale)
 DEFAULT_VISUAL_IDENTITY_PROFILE: str = _ACTIVE_STYLE.profile_name
-# FLUX.1-dev is the production default. flux2-dev remains an explicit override.
-LOFI_FLUX_BACKEND: str = str(os.environ.get("LOFI_FLUX_BACKEND") or "dev").strip()
+# FLUX.1-schnell is the production default: it is the only generator the
+# near-zero cost rule allows (about $0.0018 per 720x1280 still at 4 steps).
+# ``LOFI_FLUX_BACKEND=dev`` / ``flux2-dev`` stay explicit, opt-in overrides.
+LOFI_FLUX_BACKEND: str = str(os.environ.get("LOFI_FLUX_BACKEND") or "schnell").strip()
+LOFI_SCHNELL_IMAGE_MODEL: str = "black-forest-labs/FLUX.1-schnell"
+LOFI_SCHNELL_IMAGE_STEPS: int = int(os.environ.get("LOFI_SCHNELL_STEPS") or 4)
 LOFI_FLUX2_DEV_MODEL: str = "black-forest-labs/FLUX.2-dev"
 LOFI_FLUX2_DEV_STEPS: int = 24
 LOFI_FLUX2_DEV_GUIDANCE_SCALE: float = 5.5
@@ -549,7 +553,7 @@ LOFI_FLUX2_DEV_GUIDANCE_SCALE: float = 5.5
 
 def flux_backend() -> str:
     return str(
-        os.environ.get("LOFI_FLUX_BACKEND") or LOFI_FLUX_BACKEND or "dev"
+        os.environ.get("LOFI_FLUX_BACKEND") or LOFI_FLUX_BACKEND or "schnell"
     ).strip().lower()
 
 
@@ -745,7 +749,7 @@ def lofi_image_cost_per_call_usd(
                 "billed DeepInfra FLUX-1-dev formula."
             ),
         }
-    steps = int(schnell_steps or 4)
+    steps = int(schnell_steps or LOFI_SCHNELL_IMAGE_STEPS)
     usd = estimate_deepinfra_schnell_cost_usd(width, height, steps)
     return usd, {
         "backend": "schnell",

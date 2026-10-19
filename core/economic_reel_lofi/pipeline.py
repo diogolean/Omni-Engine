@@ -2891,7 +2891,7 @@ def _generate_validated_script(
             draft = write_draft(
                 brief,
                 attempt=1,
-                provider="gemini38",
+                provider="lofi_writer",
                 reference_seed=None,
             )
         except Exception as exc:  # valid JSON/schema failure; never retry in fast mode
