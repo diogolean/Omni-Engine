@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from utils.pipeline_paths import WINDOWS_FFMPEG_FALLBACK, ffmpeg_binary_override
+from utils.ffmpeg import resolve_ffmpeg as _resolve_ffmpeg
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 SIGNED_SUFFIX = "_signed"
@@ -51,31 +51,8 @@ _DEFAULT_OPTIONS: dict[str, Any] = {
 }
 
 
-def resolve_ffmpeg() -> str:
-    """Return an ffmpeg executable path (FFMPEG_BINARY, PATH, imageio_ffmpeg, or common installs)."""
-    override = ffmpeg_binary_override()
-    if override is not None:
-        return str(override)
-    ff = shutil.which("ffmpeg")
-    if ff:
-        return ff
-    try:
-        import imageio_ffmpeg  # type: ignore
-
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and Path(exe).is_file():
-            return str(exe)
-    except Exception:  # noqa: BLE001
-        pass
-    for cand in (
-        Path.home() / "AppData/Local/Programs/Stremio/ffmpeg.exe",
-        WINDOWS_FFMPEG_FALLBACK,
-    ):
-        if cand.is_file():
-            return str(cand)
-    raise RuntimeError(
-        "ffmpeg not found on PATH, imageio_ffmpeg, or common install paths."
-    )
+# Kept as a public name: core.animator.renderer and tests import it from here.
+resolve_ffmpeg = _resolve_ffmpeg
 
 
 def resolve_processes_dir(source_dir: str | Path) -> Path:
