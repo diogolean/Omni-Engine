@@ -275,20 +275,33 @@ Every PR follows the same rules: `git mv` plus a `sys.modules` shim at the old p
 |---|---|---|
 | M0 | This ADR | — |
 | M1 | import-linter contracts in CI, in report-only mode | makes the target measurable before moving anything |
+| M1b | **High priority (performance).** The scheduler resumes from the last publish in the ledger (`next = last_published_at + cadence`) instead of a fixed 7–9h initial delay on startup | Every deploy restarts the scheduler and resets that delay. Until M1b ships, merge in batches per deploy window. |
 | M2 | `shared/` with env, paths, logging, ffmpeg, mime, retry; re-target the content of #35/#37/#38/#41/#42 | old `utils.*` become shims |
 | M3 | `shared/storage`, `shared/contracts`, `shared/memory` | B2/Drive/durable store |
 | M4 | `distribution/publishers` (base, registry, api, browser, export) | omni/adapters + agents/posting publishers |
-| M5 | `distribution/accounts` + `distribution/scheduling` (ledger, drip, cadence, queue) | ledger path pinned by test |
-| M6 | `distribution/workers` (runtime + jobs); `omni.worker` becomes a shim | entrypoint unchanged |
-| M7 | **Entrypoint switch** to `python -m distribution.workers` | scheduler stopped, Automação & Nuvem VM check, ledger row count checked, next pin confirmed |
+| M5 | `distribution/accounts` + `distribution/scheduling` (ledger, drip, cadence, queue) | ledger path pinned by test. Adds a per-channel file lock now at `$OUTPUT_PATH/_omni/locks/<canal>.lock`, even with 1 replica: a manual CLI run or `publish_existing` running alongside the scheduler can duplicate pins. A Postgres/B2 lease replaces it later. |
+| M6 | `distribution/workers` (runtime + jobs); `omni.worker` becomes a shim | entrypoint unchanged. Every publishing path (scheduler, CLI, `publish_existing`) takes the `<canal>.lock` from M5 before reading or writing the ledger. |
+| M7 | **Entrypoint switch** to `python -m distribution.workers` | Only the compose `command:` changes. Service names (`engine`, `scheduler`), profiles, bind mounts (`state/`, `channels_env/`, outputs) and the healthcheck stay the same. VM procedure below. |
 | M8 | `production/` moves in 3 PRs: providers+cost → qa+media → pipeline+formats+writers+library | `config.py` split last |
 | M9 | `animation/` extraction with `animation.api`; remove the 5 engine→Aiwake couplings | contract: animation imports only shared |
 | M10 | `products/aiwake/` move | Aiwake tests and import smoke in their own CI job |
 | M11 | `channels/` (data) and persona loader unification | per-channel byte-identical prompts test |
-| M12 | `deploy/` tree + `deploy.yml` path update | needs workflow permission, VM check |
+| M12 | `deploy/` tree + `deploy.yml` path update | Also updates the scp paths in `deploy.yml`, moves `.github/scripts/remote-deploy.sh` to `deploy/vm/remote-deploy.sh` (the workflow calls it from there) and covers `backup_supermemory.sh`. On the VM, compose stays at `/opt/omni-engine/docker-compose.yml`. Needs a cloud agent with `workflow` scope, plus a VM check. |
 | M13 | `scripts/` → `tools/`; `portfolio_showcase` decision | — |
 | M14 | Remove all shims after 1–2 clean scheduler cycles; import-linter becomes blocking | — |
 | M15 | README rewrite (outline below) | — |
+
+#### M7 VM procedure (run by Automação & Nuvem)
+
+1. Back up `$OUTPUT_PATH/_omni/publish_ledger.json` and record its row count.
+2. Set `SCHEDULER_ENABLED=0`.
+3. Merge and deploy.
+4. Inside the container, run `python -m distribution.workers --role scheduler --once --dry-run`.
+5. Confirm the ledger path is unchanged and the row count matches step 1.
+6. Set `SCHEDULER_ENABLED=1` and restart.
+7. Confirm the next pin is published once and only once.
+
+Rollback: redeploy the previous image tag and restore the ledger backup from step 1.
 
 #36 (dead files) is independent and can merge any time. #43–#46 (omni → core/modules) are superseded by M4–M7 and should be closed.
 
