@@ -30,9 +30,11 @@ if str(_ENGINE_ROOT) not in sys.path:
 
 from utils.gemini_usage import (
     GeminiUsage,
+    extract_json_object,
     extract_usage,
     hush_gemini_sdk_logs,
     log_usage,
+    response_text,
     unwrap_json_object,
 )
 from utils.ocr_text import strip_wrapping_quotes
@@ -59,10 +61,6 @@ FACTORY_ROOT: Path = _ASSETS_ROOT.parent
 DEFAULT_VAULT: Path = _ASSETS_ROOT / "ocr_vault.json"
 DEFAULT_OUTPUT_NAME: str = "ocr_vault_original.json"
 
-_FENCE_RE = re.compile(
-    r"^```(?:[a-zA-Z0-9_-]+)?\r?\n(.*)\r?\n```\s*$",
-    re.DOTALL,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -120,36 +118,14 @@ def word_change_ratio(original: str, rewritten: str) -> float:
     return missing / len(source)
 
 
-def _extract_json_object(raw: str) -> str:
-    text = (raw or "").strip()
-    fenced = _FENCE_RE.match(text)
-    if fenced:
-        text = fenced.group(1).strip()
-    if text.startswith("{") and text.endswith("}"):
-        return text
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        return text[start : end + 1]
-    raise json.JSONDecodeError("No JSON object in model response", text, 0)
+_extract_json_object = extract_json_object
 
 
 def _unwrap_json(raw: str) -> Any:
     return json.loads(_extract_json_object(raw))
 
 
-def _response_text(response: Any) -> str:
-    direct = (getattr(response, "text", None) or "").strip()
-    if direct:
-        return direct
-    chunks: list[str] = []
-    for candidate in getattr(response, "candidates", None) or []:
-        content = getattr(candidate, "content", None)
-        for part in getattr(content, "parts", None) or []:
-            piece = getattr(part, "text", None)
-            if piece and not getattr(part, "thought", False):
-                chunks.append(str(piece))
-    return "\n".join(chunks).strip()
+_response_text = response_text
 
 
 def _paraphrase_all(client: Any, types: Any, items: Mapping[str, str]) -> tuple[dict[str, str], GeminiUsage]:

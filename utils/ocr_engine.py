@@ -41,6 +41,7 @@ from utils.gemini_usage import (
     extract_usage,
     hush_gemini_sdk_logs,
     log_usage,
+    response_text,
     unwrap_json_object,
 )
 from utils.ocr_text import strip_wrapping_quotes
@@ -189,18 +190,7 @@ def _clean_ocr_text(raw: str) -> str:
     return strip_wrapping_quotes(text)
 
 
-def _response_text(response: Any) -> str:
-    direct = (getattr(response, "text", None) or "").strip()
-    if direct:
-        return direct
-    chunks: list[str] = []
-    for candidate in getattr(response, "candidates", None) or []:
-        content = getattr(candidate, "content", None)
-        for part in getattr(content, "parts", None) or []:
-            piece = getattr(part, "text", None)
-            if piece and not getattr(part, "thought", False):
-                chunks.append(str(piece))
-    return "\n".join(chunks).strip()
+_response_text = response_text
 
 
 def _map_ocr_texts(payload: Mapping[str, Any], keys: list[str]) -> dict[str, str]:

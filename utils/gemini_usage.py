@@ -102,3 +102,18 @@ def unwrap_json_object(raw: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise RuntimeError("Gemini payload must be a JSON object")
     return parsed
+
+
+def response_text(response: Any) -> str:
+    """Text of a Gemini response: ``.text``, else non-thought parts joined."""
+    direct = (getattr(response, "text", None) or "").strip()
+    if direct:
+        return direct
+    chunks: list[str] = []
+    for candidate in getattr(response, "candidates", None) or []:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            piece = getattr(part, "text", None)
+            if piece and not getattr(part, "thought", False):
+                chunks.append(str(piece))
+    return "\n".join(chunks).strip()
