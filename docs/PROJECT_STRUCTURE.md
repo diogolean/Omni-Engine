@@ -2,6 +2,8 @@
 
 The repository root holds entry points, configuration, and top-level packages. Scratch files and tests do not live beside `main.py`.
 
+The allowlist, the homes for posting, the animator, Visual QA, channel stores, and the paths that must not move are in [architecture/REPO_LAYOUT.md](architecture/REPO_LAYOUT.md). Agents follow that file and `AGENTS.md`.
+
 ## What stays at the root
 
 - Entry points and config: `main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `requirements-docker.txt`, `requirements-ci.txt`, `Dockerfile`, `docker-compose.yml`, `.gitignore`, `README.md`, `.env`.

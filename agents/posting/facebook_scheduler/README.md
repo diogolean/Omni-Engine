@@ -18,9 +18,9 @@ agents/posting/facebook_scheduler/
 ├── facebook_scheduler.py     Core Playwright engine + selector constants
 ├── main.py                   CLI entry point
 ├── record_mode.py            Playwright Codegen launcher for recording selectors
-├── screenshots/              Auto-saved screenshots on errors
-├── logs/                     Daily log files
 └── README.md
+
+Error screenshots and logs are written under `outputs/facebook_scheduler/`, not in this package.
 ```
 
 ---
@@ -182,8 +182,8 @@ python agents/posting/facebook_scheduler/main.py --url https://www.facebook.com/
 
 When any step fails:
 
-1. A full-page screenshot is saved to `agents/posting/facebook_scheduler/screenshots/`.
-2. The error is logged to `agents/posting/facebook_scheduler/logs/fb_scheduler_YYYY-MM-DD.log`.
+1. A full-page screenshot is saved under `outputs/facebook_scheduler/screenshots/` (gitignored).
+2. The error is logged under `outputs/facebook_scheduler/logs/`.
 3. The row is marked `FAILED: <reason>` in the sheet.
 4. **Execution stops immediately** — no further rows are processed.
 
