@@ -14,6 +14,7 @@ import yaml
 from omni.accounts import is_unset
 from omni.config import repo_root
 from omni.models import Account
+from utils.env import as_bool
 
 DEFAULT_ACCOUNTS_PATH = repo_root() / "config" / "pinterest_accounts.yaml"
 
@@ -93,13 +94,7 @@ def account_blockers(account: Account) -> list[str]:
 
 
 def _as_bool(value: Any, *, default: bool = True) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
+    return as_bool(value, default=default)
 
 
 def _required_str(raw: dict[str, Any], key: str, index: int) -> str:

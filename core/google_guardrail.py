@@ -34,6 +34,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+from utils.env import env_float
 import threading
 import traceback
 from dataclasses import dataclass, field
@@ -114,14 +115,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None or not str(raw).strip():
-        return default
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return default
+_env_float = env_float
 
 
 def _env_int(name: str, default: int) -> int:
