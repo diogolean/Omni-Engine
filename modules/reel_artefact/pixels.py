@@ -43,7 +43,12 @@ def image_defect(image: Image.Image, *, nbytes: int = 0) -> str:
 
 
 def _uniform_band(image: Image.Image) -> str:
-    """A white or black stripe taller than 10% of the frame."""
+    """A white or black stripe taller than 10% of the frame, on the top or bottom edge.
+
+    Padding and letterbox bars sit on an edge. A blown-out sky or a bright
+    sea in the middle of an old photograph is part of the picture, so the
+    check only looks at the two edge windows.
+    """
     gray = image.convert("L")
     _width, height = gray.size
     if height < 20:
@@ -52,8 +57,7 @@ def _uniform_band(image: Image.Image) -> str:
     small = gray.resize((columns, height), Image.Resampling.BOX)
     pixels = list(small.getdata())
     window = max(2, int(round(height * 0.10)))
-    step = max(1, window // 3)
-    for start in range(0, height - window + 1, step):
+    for start in sorted({0, height - window}):
         chunk = []
         for row in range(start, start + window):
             chunk.extend(pixels[row * columns:(row + 1) * columns])
