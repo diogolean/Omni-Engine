@@ -87,3 +87,9 @@ def test_screen_pool_keeps_one_photo_per_view(tmp_path: Path) -> None:
                                 source="cache", key=f"s{n}"))
     kept = [a.key for a in screen_pool(assets)]
     assert kept == ["s0", "s2"]
+
+
+def test_search_results_keep_pixel_only_dedupe() -> None:
+    a = PoolAsset(path="/x/a.jpg", caption="Gobekli Tepe enclosure", kind="site",
+                  source="commons", key="a")
+    assert view_key(a) == frozenset()

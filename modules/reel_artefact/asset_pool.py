@@ -728,14 +728,16 @@ def view_key(asset: PoolAsset) -> frozenset[str]:
     Two different photographs of one facade from a similar viewpoint (the
     Ctesiphon arch as 04, 05 and 07) defeat every pixel check, the ORB crop
     match included, so a site's view is also judged by its caption. Years,
-    numbers and the country do not change the view.
+    numbers and the country do not change the view. Curated cache files only.
     """
-    if asset.kind != "site":
+    if asset.kind != "site" or asset.source != "cache":
+        # Search captions are too thin ("Gobekli Tepe") to tell views apart.
         return frozenset()
-    return frozenset(
+    view = frozenset(
         token for token in _tokens(asset.caption)
         if not token.isdigit() and token not in _REGION_WORDS
     )
+    return view if len(view) >= 2 else frozenset()
 
 
 def screen_pool(assets: list[PoolAsset]) -> list[PoolAsset]:
