@@ -45,14 +45,13 @@ jobs:
           # Whole suite, including the B2, Drive, and Pinterest tests from main
           # (test_b2_budget, test_b2_direct_client_guard, test_drive_source,
           # test_upload_clips_b2_budget, test_pinterest_vm, and the omni tests).
-          # The four Ancient Knowledge deselects (visual-QA chain, both providers
-          # down, flux retry, fair-share stills) stay excluded; they come from
-          # #23 and that owner will fix them there. The other deselects failed
-          # in isolation on the base branch before this refactor.
+          # Three Ancient Knowledge deselects stay out (shot-variety page id,
+          # flux retry, fair-share stills). Their owner will fix them in a
+          # small follow-up based on this branch. The visual-QA chain tests
+          # run: the default chain is qwen-only and fails closed. The other
+          # deselects failed in isolation on the base branch before this refactor.
           pytest -q tests channels_config \
             --deselect tests/test_lofi_emotional_pipeline.py::test_gemini38_provider_uses_only_configured_primary_model \
-            --deselect tests/test_reel_visual_qa.py::test_model_chain_uses_gemini_when_qwen_missing \
-            --deselect tests/test_reel_visual_qa.py::test_both_providers_down_fail_closed \
             --deselect tests/test_shot_variety.py::test_get_image_adapter_accepts_page_id \
             --deselect tests/test_reel_object_beats_and_encode.py::test_pass_one_retry_does_not_call_flux_again \
             --deselect tests/test_reel_still_fair_share.py::test_reel_stills_through_the_main_entry \

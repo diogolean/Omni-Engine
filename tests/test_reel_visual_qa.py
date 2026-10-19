@@ -135,8 +135,38 @@ def test_a_flux_scene_that_shows_a_forbidden_object_fails(
     assert "contains_forbidden_object" in str(verdict["rejection_reason"])
 
 
-def test_model_chain_uses_gemini_when_qwen_missing(tmp_path: Path, monkeypatch) -> None:
+def _quiet_qa_env(monkeypatch) -> None:
+    """Skip the local still gate and start from the default qwen-only chain."""
+    from modules.reel_artefact.provider_health import reset_providers
+
+    monkeypatch.setenv("REEL_LOCAL_GATE", "0")
+    monkeypatch.delenv("REEL_QA_MODEL_CHAIN", raising=False)
+    reset_providers()
+
+
+def test_default_chain_fail_closes_when_qwen_unavailable(tmp_path: Path, monkeypatch) -> None:
+    """The default chain is qwen only. A missing qwen fails closed and never calls Gemini."""
     img = _png(tmp_path / "still.png")
+    _quiet_qa_env(monkeypatch)
+    called: list[str] = []
+
+    def _provider(name: str):
+        called.append(name)
+        return None
+
+    monkeypatch.setattr("modules.reel_qa.relevance._provider", _provider)
+    verdict = evaluate_chunk_relevance(img, "Bronze gears off Antikythera.", "gears")
+    assert verdict["is_relevant"] is False
+    reason = str(verdict["rejection_reason"])
+    assert "qwen_unavailable" in reason
+    assert "gemini_unavailable" not in reason
+    assert "gemini" not in called
+
+
+def test_gemini_fallback_when_model_chain_includes_it(tmp_path: Path, monkeypatch) -> None:
+    img = _png(tmp_path / "still.png")
+    _quiet_qa_env(monkeypatch)
+    monkeypatch.setenv("REEL_QA_MODEL_CHAIN", "qwen,gemini")
 
     def _provider(name: str):
         if name == "qwen":
@@ -152,13 +182,21 @@ def test_model_chain_uses_gemini_when_qwen_missing(tmp_path: Path, monkeypatch) 
 
 def test_both_providers_down_fail_closed(tmp_path: Path, monkeypatch) -> None:
     img = _png(tmp_path / "still.png")
+    _quiet_qa_env(monkeypatch)
     monkeypatch.setattr("modules.reel_qa.relevance._provider", lambda name: None)
     verdict = evaluate_chunk_relevance(img, "Divers found the dial.", "dial")
     assert verdict["is_relevant"] is False
     reason = str(verdict["rejection_reason"])
-    assert "gemini_unavailable" in reason
     assert "qwen_unavailable" in reason
-    assert reason.index("gemini") < reason.index("qwen")
+    assert "gemini_unavailable" not in reason
+
+    monkeypatch.setenv("REEL_QA_MODEL_CHAIN", "qwen,gemini")
+    fallback = evaluate_chunk_relevance(img, "Divers found the dial.", "dial")
+    assert fallback["is_relevant"] is False
+    fallback_reason = str(fallback["rejection_reason"])
+    assert "qwen_unavailable" in fallback_reason
+    assert "gemini_unavailable" in fallback_reason
+    assert fallback_reason.index("qwen") < fallback_reason.index("gemini")
 
 
 def test_retry_refines_sentence_and_entity_and_skips_placeholder(
