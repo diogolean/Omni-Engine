@@ -696,3 +696,219 @@ def test_the_documentary_prompt_names_the_topic_not_giza() -> None:
     assert "The Great Pyramid of Giza" not in prompt
     other = build_sequence_script_prompt("A topic", "history", channel_name="other")
     assert "The Great Pyramid of Giza" in other
+
+
+def _script(words: int = 50) -> str:
+    return " ".join(["The clay jar sat in the museum case."] * words)
+
+
+def test_billing_marks_gemini_dead_and_uses_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modules.reel_artefact.provider_health import (
+        complete_ak_text,
+        provider_dead,
+        reset_providers,
+    )
+
+    reset_providers()
+    sleeps: list[int] = []
+    calls = {"gemini": 0, "openrouter": 0, "deepseek": 0, "anthropic": 0}
+
+    def gemini(_prompt: str) -> str:
+        calls["gemini"] += 1
+        raise RuntimeError("402 RESOURCE_EXHAUSTED prepayment credits are depleted")
+
+    def openrouter(prompt: str) -> str:
+        calls["openrouter"] += 1
+        assert "GROUND" in prompt
+        return _script()
+
+    def deepseek(_prompt: str) -> str:
+        calls["deepseek"] += 1
+        return _script()
+
+    def anthropic(_prompt: str) -> str:
+        calls["anthropic"] += 1
+        return _script()
+
+    monkeypatch.setattr(
+        "modules.reel_artefact.net_retry.retry_sleep",
+        lambda attempt: sleeps.append(attempt),
+    )
+    callers = [
+        ("gemini", gemini),
+        ("openrouter", openrouter),
+        ("deepseek", deepseek),
+        ("anthropic", anthropic),
+    ]
+    text = complete_ak_text(
+        "GROUND the story.",
+        callers,
+        accept=lambda item: len(item.split()) >= 40,
+    )
+    assert "jar" in text
+    assert calls == {"gemini": 1, "openrouter": 1, "deepseek": 0, "anthropic": 0}
+    assert sleeps == []
+    assert provider_dead("gemini")
+    again = complete_ak_text(
+        "GROUND the story.",
+        callers,
+        accept=lambda item: len(item.split()) >= 40,
+    )
+    assert "jar" in again
+    assert calls["gemini"] == 1
+    reset_providers()
+
+
+def test_openrouter_billing_falls_through_to_deepseek_then_anthropic() -> None:
+    from modules.reel_artefact.provider_health import (
+        complete_ak_text,
+        provider_dead,
+        reset_providers,
+    )
+
+    reset_providers()
+    calls = {"openrouter": 0, "deepseek": 0, "anthropic": 0}
+
+    def openrouter(_prompt: str) -> str:
+        calls["openrouter"] += 1
+        raise RuntimeError("402 payment required")
+
+    def deepseek(_prompt: str) -> str:
+        calls["deepseek"] += 1
+        return _script()
+
+    def anthropic(_prompt: str) -> str:
+        calls["anthropic"] += 1
+        raise RuntimeError("401 unauthorized")
+
+    text = complete_ak_text(
+        "GROUND the story.",
+        [("openrouter", openrouter), ("deepseek", deepseek), ("anthropic", anthropic)],
+        accept=lambda item: len(item.split()) >= 40,
+    )
+    assert calls == {"openrouter": 1, "deepseek": 1, "anthropic": 0}
+    assert provider_dead("openrouter")
+    assert "jar" in text
+    reset_providers()
+    calls["deepseek"] = 0
+
+    def deepseek_dead(_prompt: str) -> str:
+        calls["deepseek"] += 1
+        raise RuntimeError("402 billing")
+
+    empty = complete_ak_text(
+        "GROUND the story.",
+        [("openrouter", openrouter), ("deepseek", deepseek_dead), ("anthropic", anthropic)],
+    )
+    assert empty == ""
+    assert calls["anthropic"] == 1
+    assert provider_dead("deepseek")
+    assert provider_dead("anthropic")
+    reset_providers()
+
+
+def test_text_preflight_stops_before_images_when_nobody_is_live() -> None:
+    from modules.reel_artefact.provider_health import preflight_text, provider_dead, reset_providers
+
+    reset_providers()
+    sentinel = {"pool": 0}
+
+    def dead() -> str:
+        raise RuntimeError("402 RESOURCE_EXHAUSTED prepayment credits are depleted")
+
+    with pytest.raises(RuntimeError, match="no live provider"):
+        preflight_text("ancient_knowledge", probes={"gemini": dead, "openrouter": dead})
+    assert sentinel["pool"] == 0
+    assert provider_dead("gemini")
+    assert provider_dead("openrouter")
+    preflight_text("master_mei", probes={"gemini": dead})
+    reset_providers()
+
+    def live() -> str:
+        return "ok"
+
+    preflight_text("ancient_knowledge", probes={"gemini": dead, "openrouter": live})
+    assert provider_dead("gemini")
+    assert not provider_dead("openrouter")
+    source = Path("/workspace/main.py").read_text(encoding="utf-8")
+    assert source.find('_preflight_text("ancient_knowledge")') < source.find("_build_topic_pool(")
+    reset_providers()
+
+
+def test_a_402_is_not_retried_inside_the_google_guardrail() -> None:
+    from core.google_guardrail import guarded_generate_content, reset_google_cost_tracker
+    from modules.reel_artefact.provider_health import provider_dead, reset_providers
+
+    reset_providers()
+    reset_google_cost_tracker()
+    calls = {"n": 0}
+
+    class _Models:
+        def generate_content(self, **_kwargs: object) -> object:
+            calls["n"] += 1
+            raise RuntimeError("402 RESOURCE_EXHAUSTED prepayment credits are depleted")
+
+    class _Client:
+        models = _Models()
+
+    with pytest.raises(RuntimeError, match="402"):
+        guarded_generate_content(
+            _Client(),
+            model="gemini-2.5-flash",
+            contents="Reply with ok.",
+            source="unit_test",
+        )
+    assert calls["n"] == 1
+    assert provider_dead("gemini")
+    reset_providers()
+    reset_google_cost_tracker()
+
+
+def test_ancient_knowledge_script_uses_the_same_prompt_on_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agents.writer.caption_engine import CaptionEngine
+
+    seen: dict[str, str] = {}
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("402 RESOURCE_EXHAUSTED prepayment credits are depleted")
+
+    def _openrouter(prompt: str, **_kwargs: object) -> str:
+        seen["prompt"] = prompt
+        return _script(60)
+
+    monkeypatch.setattr(
+        "modules.reel_grounding.config.angle_memory_for",
+        lambda *_a, **_k: False,
+    )
+    monkeypatch.setattr(
+        "agents.media.providers.gemini_utils.generate_content_with_model_fallback",
+        _boom,
+    )
+    monkeypatch.setattr("modules.reel_artefact.provider_health.openrouter_text", _openrouter)
+    engine = CaptionEngine.__new__(CaptionEngine)
+    engine._channel = type("Ch", (), {"channel_id": "ancient_knowledge"})()
+    engine._text_model_chain = ["gemini-2.5-flash"]
+    engine._econ_gemini_chain = ["gemini-2.5-flash"]
+    engine._router_tier = "cheap"
+    engine._gemini = object()
+    engine._deepseek = None
+    engine._anthropic = None
+    engine._last_script_error = None
+
+    def _deepseek(*_a: object, **_k: object) -> str:
+        seen["deepseek"] = "called"
+        return ""
+
+    engine._deepseek_complete = _deepseek  # type: ignore[method-assign]
+    text = engine.generate_sequence_voiceover(
+        "The Baghdad Battery, Parthian Mesopotamia, 250 BC",
+        page_niche="history",
+        duration_s=80.0,
+        narrative_mode="",
+    )
+    assert len(text.split()) >= 40
+    assert "Baghdad" in seen["prompt"]
+    assert len(seen["prompt"]) > 80
+    assert "deepseek" not in seen

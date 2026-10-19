@@ -1620,6 +1620,13 @@ class CaptionEngine:
             + f"\n{corpus_close}"
         )
         model = research_model_override or self._research_model
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            fallback = self._complete_ancient_text(full_prompt)
+            if fallback:
+                logger.info("synthesize_facts | fallback OK (topic='%s')", topic)
+                return fallback
         try:
             chain = chain_with_preferred_first(self._text_model_chain, model)
             response = generate_content_with_model_fallback(
@@ -1665,7 +1672,15 @@ class CaptionEngine:
                 return result
         except Exception as exc:  # noqa: BLE001
             logger.warning("synthesize_facts | Gemini failed (%s).", exc)
+            fallback = self._ancient_after_gemini(full_prompt, exc)
+            if fallback:
+                logger.info("synthesize_facts | fallback OK (topic='%s')", topic)
+                return fallback
 
+        if self._is_ancient_knowledge():
+            fallback = self._complete_ancient_text(full_prompt)
+            if fallback:
+                return fallback
         return ""
 
     def synthesize_facts_batch(
@@ -1698,6 +1713,12 @@ class CaptionEngine:
             context = context[:_MAX_PROMPT_CHARS]
 
         chain = list(self._text_model_chain)
+        _batch_prompt = instruction + f"\n\n{corpus_open}\n" + context + f"\n{corpus_close}"
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            fallback = self._complete_ancient_text(_batch_prompt)
+            return [fallback] if fallback else []
         try:
             response = generate_content_with_model_fallback(
                 self._gemini,
@@ -1706,7 +1727,8 @@ class CaptionEngine:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Batch research API call failed: %s", exc)
-            return []
+            fallback = self._ancient_after_gemini(_batch_prompt, exc)
+            return [fallback] if fallback else []
 
         text_attr = getattr(response, "text", None)
         raw_text = text_attr() if callable(text_attr) else text_attr
@@ -1823,6 +1845,52 @@ class CaptionEngine:
             caption = "\n".join(parts_out)
 
         return (caption or "").strip()
+
+    def _is_ancient_knowledge(self) -> bool:
+        try:
+            return str(getattr(self._channel, "channel_id", "") or "") == "ancient_knowledge"
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _text_fallbacks(self):
+        """OpenRouter, then DeepSeek, then Anthropic. Same prompt the caller built."""
+        from modules.reel_artefact.provider_health import openrouter_text
+
+        def _deepseek(body: str) -> str:
+            return self._deepseek_complete(body, max_tokens=1800)
+
+        def _claude(body: str) -> str:
+            text = self._claude_text_complete(body, max_tokens=1800)
+            if not text:
+                raise RuntimeError("ANTHROPIC_API_KEY missing")
+            return text
+
+        return [
+            ("openrouter", openrouter_text),
+            ("deepseek", _deepseek),
+            ("anthropic", _claude),
+        ]
+
+    def _complete_ancient_text(self, prompt: str, *, gemini=None, accept=None) -> str:
+        """Ancient Knowledge only. Gemini is skipped once it has been marked dead."""
+        if not self._is_ancient_knowledge():
+            return ""
+        from modules.reel_artefact.provider_health import complete_ak_text
+
+        callers = []
+        if gemini is not None:
+            callers.append(("gemini", gemini))
+        callers.extend(self._text_fallbacks())
+        return complete_ak_text(prompt, callers, accept=accept)
+
+    def _ancient_after_gemini(self, prompt: str, exc: BaseException | None) -> str:
+        if not self._is_ancient_knowledge():
+            return ""
+        from modules.reel_artefact.provider_health import is_billing_or_auth, mark_dead
+
+        if exc is not None and is_billing_or_auth(exc):
+            mark_dead("gemini", str(exc))
+        return self._complete_ancient_text(prompt)
 
     def generate_sequence_voiceover(
         self,
@@ -2056,7 +2124,13 @@ class CaptionEngine:
                 return False
             return wc >= _min_words  # hard word-count floor only, no char-count escape hatch
 
-        def _try_gemini(*, attempt: int = 1, expand: bool = False, prev_text: str = "") -> str:
+        def _try_gemini(
+            *,
+            attempt: int = 1,
+            expand: bool = False,
+            prev_text: str = "",
+            raise_errors: bool = False,
+        ) -> str:
             try:
                 from agents.media.providers.gemini_utils import chain_with_preferred_first
                 from agents.media.providers.gemini_utils import generate_content_with_model_fallback
@@ -2110,41 +2184,29 @@ class CaptionEngine:
                     "generate_sequence_voiceover | Gemini attempt %d failed (%s)",
                     attempt, _exc,
                 )
+                if raise_errors:
+                    raise
                 return ""
 
-        # ── Gemini ONLY (no Claude / DeepSeek fallbacks) ─────────────────────
-        # Round 7 (Measure-Then-Correct 2026-08-15): the word-floor retry
-        # loop below has been REMOVED for non-warrior channels. Word count
-        # from a single Gemini call is now a seed hint (main.py's
-        # _synthesize_sequence_voice_track measures the ACTUAL TTS
-        # duration and does one corrective regen with observed WPS if it
-        # falls outside tolerance). Warrior mode (Master Mei) keeps its
-        # strict length gate because MEI has structural act-length
-        # requirements that are NOT duration-derived.
+        # Ancient Knowledge falls through to OpenRouter, then DeepSeek, then
+        # Anthropic, with this same prompt. A 402 marks Gemini dead and does
+        # not retry. Warrior / Master Mei stays on Gemini.
         raw = ""
         self._last_script_error = None
-        _net_tries = 3 if _rag_channel_name == "ancient_knowledge" else 1
-        for _net_i in range(1, _net_tries + 1):
-            raw = _try_gemini(attempt=_net_i)
-            _net_err = getattr(self, "_last_script_error", None)
-            if raw and _word_count(raw) >= 40:
-                break
-            if (
-                _rag_channel_name == "ancient_knowledge"
-                and _net_err is not None
-                and _net_i < _net_tries
-            ):
-                from modules.reel_artefact.net_retry import is_network_error, retry_sleep
+        if _rag_channel_name == "ancient_knowledge" and not _warrior:
+            def _gemini_script(_body: str) -> str:
+                return _try_gemini(attempt=1, raise_errors=True)
 
-                if is_network_error(_net_err):
-                    logger.warning(
-                        "generate_sequence_voiceover | network retry %d (%s)",
-                        _net_i, type(_net_err).__name__,
-                    )
-                    retry_sleep(_net_i)
-                    self._last_script_error = None
-                    continue
-            break
+            raw = self._complete_ancient_text(
+                _full_prompt,
+                gemini=_gemini_script,
+                accept=lambda text: _word_count(text) >= 40,
+            )
+        else:
+            _net_tries = 1
+            for _net_i in range(1, _net_tries + 1):
+                raw = _try_gemini(attempt=_net_i)
+                break
         _chars = len(_metrics_script(raw))
         _first_wc = _word_count(raw)
         _first_pass = _passes_length(raw)
@@ -2172,7 +2234,7 @@ class CaptionEngine:
 
         if not raw or _word_count(raw) < 40:
             logger.error(
-                "generate_sequence_voiceover | Gemini-only stack failed or returned stubs "
+                "generate_sequence_voiceover | text providers failed or returned stubs "
                 "(%d words / %d chars) — returning empty.",
                 _word_count(raw),
                 len(_metrics_script(raw)),
@@ -2206,7 +2268,7 @@ class CaptionEngine:
             clean = ensure_topic_date(clean, topic)
         logger.info(
             "generate_sequence_voiceover | final script %d words / %d chars "
-            "(target_words=%d min_words=%d) [Gemini-only]",
+            "(target_words=%d min_words=%d)",
             _word_count(clean), len(_metrics_script(clean)),
             total_words_target, _min_words,
         )
@@ -2343,30 +2405,35 @@ class CaptionEngine:
 
         raw_response = ""
         mode_tag = "humanized"
+        econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
+        gemini_contents = f"{_smart_bait_system}\n\n{prompt}"
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
 
-        # --- Gemini ONLY (models/gemini-2.5-flash) — no Claude / DeepSeek ---
-        try:
-            econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
-            gemini_contents = f"{_smart_bait_system}\n\n{prompt}"
-            raw_response = self._gemini_text_complete(gemini_contents, model_id=econ)
-            if raw_response and len(raw_response.strip()) < 150:
-                logger.warning(
-                    "humanize_smart_bait | Gemini draft < 150 chars — re-prompting to expand."
-                )
-                expand_prompt = (
-                    gemini_contents
-                    + "\n\nCRITICAL: Expand your previous answer. "
-                    "Return a richer JSON payload with more detail (≥150 characters total)."
-                )
-                expanded = self._gemini_text_complete(expand_prompt, model_id=econ)
-                if expanded and len(expanded.strip()) > len(raw_response.strip()):
-                    raw_response = expanded
-            if raw_response:
-                mode_tag = "humanized"
-                logger.info("humanize_smart_bait | Gemini PRIMARY OK")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("humanize_smart_bait | Gemini failed (%s).", exc)
-            raw_response = ""
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            raw_response = self._complete_ancient_text(gemini_contents)
+        else:
+            try:
+                raw_response = self._gemini_text_complete(gemini_contents, model_id=econ)
+                if raw_response and len(raw_response.strip()) < 150:
+                    logger.warning(
+                        "humanize_smart_bait | Gemini draft < 150 chars — re-prompting to expand."
+                    )
+                    expand_prompt = (
+                        gemini_contents
+                        + "\n\nCRITICAL: Expand your previous answer. "
+                        "Return a richer JSON payload with more detail (≥150 characters total)."
+                    )
+                    expanded = self._gemini_text_complete(expand_prompt, model_id=econ)
+                    if expanded and len(expanded.strip()) > len(raw_response.strip()):
+                        raw_response = expanded
+                if raw_response:
+                    mode_tag = "humanized"
+                    logger.info("humanize_smart_bait | Gemini PRIMARY OK")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("humanize_smart_bait | Gemini failed (%s).", exc)
+                raw_response = self._ancient_after_gemini(gemini_contents, exc)
+            if not raw_response and self._is_ancient_knowledge():
+                raw_response = self._complete_ancient_text(gemini_contents)
 
         if not raw_response:
             return "", "", "researcher_fallback", ""
@@ -2560,30 +2627,34 @@ class CaptionEngine:
 
         raw_response = ""
         mode_tag = "humanized"
+        _long_prompt = f"{_long_caption_system}\n\n{prompt}"
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
 
-        # --- Gemini ONLY — no Claude / DeepSeek ---
-        try:
-            econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
-            raw_response = self._gemini_text_complete(
-                f"{_long_caption_system}\n\n{prompt}", model_id=econ,
-            )
-            if raw_response and len(raw_response.strip()) < 150:
-                logger.warning(
-                    "humanize_long_caption | Gemini draft < 150 chars — re-prompting to expand."
-                )
-                expanded = self._gemini_text_complete(
-                    f"{_long_caption_system}\n\n{prompt}\n\n"
-                    "CRITICAL: Expand the essay substantially (≥150 characters).",
-                    model_id=econ,
-                )
-                if expanded and len(expanded.strip()) > len(raw_response.strip()):
-                    raw_response = expanded
-            if raw_response:
-                mode_tag = "humanized"
-                logger.info("humanize_long_caption | Gemini PRIMARY OK")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("humanize_long_caption | Gemini failed (%s).", exc)
-            raw_response = ""
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            raw_response = self._complete_ancient_text(_long_prompt)
+        else:
+            try:
+                econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
+                raw_response = self._gemini_text_complete(_long_prompt, model_id=econ)
+                if raw_response and len(raw_response.strip()) < 150:
+                    logger.warning(
+                        "humanize_long_caption | Gemini draft < 150 chars — re-prompting to expand."
+                    )
+                    expanded = self._gemini_text_complete(
+                        _long_prompt
+                        + "\n\nCRITICAL: Expand the essay substantially (≥150 characters).",
+                        model_id=econ,
+                    )
+                    if expanded and len(expanded.strip()) > len(raw_response.strip()):
+                        raw_response = expanded
+                if raw_response:
+                    mode_tag = "humanized"
+                    logger.info("humanize_long_caption | Gemini PRIMARY OK")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("humanize_long_caption | Gemini failed (%s).", exc)
+                raw_response = self._ancient_after_gemini(_long_prompt, exc)
+            if not raw_response and self._is_ancient_knowledge():
+                raw_response = self._complete_ancient_text(_long_prompt)
 
         if not raw_response:
             return "", "researcher_fallback"
@@ -2748,8 +2819,25 @@ class CaptionEngine:
                 )
             return cleaned, tag
 
+        _voice_prompt = build_gemini_humanizer_instruction(
+            topic,
+            raw_fact_sheet,
+            variation_index=variation_index,
+            total_variants=total_variants,
+            cta_keyword=kw,
+            cta_enabled=cta_enabled,
+            channel=self._channel,
+            cta_caption_format=cta_caption_format,
+        )
+        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+
+        if self._is_ancient_knowledge() and _gemini_dead("gemini"):
+            fallback = self._complete_ancient_text(_voice_prompt)
+            if fallback:
+                return _finish(fallback, "humanized")
+            return "", "researcher_fallback"
+
         if economic:
-            # Gemini PRIMARY ONLY for economic captions (all pages)
             try:
                 result = _gemini_call(raw_fact_sheet)
                 if result and len(result.strip()) < 150:
@@ -2774,10 +2862,14 @@ class CaptionEngine:
                     logger.info("humanize_voice_with_fallback | Gemini PRIMARY OK")
                     return _finish(result, "humanized")
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Gemini humanizer failed (economic mode): %s — no Claude/DeepSeek fallback.",
-                    exc,
-                )
+                logger.warning("Gemini humanizer failed (economic mode): %s", exc)
+                fallback = self._ancient_after_gemini(_voice_prompt, exc)
+                if fallback:
+                    return _finish(fallback, "humanized")
+            if self._is_ancient_knowledge():
+                fallback = self._complete_ancient_text(_voice_prompt)
+                if fallback:
+                    return _finish(fallback, "humanized")
             return "", "researcher_fallback"
 
         # Premium path: Gemini-only (Claude / DeepSeek removed from text stack)
@@ -2802,7 +2894,14 @@ class CaptionEngine:
                 return _finish(result, "humanized")
         except Exception as gem_exc:  # noqa: BLE001
             logger.warning("Gemini humanizer failed: %s", gem_exc)
+            fallback = self._ancient_after_gemini(_voice_prompt, gem_exc)
+            if fallback:
+                return _finish(fallback, "humanized")
 
+        if self._is_ancient_knowledge():
+            fallback = self._complete_ancient_text(_voice_prompt)
+            if fallback:
+                return _finish(fallback, "humanized")
         return "", "researcher_fallback"
 
     def humanize_cta_caption(

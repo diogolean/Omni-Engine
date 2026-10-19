@@ -398,7 +398,7 @@ def test_cache_seed_counts_and_a_short_pool_aborts(tmp_path: Path) -> None:
     assert calls["n"] == 0
     assert seeded[0].source == "cache"
     assert seeded[0].kind == "object"
-    with pytest.raises(PoolTooSmall):
+    with pytest.raises(PoolTooSmall, match="Nano Banana 402 billing") as caught:
         build_asset_pool(
             queries=["battery"],
             categories=[],
@@ -415,6 +415,7 @@ def test_cache_seed_counts_and_a_short_pool_aborts(tmp_path: Path) -> None:
             strict=True,
         )
     assert calls["n"] == 1
+    assert "pool 1 < 8" in str(caught.value)
 
 
 def test_a_source_is_not_used_twice_in_a_row_or_more_than_twice() -> None:
@@ -473,3 +474,152 @@ def test_object_beats_do_not_show_a_landscape() -> None:
     jar = shots[0]
     assert jar.asset_key == "jar"
     assert jar.mode == "asset"
+
+
+def _pool_from(tmp_path: Path, item: _Item, judge) -> list:
+    from modules.reel_artefact.asset_pool import build_asset_pool
+
+    return build_asset_pool(
+        queries=["battery"],
+        categories=[],
+        dest=tmp_path,
+        search=lambda _query: [item],
+        category=lambda _name: [],
+        subcategories=lambda _name: [],
+        openverse=lambda _query: [],
+        download=_download,
+        judge=judge,
+        nano=None,
+        target_min=1,
+        object_floor=0,
+    )
+
+
+def test_a_low_score_museum_jar_stays_and_a_diagram_does_not(tmp_path: Path) -> None:
+    item = _Item("jar", "PartherJar InnerSystem", "object")
+
+    def museum(_path: Path, _caption: str, kind: str) -> dict:
+        return {
+            "passed": False,
+            "contains_text": True,
+            "non_photoreal": True,
+            "rejection_reason": "documentary_fail:non_photoreal,contains_text",
+            "relevance_score": 0.35,
+            "kind": kind,
+            "image_description": "clay jar in a museum case with a small label and a scale bar",
+        }
+
+    kept = _pool_from(tmp_path / "jar", item, museum)
+    assert [asset.caption for asset in kept] == ["PartherJar InnerSystem"]
+
+    def diagram(_path: Path, _caption: str, kind: str) -> dict:
+        return {
+            "passed": False,
+            "contains_text": False,
+            "non_photoreal": True,
+            "rejection_reason": "documentary_fail:non_photoreal",
+            "image_description": "ink diagram of the jar",
+            "relevance_score": 0.95,
+            "kind": kind,
+        }
+
+    assert _pool_from(tmp_path / "diagram", item, diagram) == []
+
+    panel = _Item("panel", "museum text panel", "site")
+
+    def text_panel(_path: Path, _caption: str, kind: str) -> dict:
+        return {
+            "passed": False,
+            "contains_text": True,
+            "rejection_reason": "documentary_fail:contains_text",
+            "image_description": "a text panel on the wall",
+            "relevance_score": 0.2,
+            "kind": kind,
+        }
+
+    assert _pool_from(tmp_path / "panel", panel, text_panel) == []
+
+
+def test_label_bands_are_cropped_off_an_object_photo(tmp_path: Path) -> None:
+    from modules.reel_artefact.asset_pool import build_asset_pool
+    from modules.reel_artefact.crop import crop_label_bands
+
+    image = Image.new("RGB", (200, 400), (180, 40, 40))
+    image.paste(Image.new("RGB", (200, 56), (255, 255, 255)), (0, 344))
+    cropped = crop_label_bands(image)
+    assert cropped.getpixel((10, cropped.size[1] - 1))[0] > 100
+    assert cropped.getpixel((10, cropped.size[1] - 1))[1] < 80
+
+    def download(_item: _Item, folder: Path) -> Path:
+        path = folder / "jar.jpg"
+        image.save(path, quality=95)
+        return path
+
+    def judge(_path: Path, _caption: str, kind: str) -> dict:
+        return {
+            "passed": False,
+            "contains_text": True,
+            "non_photoreal": True,
+            "rejection_reason": "documentary_fail:contains_text",
+            "relevance_score": 0.0,
+            "kind": kind,
+            "image_description": "museum photograph of a clay jar with a caption strip",
+        }
+
+    pool = build_asset_pool(
+        queries=["battery"],
+        categories=[],
+        dest=tmp_path,
+        search=lambda _query: [_Item("jar", "Parthian jar", "object")],
+        category=lambda _name: [],
+        subcategories=lambda _name: [],
+        openverse=lambda _query: [],
+        download=download,
+        judge=judge,
+        nano=None,
+        target_min=1,
+        object_floor=0,
+    )
+    assert pool
+    with Image.open(pool[0].path) as saved:
+        pixel = saved.getpixel((10, saved.size[1] - 1))
+    assert pixel[0] > 100
+    assert pixel[1] < 120
+
+
+def test_committed_baghdad_cache_names_the_licence(tmp_path: Path) -> None:
+    import json
+
+    from modules.reel_artefact.asset_pool import build_asset_pool
+    from modules.reel_artefact.fetch import committed_cache_dir
+
+    folder = committed_cache_dir("ancient_knowledge", "baghdad_battery")
+    credits = json.loads((folder / "credits.json").read_text(encoding="utf-8"))
+    photos = credits["photos"]
+    assert len(photos) >= 8
+    blob = " ".join(
+        f"{row.get('file', '')} {row.get('title', '')} {row.get('subject', '')}" for row in photos
+    ).lower()
+    assert "jar" in blob or "battery" in blob or "pile" in blob
+    assert "ctesiphon" in blob or "mesopotamia" in blob or "taq" in blob
+    for row in photos:
+        assert row.get("license")
+        assert row.get("author")
+        assert row.get("source_url")
+        assert (folder / row["file"]).is_file()
+    pool = build_asset_pool(
+        queries=["battery"],
+        categories=[],
+        dest=tmp_path,
+        search=lambda _query: [],
+        category=lambda _name: [],
+        subcategories=lambda _name: [],
+        openverse=lambda _query: [],
+        download=_download,
+        judge=_judge_ok,
+        nano=None,
+        cache_dir=folder,
+        target_min=1,
+        object_floor=0,
+    )
+    assert any(asset.source == "cache" and asset.kind == "object" for asset in pool)

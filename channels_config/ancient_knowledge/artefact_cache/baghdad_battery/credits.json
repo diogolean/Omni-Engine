@@ -1,0 +1,104 @@
+{
+  "entity": "baghdad_battery",
+  "photos": [
+    {
+      "file": "01_parthian_jar_copper_iron.jpg",
+      "title": "File:Ironie pile Bagdad.jpg",
+      "subject": "Parthian jar, copper cylinder and iron rod",
+      "license": "CC BY-SA 2.5",
+      "author": "Ironie",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3AIronie_pile_Bagdad.jpg",
+      "attribution": "File:Ironie pile Bagdad.jpg by Ironie — CC BY-SA 2.5 — Wikimedia Commons"
+    },
+    {
+      "file": "02_parthian_jar.jpg",
+      "title": "File:PartherJar InnerSystem.jpg",
+      "subject": "Parthian jar with copper cylinder and iron rod",
+      "license": "CC BY-SA 3.0",
+      "author": "Tympanus",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3APartherJar_InnerSystem.jpg",
+      "attribution": "File:PartherJar InnerSystem.jpg by Tympanus — CC BY-SA 3.0 — Wikimedia Commons"
+    },
+    {
+      "file": "03_copper_cylinder_iron_rod.jpg",
+      "title": "File:Parther Cu-Fe-Elektroden.jpg",
+      "subject": "copper cylinder and iron rod",
+      "license": "Copyrighted free use",
+      "author": "Tympanus",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3AParther_Cu-Fe-Elektroden.jpg",
+      "attribution": "File:Parther Cu-Fe-Elektroden.jpg by Tympanus — Copyrighted free use — Wikimedia Commons"
+    },
+    {
+      "file": "04_ctesiphon_1932.jpg",
+      "title": "File:Ctesiphon, Iraq, 1932.jpg",
+      "subject": "Ctesiphon arch, Mesopotamia",
+      "license": "Public domain",
+      "author": "Unknown author Unknown author (American Colony Photo Department)",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3ACtesiphon%2C_Iraq%2C_1932.jpg",
+      "attribution": "File:Ctesiphon, Iraq, 1932.jpg by Unknown author Unknown author (American Colony Photo Department) — Public domain — Wikimedia Commons"
+    },
+    {
+      "file": "05_ctesiphon_arch.jpg",
+      "title": "File:Ctesiphon.jpg",
+      "subject": "Ctesiphon",
+      "license": "Public domain",
+      "author": "Wikimedia Commons",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3ACtesiphon.jpg",
+      "attribution": "File:Ctesiphon.jpg by Wikimedia Commons — Public domain — Wikimedia Commons"
+    },
+    {
+      "file": "06_taq_kasra.jpg",
+      "title": "File:Taq Kasra.jpg",
+      "subject": "Taq Kasra, Ctesiphon",
+      "license": "CC BY-SA 4.0",
+      "author": "Hassan Majed",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3ATaq_Kasra.jpg",
+      "attribution": "File:Taq Kasra.jpg by Hassan Majed — CC BY-SA 4.0 — Wikimedia Commons"
+    },
+    {
+      "file": "07_arch_of_ctesiphon.jpg",
+      "title": "File:Arch of Ctesiphon.jpg",
+      "subject": "Arch of Ctesiphon",
+      "license": "Public domain",
+      "author": "Pierre Ponafidine",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3AArch_of_Ctesiphon.jpg",
+      "attribution": "File:Arch of Ctesiphon.jpg by Pierre Ponafidine — Public domain — Wikimedia Commons"
+    },
+    {
+      "file": "08_ctesiphon_exhibition.jpg",
+      "title": "File:Ctesiphon Exhibition - Pergamonmuseum Berlin 2017.jpg",
+      "subject": "Ctesiphon exhibition",
+      "license": "CC BY-SA 4.0",
+      "author": "PersianDutchNetwork",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3ACtesiphon_Exhibition_-_Pergamonmuseum_Berlin_2017.jpg",
+      "attribution": "File:Ctesiphon Exhibition - Pergamonmuseum Berlin 2017.jpg by PersianDutchNetwork — CC BY-SA 4.0 — Wikimedia Commons"
+    },
+    {
+      "file": "09_ctesiphon_wall.jpg",
+      "title": "File:Wall decoration from Ctesiphon DP-1091-001.jpg",
+      "subject": "Ctesiphon wall decoration, Mesopotamia",
+      "license": "CC0",
+      "author": "Metropolitan Museum of Art",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3AWall_decoration_from_Ctesiphon_DP-1091-001.jpg",
+      "attribution": "File:Wall decoration from Ctesiphon DP-1091-001.jpg by Metropolitan Museum of Art — CC0 — Wikimedia Commons"
+    },
+    {
+      "file": "10_ziggurat_of_ur.jpg",
+      "title": "File:Ziggurat of Ur.jpg",
+      "subject": "Ziggurat of Ur, Mesopotamia",
+      "license": "CC BY-SA 4.0",
+      "author": "Amjedha95",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3AZiggurat_of_Ur.jpg",
+      "attribution": "File:Ziggurat of Ur.jpg by Amjedha95 — CC BY-SA 4.0 — Wikimedia Commons"
+    },
+    {
+      "file": "11_ishtar_gate.jpg",
+      "title": "File:Ishtar Gate.jpg",
+      "subject": "Ishtar Gate, Babylon, Mesopotamia",
+      "license": "CC BY-SA 3.0",
+      "author": "David Stanley",
+      "source_url": "https://commons.wikimedia.org/wiki/File%3AIshtar_Gate.jpg",
+      "attribution": "File:Ishtar Gate.jpg by David Stanley — CC BY-SA 3.0 — Wikimedia Commons"
+    }
+  ]
+}

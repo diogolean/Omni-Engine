@@ -100,8 +100,36 @@ def wants_flux(sentence: str) -> bool:
     return bool(_ATMOSPHERE.search(sentence or ""))
 
 
+_DRAWN = re.compile(
+    r"\b(illustrations?|diagrams?|maps?|drawings?|schematics?|engravings?|paintings?)\b",
+    re.I,
+)
+_TEXT_PANEL = re.compile(r"\b(text panels?|slides?|posters?|title cards?)\b", re.I)
+
+
+def _blob(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "")
+        for key in ("rejection_reason", "image_description", "description", "caption")
+    )
+
+
+def _true_drawing(row: dict[str, Any]) -> bool:
+    """An illustration, diagram, or map. A museum photograph is not one of these."""
+    return _DRAWN.search(_blob(row)) is not None
+
+
+def _text_panel(row: dict[str, Any]) -> bool:
+    return _TEXT_PANEL.search(_blob(row)) is not None
+
+
 def accept_verdict(verdict: dict[str, Any] | None, *, artefact: bool = False) -> bool:
-    """One judge pass. Text panels fail. A labeled museum photo of the object can pass."""
+    """One judge pass. A real museum photo of the object can pass with a label.
+
+    A low score is ignored when the only complaints are a label, a scale bar,
+    or a museum-display look. An illustration, diagram, map, or text panel
+    still fails, including on an object beat.
+    """
     row = verdict or {}
     reason = str(row.get("rejection_reason") or "")
     text_hit = bool(row.get("contains_text")) or "contains_text" in reason
@@ -109,7 +137,8 @@ def accept_verdict(verdict: dict[str, Any] | None, *, artefact: bool = False) ->
     kind = str(row.get("kind") or "")
     waived = False
     if artefact and kind == "object" and (text_hit or drawn):
-        # A museum label or a diagram of the artefact is still the object.
+        if _true_drawing(row) or _text_panel(row):
+            return False
         text_hit = False
         drawn = False
         waived = True
@@ -119,7 +148,7 @@ def accept_verdict(verdict: dict[str, Any] | None, *, artefact: bool = False) ->
     if any(item in reason for item in hard):
         return False
     score = row.get("relevance_score", row.get("score"))
-    if score is not None and float(score) < _SCORE_FLOOR:
+    if not waived and score is not None and float(score) < _SCORE_FLOOR:
         return False
     if waived:
         return True
@@ -415,6 +444,32 @@ def pool_short_reason(
     return ""
 
 
+def nano_failure_note(exc: BaseException) -> str:
+    """A short reason for PoolTooSmall. Billing names the provider."""
+    text = f"{type(exc).__name__} {exc}"
+    low = text.lower()
+    billing = ("402", "resource_exhausted", "prepayment", "billing", "depleted")
+    if any(needle in low for needle in billing):
+        return "nano failed: Nano Banana 402 billing"
+    if "getaddrinfo" in low or "connecterror" in low or "nameresolution" in low:
+        return "nano failed: Nano Banana DNS"
+    return f"nano failed: {text[:160]}"
+
+
+def _crop_labels(path: Path) -> None:
+    """A museum label sits in a band. The object photograph stays."""
+    try:
+        from PIL import Image
+
+        from modules.reel_artefact.crop import crop_label_bands
+
+        with Image.open(path) as image:
+            cropped = crop_label_bands(image)
+        cropped.save(path, quality=90)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("ASSET POOL label crop skipped (%s)", type(exc).__name__)
+
+
 def _seed_cache(cache_dir: Path | None, folder: Path) -> list[PoolAsset]:
     """Curated artefact_cache files count as object photographs."""
     if cache_dir is None or not Path(cache_dir).is_dir():
@@ -457,6 +512,7 @@ def build_asset_pool(
     nano_max: int = NANO_MAX,
     openverse_floor: int = OPENVERSE_FLOOR,
     cache_dir: Path | None = None,
+    cache_dirs: list[Path] | None = None,
     strict: bool = False,
 ) -> list[PoolAsset]:
     """Download and judge each candidate once. Stop at the usable target.
@@ -469,7 +525,20 @@ def build_asset_pool(
 
     folder = Path(dest)
     folder.mkdir(parents=True, exist_ok=True)
-    kept = _seed_cache(cache_dir, folder)
+    seed_dirs: list[Path] = []
+    if cache_dir is not None:
+        seed_dirs.append(Path(cache_dir))
+    for extra in cache_dirs or []:
+        if extra is not None and Path(extra) not in seed_dirs:
+            seed_dirs.append(Path(extra))
+    kept: list[PoolAsset] = []
+    seen_seed: set[str] = set()
+    for seed in seed_dirs:
+        for asset in _seed_cache(seed, folder):
+            if asset.key in seen_seed:
+                continue
+            seen_seed.add(asset.key)
+            kept.append(asset)
     commons: list[Any] = []
     seen: set[str] = {item.key for item in kept}
 
@@ -526,6 +595,7 @@ def build_asset_pool(
     prompts = [item for item in (object_prompts or []) if str(item).strip()] or ["the object"]
     calls = 0
     nano_dead = False
+    nano_note = ""
     while (
         objects < int(object_floor)
         and calls < int(nano_max)
@@ -541,6 +611,7 @@ def build_asset_pool(
             logger.info("ASSET POOL nano failed (%s)", type(exc).__name__)
             if fatal_nano_error(exc) or "nanobanana_failed" in str(exc).lower():
                 nano_dead = True
+                nano_note = nano_failure_note(exc)
             continue
         if written is None or not Path(written).is_file():
             continue
@@ -569,9 +640,10 @@ def build_asset_pool(
             kept, target_min=int(target_min), object_floor=int(object_floor),
         )
         if reason:
-            raise PoolTooSmall(
-                f"asset pool too small ({reason}) after cache, search, and nano"
-            )
+            detail = f"asset pool too small ({reason}) after cache and search"
+            if nano_note:
+                detail = f"{detail}; {nano_note}"
+            raise PoolTooSmall(detail)
     return kept[: int(target_max)]
 
 
@@ -601,6 +673,9 @@ def _judge_candidates(
         verdict.setdefault("kind", kind)
         if not accept_verdict(verdict, artefact=(kind == "object")):
             continue
+        reason = str(verdict.get("rejection_reason") or "")
+        if kind == "object" and (verdict.get("contains_text") or "contains_text" in reason):
+            _crop_labels(Path(path))
         judged_kind = str(verdict.get("kind") or kind or "site")
         kept.append(PoolAsset(
             path=str(path),
@@ -815,13 +890,15 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
             shot_subject=caption,
             shot_setting=geography,
         )
+        reason = str(verdict.get("rejection_reason") or "")
         return {
             "passed": bool(verdict.get("is_relevant")),
-            "contains_text": bool(verdict.get("contains_text"))
-            or "contains_text" in str(verdict.get("rejection_reason") or ""),
+            "contains_text": bool(verdict.get("contains_text")) or "contains_text" in reason,
+            "non_photoreal": bool(verdict.get("non_photoreal")) or "non_photoreal" in reason,
+            "image_description": str(verdict.get("image_description") or ""),
             "relevance_score": verdict.get("relevance_score"),
             "kind": kind,
-            "rejection_reason": verdict.get("rejection_reason"),
+            "rejection_reason": reason,
         }
 
     def download(item: Any, folder: Path) -> Path | None:
@@ -839,11 +916,11 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
         generate_artefact_image(prompt, path)
         return path if path.is_file() else None
 
-    cache_dir = None
+    cache_dirs: list[Path] = []
     if entity is not None and getattr(entity, "id", ""):
-        from modules.reel_artefact.fetch import artefact_cache_dir
+        from modules.reel_artefact.fetch import cache_seed_dirs
 
-        cache_dir = artefact_cache_dir(channel, str(entity.id))
+        cache_dirs = cache_seed_dirs(channel, str(entity.id))
     try:
         return build_asset_pool(
             queries=queries,
@@ -857,7 +934,7 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
             judge=judge,
             nano=nano,
             object_prompts=prompts,
-            cache_dir=cache_dir,
+            cache_dirs=cache_dirs,
             strict=True,
         )
     except PoolTooSmall:

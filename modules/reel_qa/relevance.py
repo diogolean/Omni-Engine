@@ -35,6 +35,11 @@ Set non_photoreal true for CGI, a 3D render, an illustration, a cartoon, or a mi
 or clay-model look.
 Set anatomy_defect true for a mangled, fused, or extra limb.
 Set contains_text true when the picture has burned-in words, a museum label, a date, or a caption.
+A real photograph of a museum object is still a photograph when a small label, a scale
+bar, or the display case is visible. Set contains_text false for that label or scale bar.
+Set contains_text true only when the frame is a slide, a poster, or a text panel and the
+object is not the subject. Set non_photoreal true only for a true illustration, diagram,
+map, drawing, or CGI. A museum photograph is not an illustration.
 Set setting_contradicts_beat true when the place contradicts the spoken beat.
 A visible expected subject is not enough. The wrong place, a non-photoreal look, or a
 broken body still fails.
@@ -381,6 +386,9 @@ def _verdict_from_payload(
         verdict["rejection_reason"] = "documentary_fail:" + ",".join(defects)
     verdict["qa_status"] = "scored"
     verdict["publishable"] = bool(verdict.get("is_relevant")) and not verdict.get("hard_reject")
+    verdict["image_description"] = str(data.get("image_description") or "")[:500]
+    verdict["contains_text"] = _as_bool(data.get("contains_text")) or "contains_text" in defects
+    verdict["non_photoreal"] = _as_bool(data.get("non_photoreal")) or "non_photoreal" in defects
     verdict["provider"] = provider
     verdict["model_id"] = model_id
     _LOG.info(
@@ -498,8 +506,19 @@ def evaluate_chunk_relevance(
         )
         images.append(reference)
         labels.append("reference")
+    from modules.reel_artefact.provider_health import (
+        is_billing_or_auth,
+        mark_dead,
+        provider_dead,
+    )
+
     errors: list[str] = []
     for name in chain:
+        provider_key = "openrouter" if name in {"qwen", "openrouter", "deepseek"} else name
+        if provider_dead(provider_key):
+            errors.append(f"{name}_dead")
+            _LOG.info("VisualQA provider %s dead — trying next", name)
+            continue
         provider = _provider(name)
         if provider is None:
             errors.append(f"{name}_unavailable")
@@ -509,6 +528,8 @@ def evaluate_chunk_relevance(
             result = provider.evaluate(prompt, images, labels=labels)
             data = _strip_json(getattr(result, "text", "") or "")
         except Exception as exc:  # noqa: BLE001
+            if is_billing_or_auth(exc):
+                mark_dead(provider_key, str(exc))
             errors.append(f"{name}:{type(exc).__name__}")
             _LOG.warning("VisualQA %s failed on %s (%s)", name, path.name, exc)
             continue

@@ -570,6 +570,18 @@ def guarded_generate_content(
             raise
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
+            from modules.reel_artefact.provider_health import (  # noqa: PLC0415
+                is_billing_or_auth,
+                mark_dead,
+            )
+
+            if is_billing_or_auth(exc):
+                mark_dead("gemini", str(exc))
+                logger.error(
+                    "GOOGLE_API billing | src=%s | model=%s | no retry | %s",
+                    src, model_id, exc,
+                )
+                raise
             if attempt + 1 >= attempts:
                 logger.error(
                     "GOOGLE_API FAIL | src=%s | model=%s | retries_exhausted=%d | %s",

@@ -16,6 +16,22 @@ REFERENCE_MIN_SHORT = 200
 _ANCHORS = ("center", "left", "right", "upper", "lower")
 
 
+def crop_label_bands(
+    image: Image.Image,
+    *,
+    top: float = 0.08,
+    bottom: float = 0.14,
+) -> Image.Image:
+    """Drop the caption strip a museum photo often carries at the top or bottom."""
+    frame = image.convert("RGB")
+    width, height = frame.size
+    top_px = max(0, int(round(height * float(top))))
+    bottom_px = max(0, int(round(height * float(bottom))))
+    if height - top_px - bottom_px < 8:
+        return frame
+    return frame.crop((0, top_px, width, height - bottom_px))
+
+
 def anchor_for(index: int) -> str:
     """Crop window for beat ``index``. Successive beats do not repeat the same edge."""
     return _ANCHORS[int(index) % len(_ANCHORS)]

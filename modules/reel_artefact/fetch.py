@@ -184,6 +184,30 @@ def list_candidates(entity: Entity, client: HttpClient | None = None) -> list[Ca
     return _collect(entity, http)
 
 
+def _entity_slug(entity_id: str) -> str:
+    slug = re.sub(r"[^a-z0-9_-]+", "_", (entity_id or "entity").strip().lower())
+    return slug.strip("_") or "entity"
+
+
+def committed_cache_dir(channel: str, entity_id: str) -> Path:
+    """Photographs shipped with the repo. The runtime store is gitignored."""
+    slug = _entity_slug(entity_id)
+    root = Path(__file__).resolve().parents[2]
+    return root / "channels_config" / (channel or "ancient_knowledge") / "artefact_cache" / slug
+
+
+def cache_seed_dirs(channel: str, entity_id: str) -> list[Path]:
+    """Committed catalogue first, then the runtime store."""
+    dirs: list[Path] = []
+    committed = committed_cache_dir(channel, entity_id)
+    if committed.is_dir():
+        dirs.append(committed)
+    runtime = artefact_cache_dir(channel, entity_id)
+    if runtime.is_dir() and runtime.resolve() not in {path.resolve() for path in dirs}:
+        dirs.append(runtime)
+    return dirs
+
+
 def artefact_cache_dir(channel: str, entity_id: str) -> Path:
     """Permanent reference cache: ``channels_config/<channel>/store/artefact_cache/``.
 
@@ -191,10 +215,10 @@ def artefact_cache_dir(channel: str, entity_id: str) -> Path:
     Tests set ``REEL_ARTEFACT_CACHE_DIR`` so a fixture never lands in the
     channel store.
     """
-    slug = re.sub(r"[^a-z0-9_-]+", "_", (entity_id or "entity").strip().lower()).strip("_")
+    slug = _entity_slug(entity_id)
     override = (os.getenv("REEL_ARTEFACT_CACHE_DIR") or "").strip()
     if override:
-        folder = Path(override) / (slug or "entity")
+        folder = Path(override) / slug
         folder.mkdir(parents=True, exist_ok=True)
         return folder
     from utils.pipeline_paths import channel_store_dir

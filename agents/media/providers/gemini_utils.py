@@ -456,6 +456,11 @@ def generate_content_with_model_fallback(
     if not model_chain:
         raise RuntimeError("generate_content_with_model_fallback: model_chain is empty.")
 
+    from modules.reel_artefact.provider_health import dead_reason, provider_dead
+
+    if provider_dead("gemini"):
+        raise RuntimeError(f"gemini dead: {dead_reason('gemini') or 'billing'}")
+
     last: BaseException | None = None
     total = len(model_chain)
     retry_budget = min(MAX_503_RETRIES, max_google_retries())
@@ -517,6 +522,19 @@ def generate_content_with_model_fallback(
                 raise
             except (_g_errors.APIError, Exception) as exc:  # noqa: BLE001
                 last = exc
+                from modules.reel_artefact.provider_health import (  # noqa: PLC0415
+                    is_billing_or_auth,
+                    mark_dead,
+                    provider_dead,
+                )
+
+                if provider_dead("gemini") or is_billing_or_auth(exc):
+                    if is_billing_or_auth(exc):
+                        mark_dead("gemini", str(exc))
+                    logger.error(
+                        "Gemini billing | model=%s | no retry | %s", model_id, exc,
+                    )
+                    raise
 
                 if _is_retryable_503(exc) or _is_retryable_429(exc):
                     if attempt < attempts - 1:

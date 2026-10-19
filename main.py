@@ -2170,6 +2170,11 @@ def _produce_variant_worker(
                 variant + 1, resolved_subject,
             )
 
+    if page_ctx and (page_ctx.page_id or "").lower() == "ancient_knowledge":
+        from modules.reel_artefact.provider_health import preflight_text as _preflight_text
+
+        _preflight_text("ancient_knowledge")
+
     cta_kw = contextual_cta_keyword(resolved_subject)
     humanizer_notes = bm.humanizer_summary
 
