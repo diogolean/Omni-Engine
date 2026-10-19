@@ -20,6 +20,10 @@ credentials
 **/*.key
 client_secret*.json
 
+# Safety net: live channel state must not be baked in by COPY . .
+# hydrate_state_file treats a non-empty store file as already present.
+channels_config/*/store/
+
 outputs
 logs
 **/*.mp4
