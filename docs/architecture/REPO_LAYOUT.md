@@ -37,8 +37,8 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Puppet / Aiwake animator | `core/animator/` | Code. Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
 | Visual QA critic | `quality/VisualQA_Agent/` | Code and package-local critic JSON. Shared profiles stay in root `critic_profiles/`. |
 | Cursor rules | `.cursor/rules/` | The whole directory is versioned, including `aiwake-copy.mdc` and `video-pipeline.mdc`. `.cursor/*` other than `rules/` is gitignored. |
-| Channel store | `channels_config/<channel>/store/` | First-level files are versioned (`*.json`, `scheduled_history.txt`, `.gitkeep`). [#29](https://github.com/diogolean/Omni-Engine/pull/29) adds them. Subfolders `scene_library/`, `artefact_cache/`, and `reel_checkpoints/` stay gitignored, as do backups (`*.before_*.json`, `*.bak*`) and the regenerable `openrouter_models.json` cache. Aiwake also keeps `store/aiwake_memory.json` out. The Oracle compose file mounts Ancient Knowledge's store over the image copy. Do not rename that path. |
-| Lofi store | `core/economic_reel_lofi/store/` | Versioned, including `aphorism_recent.json`. #29 adds the current state files. |
+| Channel store | `channels_config/<channel>/store/` | Runtime state stays gitignored and dockerignored, and only lives in the owner's Drive backup. `.dockerignore` excludes `channels_config/*/store/` and re-includes `channels_config/aiwake/store/portfolio/` so those tracked showcase snapshots stay in the image. `store/.gitkeep` is a git placeholder. The Oracle compose file mounts Ancient Knowledge's store over that path. Do not rename it. |
+| Lofi store | `core/economic_reel_lofi/store/` | Files already tracked in this directory stay in git. `aphorism_recent.json` stays gitignored. |
 | Committed artefact photos | `channels_config/<channel>/artefact_cache/<entity>/` | Photographs shipped with the repo. The runtime cache under `store/artefact_cache/` stays gitignored. |
 | Channel operator env | `channels_config/<id>/.env.<id>` on the host, seen in the container as `channels_env/<id>/.env.<id>` | The compose file mounts `./channels_config` at `/opt/omni-engine/channels_env`. Do not change that mount. |
 | Pinterest account map | `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml` | Do not rename. Article cache for Ancient Knowledge is `outputs/ancient_knowledge/article_cache/` and is gitignored with the rest of `outputs/`. |
@@ -54,8 +54,7 @@ These already have a home. Do not invent a second one, and do not add empty plac
 - `*.npz` and `*.psd` (render caches and design binaries). Runtime assets are the PNG/TTF the code opens.
 - Error screenshots (`click_failed_*.png`, `*_error_*.png`)
 - `*_recovered*.txt` and `__mine_*` transcript miners
-- `channels_config/<channel>/store/scene_library/`, `store/artefact_cache/`, and `store/reel_checkpoints/`
-- Channel-store backups (`*.before_*.json`, `*.bak*`) and `store/openrouter_models.json`
+- Channel store runtime state under `channels_config/<channel>/store/` (inventories, histories, content libraries, planners, caches, backups, `scene_library/`, `artefact_cache/`, `reel_checkpoints/`). It stays gitignored and dockerignored, and only lives in the owner's Drive backup. The tracked exception is `channels_config/aiwake/store/portfolio/`.
 
 ## Tests
 
