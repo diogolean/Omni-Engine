@@ -1364,22 +1364,3 @@ def _checker_bytes() -> bytes:
 # them through this file, because the workflow list cannot be edited here.
 from tests.test_near_zero_cost import *  # noqa: E402,F401,F403
 
-
-# validate.yml deselects these three by their original node ids. Collecting
-# them here under new names runs them in CI until the workflow drops the
-# deselects (a workflow edit needs the `workflow` token scope).
-from tests.test_reel_object_beats_and_encode import (  # noqa: E402
-    test_pass_one_retry_does_not_call_flux_again as test_ci_pass_one_retry_does_not_call_flux_again,
-)
-from tests.test_reel_still_fair_share import (  # noqa: E402
-    test_reel_stills_through_the_main_entry as test_ci_reel_stills_through_the_main_entry,
-)
-from tests.test_shot_variety import (  # noqa: E402
-    test_get_image_adapter_accepts_page_id as test_ci_get_image_adapter_accepts_page_id,
-)
-
-__all__ = [
-    "test_ci_get_image_adapter_accepts_page_id",
-    "test_ci_pass_one_retry_does_not_call_flux_again",
-    "test_ci_reel_stills_through_the_main_entry",
-]
