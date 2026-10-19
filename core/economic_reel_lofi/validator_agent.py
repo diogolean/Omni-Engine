@@ -322,7 +322,7 @@ def validate_script(
         hit, ref_reason = reference_overlap_hit(overlap_blob)
         if hit:
             reasons.append(ref_reason)
-            print(f"[LOFI validator] reference-copy REJECT")
+            print("[LOFI validator] reference-copy REJECT")
 
     if flat and not reasons and not is_resume:
         sim = rag.max_similarity_to_history(module, flat)

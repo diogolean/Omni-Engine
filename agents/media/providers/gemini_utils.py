@@ -24,7 +24,10 @@ import logging
 import os
 import re
 import time
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    import google.genai as genai
 
 logger = logging.getLogger(__name__)
 

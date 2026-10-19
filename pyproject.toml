@@ -4,10 +4,14 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["omni", "tests"]
+src = ["omni", "tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+# E501: the legacy tree is far past 100 columns. E402: bootstrap and channel
+# scripts import after sys.path setup on purpose. I001/F401/F841: sorting and
+# unused names are not gated; undefined names (F821) are.
+ignore = ["E501", "E402", "E731", "E741", "I001", "F401", "F841"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["omni", "agents", "utils", "core", "modules", "channels_config"]
+known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config"]

@@ -1,5 +1,9 @@
 """Side-by-side proof: DeepSeek matched to Gemini's head presence. No video."""
+
 from __future__ import annotations
+
+import pytest
+pytest.importorskip('cv2')  # optional media stack; CI image does not install it
 
 import sys
 from pathlib import Path

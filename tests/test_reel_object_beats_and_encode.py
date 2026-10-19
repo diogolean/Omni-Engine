@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Smoke 14. Object lines, one Flux in pass 1, the final frame, the encode."""
+"""Object lines, one Flux in pass 1, the final frame, and the encode."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -62,7 +62,7 @@ def _by_narration(plan, snippet: str):
     return found[0]
 
 
-def test_smoke14_feature_lines_are_object_beats() -> None:
+def test_feature_lines_are_object_beats() -> None:
     """Lines that name the object are photographs. Atmosphere stays a place.
 
     The share lands near 30–40%. A wreck discovery with no feature named
@@ -107,7 +107,7 @@ def test_smoke14_feature_lines_are_object_beats() -> None:
     assert len(anti_photos) <= (6 + 4) * 2
 
 
-def test_smoke14_a_moved_approved_frame_skips_the_spoken_line(tmp_path: Path) -> None:
+def test_a_moved_approved_frame_skips_the_spoken_line(tmp_path: Path) -> None:
     """Ken Burns of the approved still passes. A different picture is judged."""
     from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
 
@@ -184,7 +184,7 @@ def test_smoke14_a_moved_approved_frame_skips_the_spoken_line(tmp_path: Path) ->
     assert "frame_subtitle_mismatch" in mismatch["reasons"]
 
 
-def test_smoke14_pass_one_retry_does_not_call_flux_again(tmp_path: Path) -> None:
+def test_pass_one_retry_does_not_call_flux_again(tmp_path: Path) -> None:
     """A failed Flux beat, retried inside the first pass, does not generate again."""
     from modules.reel_artefact.climb import set_share
 
@@ -244,7 +244,7 @@ def test_smoke14_pass_one_retry_does_not_call_flux_again(tmp_path: Path) -> None
     assert retry.rung == "reuse"
 
 
-def test_smoke14_encode_stays_under_60mb_at_reel_size() -> None:
+def test_encode_stays_under_60mb_at_reel_size() -> None:
     """1080×1920, CRF 22, veryfast or faster, and an 80s reel under 60 MB."""
     from core.reel_sequence_engine import (
         _REEL_HEIGHT,
@@ -274,7 +274,7 @@ def test_smoke14_encode_stays_under_60mb_at_reel_size() -> None:
     assert wide.shape == close.shape
 
 
-def test_smoke14_the_topic_date_is_in_the_opening() -> None:
+def test_the_topic_date_is_in_the_opening() -> None:
     """A date buried later in the script moves into the first two sentences."""
     from core.reel_sequence_engine import build_sequence_script_prompt
 

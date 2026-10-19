@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path as _ReorgPath
 import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
+_REORG_ROOT = _ReorgPath(__file__).resolve().parents[3]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -26,7 +26,7 @@ from agents.media.audio_engine import (  # noqa: E402
     _audio_file_duration_s,
 )
 from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from tests.lofi.vo_pace_probe import silencedetect  # noqa: E402
+from scripts.lofi.probes.vo_pace_probe import silencedetect  # noqa: E402
 from core.economic_reel_lofi.pipeline import (  # noqa: E402
     _tts_breath_commas,
     _tts_text_with_breaks,

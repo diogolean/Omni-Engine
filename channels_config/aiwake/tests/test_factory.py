@@ -1,5 +1,9 @@
 """V3 autonomous puppet factory regression and acceptance harness."""
+
 from __future__ import annotations
+
+import pytest
+pytest.importorskip('cv2')  # optional media stack; CI image does not install it
 
 import hashlib
 import importlib

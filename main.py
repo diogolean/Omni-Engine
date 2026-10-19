@@ -382,11 +382,6 @@ def _load_engagement_bait_examples(page_ctx: "Any | None" = None) -> str:
     except Exception as _exc:  # noqa: BLE001
         _LOG.warning("_load_engagement_bait_examples failed (%s) — skipping.", _exc)
         return ""
-    """Humanizer-offline path: short header + raw fact sheet body."""
-    body = raw_sheet.strip() if isinstance(raw_sheet, str) else ""
-    if not body:
-        return ""
-    return "[Caption from researcher output - humanizer skipped]" + chr(10) + chr(10) + body
 
 
 def _silence_noisy_http_loggers() -> None:
@@ -856,14 +851,14 @@ def _format_cost_block(
             )
         lines += [
             "",
-            f"  - Research & Script (Gemini 2.5 Flash):".ljust(42)
+            "  - Research & Script (Gemini 2.5 Flash):".ljust(42)
             + f"${research_cost:.4f}  ({research_tokens:,} tokens)",
         ]
         if split_images:
             lines.extend(image_cost_lines(cats))
         else:
             lines.append(
-                f"  - Image Gen (FLUX Schnell):".ljust(42)
+                "  - Image Gen (FLUX Schnell):".ljust(42)
                 + f"${image_cost:.4f}  ({img_note})"
             )
         if not omit_audio:
@@ -878,12 +873,12 @@ def _format_cost_block(
             )
         if _is_reel:
             lines.append(
-                f"  - Video Render (MoviePy/FFmpeg):".ljust(42)
+                "  - Video Render (MoviePy/FFmpeg):".ljust(42)
                 + "$0.0000  (local, no API charge)"
             )
         if scheduled_publish:
             lines.append(
-                f"  - Scheduled Publish (YouTube):".ljust(42)
+                "  - Scheduled Publish (YouTube):".ljust(42)
                 + f"{scheduled_publish} (Shorts)"
             )
         if per_reel_costs and (n > 1 or not _is_reel or _pt == "ECONOMIC_REEL"):
@@ -2886,7 +2881,7 @@ def _produce_variant_worker(
             if _os.path.exists(_WF_STYLE_REF_STR):
                 _style_ref_path = _WF_STYLE_REF
                 _style_ref_paths = [_WF_STYLE_REF]
-                print(f"[DEBUG_STYLE_ENGINE] Verification PASSED — style reference loaded.")
+                print("[DEBUG_STYLE_ENGINE] Verification PASSED — style reference loaded.")
                 logging.info("wonder_feed STYLE REF LOCK | pinned → %s", _WF_STYLE_REF.name)
             else:
                 print(f"[ERROR_STYLE_ENGINE] Verification Failed. Path missing: {_WF_STYLE_REF_STR}")
@@ -6442,7 +6437,7 @@ def _produce_variant_worker(
             if _is_wan_reel and _wan_stage_times:
                 _fb = [s for s in _wan_act_status if s != "wan"]
                 print(
-                    f"[WAN_REEL] Stages | "
+                    "[WAN_REEL] Stages | "
                     + " | ".join(f"{k}={v:.1f}s" for k, v in _wan_stage_times.items())
                 )
                 if _wan_act_status:

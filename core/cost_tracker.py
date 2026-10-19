@@ -643,24 +643,24 @@ def image_cost_lines(cats: dict | None) -> list[str]:
     lines: list[str] = []
     if nano_n:
         lines.append(
-            f"  - Image Gen (Nano Banana):".ljust(42)
+            "  - Image Gen (Nano Banana):".ljust(42)
             + f"${float(row.get('image_nano_cost') or 0):.4f}  "
             f"({nano_n} generation{'s' if nano_n != 1 else ''})"
         )
     if flux_n:
         lines.append(
-            f"  - Image Gen (FLUX Schnell):".ljust(42)
+            "  - Image Gen (FLUX Schnell):".ljust(42)
             + f"${float(row.get('image_flux_cost') or 0):.4f}  "
             f"({flux_n} attempt{'s' if flux_n != 1 else ''})"
         )
     if real_n:
         lines.append(
-            f"  - Image Gen (Commons/real):".ljust(42)
+            "  - Image Gen (Commons/real):".ljust(42)
             + f"$0.0000  ({real_n} still{'s' if real_n != 1 else ''})"
         )
     if reuse_n:
         lines.append(
-            f"  - Image Gen (reuse):".ljust(42)
+            "  - Image Gen (reuse):".ljust(42)
             + f"$0.0000  ({reuse_n} still{'s' if reuse_n != 1 else ''})"
         )
     return lines

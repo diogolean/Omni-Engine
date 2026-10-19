@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Smoke 12, through the same still entry point main.py uses.
+"""Still entry point main.py uses, including fair share and planned photos.
 
 Unit tests climbed one beat on the calling thread, so they never saw the
 worker pool drop the fair-share flag, or a planned photograph routed to Flux.
@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import random
+import re
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,7 +27,7 @@ _QUIMBAYA = "The Quimbaya golden ornaments, 600-1000 AD"
 _ANTIKYTHERA = "The Antikythera Mechanism"
 
 
-def test_smoke12_reel_through_the_main_entry(tmp_path: Path, monkeypatch) -> None:
+def test_reel_stills_through_the_main_entry(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("REEL_PLAN_CHECK", "off")
     monkeypatch.setenv("REEL_LADDER_LLM", "0")
     monkeypatch.setenv("REEL_ARTIFACT_IMAGES", "1")
@@ -202,7 +203,8 @@ def _run_quimbaya(folder: Path, monkeypatch, logs: list[str]) -> None:
     assert place_prompts
     for prompt in place_prompts:
         assert "cloud forest" in prompt.lower() or "quindío" in prompt.lower() or "quindio" in prompt.lower()
-        assert "mesa" not in prompt.lower()
+        # "mesas" in the negative prompt is the ban, not a mesa scene.
+        assert re.search(r"\bmesa\b", prompt.lower()) is None
         assert "egypt" not in prompt.lower()
 
 

@@ -84,6 +84,8 @@ def test_broad_hashtag_fails() -> None:
 
 
 def test_fit_title_keeps_the_opening_question() -> None:
+    import pytest
+    pytest.importorskip("imageio_ffmpeg")
     from channels_config.aiwake.tools.caption_generator import is_complete_question
     from channels_config.aiwake.tools.scope_qc_captions_v4 import _closer, _fit_title
 

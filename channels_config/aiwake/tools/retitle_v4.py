@@ -30,7 +30,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -64,7 +64,7 @@ LIBRARY = ROOT / "channels_config" / "aiwake" / "store" / "content_library.json"
 DOCS_DIR = ROOT / "channels_config" / "aiwake" / "docs" / "retitle_v4"
 
 BRT = ZoneInfo("America/Sao_Paulo")
-SLOT = time(19, 30)
+SLOT = dt_time(19, 30)
 TITLE_MAX = 70
 MAX_HASHTAGS = 5
 QUOTA_UNITS_PER_UPDATE = 50

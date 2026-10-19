@@ -1,5 +1,9 @@
 """Single 9:16 reverse-shot frame of DeepSeek. Gemini stays off this canvas."""
+
 from __future__ import annotations
+
+import pytest
+pytest.importorskip('cv2')  # optional media stack; CI image does not install it
 
 import argparse
 import sys

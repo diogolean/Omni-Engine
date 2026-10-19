@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path as _ReorgPath
 import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[1]
+_REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
@@ -28,7 +28,7 @@ from pathlib import Path
 
 os.environ.setdefault("ACTIVE_PAGE", "ancient_knowledge")
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from config import words_for_duration  # noqa: E402
 from core.reel_sequence_engine import (  # noqa: E402

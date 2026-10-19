@@ -814,6 +814,8 @@ def _floor_frame_time(fps: float, t: float) -> float:
 
 
 def test_label_never_brighter_than_body_in_real_rendered_video(tmp_path):
+    import pytest
+    pytest.importorskip("moviepy")
     """Step 3 (item 5) - the load-bearing test: renders a REAL transcript
     through the actual ``.render()`` pipeline to a temp mp4 (not a synthetic
     single-call unit test), decodes actual frames from that file, isolates
@@ -1018,6 +1020,8 @@ def test_top_mask_start_offset_moves_body_top_up():
 #     regression in the first place.
 # --------------------------------------------------------------------------- #
 def test_send_transition_moves_gradually_across_consecutive_native_frames_at_production_fps(tmp_path):
+    import pytest
+    pytest.importorskip("moviepy")
     import numpy as np
     from moviepy import VideoFileClip
 

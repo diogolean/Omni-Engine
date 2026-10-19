@@ -152,4 +152,4 @@ wb.save(str(TARGET_FILE))
 
 print(f"\n[DONE] {len(records)} rows written → {TARGET_FILE}")
 print(f"       Data starts at sheet row {DATA_START_ROW}, URLs now in CONTENT: MEDIA (col D).")
-print(f"       Signature tags appended to every caption.")
+print("       Signature tags appended to every caption.")

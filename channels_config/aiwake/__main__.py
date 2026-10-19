@@ -502,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
             GEMINI_CANONICAL_VOICE,
         )
 
-        print(f"gemini v2 git : 54b1b5d")
+        print("gemini v2 git : 54b1b5d")
         print(f"gemini voice  : {GEMINI_CANONICAL_VOICE} (+8%, -6Hz)")
         print(f"deepseek voice: {DEEPSEEK_CANONICAL_VOICE} (+8%, -6Hz)")
         print("gemini camera : immutable 54b1b5d contain/center/bottom camera")

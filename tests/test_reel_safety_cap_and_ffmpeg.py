@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Smoke 16: safety cap, blank bands, ffmpeg fallback, and script length."""
+"""Safety cap, blank bands, ffmpeg fallback, and script length."""
 from __future__ import annotations
 
 import json

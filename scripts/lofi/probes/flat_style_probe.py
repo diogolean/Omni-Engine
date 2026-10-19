@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path as _ReorgPath
 import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
+_REORG_ROOT = _ReorgPath(__file__).resolve().parents[3]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
@@ -16,7 +16,7 @@ from core.economic_reel_lofi import config as lofi_cfg
 from core.economic_reel_lofi.image_gen import generate_scene_image_dev
 from core.economic_reel_lofi.visual_identity import assemble_v2_prompt_dev
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 BEFORE = (
     page_outputs_dir("wonder_feed")
     / "assets"

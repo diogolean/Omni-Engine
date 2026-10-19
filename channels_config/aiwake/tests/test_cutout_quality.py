@@ -1,5 +1,9 @@
 """Zero-credit visual inspection harness for the V3 BiRefNet cutout."""
+
 from __future__ import annotations
+
+import pytest
+pytest.importorskip('cv2')  # optional media stack; CI image does not install it
 
 import sys
 from pathlib import Path

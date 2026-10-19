@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path as _ReorgPath
 import sys as _reorg_sys
 
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
+_REORG_ROOT = _ReorgPath(__file__).resolve().parents[3]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

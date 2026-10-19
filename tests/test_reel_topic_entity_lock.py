@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Smoke 13, through the same still entry point main.py uses.
+"""Topic entity lock: the still entry stays on the episode's place.
 
 The Antikythera reel published Göbekli Tepe and Puma Punku. Museum, hands,
 and manuscript scenes failed the judge. Open beats then ended the reel
@@ -41,7 +41,7 @@ _FOREIGN = (
 )
 
 
-def test_smoke13_topic_entity_locks_planner_and_resolver(tmp_path: Path, monkeypatch) -> None:
+def test_topic_entity_locks_planner_and_resolver(tmp_path: Path, monkeypatch) -> None:
     """A foreign entity_id is kept only when the spoken line names that entity."""
     monkeypatch.setenv("REEL_PLAN_CHECK", "off")
     monkeypatch.setenv("REEL_SHOT_PLANNER", "1")
@@ -120,7 +120,7 @@ def test_smoke13_topic_entity_locks_planner_and_resolver(tmp_path: Path, monkeyp
     assert seen == ["antikythera_mechanism"]
 
 
-def test_smoke13_flux_scenes_are_regional_places() -> None:
+def test_flux_scenes_are_regional_places() -> None:
     """Abstract lines alternate place treatments. Museum, hands, and books are gone."""
     plan = build_shot_list(
         _QUIMBAYA,
@@ -146,7 +146,7 @@ def test_smoke13_flux_scenes_are_regional_places() -> None:
         assert "museum hall" not in blob
 
 
-def test_smoke13_first_pass_is_one_flux_and_a_landscape_finishes_the_reel(
+def test_first_pass_is_one_flux_and_a_landscape_finishes_the_reel(
     tmp_path: Path, monkeypatch,
 ) -> None:
     """Pass 1 is one Flux image per beat. The next beat cannot reuse it."""

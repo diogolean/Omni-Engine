@@ -1,6 +1,10 @@
 """Real frames: the nameplate color has to match the model that is speaking."""
 
+
 from __future__ import annotations
+
+import pytest
+pytest.importorskip('imageio_ffmpeg')  # optional media stack; CI image does not install it
 
 from pathlib import Path
 

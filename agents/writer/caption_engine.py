@@ -1211,9 +1211,9 @@ def build_long_caption_prompt(
             )
         else:
             cta_close = (  # type: ignore[assignment]
-                f"\nParagraph 3 (CTA) must end with a curiosity invitation."
+                "\nParagraph 3 (CTA) must end with a curiosity invitation."
                 if cta_enabled
-                else f"\nDo not add a follow CTA."
+                else "\nDo not add a follow CTA."
             )
         return dedent(
             f"""

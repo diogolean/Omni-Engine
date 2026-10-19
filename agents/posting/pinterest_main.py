@@ -148,7 +148,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
     verified = inv.count_verified_images(data)
     unposted = len(inv.get_unposted(data))
 
-    print(f"\nSync complete:")
+    print("\nSync complete:")
     print(f"  Total entries        : {total}")
     print(f"  With Pinterest meta  : {with_meta}")
     print(f"  Verified local imgs  : {verified}")
@@ -256,7 +256,7 @@ def cmd_transform(args: argparse.Namespace) -> None:
             sys.exit(1)
         entry = candidates[0]
 
-    print(f"\n[TRANSFORM] Building 2:3 pin for:")
+    print("\n[TRANSFORM] Building 2:3 pin for:")
     print(f"  Channel     : {config.CHANNEL_ID or '(none)'}")
     print(f"  Topic       : {entry.get('topic', '?')}")
     print(f"  Visual hook : {entry.get('visual_hook', '(not set)')}")

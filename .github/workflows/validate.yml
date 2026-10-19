@@ -26,48 +26,30 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements-ci.txt
 
       - name: Lint
-        run: >
-          ruff check omni modules/memory modules/shot_planner modules/reel_artefact modules/reel_hook
-          core/reel_ffmpeg_render.py
-          scripts/backup_supermemory.py
-          tests/test_omni_config.py
-          tests/test_shot_planner.py
-          tests/test_shot_planner_llm.py
-          tests/test_reel_judge_documentary.py
-          tests/test_reel_artefact.py
-          tests/test_reel_artefact_hybrid.py
-          tests/test_reel_ladder.py
-          tests/test_reel_hook_parallax.py
-          tests/test_smoke16_reel.py
-          tests/test_smoke17_reel.py
-          tests/test_asset_pool.py
-          tests/test_omni_publisher.py
-          tests/test_pinterest_vm.py
-          tests/test_memory_client.py
-          tests/test_supermemory_service.py
-          tests/test_repo_root_layout.py
+        run: ruff check .
+
+      - name: Secret scan
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          # Current tree only. A Facebook page token remains in git history;
+          # the owner must revoke it and decide on a history purge. This scan
+          # stops a new commit from adding another secret.
+          /tmp/gitleaks detect --no-git --source . --redact --exit-code 1
 
       - name: Test
-        run: >
-          pytest -q
-          tests/test_omni_config.py
-          tests/test_omni_publisher.py
-          tests/test_pinterest_vm.py
-          tests/test_memory_client.py
-          tests/test_supermemory_service.py
-          tests/test_repo_root_layout.py
-          tests/test_reel_grounding.py
-          tests/test_reel_ooparts_grounding.py
-          tests/test_reel_angle_memory.py
-          tests/test_reel_followup_fixes.py
-          tests/test_ffmpeg_kill_posix.py
-          tests/test_shot_planner.py
-          tests/test_shot_planner_llm.py
-          tests/test_reel_judge_documentary.py
-          tests/test_reel_artefact.py
-          tests/test_reel_artefact_hybrid.py
-          tests/test_reel_ladder.py
-          tests/test_reel_hook_parallax.py
-          tests/test_smoke16_reel.py
-          tests/test_smoke17_reel.py
-          tests/test_asset_pool.py
+        run: |
+          # Whole suite. The --deselect lines failed on the base branch
+          # (cursor/hook-parallax-b2fd) before this refactor, in isolation.
+          pytest -q tests channels_config \
+            --deselect tests/test_lofi_emotional_pipeline.py::test_gemini38_provider_uses_only_configured_primary_model \
+            --deselect tests/test_reel_visual_qa.py::test_model_chain_uses_gemini_when_qwen_missing \
+            --deselect tests/test_reel_visual_qa.py::test_both_providers_down_fail_closed \
+            --deselect tests/test_shot_variety.py::test_get_image_adapter_accepts_page_id \
+            --deselect tests/test_reel_object_beats_and_encode.py::test_pass_one_retry_does_not_call_flux_again \
+            --deselect tests/test_reel_still_fair_share.py::test_reel_stills_through_the_main_entry \
+            --deselect channels_config/aiwake/tests/test_caption_validator.py::test_truncated_plugs_it_fails \
+            --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_tiktok_caption_is_hook_quote_trigger \
+            --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_planner_imports_root_videos_with_optimized_captions \
+            --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_update_scheduled_touches_private_matches_only \
+            --deselect channels_config/aiwake/tests/test_library_audit.py::test_run_audit_moves_rejects_and_exports_clean_planners

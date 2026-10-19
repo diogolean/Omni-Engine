@@ -42,11 +42,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Credentials (can also be passed as CLI args for CI use)
 # ---------------------------------------------------------------------------
-PAGE_ID      = os.getenv("FB_MOMMA_CIRCLE_PAGE_ID", "415144745345466").strip()
-ACCESS_TOKEN = os.getenv(
-    "FB_MOMMA_CIRCLE_ACCESS_TOKEN",
-    "EAAPbmJ8XohkBSGmLeFXx5tRzM6ndvgSFGtWpU7O4FRN3BYUagpZB9XF4WxSYanAdzdNDhqg7unbx5QVm5ULsl4Pbq5fBklyrdX0EAfCn1H8ahS8uI9QfeUZCO9iqDo63GXhXWFVZCIFAZCAopnUee1fZAKuqiKpAq59Nnxnxpa3lPRIDSgT0EerIzFN5ZAcX8moaxn7w2ZA1g7pu2DIocW8t9P01ikAdqUb04ryWXQdFlHcYUD18aYrEhZB9ceAZD",
-).strip()
+PAGE_ID = os.getenv("FB_MOMMA_CIRCLE_PAGE_ID", "415144745345466").strip()
+ACCESS_TOKEN = os.getenv("FB_MOMMA_CIRCLE_ACCESS_TOKEN", "").strip()
 API_VERSION  = os.getenv("FB_GRAPH_API_VERSION", "v25.0").strip()
 
 _DEFAULT_MESSAGE = (
@@ -77,7 +74,7 @@ def verify_page(page_id: str = PAGE_ID, access_token: str = ACCESS_TOKEN) -> dic
 
     if "error" in data:
         err = data["error"]
-        print(f"[FAIL] Token verification failed:")
+        print("[FAIL] Token verification failed:")
         print(f"       Code   : {err.get('code')}")
         print(f"       Message: {err.get('message')}")
         return {}
@@ -90,7 +87,7 @@ def verify_page(page_id: str = PAGE_ID, access_token: str = ACCESS_TOKEN) -> dic
     return data
 
 
-def test_publish(
+def publish_text(
     message_text: str = _DEFAULT_MESSAGE,
     page_id: str = PAGE_ID,
     access_token: str = ACCESS_TOKEN,
@@ -117,13 +114,13 @@ def test_publish(
 
     if "id" in res_data:
         post_id = res_data["id"]
-        print(f"[OK] Successfully posted to Momma Circle!")
+        print("[OK] Successfully posted to Momma Circle!")
         print(f"     Post ID: {post_id}")
         print(f"     View at: https://www.facebook.com/{post_id.replace('_', '/posts/')}")
         return post_id
     else:
         err = res_data.get("error", res_data)
-        print(f"[FAIL] Post failed:")
+        print("[FAIL] Post failed:")
         print(f"       Code   : {err.get('code', '?')}")
         print(f"       Message: {err.get('message', str(err))}")
         return None
@@ -170,11 +167,21 @@ def main() -> None:
 
     # Step 2: publish the test post
     print()
-    post_id = test_publish(ns.message)
+    post_id = publish_text(ns.message)
     if post_id is None:
         sys.exit(1)
 
     print("\n[DONE] Connection test passed.")
+
+
+def test_momma_circle_page_token_verifies() -> None:
+    """Live Graph check. Skips unless the page token is in the environment."""
+    import pytest
+
+    if not ACCESS_TOKEN:
+        pytest.skip("FB_MOMMA_CIRCLE_ACCESS_TOKEN is not set")
+    info = verify_page(PAGE_ID, ACCESS_TOKEN)
+    assert info.get("id")
 
 
 if __name__ == "__main__":

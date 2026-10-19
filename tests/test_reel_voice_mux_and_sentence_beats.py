@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Smoke 17: voice in the mux, sentence beats, and a reel that still compiles."""
+"""Voice in the mux, sentence beats, and a reel that still compiles."""
 from __future__ import annotations
 
 import math
