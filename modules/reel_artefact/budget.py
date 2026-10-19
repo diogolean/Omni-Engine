@@ -59,8 +59,13 @@ def beat_budget_usd() -> float:
 
 
 def reel_budget_usd() -> float:
-    """Most one reel may spend, stills and LLM calls together."""
-    return _usd("REEL_REEL_BUDGET_USD", 0.05)
+    """Most one reel may spend, stills and LLM calls together.
+
+    The cap has one owner, ``core.spend_ledger.reel_cap_usd``.
+    """
+    from core.spend_ledger import reel_cap_usd  # noqa: PLC0415  (spend_ledger imports this module)
+
+    return reel_cap_usd()
 
 
 def _llm_spent() -> float:
