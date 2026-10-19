@@ -107,15 +107,9 @@ from agents.posting.youtube_publisher import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def _setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    if not verbose:
-        for _noisy in ("googleapiclient.discovery", "google.auth", "urllib3"):
-            logging.getLogger(_noisy).setLevel(logging.WARNING)
+    from utils.logging_setup import setup_cli_logging  # noqa: PLC0415
+
+    setup_cli_logging(verbose)
 
 
 # ---------------------------------------------------------------------------

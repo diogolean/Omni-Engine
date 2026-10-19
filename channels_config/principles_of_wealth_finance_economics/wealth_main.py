@@ -49,15 +49,9 @@ from core.principles_of_wealth.pipeline import (  # noqa: E402
 
 
 def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    if not verbose:
-        for noisy in ("googleapiclient.discovery", "google.auth", "urllib3"):
-            logging.getLogger(noisy).setLevel(logging.WARNING)
+    from utils.logging_setup import setup_cli_logging  # noqa: PLC0415
+
+    setup_cli_logging(verbose)
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:

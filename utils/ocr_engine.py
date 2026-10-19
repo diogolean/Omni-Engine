@@ -45,6 +45,7 @@ from utils.gemini_usage import (
 )
 from utils.ocr_text import strip_wrapping_quotes
 from utils.pipeline_paths import assets_path, path_from_env
+from utils.logging_setup import setup_gemini_tool_logging
 
 logger = logging.getLogger(__name__)
 
@@ -621,13 +622,7 @@ class OCREngine:
         return {key: "" for key, _path in pending}, GeminiUsage()
 
 
-def _configure_logging() -> None:
-    if not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s | %(message)s",
-        )
-    hush_gemini_sdk_logs()
+_configure_logging = setup_gemini_tool_logging
 
 
 def main(argv: list[str] | None = None) -> int:
