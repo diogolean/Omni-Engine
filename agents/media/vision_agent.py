@@ -16,6 +16,8 @@ import threading
 from pathlib import Path
 from typing import Any, Sequence
 
+from utils.mime import image_mime_for
+
 _LOG = logging.getLogger(__name__)
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
@@ -66,13 +68,7 @@ def list_style_reference_images(reference_folder: str | Path) -> list[Path]:
     ]
 
 
-def _mime_for(filename: str) -> str:
-    lo = filename.lower()
-    if lo.endswith(".png"):
-        return "image/png"
-    if lo.endswith(".webp"):
-        return "image/webp"
-    return "image/jpeg"
+_mime_for = image_mime_for
 
 
 def _folder_cache_key(folder: Path) -> str:
