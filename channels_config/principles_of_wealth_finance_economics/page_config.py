@@ -10,9 +10,7 @@ Entry point: ``python channels_config/principles_of_wealth_finance_economics/wea
 """
 from __future__ import annotations
 
-from pathlib import Path
-
-from utils.pipeline_paths import path_from_env
+from utils.pipeline_paths import drive_root, path_from_env
 
 # ---------------------------------------------------------------------------
 # Core profile
@@ -37,10 +35,9 @@ ECONOMIC_BRAIN_MODE: bool = True
 # ---------------------------------------------------------------------------
 # Source library — read-only from the factory; do not copy into the repo
 # ---------------------------------------------------------------------------
-_WINDOWS_WEALTH_SOURCE = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@ Contents"
-    r"\You Tube Content Videos\Ray Dalio"
-    r"\Ray Dalio Creation\Ray Dalio Principles of Wealth-Production"
+_WINDOWS_WEALTH_SOURCE = (
+    drive_root() / "@ Contents" / "You Tube Content Videos" / "Ray Dalio"
+    / "Ray Dalio Creation" / "Ray Dalio Principles of Wealth-Production"
 )
 SOURCE_DIRECTORY: str = str(
     path_from_env(("WEALTH_SOURCE_DIRECTORY",), _WINDOWS_WEALTH_SOURCE)

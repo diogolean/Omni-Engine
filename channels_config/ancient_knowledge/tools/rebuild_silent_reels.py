@@ -30,7 +30,7 @@ from agents.media.audio_engine import (  # noqa: E402
     generate_voiceover_with_timestamps,
 )
 from main import _stitch_audio_sequential  # noqa: E402
-from utils.pipeline_paths import outputs_path  # noqa: E402
+from utils.pipeline_paths import outputs_path, windows_fonts_dir  # noqa: E402
 
 CLIPS = outputs_path("ancient_knowledge", "clips")
 ASSETS = CLIPS.parent / "assets"
@@ -41,9 +41,9 @@ FFMPEG = Path(
 )
 FONT_CANDIDATES = [
     ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Bold.ttf",
-    Path(r"C:\Windows\Fonts\arialbd.ttf"),
-    Path(r"C:\Windows\Fonts\Arial Bold.ttf"),
-    Path(r"C:\Windows\Fonts\trebucbd.ttf"),
+    windows_fonts_dir() / "arialbd.ttf",
+    windows_fonts_dir() / "Arial Bold.ttf",
+    windows_fonts_dir() / "trebucbd.ttf",
 ]
 VOICE_ID = "WdZjiN0nNcik2LBjOHiv"
 MODEL_ID = "eleven_multilingual_v2"

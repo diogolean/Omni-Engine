@@ -38,6 +38,7 @@ try:
 except ImportError:
     pass
 
+from shared.logging import setup_cli_logging  # noqa: E402
 from channels_config.endless_summer_paradise.handler import (  # noqa: E402
     load_schedule_queue,
     print_scan_report,
@@ -48,15 +49,7 @@ from channels_config.endless_summer_paradise.handler import (  # noqa: E402
 
 
 def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    if not verbose:
-        for noisy in ("googleapiclient.discovery", "google.auth", "urllib3", "moviepy"):
-            logging.getLogger(noisy).setLevel(logging.WARNING)
+    setup_cli_logging(verbose, extra_noisy=("moviepy",))
 
 
 def _resolve_interval_arg(args: argparse.Namespace) -> str | float:

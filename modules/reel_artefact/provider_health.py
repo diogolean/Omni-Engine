@@ -114,7 +114,7 @@ def complete_ak_text(
     Billing marks that provider dead and moves on. ``refine`` runs first, so
     a reasoning blob can be reduced to the narration before the check.
     """
-    from modules.reel_artefact.net_retry import is_network_error, retry_sleep
+    from shared.retry import is_network_error, retry_sleep
     from modules.reel_artefact.script_grounding import strip_model_wrapper
 
     for name, call in callers:

@@ -14,7 +14,7 @@ Tracked at the repository root:
 | Entry points | `main.py`, `config.py`, `channel_loader.py`. `run_main_noupload.py` is an allowed entry point when it is added. Do not rename it. |
 | Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml`, `.gitleaksignore` |
 | Containers and CI | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.github/` |
-| Packages | `agents/`, `channels_config/`, `config/`, `core/`, `engine/`, `models_avatar/`, `modules/`, `omni/`, `portfolio_showcase/`, `quality/`, `utils/` |
+| Packages | `agents/`, `channels_config/`, `config/`, `core/`, `engine/`, `models_avatar/`, `modules/`, `omni/`, `portfolio_showcase/`, `quality/`, `shared/`, `utils/` |
 | Support trees | `assets/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
 | Agent rules | `.cursor/rules/` |
 
@@ -44,7 +44,9 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Pinterest account map | `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml` | Do not rename. Article cache for Ancient Knowledge is `outputs/ancient_knowledge/article_cache/` and is gitignored with the rest of `outputs/`. |
 | Worker entry | `python -m omni.worker --role engine` and `--role scheduler` | `omni/` stays the package. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
 
-`outputs/` is runtime state: renders, logs, review dumps, the B2 usage ledger, and publisher libraries. It is gitignored. Write scratch with `temp_path` and `review_path` from `utils/pipeline_paths.py`.
+`shared/` is the home for env getters, paths, logging, ffmpeg, image MIME, and network retry (ADR 0008 M2). `utils/pipeline_paths.py` is `shared.paths`. `utils/process_tools.py` is `shared.ffmpeg`. `modules/reel_artefact/net_retry.py` is `shared.retry`. New code imports `shared`. The old modules stay as shims so existing imports and monkeypatches keep one object.
+
+`outputs/` is runtime state: renders, logs, review dumps, the B2 usage ledger, and publisher libraries. It is gitignored. Write scratch with `temp_path` and `review_path` from `shared.paths` (`utils.pipeline_paths` is the same module).
 
 ## What does not belong in git
 

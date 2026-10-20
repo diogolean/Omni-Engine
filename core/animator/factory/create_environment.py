@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-from utils.pipeline_paths import assets_root, outputs_root
+from utils.pipeline_paths import assets_root, outputs_root, windows_fonts_dir
 
 from .create_puppet import generate_character_image
 
@@ -449,8 +449,8 @@ def _write_benchmark_comparison(graded_path: Path) -> Path:
 
 def _catalog_font(size: int) -> ImageFont.ImageFont:
     for candidate in (
-        Path(r"C:\Windows\Fonts\segoeui.ttf"),
-        Path(r"C:\Windows\Fonts\arial.ttf"),
+        windows_fonts_dir() / "segoeui.ttf",
+        windows_fonts_dir() / "arial.ttf",
     ):
         if candidate.is_file():
             return ImageFont.truetype(str(candidate), size)

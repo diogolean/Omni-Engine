@@ -35,9 +35,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from shared.env import env_bool, parse_interval_hours, resolve_path
 from utils.pipeline_paths import (
     assets_root,
     channel_store_dir,
+    drive_root as _drive_root,
     outputs_root,
     page_assets_dir,
     page_outputs_dir,
@@ -78,15 +80,8 @@ def print_dotenv_bootstrap() -> None:
 # Small helpers
 # ---------------------------------------------------------------------------
 
-def _bool_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _resolve_path(value: str | None, default: Path) -> Path:
-    return Path((value or str(default))).expanduser()
+_bool_env = env_bool
+_resolve_path = resolve_path
 
 
 def _parse_schedule_minutes(raw: str | None) -> int | None:
@@ -635,9 +630,12 @@ if not PERSONA_DNA_PATH.is_file() and ACTIVE_PAGE == "anna_protocol":
 # Reference avatar: REFERENCE_IMAGE_PATH, then the in-repo page avatar,
 # then the historical Windows Drive file for anna_protocol.
 _page_ref_avatar: Path = ACTIVE_PAGE_DIR / "avatar_reference" / "avatar.png"
-_REFERENCE_AVATAR_WINDOWS = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@_Content 2026\The Holistic Legacy - Anna's Protocol"
-) / "Anna's Automated Image Posts Engine" / "avatar_reference" / "avatar.png"
+# REFERENCE_AVATAR_PATH overrides that last Drive fallback only.
+_REFERENCE_AVATAR_WINDOWS = _resolve_path(
+    os.getenv("REFERENCE_AVATAR_PATH"),
+    _drive_root() / "@_Content 2026" / "The Holistic Legacy - Anna's Protocol"
+    / "Anna's Automated Image Posts Engine" / "avatar_reference" / "avatar.png",
+)
 _ref_avatar_default: Path = (
     _page_ref_avatar if _page_ref_avatar.parent.is_dir() else _REFERENCE_AVATAR_WINDOWS
 )
@@ -689,14 +687,7 @@ PUBLISHING_INTERVAL_MINUTES: int | None = _parse_schedule_minutes(PUBLISHING_SCH
 # ---------------------------------------------------------------------------
 # Pinterest safe-drip interval
 # ---------------------------------------------------------------------------
-def _parse_interval_hours(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if not raw:
-        return default
-    try:
-        return float(raw.strip())
-    except ValueError:
-        return default
+_parse_interval_hours = parse_interval_hours
 
 
 MIN_INTERVAL_HOURS: float = _parse_interval_hours("MIN_INTERVAL_HOURS", 3.0)

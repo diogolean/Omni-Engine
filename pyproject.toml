@@ -4,7 +4,7 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["omni", "tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts"]
+src = ["omni", "tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -65,13 +65,14 @@ ignore = ["E501", "E402", "E731", "E741"]
 "channel_loader.py" = ["F401", "F841", "I001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config"]
+known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config", "shared"]
 
 # ADR 0008 M1. These names are today's packages, standing in for the target
 # layers until the moves land. CI runs them in report-only mode; M14 makes
 # the same contracts blocking.
 #
-# shared stand-in: utils.pipeline_paths, utils.process_tools
+# shared is the real layer (ADR 0008 M2). The utils shims stay until M14.
+# shared stand-in that remains: utils.pipeline_paths, utils.process_tools
 # animation: core.animator
 # production: engine, modules, agents.{media,writer,rag,orchestrator,mcp},
 #   models_avatar, core
@@ -87,6 +88,7 @@ root_packages = [
     "models_avatar",
     "modules",
     "omni",
+    "shared",
     "utils",
 ]
 include_external_packages = false
@@ -152,6 +154,7 @@ source_modules = [
     "agents",
     "core",
     "omni",
+    "shared",
     "utils",
     "models_avatar",
 ]
@@ -211,4 +214,19 @@ forbidden_modules = [
     "omni",
     "channels_config",
     "models_avatar",
+]
+
+[[tool.importlinter.contracts]]
+name = "Shared does not import the factory"
+type = "forbidden"
+source_modules = ["shared"]
+forbidden_modules = [
+    "engine",
+    "modules",
+    "agents",
+    "core",
+    "omni",
+    "channels_config",
+    "models_avatar",
+    "utils",
 ]

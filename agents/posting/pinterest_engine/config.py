@@ -32,6 +32,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from shared.env import parse_interval_hours, resolve_path
+
 logger = logging.getLogger(__name__)
 
 # Factory root (agents/posting/pinterest_engine/config.py → parents[3])
@@ -90,18 +92,8 @@ def _honour_blank_env_values(env_path: Path) -> None:
             os.environ[key.strip()] = ""
 
 
-def _resolve_path(value: str | None, default: Path) -> Path:
-    return Path((value or str(default))).expanduser()
-
-
-def _parse_interval_hours(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if not raw:
-        return default
-    try:
-        return float(raw.strip())
-    except ValueError:
-        return default
+_resolve_path = resolve_path
+_parse_interval_hours = parse_interval_hours
 
 
 def _safe_channel_id(channel_id: str) -> str:

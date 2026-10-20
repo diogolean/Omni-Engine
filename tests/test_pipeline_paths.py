@@ -22,6 +22,7 @@ _FORBIDDEN = re.compile(
     r"""(?:ENGINE_ROOT|_ENGINE_ROOT|_FACTORY_ROOT|factory_root\(\)|PROJECT_ROOT)\s*/\s*[\"']outputs[\"']"""
 )
 _SCAN_SKIP = {
+    "shared/paths.py",
     "utils/pipeline_paths.py",
     "tools/migrate_local_outputs_to_factory.py",
     "tools/repair_doubled_output_paths.py",

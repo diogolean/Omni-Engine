@@ -10,15 +10,17 @@ from typing import Sequence
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 
-from .puppet import PuppetRig, PuppetSkin
+from utils.pipeline_paths import windows_fonts_dir
+
 from .animator_types import SpeakerStyle
+from .puppet import PuppetRig, PuppetSkin
 
 
 def _font(size: int) -> ImageFont.ImageFont:
     for candidate in (
-        Path(r"C:\Windows\Fonts\impact.ttf"),
-        Path(r"C:\Windows\Fonts\arialbd.ttf"),
-        Path(r"C:\Windows\Fonts\seguisb.ttf"),
+        windows_fonts_dir() / "impact.ttf",
+        windows_fonts_dir() / "arialbd.ttf",
+        windows_fonts_dir() / "seguisb.ttf",
     ):
         if candidate.is_file():
             return ImageFont.truetype(str(candidate), size)

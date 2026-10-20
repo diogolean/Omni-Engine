@@ -84,6 +84,7 @@ try:
 except ImportError:
     pass
 
+from shared.logging import setup_cli_logging  # noqa: E402
 from agents.posting.youtube_publisher import (  # noqa: E402
     build_credentials,
     build_youtube_client,
@@ -107,15 +108,7 @@ from agents.posting.youtube_publisher import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def _setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    if not verbose:
-        for _noisy in ("googleapiclient.discovery", "google.auth", "urllib3"):
-            logging.getLogger(_noisy).setLevel(logging.WARNING)
+    setup_cli_logging(verbose)
 
 
 # ---------------------------------------------------------------------------
