@@ -33,26 +33,22 @@ _ANCIENT_MYSTERY_DEFAULT_THRESHOLD: float = 5.5
 
 
 def load_critic_profile(name: str) -> dict[str, Any]:
-    """Load ``critic_profiles/{name}.json`` from the factory root (cached)."""
+    """Load ``critic_profiles/{name}.json`` from this package (cached)."""
     key = (name or "").strip().lower()
     if not key:
         return {}
     cached = _CRITIC_PROFILE_CACHE.get(key)
     if cached is not None:
         return cached
-    candidates = [
-        config.PROJECT_ROOT / "critic_profiles" / f"{key}.json",
-        Path(__file__).resolve().parent / "critic_profiles" / f"{key}.json",
-    ]
-    for path in candidates:
-        try:
-            if path.is_file():
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    _CRITIC_PROFILE_CACHE[key] = data
-                    return data
-        except (OSError, json.JSONDecodeError) as exc:
-            _LOG.warning("critic profile %s unreadable (%s)", path, exc)
+    path = Path(__file__).resolve().parent / "critic_profiles" / f"{key}.json"
+    try:
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _CRITIC_PROFILE_CACHE[key] = data
+                return data
+    except (OSError, json.JSONDecodeError) as exc:
+        _LOG.warning("critic profile %s unreadable (%s)", path, exc)
     _CRITIC_PROFILE_CACHE[key] = {}
     return {}
 
