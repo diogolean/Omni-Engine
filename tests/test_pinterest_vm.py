@@ -684,6 +684,7 @@ def test_scheduler_waits_before_the_first_publish(monkeypatch: pytest.MonkeyPatc
     calls: list[object] = []
 
     monkeypatch.setattr("omni.worker.interval_seconds", lambda rng=None: 12)
+    monkeypatch.setattr("omni.worker.newest_pin_published", lambda: None)
 
     def fake_sleep(seconds, stop):
         calls.append(("sleep", seconds))
