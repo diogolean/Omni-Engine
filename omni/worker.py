@@ -1,12 +1,16 @@
 """Scheduler service that replaces the manual Pinterest drip loop.
 
 One wake publishes ``PINTEREST_PINS_PER_RUN`` image pins (default 1) for
-every active row in ``config/pinterest_accounts.yaml``. Media comes from
-B2 one object at a time. Video files are skipped. Before the first publish
-the process sleeps until the newest PinLedger ``published_utc`` plus one
-cadence draw (``MIN_INTERVAL_HOURS`` to ``MAX_INTERVAL_HOURS``, default
-3–6). If that moment is already past, it publishes immediately. An empty
-or unreachable ledger keeps the previous random 3–6h startup delay.
+every active row in ``config/pinterest_accounts.yaml``, and never more
+than ``PINTEREST_PINS_PER_DAY`` (default 4) once pins already recorded
+that UTC day are counted. Media comes from B2 one object at a time.
+Video files are skipped. Before the first publish the process sleeps
+until the newest PinLedger ``published_utc`` plus one cadence draw
+(``MIN_INTERVAL_HOURS`` to ``MAX_INTERVAL_HOURS``, default 3–6). If that
+moment is already past, it publishes immediately, still under the daily
+cap and the shared ledger duplicate check. A ``published_utc`` in the
+future cannot stretch that wait past ``MAX_INTERVAL_HOURS``. An empty or
+unreachable ledger keeps the previous random 3–6h startup delay.
 Between wakes it still sleeps a fresh random gap in that range.
 ``--once`` and ``--dry-run`` skip the initial delay. ``--dry-run`` builds
 the cards and does not call Pinterest.
@@ -139,6 +143,8 @@ def startup_delay_seconds(
     ``published_at`` is the newest pin time, or ``None`` when the ledger is
     empty or unreachable. ``None`` keeps the random 3–6h delay. Otherwise
     the wait is whatever remains of one cadence draw after that pin.
+    A stamp in the future (clock skew or a bad row) cannot push the wait
+    past ``MAX_INTERVAL_HOURS``.
     """
     cadence = interval_seconds(rng)
     if published_at is None:
@@ -150,7 +156,17 @@ def startup_delay_seconds(
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     remaining = (stamp + timedelta(seconds=cadence) - moment).total_seconds()
-    return max(0.0, remaining)
+    ceiling = max(0.0, _hours("MAX_INTERVAL_HOURS", _DEFAULT_MAX_HOURS)) * 3600.0
+    return min(max(0.0, remaining), ceiling)
+
+
+def _pins_per_day() -> int:
+    raw = (os.getenv("PINTEREST_PINS_PER_DAY") or "4").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 4
+    return value if value > 0 else 4
 
 
 def pins_per_wake() -> int:
@@ -158,8 +174,50 @@ def pins_per_wake() -> int:
     try:
         value = int(raw)
     except ValueError:
-        return 1
-    return value if value > 0 else 1
+        value = 1
+    if value <= 0:
+        value = 1
+    return min(value, _pins_per_day())
+
+
+def _pins_recorded_on(rows: Sequence[object], day) -> int:
+    count = 0
+    for row in rows:
+        if not isinstance(row, dict) or row.get("pin_recorded") is False:
+            continue
+        stamp = _parse_published_utc(row.get("published_utc"))
+        if stamp is not None and stamp.astimezone(timezone.utc).date() == day:
+            count += 1
+    return count
+
+
+def wake_pin_allowance(
+    account: Account,
+    *,
+    now: datetime | None = None,
+    read_rows: Callable[[Account], tuple[list[dict], bool]] | None = None,
+) -> int:
+    """How many pins this wake may publish for ``account``.
+
+    The request cannot exceed ``PINTEREST_PINS_PER_DAY``. Rows already
+    recorded on the current UTC day consume that budget. When the ledger
+    cannot be read, that count is unknown and only the per-wake cap applies.
+    """
+    requested = pins_per_wake()
+    moment = now or _utc_now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    rows_of = read_rows or _read_account_ledger
+    try:
+        rows, reachable = rows_of(account)
+    except Exception:  # noqa: BLE001 — unknown ledger must not add a full batch
+        log.info("Pin ledger unreadable for %s; keeping the per-wake cap", account.account_id)
+        return requested
+    if not reachable:
+        log.info("Pin ledger unreadable for %s; keeping the per-wake cap", account.account_id)
+        return requested
+    used = _pins_recorded_on(rows, moment.astimezone(timezone.utc).date())
+    return max(0, min(requested, _pins_per_day() - used))
 
 
 def run_pinterest_drip(
@@ -171,7 +229,22 @@ def run_pinterest_drip(
     """One image-card wake for ``account``. Videos and filename titles are skipped."""
     from omni.pinterest_drip import publish_account
 
-    quantity = pins if pins is not None else pins_per_wake()
+    if pins is None:
+        quantity = wake_pin_allowance(account)
+        if quantity <= 0:
+            log.info(
+                "Pinterest daily cap reached for %s; this wake publishes nothing",
+                account.account_id,
+            )
+            return {
+                "published": 0,
+                "skipped": 0,
+                "errors": 0,
+                "remaining": 0,
+                "skipped_reason": "daily_cap",
+            }
+    else:
+        quantity = pins
     return publish_account(account, pins=quantity, dry_run=dry_run)
 
 
