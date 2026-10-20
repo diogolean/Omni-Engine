@@ -12,10 +12,10 @@ Pinterest and the PC runner can both see the same B2 prefix. Publishing from mem
 
 The publish record lives with the outputs that both runners can see, backed by the B2 object identity:
 
-- `outputs/pinterest/published_pins.json` (`omni/pinterest_drip.PublishedPins`) stores account, B2 object key, article, and pin id.
-- `publish_ledger.json` beside it (`omni/publisher.FileIdempotencyStore`) remembers a successful publish key so a replay does not post twice.
+- The live pin record is the B2 ledger `pinterest/ledger/<account>.jsonl` (`distribution/scheduling/ledger.py`). It stores account, source, and pin id.
+- `$OUTPUT_PATH/_omni/publish_ledger.json` (`distribution.publishers.base.FileIdempotencyStore`, override `OMNI_LEDGER_PATH`) remembers a successful publish key so a replay does not post twice.
 - Before a pin is created, keys already in the ledger for that account are removed from the pending list.
-- Each branding has its own board id (`PINTEREST_BOARD_ID_<BRANDING>` via `omni/accounts.py`). Dedupe is per account and per object, so two brands can use one bucket without sharing a board.
+- Each branding has its own board id (`PINTEREST_BOARD_ID_<BRANDING>` via `accounts/tokens.py`). Dedupe is per account and per object, so two brands can use one bucket without sharing a board.
 
 The VM scheduler and a PC run of the same drip consult the same ledger. They do not each keep a private “already pinned” set.
 

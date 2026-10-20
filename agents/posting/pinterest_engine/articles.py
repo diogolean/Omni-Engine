@@ -521,7 +521,7 @@ def image_map_path() -> Path:
     override = (os.getenv("PINTEREST_IMAGE_MAP") or "").strip()
     if override:
         return Path(override).expanduser()
-    from omni.config import repo_root  # noqa: PLC0415
+    from accounts.brandings import repo_root  # noqa: PLC0415
 
     return repo_root() / "config" / "pinterest_image_map.yaml"
 

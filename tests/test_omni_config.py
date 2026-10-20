@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from omni.accounts import remember_rotated_token, resolve_pinterest_token
-from omni.config import BrandingConfigError, active_accounts, load_brandings
-from omni.models import Account
-from omni.worker import interval_seconds, run_cycle
+from accounts.brandings import BrandingConfigError, active_accounts, load_brandings
+from accounts.tokens import remember_rotated_token, resolve_pinterest_token
+from distribution.publishers.base import Account
+from distribution.workers.runtime import interval_seconds, run_cycle
 
 
 def test_brandings_model_multiple_pinterest_accounts() -> None:
@@ -169,7 +169,7 @@ def test_scheduler_cycle_publishes_only_active_pinterest(monkeypatch: pytest.Mon
         assert dry_run is False
         return {"published": 0, "errors": 0}
 
-    monkeypatch.setattr("omni.worker.run_pinterest_drip", _fake_drip)
+    monkeypatch.setattr("distribution.workers.runtime.run_pinterest_drip", _fake_drip)
     results = run_cycle()
     assert seen == ["ancient_knowledge", "anna_protocol"]
     assert [row["branding"] for row in results] == seen

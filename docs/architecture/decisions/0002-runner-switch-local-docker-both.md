@@ -15,7 +15,7 @@ Every job class picks one runner mode:
 | Mode | Where it runs | Examples |
 |---|---|---|
 | `local` | PC runner | Aiwake animated render (`channels_config/aiwake/`, `core/animator/`), Master Mei batches, anything that still resolves `WINDOWS_FACTORY_ROOT` |
-| `docker` | Oracle VM containers | `omni.worker --role engine`, Pinterest scheduler, YouTube `publishAt` from `main.py` |
+| `docker` | Oracle VM containers | `distribution.workers --role engine`, Pinterest scheduler, YouTube `publishAt` from `main.py` |
 | `both` | Either runner, same B2 objects | Upload a finished MP4, read the library, append the publish ledger |
 
 There is no single `RUNNER=` environment variable yet. The mode is expressed by where the operator starts the process, plus:

@@ -14,13 +14,13 @@ Accepted. Design only: no code moves in this PR. The draft refactor PRs #37–#4
 |---|---|
 | M0 | Accepted. This document. |
 | M1 | Import-linter contracts run in CI in report-only mode. |
-| M1b | Scheduler resume from the newest real `published_utc` is in `distribution/workers/runtime.py` (shim: `omni.worker`). |
+| M1b | Scheduler resume from the newest real `published_utc` is in `distribution/workers/runtime.py`. |
 | M2 | `shared/` has env, paths, logging, ffmpeg, mime, and retry. Old `utils.*` modules are shims. |
 | M3 | `shared.store`, `shared.contracts` (`ContentItem` v1), and `shared.memory` landed. Old module paths are shims. |
-| M4 | Publishers are the home of the `Publisher` protocol. This step also moved the live `omni/` modules, because retiring that package is what makes the protocol the only publisher home. Shims stay where compose, Docker, and current imports still enter. |
+| M4 | Publishers are the home of the `Publisher` protocol. This step moved the live `omni/` modules. Thin shims stay at the old import paths. |
 | M5 | Partially included with M4: drip, the Pinterest scheduler, the pin ledger, the Facebook queue, inventory, and library source now live under `distribution/scheduling/`. The per-channel `$OUTPUT_PATH/_omni/locks/<canal>.lock` is not added. |
-| M6 | Partially included with M4: the worker runtime lives in `distribution/workers/runtime.py`. `python -m omni.worker` is still the compose and VM entry. The file lock from M5 is not taken yet. |
-| M7 | Not started. Compose `command:` is still `python -m omni.worker`. Service names, profiles, and bind mounts are unchanged. |
+| M6 | Partially included with M4: the worker runtime lives in `distribution/workers/runtime.py`. M7 switched the compose and VM entry to `python -m distribution.workers`. The file lock from M5 is not taken yet. |
+| M7 | Entrypoint switched. Compose `command:` and the Dockerfile `CMD` are `python -m distribution.workers` with the same `--role`, `--once`, `--dry-run`, `--account`, and `--pins` flags. Service names, profiles, bind mounts, and the absence of a healthcheck are unchanged. `omni/` stays as thin shims so `python -m omni.worker` still runs. Those shims come out only after a deploy on the new entrypoint is confirmed. |
 
 M4 places the account loaders in the top-level `accounts/` package from the naming note above (`brandings`, `tokens`, `pinterest`), not under `distribution/accounts/`.
 
@@ -30,8 +30,8 @@ What moved, what merged, and what was deleted is listed in the M4 pull request. 
 * `agents/posting/pinterest_main.py` and `agents/posting/publish_existing.py` stay. They are live CLIs. The ADR maps them to `tools/` later. They are not dead.
 * `agents/posting/youtube_publisher.py` did move, to `distribution/publishers/api/youtube_upload.py`, and still calls `agents.media.content_source` for a Drive-only file. That edge is the same call as before. It shows up in the report-only import-linter until B2/Drive clients live in `shared`.
 * `distribution/scheduling/{scheduler,ledger,library_source,queue}.py` still call `agents.media` for B2, Drive, and imgbb. Same calls, new module path. The import-linter gate for “no distribution → production” is not green for those edges; M3 moved the durable store to `shared.store`, and these clients are still the media package.
-* Interval and resume helpers (`interval_seconds`, `startup_delay_seconds`) stay on the worker module so `omni.worker.interval_seconds` remains the one object tests and the process call.
-* `omni/` remains as `sys.modules` shims (`omni.worker` is `distribution.workers.runtime`, and the same for the other modules). Docker, compose, and `python -m omni.worker` still enter there. The shims come out at M14, after the entrypoint switch (M7) and clean scheduler cycles. Nothing in `omni/` is an implementation anymore.
+* Interval and resume helpers (`interval_seconds`, `startup_delay_seconds`) stay on `distribution.workers.runtime`. Tests and the process call that module.
+* Callers and tests import `distribution` and `accounts` directly. `omni/` remains a `sys.modules` shim (`omni.worker` is `distribution.workers.runtime`, and the same for the other modules) so `python -m omni.worker` is a fallback. Compose and the Dockerfile do not enter there. The shims come out after a deploy on the new entrypoint is confirmed. Logger names `omni.worker` and `omni.pinterest_drip` stay. Other shims (`utils.*`, `agents/posting/*` publisher paths) stay until M14.
 
 ## Context
 
@@ -310,22 +310,22 @@ Every PR follows the same rules: `git mv` plus a `sys.modules` shim at the old p
 | M3 | `shared/store`, `shared/contracts` (**`ContentItem` v1**, see below), `shared/memory` | Exit gate: production writes `ContentItem` v1 and distribution reads it without importing production; old readers still work through adapters. M4 does not start before this passes. |
 | M4 | `distribution/publishers` (base, registry, api, browser, export) — the only home of the `Publisher` protocol | Exit gate: import-linter shows no `distribution → production` import; publisher tests green. |
 | M5 | `distribution/accounts` + `distribution/scheduling` (ledger, drip, cadence, queue) | Exit gate: ledger paths and old/new idempotency keys pinned by tests; all three Pinterest stores unchanged (see *Pinterest state safety*). Adds, as an extra within one host only, a per-channel file lock at `$OUTPUT_PATH/_omni/locks/<canal>.lock`, even with 1 replica: a manual CLI run or `publish_existing` running alongside the scheduler can duplicate pins. It does **not** coordinate the PC and the VM; the single-writer fence below does. |
-| M6 | `distribution/workers` (runtime + jobs); `omni.worker` becomes a shim | entrypoint unchanged. Every publishing path (scheduler, CLI, `publish_existing`) takes the `<canal>.lock` from M5 before reading or writing the ledger. Exit gate: smoke both compose roles (`--role engine` and `--role scheduler`, both run `omni.worker` today) with `--once --dry-run`. |
-| M7 | **Entrypoint switch** to `python -m distribution.workers` | Only the compose `command:` changes. Service names (`engine`, `scheduler`), profiles and bind mounts stay the same. (There is no compose healthcheck today.) Exit gate: VM procedure below, both roles smoked. |
+| M6 | `distribution/workers` (runtime + jobs) | The entrypoint switch is M7. Every publishing path (scheduler, CLI, `publish_existing`) takes the `<canal>.lock` from M5 before reading or writing the ledger. Exit gate: smoke both compose roles (`--role engine` and `--role scheduler`) with `--once --dry-run`. |
+| M7 | **Entrypoint switch** to `python -m distribution.workers`. Compose `command:` and the Dockerfile `CMD` use that module. `omni/` stays as a thin fallback until a deploy on the new entrypoint is confirmed. | Service names (`engine`, `scheduler`), profiles and bind mounts stay the same. (There is no compose healthcheck today.) Flags stay `--role`, `--once`, `--dry-run`, `--account`, `--pins`. Exit gate: VM procedure below, both roles smoked. |
 | M8 | `production/` moves in 3 PRs: providers+cost → qa+media → pipeline+formats+writers+library | `config.py` split last |
 | M9 | **Split, not rename.** `core/animator` → `animation/`; Aiwake-specific arena names, character manifests, voices, puppet factories (`factory/create_puppet.py`) and harness output paths → `products/aiwake/`; `core.google_guardrail` / `core.utils.fingerprint_engine` imports (used by `renderer.py`, `create_puppet.py`) → `shared`; ffmpeg calls (`renderer.py`, `pipeline.py`, `audio_analyzer.py`, `rhubarb.py`) → `shared/ffmpeg`. `animation.api` starts as a compatibility facade over today's `render_dynamic_animation`; internals go private only after callers move. Remove production's dependencies on Aiwake assets and the 5 engine→Aiwake couplings. | Contract: animation imports only shared. |
 | M10 | `products/aiwake/` move | Aiwake tests and import smoke in their own CI job |
 | M11 | `channels/` (data) and persona loader unification | per-channel byte-identical prompts test |
 | M12 | `deploy/` tree + `deploy.yml` path update. Compose under `deploy/compose/` changes relative paths: `build.context: .`, the Dockerfile, `env_file: .env`, bind mounts `./outputs`, `./credentials`, `./.env`, `./channels_config→channels_env`, `./state/ancient_knowledge/store`, and `docker/supermemory`. Either set `context: ../..` and `--project-directory` explicitly, or keep the workflow copying compose to the VM root. Test both the local invocation and `/opt/omni-engine/docker-compose.yml`. | Also updates the scp paths in `deploy.yml`, moves `.github/scripts/remote-deploy.sh` to `deploy/vm/remote-deploy.sh` (the workflow calls it from there) and covers `backup_supermemory.sh`. On the VM, compose stays at `/opt/omni-engine/docker-compose.yml`. Needs a cloud agent with `workflow` scope, plus a VM check. |
 | M13 | `scripts/` → `tools/`; `portfolio_showcase` decision | — |
-| M14 | Remove shims only when every consumer has migrated (imports, CLI `python -m` strings, compose/workflow/docs module strings, monkeypatch targets), checked by `rg`, **and** after 1–2 clean scheduler cycles; import-linter becomes blocking | — |
+| M14 | Remove the remaining shims (`utils.*`, `agents/posting/*`, `modules.durable_store`, and the other M2/M3 aliases) only when every consumer has migrated, checked by `rg`, **and** after 1–2 clean scheduler cycles. The `omni/` fallback comes out in its own PR after the M7 deploy is confirmed. Import-linter becomes blocking. | — |
 | M15 | README rewrite (outline below) | — |
 
 Governance: every step that changes a home updates `AGENTS.md` and `docs/architecture/REPO_LAYOUT.md` (and the root-layout test allowlist) in the same PR, not at M15.
 
 #### `ContentItem` v1 (defined in M3, before M4)
 
-Today there are four shapes: the dict rows written by `engine/pipeline/stage_publish.py`; `DistributionRecord` (`modules/distribution_contract.py`, stored in `channels_config/<channel>/store/content_library.json`); `omni.models.Content`; and Pinterest's `outputs/<channel>/{content_library.json,library/}`.
+Today there are four shapes: the dict rows written by `engine/pipeline/stage_publish.py`; `DistributionRecord` (`modules/distribution_contract.py`, stored in `channels_config/<channel>/store/content_library.json`); `distribution.publishers.base.Content`; and Pinterest's `outputs/<channel>/{content_library.json,library/}`.
 
 - **Schema:** one pydantic model `shared.contracts.ContentItem` with `schema_version: 1`, based on `DistributionRecord` (the richest of the four).
 - **Canonical path:** `channels_config/<channel>/store/content_library.json`, mirrored through `shared.store`. (`channels_config/` keeps its name; see *Naming recorded at M3*.)
@@ -334,7 +334,7 @@ Today there are four shapes: the dict rows written by `engine/pipeline/stage_pub
 
 #### Pinterest state safety (M5–M7)
 
-The live path is `omni.worker → omni.pinterest_drip → PinterestScheduler`. Its state is **not** `_omni/publish_ledger.json`. It is three stores:
+The live path is `distribution.workers → distribution.scheduling.drip → PinterestScheduler`. Its state is **not** `_omni/publish_ledger.json`. It is three stores:
 1. B2 `PinLedger`: `pinterest/ledger/<account>.jsonl` (`agents/posting/pinterest_engine/ledger.py`);
 2. per-channel `master_inventory.json`;
 3. per-channel `scheduled_history.txt`.
@@ -365,7 +365,7 @@ Rollback: redeploy the previous image tag, run reconcile, and restore the backup
 | Risk | Level | Mitigation |
 |---|---|---|
 | Double post after the worker move (new ledger path or key) | High | path and key pinned by tests; scheduler stopped across the switch; single replica; ledger row count before and after |
-| Deploy break on the entrypoint or compose path change | Medium | old entry kept as a shim until M14; VM check by Automação & Nuvem; ADR 0004 keeps publishing off |
+| Deploy break on the entrypoint or compose path change | Medium | `python -m omni.worker` stays as a fallback until the new entrypoint has been deployed; VM check by Automação & Nuvem; ADR 0004 keeps publishing off |
 | Hidden dynamic imports (`importlib`, page_config by path, `python -m` in docs/cron) | Medium | shims at every old path; `rg` of docs/compose/workflows per PR; scheduler dry-run |
 | Monkeypatch-by-string in tests | Low | `sys.modules` aliasing keeps one module object |
 | Animation extraction reveals Aiwake-specific code in core/animator | Medium | move only after import-linter reports zero `animation → products` edges |
