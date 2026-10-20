@@ -66,3 +66,149 @@ ignore = ["E501", "E402", "E731", "E741"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config"]
+
+# ADR 0008 M1. These names are today's packages, standing in for the target
+# layers until the moves land. CI runs them in report-only mode; M14 makes
+# the same contracts blocking.
+#
+# shared stand-in: utils.pipeline_paths, utils.process_tools
+# animation: core.animator
+# production: engine, modules, agents.{media,writer,rag,orchestrator,mcp},
+#   models_avatar, core
+# distribution: omni, agents.posting
+# products.aiwake: channels_config.aiwake
+# channels: the other channels_config packages
+[tool.importlinter]
+root_packages = [
+    "agents",
+    "channels_config",
+    "core",
+    "engine",
+    "models_avatar",
+    "modules",
+    "omni",
+    "utils",
+]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Animation does not import products, distribution, or the factory pipeline"
+type = "forbidden"
+source_modules = ["core.animator"]
+forbidden_modules = [
+    "channels_config",
+    "omni",
+    "agents",
+    "engine",
+    "modules",
+    "models_avatar",
+]
+
+[[tool.importlinter.contracts]]
+name = "Production does not import distribution"
+type = "forbidden"
+source_modules = [
+    "engine",
+    "modules",
+    "agents.media",
+    "agents.writer",
+    "agents.rag",
+    "agents.orchestrator",
+    "agents.mcp",
+    "models_avatar",
+    "core",
+]
+forbidden_modules = [
+    "omni",
+    "agents.posting",
+]
+
+[[tool.importlinter.contracts]]
+name = "Distribution does not import production, animation, or products"
+type = "forbidden"
+source_modules = [
+    "omni",
+    "agents.posting",
+]
+forbidden_modules = [
+    "engine",
+    "modules",
+    "agents.media",
+    "agents.writer",
+    "agents.rag",
+    "agents.orchestrator",
+    "agents.mcp",
+    "models_avatar",
+    "core",
+    "channels_config.aiwake",
+]
+
+[[tool.importlinter.contracts]]
+name = "Factory code does not import Aiwake"
+type = "forbidden"
+source_modules = [
+    "engine",
+    "modules",
+    "agents",
+    "core",
+    "omni",
+    "utils",
+    "models_avatar",
+]
+forbidden_modules = ["channels_config.aiwake"]
+
+[[tool.importlinter.contracts]]
+name = "Aiwake does not import the production pipeline"
+type = "forbidden"
+source_modules = ["channels_config.aiwake"]
+forbidden_modules = [
+    "engine",
+    "modules",
+    "agents.media",
+    "agents.writer",
+    "agents.rag",
+    "agents.orchestrator",
+    "agents.mcp",
+    "models_avatar",
+]
+
+[[tool.importlinter.contracts]]
+name = "Channel packages do not import the factory or Aiwake"
+type = "forbidden"
+source_modules = [
+    "channels_config.ancient_knowledge",
+    "channels_config.anna_protocol",
+    "channels_config.down_dirty",
+    "channels_config.endless_summer_paradise",
+    "channels_config.master_mei",
+    "channels_config.momma_circle",
+    "channels_config.principles_of_wealth_finance_economics",
+    "channels_config.shared",
+    "channels_config.wonder_feed",
+]
+forbidden_modules = [
+    "engine",
+    "modules",
+    "agents",
+    "core",
+    "omni",
+    "models_avatar",
+    "channels_config.aiwake",
+]
+
+[[tool.importlinter.contracts]]
+name = "Path and process helpers do not import the factory"
+type = "forbidden"
+source_modules = [
+    "utils.pipeline_paths",
+    "utils.process_tools",
+]
+forbidden_modules = [
+    "engine",
+    "modules",
+    "agents",
+    "core",
+    "omni",
+    "channels_config",
+    "models_avatar",
+]
