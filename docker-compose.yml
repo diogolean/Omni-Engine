@@ -62,6 +62,7 @@ services:
       MIN_INTERVAL_HOURS: ${MIN_INTERVAL_HOURS:-3}
       MAX_INTERVAL_HOURS: ${MAX_INTERVAL_HOURS:-6}
       PINTEREST_PINS_PER_RUN: ${PINTEREST_PINS_PER_RUN:-1}
+      PINTEREST_DAY_TZ: ${PINTEREST_DAY_TZ:-America/Sao_Paulo}
       PUBLISHER_MODE: docker
     volumes:
       - ./outputs:/opt/omni-engine/outputs

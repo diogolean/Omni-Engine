@@ -321,10 +321,11 @@ def test_daily_allowance_counts_recorded_pins_from_today_only(
     monkeypatch.setenv("PINTEREST_PINS_PER_DAY", "2")
     rows = [
         {"post_id": "yesterday", "published_utc": "2026-10-19T23:00:00Z"},
-        {"post_id": "today", "published_utc": "2026-10-20T01:00:00Z"},
+        # 04:00Z is 01:00 in America/Sao_Paulo, so this pin is on the 20th.
+        {"post_id": "today", "published_utc": "2026-10-20T04:00:00Z"},
         {
             "post_id": "note",
-            "published_utc": "2026-10-20T02:00:00Z",
+            "published_utc": "2026-10-20T05:00:00Z",
             "pin_recorded": False,
         },
     ]
@@ -368,7 +369,7 @@ def test_immediate_restart_publishes_nothing_once_the_daily_cap_is_full(
     monkeypatch.setenv("PINTEREST_PINS_PER_RUN", "5")
     monkeypatch.setenv("PINTEREST_PINS_PER_DAY", "2")
     rows = [
-        {"post_id": "already-one", "published_utc": "2026-10-20T01:00:00Z"},
+        {"post_id": "already-one", "published_utc": "2026-10-20T04:00:00Z"},
         {"post_id": "already-two", "published_utc": "2026-10-20T08:00:00Z"},
         {
             "post_id": "facebook-note",
@@ -472,3 +473,203 @@ def test_immediate_restart_keeps_the_daily_cap_and_ledger_dedupe(
     assert stats["published"] == 1
     assert stats["skipped"] >= 1
     assert {pin["post_id"] for pin in stats.get("pins") or []} == {"post_giants"}
+
+
+def test_seed_does_not_rewrite_a_pin_id_that_already_exists(
+    budget: Path, tmp_path: Path
+) -> None:
+    """An existing pin_id is left untouched, including older duplicate rows."""
+    import json
+
+    del budget
+    original = [
+        {
+            "account": "acct",
+            "post_id": "",
+            "title": "Old title",
+            "pin_id": "pin-1",
+            "source_hash": "",
+            "article": "",
+            "seeded": True,
+            "published_utc": "2026-09-01T00:00:00Z",
+        },
+        {
+            "account": "acct",
+            "post_id": "post-real",
+            "title": "Real pin",
+            "pin_id": "pin-1",
+            "source_hash": "abc",
+            "article": "https://example.test/a",
+            "seeded": False,
+            "published_utc": "2026-10-19T08:00:00Z",
+        },
+    ]
+    cache = tmp_path / "acct.jsonl"
+    cache.write_text("".join(json.dumps(row) + "\n" for row in original), encoding="utf-8")
+    before = cache.read_bytes()
+    client = _Client()
+    ledger = PinLedger("acct", client=client, bucket="bucket", cache_path=cache)
+    ledger.rows = [dict(row) for row in original]
+
+    added = ledger.seed_board_pins(
+        [
+            {"id": "pin-1", "title": "Renamed on the board"},
+            {"pin_id": "pin-1", "title": "Another spelling"},
+        ]
+    )
+    assert added == 0
+    assert client.puts == 0
+    assert cache.read_bytes() == before
+    assert ledger.rows == original
+
+    dry = PinLedger("acct", client=client, bucket="bucket", cache_path=cache)
+    dry.rows = [dict(row) for row in original]
+    noted = dry.seed_board_pins([{"id": "pin-9", "title": "Dry run"}], persist=False)
+    assert noted == 1
+    assert client.puts == 0
+    assert cache.read_bytes() == before
+    assert dry.rows[-1]["pin_id"] == "pin-9"
+    assert dry.rows[-1]["seeded"] is True
+    assert dry.rows[:2] == original
+
+    added = ledger.seed_board_pins(
+        [
+            {"id": "pin-1", "title": "Still the old pin"},
+            {"id": "pin-2", "title": "Brand new"},
+            {"id": "pin-2", "title": "Same new id twice"},
+        ]
+    )
+    assert added == 1
+    assert client.puts == 1
+    assert ledger.rows[:2] == original
+    assert ledger.rows[2]["pin_id"] == "pin-2"
+    assert ledger.rows[2]["seeded"] is True
+    assert ledger.rows[2]["title"] == "Brand new"
+    stored = [json.loads(line) for line in cache.read_text(encoding="utf-8").splitlines()]
+    assert stored[:2] == original
+    assert [row["pin_id"] for row in stored].count("pin-1") == 2
+
+    puts = client.puts
+    snapshot = cache.read_bytes()
+    again = ledger.seed_board_pins(
+        [
+            {"id": "pin-1", "title": "Renamed"},
+            {"id": "pin-2", "title": "Brand new, retitled"},
+        ]
+    )
+    assert again == 0
+    assert client.puts == puts
+    assert cache.read_bytes() == snapshot
+    assert ledger.rows[2]["title"] == "Brand new"
+    assert ledger.rows[2]["published_utc"] == stored[2]["published_utc"]
+
+
+def test_seeded_rows_do_not_move_resume_or_spend_the_daily_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PINTEREST_PINS_PER_RUN", "5")
+    monkeypatch.setenv("PINTEREST_PINS_PER_DAY", "2")
+    monkeypatch.delenv("PINTEREST_DAY_TZ", raising=False)
+    rows = [
+        {
+            "pin_id": "real",
+            "published_utc": "2026-10-20T08:00:00Z",
+            "seeded": False,
+        },
+        {"pin_id": "dup", "published_utc": "2026-10-20T11:30:00Z", "seeded": True},
+        {"pin_id": "dup", "published_utc": "2026-10-20T11:40:00Z", "seeded": True},
+        {"pin_id": "dup", "published_utc": "2026-10-20T11:45:00Z", "seeded": True},
+        {"pin_id": "dup", "published_utc": "2026-10-20T11:50:00Z", "seeded": True},
+        {"pin_id": "dup", "published_utc": "2026-10-20T11:55:00Z", "seeded": True},
+    ]
+
+    stamp = newest_pin_published(
+        [_account("acct")],
+        read_rows=lambda _account: (rows, True),
+    )
+    assert stamp == datetime(2026, 10, 20, 8, 0, tzinfo=timezone.utc)
+    assert (
+        newest_pin_published(
+            [_account("acct")],
+            read_rows=lambda _account: (
+                [{"published_utc": "2026-10-20T11:00:00Z", "seeded": True, "pin_id": "dup"}],
+                True,
+            ),
+        )
+        is None
+    )
+
+    allowed = wake_pin_allowance(
+        _account("acct"),
+        now=_NOW,
+        read_rows=lambda _account: (rows, True),
+    )
+    assert allowed == 1
+
+
+def test_daily_cap_counts_the_calendar_day_in_pinterest_day_tz(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PINTEREST_PINS_PER_RUN", "4")
+    monkeypatch.setenv("PINTEREST_PINS_PER_DAY", "1")
+    # 02:30Z is still the 19th in Sao Paulo. 03:30Z is the 20th there, and
+    # both stamps are the 20th in UTC.
+    late_utc = [{"published_utc": "2026-10-20T02:30:00Z", "seeded": False, "pin_id": "late"}]
+    local_today = [{"published_utc": "2026-10-20T03:30:00Z", "seeded": False, "pin_id": "local"}]
+
+    monkeypatch.delenv("PINTEREST_DAY_TZ", raising=False)
+    assert (
+        wake_pin_allowance(
+            _account("acct"),
+            now=_NOW,
+            read_rows=lambda _account: (late_utc, True),
+        )
+        == 1
+    )
+    assert (
+        wake_pin_allowance(
+            _account("acct"),
+            now=_NOW,
+            read_rows=lambda _account: (local_today, True),
+        )
+        == 0
+    )
+
+    monkeypatch.setenv("PINTEREST_DAY_TZ", "America/Sao_Paulo")
+    assert (
+        wake_pin_allowance(
+            _account("acct"),
+            now=_NOW,
+            read_rows=lambda _account: (late_utc, True),
+        )
+        == 1
+    )
+
+    monkeypatch.setenv("PINTEREST_DAY_TZ", "UTC")
+    assert (
+        wake_pin_allowance(
+            _account("acct"),
+            now=_NOW,
+            read_rows=lambda _account: (late_utc, True),
+        )
+        == 0
+    )
+
+    monkeypatch.setenv("PINTEREST_DAY_TZ", "Not/AZone")
+    assert (
+        wake_pin_allowance(
+            _account("acct"),
+            now=_NOW,
+            read_rows=lambda _account: (late_utc, True),
+        )
+        == 1
+    )
+    monkeypatch.setenv("PINTEREST_DAY_TZ", "   ")
+    assert (
+        wake_pin_allowance(
+            _account("acct"),
+            now=_NOW,
+            read_rows=lambda _account: (local_today, True),
+        )
+        == 0
+    )
