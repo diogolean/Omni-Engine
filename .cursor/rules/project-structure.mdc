@@ -7,7 +7,7 @@ alwaysApply: true
 
 Follow `docs/architecture/REPO_LAYOUT.md` and `AGENTS.md`.
 
-The repository root holds entry points, config, containers, CI, docs, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, `engine/`, `agents/`, `channels_config/`, `config/`, `core/`, `omni/`, `shared/`, `utils/`, `tests/`, `docs/`).
+The repository root holds entry points, config, containers, CI, docs, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, `engine/`, `agents/`, `accounts/`, `distribution/`, `channels_config/`, `config/`, `core/`, `omni/`, `shared/`, `utils/`, `tests/`, `docs/`).
 
 - Write temp files with `temp_path(channel, *parts)` from `shared/paths.py` (`utils/pipeline_paths.py` is the same module). That resolves to `outputs/<channel>/_tmp/`.
 - Write preview and review dumps with `review_path(channel, *parts)`. That resolves to `outputs/<channel>/_review/`.
@@ -15,7 +15,7 @@ The repository root holds entry points, config, containers, CI, docs, and top-le
 - Put tests in `tests/` or `channels_config/<channel>/tests/`. Pytest must collect them from there.
 - Secrets belong in `.env` only. Never hardcode tokens.
 - Channel store state in `channels_config/<channel>/store/` stays gitignored and dockerignored, and only lives in the owner's Drive backup. `channels_config/aiwake/store/portfolio/` stays tracked and in the image. Files already tracked in `core/economic_reel_lofi/store/` stay in git, and `aphorism_recent.json` stays gitignored. `.cursor/rules/` is versioned. `scene_library/`, `artefact_cache/`, and `reel_checkpoints/` under a channel store stay gitignored.
-- Do not rename `omni/`, `agents/media/`, compose services `engine` and `scheduler`, the `memory` profile, `channels_config/*/store`, `scene_library`, or `artefact_cache`.
+- Do not remove the `omni/` shims. Publishers live in `distribution/publishers/`, scheduling in `distribution/scheduling/`, the worker in `distribution/workers/`, and the account registry in `accounts/`. `python -m omni.worker` stays the VM entry. Do not rename `agents/media/`, compose services `engine` and `scheduler`, the `memory` profile, `channels_config/*/store`, `scene_library`, or `artefact_cache`.
 - Delete a temp folder once nothing references it.
 
 Never create `_tmp*`, `_cp_preview`, `_review`, or log folders at the repository root. Never commit `outputs/`, video, `*.npz`, `*.psd`, or error screenshots.

@@ -1,1 +1,1 @@
-"""Platform adapters. Each one delegates to the publisher that already ships."""
+"""Compatibility package. Adapters live in ``distribution.publishers.api``."""

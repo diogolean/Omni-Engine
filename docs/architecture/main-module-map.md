@@ -17,7 +17,7 @@ Import order is load-bearing. `ACTIVE_PAGE` is set before `engine.runtime` impor
 | Compile | `engine/pipeline/stage_compile_reel.py` | `core/reel_sequence_engine.py`, `agents/media/video_engine.py` |
 | QA seal | after compile, still inside the compile stage | `modules/reel_qa/pipeline.py` |
 | Reporting | `engine/reporting.py` | cost tracker |
-| Publish | `engine/pipeline/stage_publish.py`; YouTube block in `engine/cli_run.py` | `agents/posting/post_planner.py`, `omni/adapters/youtube.py` |
+| Publish | `engine/pipeline/stage_publish.py`; YouTube block in `engine/cli_run.py` | `distribution/publishers/export/post_planner.py`, `distribution/publishers/api/youtube.py` (old paths are shims) |
 | Agentic stills | `engine/pipeline/agentic.py` (`_produce_agentic`, `_persist_agentic_postplanner`) | `agents/orchestrator/` |
 | CLI | `engine/cli.py` calls `engine/cli_parser.py` then `engine/cli_run.py` | the modules above |
 

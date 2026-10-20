@@ -4,7 +4,7 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["omni", "tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared"]
+src = ["omni", "tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -63,9 +63,21 @@ ignore = ["E501", "E402", "E731", "E741"]
 "main.py" = ["F401", "F841", "I001"]
 "config.py" = ["F401", "F841", "I001"]
 "channel_loader.py" = ["F401", "F841", "I001"]
+# Moved out of agents/posting with the same legacy lint debt. New distribution
+# modules (base, registry, drip, the worker, accounts) are not listed here.
+"distribution/publishers/api/pinterest.py" = ["F401", "F841", "I001"]
+"distribution/publishers/api/pinterest_oauth.py" = ["F401", "F841", "I001"]
+"distribution/publishers/api/youtube_upload.py" = ["F401", "F841", "I001"]
+"distribution/publishers/browser/**" = ["F401", "F841", "I001"]
+"distribution/publishers/export/**" = ["F401", "F841", "I001"]
+"distribution/scheduling/inventory.py" = ["F401", "F841", "I001"]
+"distribution/scheduling/ledger.py" = ["F401", "F841", "I001"]
+"distribution/scheduling/library_source.py" = ["F401", "F841", "I001"]
+"distribution/scheduling/queue.py" = ["F401", "F841", "I001"]
+"distribution/scheduling/scheduler.py" = ["F401", "F841", "I001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config", "shared"]
+known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts"]
 
 # ADR 0008 M1. These names are today's packages, standing in for the target
 # layers until the moves land. CI runs them in report-only mode; M14 makes
@@ -77,7 +89,7 @@ known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "ch
 # animation: core.animator
 # production: engine, modules, agents.{media,writer,rag,orchestrator,mcp},
 #   models_avatar, core
-# distribution: omni, agents.posting
+# distribution: distribution, accounts, and the shims omni + agents.posting
 # products.aiwake: channels_config.aiwake
 # channels: the other channels_config packages
 [tool.importlinter]
@@ -91,6 +103,8 @@ root_packages = [
     "omni",
     "shared",
     "utils",
+    "distribution",
+    "accounts",
 ]
 include_external_packages = false
 
@@ -101,6 +115,8 @@ source_modules = ["core.animator"]
 forbidden_modules = [
     "channels_config",
     "omni",
+    "distribution",
+    "accounts",
     "agents",
     "engine",
     "modules",
@@ -123,6 +139,8 @@ source_modules = [
 ]
 forbidden_modules = [
     "omni",
+    "distribution",
+    "accounts",
     "agents.posting",
 ]
 
@@ -130,6 +148,8 @@ forbidden_modules = [
 name = "Distribution does not import production, animation, or products"
 type = "forbidden"
 source_modules = [
+    "distribution",
+    "accounts",
     "omni",
     "agents.posting",
 ]
@@ -155,6 +175,8 @@ source_modules = [
     "agents",
     "core",
     "omni",
+    "distribution",
+    "accounts",
     "shared",
     "utils",
     "models_avatar",
@@ -196,6 +218,8 @@ forbidden_modules = [
     "agents",
     "core",
     "omni",
+    "distribution",
+    "accounts",
     "models_avatar",
     "channels_config.aiwake",
 ]
@@ -213,6 +237,8 @@ forbidden_modules = [
     "agents",
     "core",
     "omni",
+    "distribution",
+    "accounts",
     "channels_config",
     "models_avatar",
 ]
@@ -227,6 +253,8 @@ forbidden_modules = [
     "agents",
     "core",
     "omni",
+    "distribution",
+    "accounts",
     "channels_config",
     "models_avatar",
     "utils",
