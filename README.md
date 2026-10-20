@@ -1,6 +1,6 @@
 # Omni-Engine
 
-Omni-Engine is the content factory for several public pages. `python main.py` drafts a post, draws or renders it, and writes a Post Planner row. The process that stays up on the Oracle VM is `python -m distribution.workers`. `python -m omni.worker` is the same process, kept as a fallback.
+Omni-Engine is the content factory for several public pages. `python main.py` drafts a post, draws or renders it, and writes a Post Planner row. The process that stays up on the Oracle VM is `python -m distribution.workers`.
 
 The repository is public. API keys, tokens, and credentials live only in `.env` (gitignored). `.env.example` lists the names and stays empty.
 
