@@ -162,8 +162,8 @@ def _runner_allows_this_process(channel_id: str | None) -> bool:
     """PC runs accounts marked local or both. Docker is a different process."""
     if not channel_id:
         return True
-    from omni.pinterest_accounts import load_pinterest_accounts  # noqa: PLC0415
-    from omni.pinterest_drip import account_runs_here, publisher_mode  # noqa: PLC0415
+    from accounts.pinterest import load_pinterest_accounts  # noqa: PLC0415
+    from distribution.scheduling.drip import account_runs_here, publisher_mode  # noqa: PLC0415
 
     try:
         accounts = load_pinterest_accounts()

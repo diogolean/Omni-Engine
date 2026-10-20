@@ -7,7 +7,7 @@
 ``posting_status`` via :func:`update_publish_status`.
 
 :class:`DistributionRecord` is the pre-v1 shape (``schema_version`` ``"1.0"``).
-Lean publish dicts, :class:`omni.models.Content` dicts, and Pinterest library
+Lean publish dicts, :class:`distribution.publishers.base.Content` dicts, and Pinterest library
 objects are read through :func:`content_item_from_any`. This module does not
 import production or distribution.
 """

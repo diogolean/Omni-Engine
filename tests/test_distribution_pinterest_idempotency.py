@@ -24,6 +24,7 @@ import distribution.publishers.api.pinterest as pinterest_api
 import distribution.publishers.base as base
 import distribution.scheduling.drip as drip
 import distribution.scheduling.ledger as pin_ledger
+import distribution.workers.__main__ as worker_main
 import distribution.workers.runtime as runtime
 import omni.accounts as omni_accounts
 import omni.adapters.pinterest as omni_pinterest
@@ -49,7 +50,6 @@ def test_old_and_new_pinterest_modules_are_one_object() -> None:
     assert legacy_publisher.PinterestPublisher is pinterest_api.PinterestPublisher
     assert legacy_publisher.PinterestAccountPublisher is pinterest_api.PinterestAccountPublisher
     assert omni_models is omni_publisher is base
-    assert omni_publisher.default_ledger_path is default_ledger_path
     assert omni_drip is drip
     assert omni_worker is runtime
     assert omni_config is brandings
@@ -58,6 +58,7 @@ def test_old_and_new_pinterest_modules_are_one_object() -> None:
     assert legacy_ledger is pin_ledger
     assert legacy_ledger.ledger_object_key is ledger_object_key
     assert legacy_ledger.normalize_title is normalize_title
+    assert worker_main.main is runtime.main
 
 
 def test_default_ledger_path_stays_under_omni(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,7 +206,17 @@ def test_already_posted_record_does_not_call_pinterest(
     assert result is None
 
 
-def test_worker_entry_module_is_importable_as_main() -> None:
-    """``python -m omni.worker`` loads this shim. The module object stays the runtime."""
-    assert "omni.worker" in sys.modules
-    assert sys.modules["omni.worker"] is runtime
+def test_worker_cli_keeps_role_once_dry_run_account_and_pins() -> None:
+    """Compose calls ``distribution.workers``. ``omni.worker`` is the same fallback."""
+    import subprocess
+
+    for module in ("distribution.workers", "omni.worker"):
+        proc = subprocess.run(
+            [sys.executable, "-m", module, "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        for flag in ("--role", "--once", "--dry-run", "--account", "--pins"):
+            assert flag in proc.stdout

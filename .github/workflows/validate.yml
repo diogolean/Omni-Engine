@@ -26,7 +26,7 @@ jobs:
         run: python -m pip install --upgrade pip && pip install -r requirements-ci.txt
 
       - name: Lint
-        # Covers the main-branch list too: omni, modules/memory, drive_source,
+        # Covers the main-branch list too: distribution, modules/memory, drive_source,
         # content_source, library_source, the B2 modules, and their tests.
         run: ruff check .
 
@@ -50,7 +50,7 @@ jobs:
         run: |
           # Whole suite, including the B2, Drive, and Pinterest tests from main
           # (test_b2_budget, test_b2_direct_client_guard, test_drive_source,
-          # test_upload_clips_b2_budget, test_pinterest_vm, and the omni tests).
+          # test_upload_clips_b2_budget, test_pinterest_vm, and the publisher tests).
           # The visual-QA chain tests run: the default chain is qwen-only and
           # fails closed. The remaining deselects failed in isolation on the
           # base branch before the engine refactor.

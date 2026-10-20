@@ -1,4 +1,8 @@
-"""Compatibility shim. The worker lives in distribution.workers.runtime. python -m omni.worker stays the VM entry."""
+"""Compatibility shim. The worker lives in distribution.workers.runtime.
+
+Compose and the Dockerfile call ``python -m distribution.workers``.
+``python -m omni.worker`` stays as a fallback and runs the same ``main``.
+"""
 from __future__ import annotations
 
 import sys
