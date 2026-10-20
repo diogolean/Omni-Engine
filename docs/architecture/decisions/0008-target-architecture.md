@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed. Design only: no code moves in this PR. The draft refactor PRs #37–#46 are paused, and their destinations change to the ones below.
+Accepted. Design only: no code moves in this PR. The draft refactor PRs #37–#46 are paused, and their destinations change to the ones below.
 
 ## Context
 
