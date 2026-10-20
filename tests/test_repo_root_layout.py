@@ -44,7 +44,6 @@ _ALLOWED_ROOT = {
     "main.py",
     "models_avatar",
     "modules",
-    "omni",
     "portfolio_showcase",
     "pyproject.toml",
     "quality",

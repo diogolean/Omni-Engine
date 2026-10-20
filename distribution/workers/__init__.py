@@ -1,2 +1,2 @@
-"""Worker process. ``python -m distribution.workers`` and ``python -m omni.worker``.
+"""Worker process. Entry: ``python -m distribution.workers``.
 """

@@ -4,18 +4,18 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["omni", "tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts"]
+src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 # E501: line length was not enforced on the whole tree. E402: bootstrap
 # and channel scripts import after path setup. E731/E741: legacy lambdas
-# and names. F401, F841, and I001 are not ignored here, so omni/ and
-# agents/media/b2_*.py stay on the original rules.
+# and names. F401, F841, and I001 are not ignored here, so distribution/
+# and agents/media/b2_*.py stay on the original rules.
 ignore = ["E501", "E402", "E731", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
-# Legacy modules. Do not add omni/ or agents/media/b2_*.py.
+# Legacy modules. Do not add agents/media/b2_*.py.
 "agents/writer/**" = ["F401", "F841", "I001"]
 "agents/posting/**" = ["F401", "F841", "I001"]
 "agents/orchestrator/**" = ["F401", "F841", "I001"]
@@ -77,7 +77,7 @@ ignore = ["E501", "E402", "E731", "E741"]
 "distribution/scheduling/scheduler.py" = ["F401", "F841", "I001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts"]
+known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts"]
 
 # ADR 0008 M1. These names are today's packages, standing in for the target
 # layers until the moves land. CI runs them in report-only mode; M14 makes
@@ -89,7 +89,7 @@ known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "ch
 # animation: core.animator
 # production: engine, modules, agents.{media,writer,rag,orchestrator,mcp},
 #   models_avatar, core
-# distribution: distribution, accounts, and the shims omni + agents.posting
+# distribution: distribution, accounts, and the agents.posting shims
 # products.aiwake: channels_config.aiwake
 # channels: the other channels_config packages
 [tool.importlinter]
@@ -100,7 +100,6 @@ root_packages = [
     "engine",
     "models_avatar",
     "modules",
-    "omni",
     "shared",
     "utils",
     "distribution",
@@ -114,7 +113,6 @@ type = "forbidden"
 source_modules = ["core.animator"]
 forbidden_modules = [
     "channels_config",
-    "omni",
     "distribution",
     "accounts",
     "agents",
@@ -138,7 +136,6 @@ source_modules = [
     "core",
 ]
 forbidden_modules = [
-    "omni",
     "distribution",
     "accounts",
     "agents.posting",
@@ -150,7 +147,6 @@ type = "forbidden"
 source_modules = [
     "distribution",
     "accounts",
-    "omni",
     "agents.posting",
 ]
 forbidden_modules = [
@@ -174,7 +170,6 @@ source_modules = [
     "modules",
     "agents",
     "core",
-    "omni",
     "distribution",
     "accounts",
     "shared",
@@ -217,7 +212,6 @@ forbidden_modules = [
     "modules",
     "agents",
     "core",
-    "omni",
     "distribution",
     "accounts",
     "models_avatar",
@@ -236,7 +230,6 @@ forbidden_modules = [
     "modules",
     "agents",
     "core",
-    "omni",
     "distribution",
     "accounts",
     "channels_config",
@@ -252,7 +245,6 @@ forbidden_modules = [
     "modules",
     "agents",
     "core",
-    "omni",
     "distribution",
     "accounts",
     "channels_config",

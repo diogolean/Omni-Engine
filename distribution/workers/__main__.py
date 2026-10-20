@@ -1,4 +1,4 @@
-"""``python -m distribution.workers`` runs the same entry as ``python -m omni.worker``.
+"""``python -m distribution.workers`` runs the worker in ``distribution.workers.runtime``.
 """
 from distribution.workers.runtime import main
 

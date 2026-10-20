@@ -11,8 +11,8 @@ import pytest
 from agents.media.b2_budget import B2DailyCapError, reset_caches
 from agents.media.b2_client import read_object_outcome, read_object_text
 from agents.posting.pinterest_engine.ledger import PinLedger
-from omni.models import Account
-from omni.worker import (
+from distribution.publishers.base import Account
+from distribution.workers.runtime import (
     newest_pin_published,
     run_scheduler,
     startup_delay_seconds,
@@ -209,9 +209,9 @@ def test_scheduler_sleeps_the_remainder_then_a_full_cadence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     last = datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr("omni.worker.newest_pin_published", lambda: last)
-    monkeypatch.setattr("omni.worker._utc_now", lambda: _NOW)
-    monkeypatch.setattr("omni.worker.interval_seconds", lambda rng=None: 4 * 3600)
+    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", lambda: last)
+    monkeypatch.setattr("distribution.workers.runtime._utc_now", lambda: _NOW)
+    monkeypatch.setattr("distribution.workers.runtime.interval_seconds", lambda rng=None: 4 * 3600)
     calls: list[float] = []
 
     def fake_sleep(seconds: float, stop: dict) -> None:
@@ -219,8 +219,8 @@ def test_scheduler_sleeps_the_remainder_then_a_full_cadence(
         if len(calls) > 1:
             stop["flag"] = True
 
-    monkeypatch.setattr("omni.worker._sleep_until", fake_sleep)
-    monkeypatch.setattr("omni.worker.run_cycle", lambda *, dry_run=False: [])
+    monkeypatch.setattr("distribution.workers.runtime._sleep_until", fake_sleep)
+    monkeypatch.setattr("distribution.workers.runtime.run_cycle", lambda *, dry_run=False: [])
     run_scheduler(once=False, dry_run=False)
     assert calls[0] == pytest.approx(2 * 3600)
     assert calls[1] == pytest.approx(4 * 3600)
@@ -230,9 +230,9 @@ def test_scheduler_skips_the_startup_delay_when_the_cadence_has_elapsed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     last = _NOW - timedelta(hours=10)
-    monkeypatch.setattr("omni.worker.newest_pin_published", lambda: last)
-    monkeypatch.setattr("omni.worker._utc_now", lambda: _NOW)
-    monkeypatch.setattr("omni.worker.interval_seconds", lambda rng=None: 4 * 3600)
+    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", lambda: last)
+    monkeypatch.setattr("distribution.workers.runtime._utc_now", lambda: _NOW)
+    monkeypatch.setattr("distribution.workers.runtime.interval_seconds", lambda rng=None: 4 * 3600)
     calls: list[float] = []
 
     def fake_sleep(seconds: float, stop: dict) -> None:
@@ -240,8 +240,8 @@ def test_scheduler_skips_the_startup_delay_when_the_cadence_has_elapsed(
         if len(calls) > 1:
             stop["flag"] = True
 
-    monkeypatch.setattr("omni.worker._sleep_until", fake_sleep)
-    monkeypatch.setattr("omni.worker.run_cycle", lambda *, dry_run=False: [])
+    monkeypatch.setattr("distribution.workers.runtime._sleep_until", fake_sleep)
+    monkeypatch.setattr("distribution.workers.runtime.run_cycle", lambda *, dry_run=False: [])
     run_scheduler(once=False, dry_run=False)
     assert calls[0] == 0
     assert calls[1] == pytest.approx(4 * 3600)
@@ -252,10 +252,10 @@ def test_once_and_dry_run_do_not_read_the_pin_ledger(monkeypatch: pytest.MonkeyP
         raise AssertionError("the startup delay must not run")
 
     cycles: list[bool] = []
-    monkeypatch.setattr("omni.worker.newest_pin_published", boom)
-    monkeypatch.setattr("omni.worker.interval_seconds", boom)
+    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", boom)
+    monkeypatch.setattr("distribution.workers.runtime.interval_seconds", boom)
     monkeypatch.setattr(
-        "omni.worker.run_cycle",
+        "distribution.workers.runtime.run_cycle",
         lambda *, dry_run=False: cycles.append(dry_run) or [],
     )
     run_scheduler(once=True, dry_run=False)
@@ -264,12 +264,12 @@ def test_once_and_dry_run_do_not_read_the_pin_ledger(monkeypatch: pytest.MonkeyP
 
     reads: list[str] = []
     monkeypatch.setattr(
-        "omni.worker.newest_pin_published",
+        "distribution.workers.runtime.newest_pin_published",
         lambda: reads.append("ledger"),
     )
-    monkeypatch.setattr("omni.worker.interval_seconds", lambda rng=None: 5)
+    monkeypatch.setattr("distribution.workers.runtime.interval_seconds", lambda rng=None: 5)
     monkeypatch.setattr(
-        "omni.worker._sleep_until",
+        "distribution.workers.runtime._sleep_until",
         lambda seconds, stop: stop.__setitem__("flag", True),
     )
     run_scheduler(once=False, dry_run=True)
@@ -300,16 +300,16 @@ def test_scheduler_startup_sleep_is_clamped_when_the_pin_is_in_the_future(
     monkeypatch.setenv("MIN_INTERVAL_HOURS", "4")
     monkeypatch.setenv("MAX_INTERVAL_HOURS", "4")
     future = _NOW + timedelta(days=3)
-    monkeypatch.setattr("omni.worker.newest_pin_published", lambda: future)
-    monkeypatch.setattr("omni.worker._utc_now", lambda: _NOW)
+    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", lambda: future)
+    monkeypatch.setattr("distribution.workers.runtime._utc_now", lambda: _NOW)
     calls: list[float] = []
 
     def fake_sleep(seconds: float, stop: dict) -> None:
         calls.append(seconds)
         stop["flag"] = True
 
-    monkeypatch.setattr("omni.worker._sleep_until", fake_sleep)
-    monkeypatch.setattr("omni.worker.run_cycle", lambda *, dry_run=False: [])
+    monkeypatch.setattr("distribution.workers.runtime._sleep_until", fake_sleep)
+    monkeypatch.setattr("distribution.workers.runtime.run_cycle", lambda *, dry_run=False: [])
     run_scheduler(once=False, dry_run=False)
     assert calls == [pytest.approx(4 * 3600)]
 
@@ -347,10 +347,10 @@ def test_daily_allowance_counts_recorded_pins_from_today_only(
 def _drive_immediate_restart(monkeypatch: pytest.MonkeyPatch, account: Account) -> None:
     """Last pin is older than the cadence, so the first sleep is zero."""
     last = _NOW - timedelta(hours=10)
-    monkeypatch.setattr("omni.worker.newest_pin_published", lambda: last)
-    monkeypatch.setattr("omni.worker._utc_now", lambda: _NOW)
-    monkeypatch.setattr("omni.worker.interval_seconds", lambda rng=None: 4 * 3600.0)
-    monkeypatch.setattr("omni.worker.active_pinterest_accounts", lambda: [account])
+    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", lambda: last)
+    monkeypatch.setattr("distribution.workers.runtime._utc_now", lambda: _NOW)
+    monkeypatch.setattr("distribution.workers.runtime.interval_seconds", lambda rng=None: 4 * 3600.0)
+    monkeypatch.setattr("distribution.workers.runtime.active_pinterest_accounts", lambda: [account])
     sleeps: list[float] = []
 
     def fake_sleep(seconds: float, stop: dict) -> None:
@@ -358,7 +358,7 @@ def _drive_immediate_restart(monkeypatch: pytest.MonkeyPatch, account: Account) 
         if len(sleeps) > 1:
             stop["flag"] = True
 
-    monkeypatch.setattr("omni.worker._sleep_until", fake_sleep)
+    monkeypatch.setattr("distribution.workers.runtime._sleep_until", fake_sleep)
     run_scheduler(once=False, dry_run=False)
     assert sleeps[0] == 0
 
@@ -377,14 +377,14 @@ def test_immediate_restart_publishes_nothing_once_the_daily_cap_is_full(
             "pin_recorded": False,
         },
     ]
-    monkeypatch.setattr("omni.worker._read_account_ledger", lambda _account: (rows, True))
+    monkeypatch.setattr("distribution.workers.runtime._read_account_ledger", lambda _account: (rows, True))
 
     def refuse(*_args, **_kwargs):
         raise AssertionError("the daily cap must stop the wake before publish")
 
-    monkeypatch.setattr("omni.pinterest_drip.publish_account", refuse)
+    monkeypatch.setattr("distribution.scheduling.drip.publish_account", refuse)
     captured: list[dict] = []
-    import omni.worker as worker
+    import distribution.workers.runtime as worker
 
     original = worker.run_cycle
 
@@ -393,7 +393,7 @@ def test_immediate_restart_publishes_nothing_once_the_daily_cap_is_full(
         captured.extend(stats)
         return stats
 
-    monkeypatch.setattr("omni.worker.run_cycle", record)
+    monkeypatch.setattr("distribution.workers.runtime.run_cycle", record)
     _drive_immediate_restart(monkeypatch, _account("ancient_knowledge"))
     assert captured[0]["stats"]["published"] == 0
     assert captured[0]["stats"]["skipped_reason"] == "daily_cap"
@@ -412,7 +412,7 @@ def test_immediate_restart_keeps_the_daily_cap_and_ledger_dedupe(
 
     from agents.media.b2_budget import reset_caches
     from agents.posting.pinterest_engine.articles import Article
-    from omni.pinterest_drip import publish_account
+    from distribution.scheduling.drip import publish_account
     from tests.test_pinterest_vm import FakeS3, _ancient, _library_record, _photo, _prepare_channel
 
     _prepare_channel(monkeypatch, tmp_path)
@@ -450,7 +450,7 @@ def test_immediate_restart_keeps_the_daily_cap_and_ledger_dedupe(
         for _stem, slug, topic in posts
     ]
     monkeypatch.setattr(
-        "omni.worker._read_account_ledger",
+        "distribution.workers.runtime._read_account_ledger",
         lambda _account: (ledger_rows, True),
     )
     calls: list[int] = []
@@ -465,7 +465,7 @@ def test_immediate_restart_keeps_the_daily_cap_and_ledger_dedupe(
         results.append(result)
         return result
 
-    monkeypatch.setattr("omni.pinterest_drip.publish_account", wrapped)
+    monkeypatch.setattr("distribution.scheduling.drip.publish_account", wrapped)
     _drive_immediate_restart(monkeypatch, _ancient())
     assert calls == [2]
     assert len(results) == 1
