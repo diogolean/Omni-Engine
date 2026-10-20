@@ -176,7 +176,7 @@ def _stage_publish_01(state: VariantState) -> None:
         pass
     state.meta = {}
     with state.write_lock:
-        state.meta = append_entry(app_config.CONTENT_LIBRARY_PATH, build_library_metadata(topic=state.resolved_subject, final_caption=state.caption_str, imgbb_url=state.imgbb_url, video_path=state.video_path_str or '', carousel_images=state._carousel_imgbb if state.post_type == 'CAROUSEL' else None))
+        state.meta = append_entry(app_config.CONTENT_LIBRARY_PATH, build_library_metadata(topic=state.resolved_subject, final_caption=state.caption_str, imgbb_url=state.imgbb_url, video_path=state.video_path_str or '', carousel_images=state._carousel_imgbb if state.post_type == 'CAROUSEL' else None, channel_id=getattr(app_config, 'ACTIVE_PAGE', '') or '', post_type=state.post_type or '', title=state._seo_title or state.overlay_text or state.resolved_subject or ''))
     from modules.reel_qa.publish import write_postplanner_xlsx_if_allowed
     state.write_postplanner_xlsx_if_allowed = write_postplanner_xlsx_if_allowed
 

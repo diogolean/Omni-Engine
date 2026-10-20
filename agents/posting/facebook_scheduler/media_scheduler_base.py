@@ -285,7 +285,7 @@ class LocalMediaQueue:
             self.media_dir.mkdir(parents=True, exist_ok=True)
             self.posted_dir.mkdir(parents=True, exist_ok=True)
             try:
-                from modules.durable_store import hydrate_state_file, restore_channel_state
+                from shared.store import hydrate_state_file, restore_channel_state
                 from utils.pipeline_paths import channel_store_dir
 
                 restore_channel_state(channel_name)
@@ -454,7 +454,7 @@ class LocalMediaQueue:
         )
         tmp.replace(self.history_path)
         try:
-            from modules.durable_store import sync_state_file
+            from shared.store import sync_state_file
 
             sync_state_file(self.history_path)
         except Exception:

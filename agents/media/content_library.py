@@ -25,7 +25,7 @@ def recent_topics(path: Path, last_n: int = 40) -> list[str]:
 
 
 def load_library(path: Path) -> list[dict[str, Any]]:
-    from modules.durable_store import hydrate_state_file
+    from shared.store import hydrate_state_file
 
     path = hydrate_state_file(Path(path))
     if not path.is_file():
@@ -35,7 +35,7 @@ def load_library(path: Path) -> list[dict[str, Any]]:
 
 
 def save_library(path: Path, rows: list[dict[str, Any]]) -> None:
-    from modules.durable_store import sync_state_file
+    from shared.store import sync_state_file
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,24 +58,30 @@ def build_library_metadata(
     imgbb_url: str,
     video_path: str = "",
     carousel_images: "list[dict[str, str]] | None" = None,
+    channel_id: str = "",
+    post_type: str = "",
+    title: str = "",
 ) -> dict[str, Any]:
-    """Library row with topic, caption, image URL, and local video path.
+    """ContentItem v1 row with the lean aliases older readers still use.
 
     ``carousel_images`` (optional) is a list of per-slide references for
     CAROUSEL posts, so the library entry carries every image of the post and
     not just the first one.
     """
-    entry: dict[str, Any] = {
-        "topic": topic,
-        "final_caption": final_caption,
-        "imgbb_url": imgbb_url,
-        "timestamp": _utc_now_iso(),
-    }
-    if video_path:
-        entry["video_path"] = video_path
-    if carousel_images:
-        entry["carousel_images"] = list(carousel_images)
-    return entry
+    from shared.contracts import new_content_item
+
+    item = new_content_item(
+        topic=topic,
+        final_caption=final_caption,
+        imgbb_url=imgbb_url,
+        video_path=video_path,
+        carousel_images=list(carousel_images) if carousel_images else None,
+        channel_id=channel_id,
+        post_type=post_type,
+        title=title,
+        timestamp=_utc_now_iso(),
+    )
+    return item.to_library_row()
 
 
 def dump_raw_research_to_log(

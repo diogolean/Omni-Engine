@@ -71,8 +71,9 @@ known-first-party = ["omni", "engine", "agents", "utils", "core", "modules", "ch
 # layers until the moves land. CI runs them in report-only mode; M14 makes
 # the same contracts blocking.
 #
-# shared is the real layer (ADR 0008 M2). The utils shims stay until M14.
-# shared stand-in that remains: utils.pipeline_paths, utils.process_tools
+# shared is the real layer (ADR 0008 M2 and M3). Shims stay until M14.
+# shared stand-ins that remain: utils.pipeline_paths, utils.process_tools,
+# modules.durable_store, modules.distribution_contract, modules.memory
 # animation: core.animator
 # production: engine, modules, agents.{media,writer,rag,orchestrator,mcp},
 #   models_avatar, core
