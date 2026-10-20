@@ -214,7 +214,7 @@ def test_claude_reads_text_blocks_and_opens_the_circuit(monkeypatch: pytest.Monk
     reset_ai_circuit()
 
 
-def test_claude_model_uses_env_or_the_newest_sonnet(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_claude_model_is_opt_in_and_never_retired(monkeypatch: pytest.MonkeyPatch) -> None:
     from agents.posting.pinterest_engine.config import get_best_claude_model
 
     class _Model:
@@ -222,27 +222,44 @@ def test_claude_model_uses_env_or_the_newest_sonnet(monkeypatch: pytest.MonkeyPa
             self.id = mid
 
     class _Listing:
-        # Models API order is newest first. The dry run resolved claude-sonnet-5-5.
         data = [
+            _Model("claude-3-5-sonnet-latest"),
+            _Model("claude-3-opus-20240229"),
             _Model("claude-sonnet-5-5"),
-            _Model("claude-sonnet-4-5-thinking"),
-            _Model("claude-haiku-latest"),
         ]
+
+    listed = {"n": 0}
 
     class _Models:
         def list(self):
+            listed["n"] += 1
             return _Listing()
 
     class _Client:
         models = _Models()
 
-    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
-    assert get_best_claude_model(_Client()) == "claude-sonnet-5-5"
-    offline = get_best_claude_model(None)
-    assert offline == "claude-sonnet-5-5"
-    assert "3-5-sonnet" not in offline
+    for name in ("CLAUDE_MODEL", "USE_CLAUDE", "CLAUDE_POLISH_MODEL", "LOFI_SCRIPT_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    assert get_best_claude_model(_Client()) == ""
+    assert get_best_claude_model(None) == ""
+    assert listed["n"] == 0
+
+    monkeypatch.setenv("USE_CLAUDE", "1")
+    assert get_best_claude_model(_Client()) == "claude-sonnet-4-5"
+    assert listed["n"] == 0
+
+    monkeypatch.setenv("CLAUDE_MODEL", "claude-3-5-sonnet-latest")
+    chosen = get_best_claude_model(_Client())
+    assert chosen == "claude-sonnet-4-5"
+    assert "latest" not in chosen
+    assert "claude-3" not in chosen
+
     monkeypatch.setenv("CLAUDE_MODEL", "claude-sonnet-4-5")
     assert get_best_claude_model(_Client()) == "claude-sonnet-4-5"
+
+    monkeypatch.setenv("USE_CLAUDE", "0")
+    assert get_best_claude_model(_Client()) == ""
+    assert listed["n"] == 0
 
 
 def test_empty_inventory_builds_only_the_next_pins(

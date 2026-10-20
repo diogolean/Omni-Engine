@@ -488,7 +488,7 @@ def generate_pin_copy(topic: str, source_text: str, *, variant_idx: int = 0) -> 
         return {}
     if not topic:
         topic = source.split(".")[0].strip()[:80] or source[:80]
-    ai = _generate_deepseek(topic, source, source, variant_idx)
+    ai = _generate_cheap(topic, source, source, variant_idx)
     if ai.get("pinterest_title") and ai.get("pinterest_caption"):
         if not ai.get("visual_hook"):
             ai["visual_hook"] = build_visual_hook(topic)
@@ -603,6 +603,58 @@ def _generate_deepseek(
     return {}
 
 
+def _generate_cheap(
+    topic: str,
+    caption: str,
+    fact_sheet: str,
+    variant_idx: int,
+) -> dict:
+    """Pin copy on the cheap text stack, then the DeepSeek chat API."""
+    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+
+    source = caption if caption not in ("PENDING_CAPTION", "") else fact_sheet[:500]
+    url = cfg.TARGET_URL
+    url_rule = (
+        f" pointing to: {url}\n   Example: \"Full details are linked in this pin.\""
+        if url else
+        " inviting the reader to learn more from the pin link"
+    )
+    user_msg = _AI_USER_TPL.format(topic=topic, caption=source or topic, url_rule=url_rule)
+    system = cfg.AI_SYSTEM_PROMPT or (
+        "You write Pinterest pin copy from the article text. "
+        "Never use a filename as the title."
+    )
+    try:
+        from core.cheap_llm import available, complete
+        from core.spend_ledger import SpendCapExceeded
+
+        if available("text"):
+            try:
+                result = complete(
+                    user_msg,
+                    system=system,
+                    json_mode=True,
+                    max_tokens=900,
+                    temperature=0.4,
+                    source="pinterest_pin_copy",
+                )
+            except SpendCapExceeded:
+                raise
+            data = _parse_pin_json(result.text)
+            parsed = {
+                "pinterest_title": sanitize_pin_title(str(data.get("pinterest_title", ""))),
+                "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
+                "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
+            }
+            if parsed.get("pinterest_title") and parsed.get("pinterest_caption"):
+                return parsed
+    except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ == "SpendCapExceeded":
+            raise
+        log.warning("Cheap pin copy failed for '%s': %s", topic, type(exc).__name__)
+    return _generate_deepseek(topic, caption, fact_sheet, variant_idx)
+
+
 _PIN_COPY_MAX_TOKENS = 4096
 _AI_FAILURE_LIMIT_DEFAULT = 3
 _ai_failure_streak = 0
@@ -666,9 +718,12 @@ def _create_pin_message(client: object, *, model: str, system: str, user_msg: st
     """Pin-copy call. Omit ``thinking``; sending disabled returns HTTP 400.
 
     Text blocks are read afterwards, so a ThinkingBlock in the response is skipped.
+    Retired aliases and 3.x ids are replaced before the request.
     """
+    from config import resolve_claude_model  # noqa: PLC0415
+
     return client.messages.create(  # type: ignore[attr-defined]
-        model=model,
+        model=resolve_claude_model(model),
         max_tokens=_PIN_COPY_MAX_TOKENS,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
@@ -834,12 +889,10 @@ class MasterInventory:
         cl_map = self._load_content_library_map()
         log.info("  content_library entries: %d", len(cl_map))
 
-        # Load AI client if requested
+        # Claude only when opted in. Otherwise pin copy stays on the cheap stack.
         client, model = (None, None)
         if use_ai:
             client, model = self._load_ai_client()
-            if not client:
-                use_ai = False
 
         # Load all library JSON records
         lib_files = sorted(self.library_dir.glob("post_*.json"))
@@ -940,18 +993,21 @@ class MasterInventory:
                 entry["visual_hook"] = normalize_pin_text(entry["visual_hook"])
 
             if needs_generation:
+                ai_result = {}
                 if use_ai and client:
                     ai_result = _generate_ai(
                         topic, source_caption, raw_fact, client, model, variant_idx
                     )
-                    if ai_result:
-                        entry.update(ai_result)
-                        log.info("  AI generated: %s (v%s)", topic, variant_idx)
-                        generated += 1
+                if use_ai and not ai_result:
+                    ai_result = _generate_cheap(
+                        topic, source_caption, raw_fact, variant_idx
+                    )
+                if ai_result:
+                    entry.update(ai_result)
+                    log.info("  AI generated: %s (v%s)", topic, variant_idx)
+                    generated += 1
+                    if client:
                         time.sleep(ai_delay_sec)
-                    else:
-                        self._fill_templates(entry, source_caption, variant_idx)
-                        generated += 1
                 else:
                     self._fill_templates(entry, source_caption, variant_idx)
                     generated += 1
@@ -1162,6 +1218,10 @@ class MasterInventory:
 
     def _load_ai_client(self) -> tuple:
         try:
+            from config import claude_opted_in, resolve_claude_model  # noqa: PLC0415
+
+            if not claude_opted_in():
+                return None, None
             import anthropic  # noqa: PLC0415
 
             from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
@@ -1169,7 +1229,7 @@ class MasterInventory:
             if not cfg.ANTHROPIC_API_KEY:
                 return None, None
             client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
-            model = cfg.get_best_claude_model(client)
+            model = resolve_claude_model()
             log.info("AI client ready (model: %s)", model)
             return client, model
         except Exception as exc:  # noqa: BLE001

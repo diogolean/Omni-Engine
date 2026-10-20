@@ -477,46 +477,17 @@ def print_dotenv_bootstrap() -> None:
     print(f"[bootstrap] ai prompt     : {'set' if AI_SYSTEM_PROMPT else '(none)'}")
 
 
-# Used only when the Models API cannot be listed and CLAUDE_MODEL is unset.
-# The 3.5 Sonnet family is retired. The dry run resolved claude-sonnet-5-5.
-_SONNET_LIST_FALLBACK = "claude-sonnet-5-5"
-
-
 def get_best_claude_model(anthropic_client: object | None = None) -> str:
-    """Newest listed Sonnet, unless ``CLAUDE_MODEL`` is set.
+    """Current Messages id when Claude is opted in. Empty when it is not.
 
-    The Models API lists newest ids first; the dry run took ``claude-sonnet-5-5``.
     Pin copy omits the thinking parameter (sending disabled is a 400) and
     reads text blocks only, so a ThinkingBlock does not crash the JSON parse.
+    The Models API is not listed: ``claude-3-5-sonnet-latest`` is still
+    advertised there and 404s on ``/v1/messages``.
     """
-    pinned = (os.getenv("CLAUDE_MODEL") or "").strip()
-    if pinned:
-        return pinned
-    discovered = _listed_claude_model(anthropic_client)
-    return discovered or _SONNET_LIST_FALLBACK
+    from config import get_best_claude_model as _root_claude_model  # noqa: PLC0415
 
-
-def _listed_claude_model(anthropic_client: object | None) -> str:
-    """First Sonnet from the Models API, then Haiku, then any Claude id."""
-    if anthropic_client is None:
-        return ""
-    try:
-        listing = anthropic_client.models.list()  # type: ignore[union-attr]
-        models = list(getattr(listing, "data", None) or listing)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Claude model discovery failed (%s).", type(exc).__name__)
-        return ""
-    for priority in ("sonnet", "haiku"):
-        for model in models:
-            mid = str(getattr(model, "id", "") or "").strip()
-            lowered = mid.lower()
-            if priority in lowered and "claude" in lowered:
-                return mid
-    for model in models:
-        mid = str(getattr(model, "id", "") or "").strip()
-        if "claude" in mid.lower():
-            return mid
-    return ""
+    return _root_claude_model(anthropic_client)
 
 
 # ---------------------------------------------------------------------------

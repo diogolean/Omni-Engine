@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""One-time Claude seed: 15–25 continuous-prose rhetorical patterns."""
+"""One-time seed: 15–25 continuous-prose rhetorical patterns.
+
+Uses the cheap text stack. Claude runs only when USE_CLAUDE or CLAUDE_MODEL is set,
+and then only with a current model id.
+"""
 from __future__ import annotations
 
 from pathlib import Path as _ReorgPath
@@ -9,6 +13,7 @@ if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -18,10 +23,8 @@ if str(ROOT) not in sys.path:
 
 from core.economic_reel_lofi import config as lofi_cfg
 from agents.writer.claude_polish import (
-    _usd,
     _usage_rec,
     append_cost_log,
-    _resolve_polish_model,
 )
 
 DATA = lofi_cfg.DATA_DIR
@@ -137,7 +140,10 @@ def _extract_json(text: str) -> dict:
 
 
 def _call_seed(client, model: str, user: str, *, tag: str) -> dict:
-    print(f"[seed] {tag} user_chars={len(user)}")
+    import config as app_config
+
+    model = app_config.resolve_claude_model(model)
+    print(f"[seed] {tag} user_chars={len(user)} model={model}")
     message = client.messages.create(
         model=model,
         max_tokens=8192,
@@ -172,20 +178,51 @@ def _normalize_patterns(raw: dict) -> list[dict]:
     return patterns
 
 
+def _seed_pass(user: str, *, tag: str) -> dict:
+    """One seed completion. Claude only when opted in; otherwise the cheap stack."""
+    import config as app_config
+
+    if app_config.claude_opted_in():
+        import anthropic
+
+        api_key = getattr(app_config, "ANTHROPIC_API_KEY", None)
+        if not api_key:
+            raise SystemExit("Claude is opted in but ANTHROPIC_API_KEY is missing")
+        client = anthropic.Anthropic(api_key=str(api_key))
+        model = app_config.resolve_claude_model(os.getenv("CLAUDE_POLISH_MODEL") or None)
+        print(f"[seed] claude model={model}")
+        return _call_seed(client, model, user, tag=tag)
+
+    from core.cheap_llm import CheapLLMUnavailable, available, complete
+
+    if not available("text"):
+        raise SystemExit(
+            "No cheap text provider is configured, and Claude is not opted in. "
+            "Set DEEPINFRA_API_KEY, OPENROUTER_API_KEY, or DEEPSEEK_API_KEY."
+        )
+    print(f"[seed] {tag} cheap stack user_chars={len(user)}")
+    try:
+        result = complete(
+            user,
+            system=SEED_SYSTEM,
+            json_mode=True,
+            max_tokens=4096,
+            temperature=0.4,
+            timeout=120,
+            source="structure_seed",
+        )
+    except CheapLLMUnavailable as exc:
+        raise SystemExit(f"cheap text seed failed: {exc}") from exc
+    print(f"[seed] {tag} provider={result.provider} model={result.model}")
+    return _extract_json(result.text)
+
+
 def main() -> int:
     themes = _themes()
     shapes = _starting_shapes()
     theme_block = "THEME / SUBTHEME COVERAGE TARGETS:\n" + "\n".join(f"- {t}" for t in themes)
     corpus = _corpus_block()
-    import config as app_config
-    import anthropic
-
-    api_key = getattr(app_config, "ANTHROPIC_API_KEY", None)
-    if not api_key:
-        raise SystemExit("ANTHROPIC_API_KEY missing")
-    client = anthropic.Anthropic(api_key=str(api_key))
-    model = _resolve_polish_model(client)
-    print(f"[seed] model={model} themes={len(themes)} starting_shapes={len(shapes)}")
+    print(f"[seed] themes={len(themes)} starting_shapes={len(shapes)}")
 
     user_a = (
         f"{corpus}\n\n{theme_block}\n\n"
@@ -200,8 +237,8 @@ def main() -> int:
         + ", ".join(s["name"] for s in shapes)
         + ". Cover theme gaps. Return only the new patterns."
     )
-    data_a = _call_seed(client, model, user_a, tag="pass_a")
-    data_b = _call_seed(client, model, user_b, tag="pass_b")
+    data_a = _seed_pass(user_a, tag="pass_a")
+    data_b = _seed_pass(user_b, tag="pass_b")
     seen: set[str] = set()
     patterns: list[dict] = []
     for p in _normalize_patterns(data_a) + _normalize_patterns(data_b):
@@ -231,7 +268,7 @@ def main() -> int:
             + json.dumps(p, indent=2, ensure_ascii=False)
         )
         try:
-            redone = _call_seed(client, model, retry_user, tag=f"echo_{p.get('name')}")
+            redone = _seed_pass(retry_user, tag=f"echo_{p.get('name')}")
             nxt = _normalize_patterns(redone)
             pick = next((x for x in nxt if x.get("name") == p.get("name")), nxt[0] if nxt else p)
             again = echo_hits(str(pick.get("in_house_example") or ""))

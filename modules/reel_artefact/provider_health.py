@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Ancient Knowledge text providers. A billing failure is permanent for the run.
 
-Gemini is tried first. OpenRouter, then DeepSeek, then Anthropic, receive the
-same prompt. Master Mei does not use this module.
+Gemini is tried first. OpenRouter, then DeepSeek, receive the same prompt.
+Claude is not probed and not called unless the operator opts in. Master Mei
+does not use this module.
 """
 from __future__ import annotations
 
@@ -167,7 +168,9 @@ def _model_label(provider: str) -> str:
     if name == "deepseek":
         return str(getattr(app_config, "DEEPSEEK_FLASH_MODEL", "") or "")
     if name == "anthropic":
-        return _RESOLVED_CLAUDE or str(getattr(app_config, "CLAUDE_MODEL", "") or "")
+        if not app_config.claude_opted_in():
+            return ""
+        return _RESOLVED_CLAUDE or app_config.resolve_claude_model()
     if name == "gemini":
         return (
             os.getenv("GEMINI_ECONOMIC_BRAIN_MODEL")
@@ -296,7 +299,7 @@ def default_text_probes() -> dict[str, Callable[[], str]]:
         probes["openrouter"] = lambda: openrouter_text(_PROBE, timeout=3.0, max_tokens=8)
     if app_config.DEEPSEEK_API_KEY:
         probes["deepseek"] = _probe_deepseek
-    if app_config.ANTHROPIC_API_KEY:
+    if app_config.ANTHROPIC_API_KEY and app_config.claude_opted_in():
         probes["anthropic"] = _probe_anthropic
     return probes
 
@@ -385,82 +388,38 @@ def _claude_message(client: object, model: str) -> str:
     return "\n".join(part for part in chunks if part).strip()
 
 
-def _claude_candidates(client: object, skip: set[str]) -> list[str]:
-    """Sonnet, then Haiku, from /v1/models. A list response is not a live probe."""
-    try:
-        page = client.models.list()  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
-        return []
-    models = list(getattr(page, "data", None) or page or [])
-    ranked: list[tuple[int, str]] = []
-    for item in models:
-        mid = str(getattr(item, "id", "") or "").strip()
-        low = mid.lower()
-        if not mid or mid in skip or "claude" not in low:
-            continue
-        if "latest" in low:
-            rank = 5
-        elif "sonnet-4" in low or "sonnet-4-5" in low:
-            rank = 0
-        elif "sonnet" in low:
-            rank = 1
-        elif "haiku" in low:
-            rank = 2
-        else:
-            rank = 3
-        ranked.append((rank, mid))
-    ranked.sort(key=lambda pair: pair[0])
-    return [mid for _rank, mid in ranked]
+def _anthropic_probe_model() -> str:
+    """The one id a probe may send. Never a ``-latest`` alias or a 3.x id."""
+    import config as app_config
+
+    model = app_config.resolve_claude_model()
+    if app_config.claude_model_retired(model):
+        raise RuntimeError(f"refusing retired Claude model {model}")
+    return model
 
 
 def _probe_anthropic() -> str:
-    """POST /v1/messages. A 200 from /v1/models is not enough.
+    """POST /v1/messages only when Claude is opted in.
 
-    ``claude-3-5-sonnet-latest`` answers the model list and 404s on messages.
-    On that 404, try the configured alias and then ids from the model list.
+    A stored API key is not enough. The model list still answers for
+    ``claude-3-5-sonnet-latest`` and that id 404s on messages, so this probe
+    does not walk ``/v1/models``.
     """
     global _RESOLVED_CLAUDE
-    from anthropic import Anthropic
-
     import config as app_config
 
+    if not app_config.claude_opted_in():
+        raise RuntimeError("anthropic messages probe skipped — Claude is not opted in")
+    model = _anthropic_probe_model()
+    from anthropic import Anthropic
+
     client = Anthropic(api_key=app_config.ANTHROPIC_API_KEY)
-    primary = (
-        app_config.CLAUDE_MODEL
-        or getattr(app_config, "SAFE_CLAUDE_MODEL", "")
-        or "claude-sonnet-4-5"
-    ).strip()
-    safe = (getattr(app_config, "SAFE_CLAUDE_MODEL", "") or "claude-sonnet-4-5").strip()
-    ordered: list[str] = []
-    for model in (primary, safe):
-        if model and model not in ordered:
-            ordered.append(model)
-    tried: set[str] = set()
-    last: BaseException | None = None
-    for model in ordered:
-        tried.add(model)
-        try:
-            text = _claude_message(client, model)
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            if _message_not_found(exc):
-                logger.info("anthropic messages 404 | model=%s", model)
-                continue
-            raise
-        _RESOLVED_CLAUDE = model
-        return text or "ok"
-    for model in _claude_candidates(client, tried):
-        try:
-            text = _claude_message(client, model)
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            if _message_not_found(exc):
-                logger.info("anthropic messages 404 | model=%s", model)
-                continue
-            raise
-        _RESOLVED_CLAUDE = model
-        logger.info("anthropic model resolved | %s", model)
-        return text or "ok"
-    if last is not None:
-        raise last
-    raise RuntimeError("anthropic messages probe failed")
+    try:
+        text = _claude_message(client, model)
+    except Exception as exc:  # noqa: BLE001
+        if _message_not_found(exc):
+            logger.info("anthropic messages 404 | model=%s", model)
+        raise
+    _RESOLVED_CLAUDE = model
+    logger.info("anthropic model resolved | %s", model)
+    return text or "ok"

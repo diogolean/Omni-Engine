@@ -120,6 +120,6 @@
     "Researcher_Primary": "models/gemini-2.5-flash",
     "Researcher_Fallback": "models/gemini-flash-lite-latest",
     "Image_Primary": "models/gemini-3.1-flash-lite-image",
-    "Writer_Primary": "claude-3-5-sonnet-latest"
+    "Writer_Primary": "deepseek-ai/DeepSeek-V4-Flash"
   }
 }

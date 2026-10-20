@@ -3966,6 +3966,7 @@ No NSFW. No real private individuals named. Brand-safe for {module}.
         from agents.writer.claude_compose import (
             _coerce_line_list,
             compose_lines,
+            compose_skip,
             format_compose_user,
         )
 
@@ -3983,64 +3984,75 @@ No NSFW. No real private individuals named. Brand-safe for {module}.
             beat_s=lofi_cfg.beat_duration_s(),
         )
         texts: list[str] = []
-        writer = "claude"
-        try:
-            texts = compose_lines(
-                user_text,
-                theme=theme,
-                scene_count=scene_count,
-                duration_s=duration_s,
-                beat_s=lofi_cfg.beat_duration_s(),
-            )
-            print(f"[LOFI compose] lines ({len(texts)}): {texts}")
-            texts = _rewrite_line_constraints(
-                texts,
-                user_text,
-                theme,
-                scene_count,
-                duration_s=duration_s,
-                beat_s=lofi_cfg.beat_duration_s(),
-            )
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("Claude compose failed (%s) — DeepSeek lines fallback", exc)
-            print(f"[LOFI compose] Claude failed ({exc}); DeepSeek fallback")
-            skip_ds = os.getenv("LOFI_SKIP_COMPOSE_ALTERNATE", "").strip().lower() in {
-                "1",
-                "true",
-                "yes",
-            }
-            if skip_ds:
-                print("[LOFI compose] DeepSeek fallback skipped — retrying Claude")
-                try:
-                    texts = compose_lines(
-                        user_text,
-                        theme=f"{theme}_retry",
-                        scene_count=scene_count,
-                        duration_s=duration_s,
-                        beat_s=lofi_cfg.beat_duration_s(),
-                    )
-                    print(f"[LOFI compose] retry lines ({len(texts)}): {texts}")
-                    if texts:
-                        texts = _rewrite_line_constraints(
-                            texts,
+        writer = "deepseek"
+        if compose_skip():
+            print("[LOFI compose] Claude off — cheap text stack")
+            try:
+                raw = _call_llm(prompt)
+                parsed = _extract_json_object(raw)
+                texts = _coerce_line_list((parsed or {}).get("lines"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LOFI compose] cheap stack failed ({exc})")
+                texts = []
+        else:
+            writer = "claude"
+            try:
+                texts = compose_lines(
+                    user_text,
+                    theme=theme,
+                    scene_count=scene_count,
+                    duration_s=duration_s,
+                    beat_s=lofi_cfg.beat_duration_s(),
+                )
+                print(f"[LOFI compose] lines ({len(texts)}): {texts}")
+                texts = _rewrite_line_constraints(
+                    texts,
+                    user_text,
+                    theme,
+                    scene_count,
+                    duration_s=duration_s,
+                    beat_s=lofi_cfg.beat_duration_s(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("Claude compose failed (%s) — DeepSeek lines fallback", exc)
+                print(f"[LOFI compose] Claude failed ({exc}); DeepSeek fallback")
+                skip_ds = os.getenv("LOFI_SKIP_COMPOSE_ALTERNATE", "").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                }
+                if skip_ds:
+                    print("[LOFI compose] DeepSeek fallback skipped — retrying Claude")
+                    try:
+                        texts = compose_lines(
                             user_text,
-                            theme,
-                            scene_count,
+                            theme=f"{theme}_retry",
+                            scene_count=scene_count,
                             duration_s=duration_s,
                             beat_s=lofi_cfg.beat_duration_s(),
                         )
-                except Exception as exc2:  # noqa: BLE001
-                    print(f"[LOFI compose] Claude retry failed ({exc2})")
-                    texts = []
-            else:
-                writer = "deepseek"
-                try:
-                    raw = _call_llm(prompt)
-                    parsed = _extract_json_object(raw)
-                    texts = _coerce_line_list((parsed or {}).get("lines"))
-                except Exception as exc2:  # noqa: BLE001
-                    print(f"[LOFI compose] DeepSeek fallback failed ({exc2})")
-                    texts = []
+                        print(f"[LOFI compose] retry lines ({len(texts)}): {texts}")
+                        if texts:
+                            texts = _rewrite_line_constraints(
+                                texts,
+                                user_text,
+                                theme,
+                                scene_count,
+                                duration_s=duration_s,
+                                beat_s=lofi_cfg.beat_duration_s(),
+                            )
+                    except Exception as exc2:  # noqa: BLE001
+                        print(f"[LOFI compose] Claude retry failed ({exc2})")
+                        texts = []
+                else:
+                    writer = "deepseek"
+                    try:
+                        raw = _call_llm(prompt)
+                        parsed = _extract_json_object(raw)
+                        texts = _coerce_line_list((parsed or {}).get("lines"))
+                    except Exception as exc2:  # noqa: BLE001
+                        print(f"[LOFI compose] DeepSeek fallback failed ({exc2})")
+                        texts = []
         if not texts:
             return _fallback_script(
                 module=module,

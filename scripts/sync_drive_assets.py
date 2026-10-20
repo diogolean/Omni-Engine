@@ -11,8 +11,8 @@ For every JSON in outputs/library/ this script:
      direct Payhip link injected).
   4. Generates visual_hook      -- short ALL-CAPS overlay text for the 2:3 pin.
 
-By default uses Claude (Anthropic) for richer AI generation.
-Use --no-ai to fall back to fast regex + template generation.
+By default uses the cheap text stack (DeepSeek on DeepInfra, OpenRouter, DeepSeek).
+Claude runs only when USE_CLAUDE or CLAUDE_MODEL is set. --no-ai stays on regex templates.
 
 Usage:
     python sync_drive_assets.py               # process all unprocessed posts
@@ -167,21 +167,62 @@ def _transform_caption_regex(
 # ---------------------------------------------------------------------------
 
 def _load_anthropic_client():
-    """Return an Anthropic client or None if not available."""
+    """Anthropic client only when Claude is opted in. Otherwise the cheap stack."""
     try:
+        from config import claude_opted_in, resolve_claude_model  # noqa: PLC0415
+
+        if not claude_opted_in():
+            log.info("Claude is not opted in; pin copy uses the cheap text stack.")
+            return None, None
         import anthropic  # noqa: PLC0415
         api_key = config.ANTHROPIC_API_KEY
         if not api_key:
-            log.warning("ANTHROPIC_API_KEY not set; falling back to regex mode.")
+            log.warning("ANTHROPIC_API_KEY not set; falling back to the cheap stack.")
             return None, None
         client = anthropic.Anthropic(api_key=api_key)
-        from config import get_best_claude_model  # noqa: PLC0415
-        model = get_best_claude_model(client)
+        model = resolve_claude_model()
         log.info("Claude model resolved: %s", model)
         return client, model
     except ImportError:
-        log.warning("anthropic package not installed; falling back to regex mode.")
+        log.warning("anthropic package not installed; falling back to the cheap stack.")
         return None, None
+
+
+def _generate_metadata_cheap(
+    topic: str,
+    source_caption: str,
+    raw_fact_sheet: str,
+) -> dict[str, str]:
+    """Same JSON contract as Claude, on the cheap text stack."""
+    fact_excerpt = (raw_fact_sheet or "")[:600]
+    user_msg = _AI_USER_TEMPLATE.format(
+        topic=topic,
+        caption=source_caption if source_caption not in ("PENDING_CAPTION", "") else "(none)",
+        fact_sheet_excerpt=fact_excerpt,
+        sales_url=SALES_URL,
+    )
+    try:
+        from core.cheap_llm import available, complete
+
+        if not available("text"):
+            return {}
+        result = complete(
+            user_msg,
+            system=_AI_SYSTEM_PROMPT,
+            json_mode=True,
+            max_tokens=900,
+            temperature=0.4,
+            source="sync_drive_assets",
+        )
+        data = json.loads(result.text)
+        return {
+            "pinterest_title": str(data.get("pinterest_title", ""))[:100],
+            "pinterest_caption": str(data.get("pinterest_caption", "")),
+            "visual_hook": str(data.get("visual_hook", "")),
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Cheap pin copy failed for topic '%s': %s", topic, type(exc).__name__)
+    return {}
 
 
 _AI_SYSTEM_PROMPT = """\
@@ -246,8 +287,10 @@ def _generate_metadata_ai(
     )
 
     try:
+        from config import resolve_claude_model  # noqa: PLC0415
+
         response = client.messages.create(
-            model=model,
+            model=resolve_claude_model(model),
             max_tokens=900,
             system=_AI_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
@@ -389,21 +432,22 @@ def sync_library(
             log.debug("  Image not found locally; imgbb_url stored as fallback.")
 
         # --- Generate Pinterest metadata ---
+        metadata: dict[str, str] = {}
         if use_ai and client:
             metadata = _generate_metadata_ai(
                 topic, source_caption, raw_fact_sheet, client, model, variant_index
             )
             if metadata:
-                record["pinterest_title"] = metadata["pinterest_title"]
-                record["pinterest_caption"] = metadata["pinterest_caption"]
-                record["visual_hook"] = metadata["visual_hook"]
-                log.info("  AI metadata injected for: %s", topic)
-                time.sleep(ai_delay_sec)  # gentle rate limiting
-            else:
-                log.warning("  AI failed; falling back to regex for: %s", topic)
-                use_ai_fallback = True
-        else:
-            use_ai_fallback = True
+                time.sleep(ai_delay_sec)
+        elif use_ai:
+            metadata = _generate_metadata_cheap(topic, source_caption, raw_fact_sheet)
+        if metadata:
+            record["pinterest_title"] = metadata["pinterest_title"]
+            record["pinterest_caption"] = metadata["pinterest_caption"]
+            record["visual_hook"] = metadata["visual_hook"]
+            log.info("  AI metadata injected for: %s", topic)
+        elif use_ai:
+            log.warning("  AI failed; falling back to regex for: %s", topic)
 
         if not use_ai or not record.get("pinterest_title"):
             record.setdefault(
@@ -470,11 +514,11 @@ def _cli() -> None:
     )
     parser.add_argument(
         "--no-ai", action="store_true",
-        help="Skip Claude; use fast regex/template mode instead.",
+        help="Skip text models; use fast regex/template mode instead.",
     )
     parser.add_argument(
         "--ai-delay", type=float, default=0.8,
-        help="Seconds to wait between Claude API calls (default: 0.8).",
+        help="Seconds to wait between Claude API calls when Claude is opted in (default: 0.8).",
     )
     args = parser.parse_args()
 

@@ -1312,7 +1312,7 @@ def build_long_caption_prompt(
 # ---------------------------------------------------------------------------
 
 class CaptionEngine:
-    """Dual-LLM relay (Gemini research -> Claude polish) or economic single-Gemini path."""
+    """Gemini research and humanizing. Claude only when the operator opts in."""
 
     def __init__(
         self,
@@ -1397,12 +1397,10 @@ class CaptionEngine:
         self._router_tier = research_route.tier
         self._research_model = self._text_model_chain[0] if self._text_model_chain else active_research
 
-        # Headers sent on every request: x-api-key (auto from api_key)
-        # + anthropic-version (required; defaults to 2023-06-01 from config).
-        # Lazy import: the Anthropic SDK is heavy (~1.6 s); load it only when
-        # a client is actually required (an API key is present).
+        # Claude is not constructed from a stored key alone. The SDK is heavy
+        # and /v1/messages is skipped unless USE_CLAUDE or CLAUDE_MODEL is set.
         _anthropic = None
-        if a_key:
+        if a_key and app_config.claude_opted_in():
             from anthropic import Anthropic  # lazy — heavy SDK
 
             _anthropic = Anthropic(
@@ -1414,11 +1412,11 @@ class CaptionEngine:
             )
         self._anthropic = _anthropic
 
-        # Dynamic Claude model selection via Models API.
-        if writer_model:
-            self._writer_model = writer_model
+        if app_config.claude_opted_in():
+            pinned = writer_model if writer_model and not app_config.claude_model_retired(writer_model) else None
+            self._writer_model = app_config.resolve_claude_model(pinned)
         else:
-            self._writer_model = app_config.get_best_claude_model(self._anthropic)
+            self._writer_model = ""
 
         # DeepSeek — OpenAI-compatible economic brain (optional, activated by --economic)
         self._deepseek = None
@@ -1567,18 +1565,10 @@ class CaptionEngine:
         max_tokens: int = 900,
         temperature: float = 0.70,
     ) -> str:
-        """Claude text fallback used when DeepSeek fails (economic or premium)."""
-        if self._anthropic is None:
+        """Claude text call. No request unless the operator opted in."""
+        if not app_config.claude_opted_in() or self._anthropic is None:
             return ""
-        model = self._writer_model
-        try:
-            from modules.reel_artefact.provider_health import resolved_claude_model
-
-            resolved = resolved_claude_model()
-            if resolved:
-                model = resolved
-        except Exception:  # noqa: BLE001
-            model = self._writer_model
+        model = app_config.resolve_claude_model(self._writer_model or None)
         message = self._anthropic.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -1784,9 +1774,10 @@ class CaptionEngine:
         cta_enabled: bool = True,
         cta_caption_format: bool = False,
     ) -> str:
-        if not self._anthropic:
+        if not app_config.claude_opted_in() or self._anthropic is None:
             raise ValueError(
-                "Anthropic client unavailable. Add ANTHROPIC_API_KEY or enable economic_brain_mode."
+                "Claude humanizer is off. The cheap text stack does not need it. "
+                "Set USE_CLAUDE=1 or CLAUDE_MODEL, and ANTHROPIC_API_KEY, to opt in."
             )
         brand = (
             self._channel.display_name
@@ -1806,7 +1797,7 @@ class CaptionEngine:
         )
 
         message = self._anthropic.messages.create(
-            model=self._writer_model,
+            model=app_config.resolve_claude_model(self._writer_model or None),
             max_tokens=900,
             temperature=0.55,
             system=system_prompt,
@@ -1869,7 +1860,7 @@ class CaptionEngine:
             return False
 
     def _text_fallbacks(self):
-        """OpenRouter, then DeepSeek, then Anthropic. Same prompt the caller built."""
+        """OpenRouter, then DeepSeek. Claude only when the operator opted in."""
         from modules.reel_artefact.provider_health import openrouter_text
 
         def _deepseek(body: str) -> str:
@@ -1878,14 +1869,16 @@ class CaptionEngine:
         def _claude(body: str) -> str:
             text = self._claude_text_complete(body, max_tokens=1800)
             if not text:
-                raise RuntimeError("ANTHROPIC_API_KEY missing")
+                raise RuntimeError("Claude opted in but the call returned nothing")
             return text
 
-        return [
+        pairs = [
             ("openrouter", openrouter_text),
             ("deepseek", _deepseek),
-            ("anthropic", _claude),
         ]
+        if app_config.claude_opted_in():
+            pairs.append(("anthropic", _claude))
+        return pairs
 
     def _complete_ancient_text(
         self,
@@ -1898,7 +1891,7 @@ class CaptionEngine:
         """Ancient Knowledge only. Cheap providers first, Gemini after them.
 
         Near-zero cost: OpenRouter and DeepSeek write the draft. Gemini runs
-        only when both fail, and Claude (Sonnet prices) stays the last resort.
+        only when both fail. Claude is absent unless the operator opted in.
         Gemini is skipped once it has been marked dead.
         """
         if not self._is_ancient_knowledge():
@@ -3019,44 +3012,30 @@ class CaptionEngine:
         variation_index: int = 0,
         total_variants: int = 1,
     ) -> tuple[str, str]:
-        if not economic_brain_mode and not self._anthropic:
-            raise ValueError("ANTHROPIC_API_KEY required for premium relay or set economic_brain_mode=True.")
-        if economic_brain_mode:
-            econ_model = app_config.GEMINI_ECONOMIC_BRAIN_MODEL
-            raw = self.synthesize_facts(
-                topic,
-                pdf_bundle,
-                research_model_override=econ_model,
-                variation_index=variation_index,
-                total_variants=total_variants,
-            )
-            caption = (
-                self.humanize_voice_gemini(
-                    raw,
-                    topic,
-                    variation_index=variation_index,
-                    total_variants=total_variants,
-                    model_id=econ_model,
-                )
-                if raw
-                else ""
-            )
-            return raw, caption
-
+        econ_model = app_config.GEMINI_ECONOMIC_BRAIN_MODEL
         raw = self.synthesize_facts(
             topic,
             pdf_bundle,
+            research_model_override=econ_model if economic_brain_mode else None,
             variation_index=variation_index,
             total_variants=total_variants,
+            economic=economic_brain_mode,
         )
-        caption = (
-            self.humanize_voice(
+        if not raw:
+            return raw, ""
+        if economic_brain_mode or not app_config.claude_opted_in():
+            caption = self.humanize_voice_gemini(
                 raw,
                 topic,
                 variation_index=variation_index,
                 total_variants=total_variants,
+                model_id=econ_model if economic_brain_mode else None,
             )
-            if raw
-            else ""
+            return raw, caption
+        caption = self.humanize_voice(
+            raw,
+            topic,
+            variation_index=variation_index,
+            total_variants=total_variants,
         )
         return raw, caption
