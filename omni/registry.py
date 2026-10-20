@@ -1,24 +1,13 @@
-"""Pick the publisher for a platform name."""
-
+"""Compatibility shim. The registry lives in distribution.publishers.registry."""
 from __future__ import annotations
 
-from omni.publisher import Publisher
+import sys
 
+if __name__ == "__main__":
+    import runpy
 
-def publisher_for(platform: str, **kwargs) -> Publisher:
-    name = platform.strip().lower()
-    if name == "pinterest":
-        from omni.adapters.pinterest import PinterestAccountPublisher
+    runpy.run_module("distribution.publishers.registry", run_name="__main__")
+else:
+    from distribution.publishers import registry as _impl
 
-        return PinterestAccountPublisher(**kwargs)
-    if name == "youtube":
-        from omni.adapters.youtube import YouTubeAccountPublisher
-
-        return YouTubeAccountPublisher(**kwargs)
-    if name == "facebook":
-        raise NotImplementedError(
-            "Facebook stays on the Playwright / Post Planner path "
-            "(agents/posting/facebook_scheduler). brandings.yaml can mark it "
-            "active later; there is no API publisher yet."
-        )
-    raise KeyError(f"No publisher registered for platform {platform!r}")
+    sys.modules[__name__] = _impl

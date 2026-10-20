@@ -8,6 +8,31 @@ Accepted. Design only: no code moves in this PR. The draft refactor PRs #37–#4
 
 `channels_config/` keeps its name for per-channel content config. The account registry is a separate top-level `accounts/` package, not `distribution/accounts/`. M3 does not add `accounts/`. The ContentItem canonical file stays `channels_config/<channel>/store/content_library.json`. Later steps do not rename `channels_config/` to `channels/`.
 
+## Progress
+
+| Step | State |
+|---|---|
+| M0 | Accepted. This document. |
+| M1 | Import-linter contracts run in CI in report-only mode. |
+| M1b | Scheduler resume from the newest real `published_utc` is in `distribution/workers/runtime.py` (shim: `omni.worker`). |
+| M2 | `shared/` has env, paths, logging, ffmpeg, mime, and retry. Old `utils.*` modules are shims. |
+| M3 | `shared.store`, `shared.contracts` (`ContentItem` v1), and `shared.memory` landed. Old module paths are shims. |
+| M4 | Publishers are the home of the `Publisher` protocol. This step also moved the live `omni/` modules, because retiring that package is what makes the protocol the only publisher home. Shims stay where compose, Docker, and current imports still enter. |
+| M5 | Partially included with M4: drip, the Pinterest scheduler, the pin ledger, the Facebook queue, inventory, and library source now live under `distribution/scheduling/`. The per-channel `$OUTPUT_PATH/_omni/locks/<canal>.lock` is not added. |
+| M6 | Partially included with M4: the worker runtime lives in `distribution/workers/runtime.py`. `python -m omni.worker` is still the compose and VM entry. The file lock from M5 is not taken yet. |
+| M7 | Not started. Compose `command:` is still `python -m omni.worker`. Service names, profiles, and bind mounts are unchanged. |
+
+M4 places the account loaders in the top-level `accounts/` package from the naming note above (`brandings`, `tokens`, `pinterest`), not under `distribution/accounts/`.
+
+What moved, what merged, and what was deleted is listed in the M4 pull request. The pieces that stayed put, and why:
+
+* `agents/posting/pinterest_engine/{config,articles,pin_copy,photos,flux_photo,image_transformer}.py` stay. The ADR maps them to `production/formats/pins/` (M8). Moving them into distribution would put pin production in the publisher layer.
+* `agents/posting/pinterest_main.py` and `agents/posting/publish_existing.py` stay. They are live CLIs. The ADR maps them to `tools/` later. They are not dead.
+* `agents/posting/youtube_publisher.py` did move, to `distribution/publishers/api/youtube_upload.py`, and still calls `agents.media.content_source` for a Drive-only file. That edge is the same call as before. It shows up in the report-only import-linter until B2/Drive clients live in `shared`.
+* `distribution/scheduling/{scheduler,ledger,library_source,queue}.py` still call `agents.media` for B2, Drive, and imgbb. Same calls, new module path. The import-linter gate for “no distribution → production” is not green for those edges; M3 moved the durable store to `shared.store`, and these clients are still the media package.
+* Interval and resume helpers (`interval_seconds`, `startup_delay_seconds`) stay on the worker module so `omni.worker.interval_seconds` remains the one object tests and the process call.
+* `omni/` remains as `sys.modules` shims (`omni.worker` is `distribution.workers.runtime`, and the same for the other modules). Docker, compose, and `python -m omni.worker` still enter there. The shims come out at M14, after the entrypoint switch (M7) and clean scheduler cycles. Nothing in `omni/` is an implementation anymore.
+
 ## Context
 
 The repo grew by accretion. Same-purpose code sits in `core/`, `modules/`, `agents/`, `utils/`, `omni/`, `quality/` and `channels_config/`. The audit (2026-10-19) found 13 duplicate groups, about 55 `load_dotenv` call sites, machine paths, and a package name (`omni`) that says nothing about what it does. Four concerns are tangled:
@@ -144,7 +169,7 @@ distribution/
 | `omni/models.py`, `publisher.py`, `registry.py` | `distribution/publishers/base.py`, `registry.py` |
 | `omni/adapters/pinterest.py`, `youtube.py` | `distribution/publishers/api/pinterest.py`, `youtube.py` |
 | `omni/pinterest_drip.py` | `distribution/scheduling/drip.py` |
-| `omni/config.py`, `accounts.py`, `pinterest_accounts.py` | `distribution/accounts/{brandings,tokens,pinterest}.py` |
+| `omni/config.py`, `accounts.py`, `pinterest_accounts.py` | `accounts/{brandings,tokens,pinterest}.py` (top-level package; see *Naming recorded at M3*) |
 
 **Kept exactly:** `$OUTPUT_PATH/_omni/publish_ledger.json`, `OMNI_LEDGER_PATH`, `OMNI_ROLE`, `OMNI_ROOT`, `OMNI_IMAGE_TAG`, `OMNI_SKIP_DOTENV`, `_OMNI_APPLIED_PINTEREST_TOKEN/REFRESH`. `OMNI_` is the product prefix (Omni-Engine), not the package. Renaming state buys nothing and risks a fresh ledger, which would mean reposts.
 
@@ -257,7 +282,7 @@ deploy/
 | `agents/writer/`, `agents/rag/` | `production/writers/` |
 | `agents/orchestrator/` | `production/pipeline/agentic/` |
 | `agents/mcp/` | `production/providers/` (model_api_flows) |
-| `agents/posting/` | `youtube_publisher`, `facebook_publisher`, `pinterest_engine/publisher`, `pinterest_oauth` → `distribution/publishers/api/`; `facebook_scheduler/` → `distribution/publishers/browser/`; `post_planner` → `distribution/publishers/export/`; `pinterest_engine/{scheduler,ledger,facebook_queue,inventory,library_source}` → `distribution/scheduling/`; `pinterest_engine/{pin_copy,image_transformer,flux_photo,articles,photos}` → `production/formats/pins/`; `pinterest_main`, `publish_existing`, `scheduler_engine` → `tools/` CLIs over distribution |
+| `agents/posting/` | `youtube_publisher`, `pinterest_engine/publisher`, `pinterest_oauth` → `distribution/publishers/api/` (done in M4; `facebook_publisher.py` was deleted, see Progress — nothing imported it except the also-deleted `scheduler_engine.py`); `facebook_scheduler/` → `distribution/publishers/browser/` (done); `post_planner` → `distribution/publishers/export/` (done); `pinterest_engine/{scheduler,ledger,facebook_queue,inventory,library_source}` → `distribution/scheduling/` (done); `pinterest_engine/{pin_copy,image_transformer,flux_photo,articles,photos}` → `production/formats/pins/` (M8, still in place); `pinterest_main`, `publish_existing` → `tools/` CLIs over distribution (still in place; live CLIs) |
 | `omni/` | `distribution/` (table above) |
 | `utils/` | `pipeline_paths` → `shared/paths.py`; `process_tools` → `shared/ffmpeg.py`; `run_ledger`, `gemini_usage` → `production/cost/`; `ocr_*`, `quote_renderer` → `production/formats/quotes/`; `cursor_recovery` → deleted (#36) |
 | `quality/VisualQA_Agent/` | `production/qa/judges/visual_critic/`; package `critic_profiles/` → `production/qa/judges/profiles/` |

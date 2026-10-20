@@ -26,7 +26,7 @@ The always-on process is the `engine` service in `docker-compose.yml`. GitHub Ac
 
 That script pins `OMNI_IMAGE_TAG` and starts **engine only**. The scheduler is a Compose profile. Deploy does not start it unless `SCHEDULER_ENABLED` is set. See [0004](decisions/0004-scheduler-not-started-by-deploy.md).
 
-`python -m omni.worker --role engine` stays up so an operator can `docker compose exec engine python main.py ...`. It does not generate content by itself. `--role scheduler` publishes Pinterest image pins on a random 3–6 hour gap.
+`python -m omni.worker --role engine` stays up so an operator can `docker compose exec engine python main.py ...`. That command is a shim over `distribution.workers`. It does not generate content by itself. `--role scheduler` publishes Pinterest image pins on a random 3–6 hour gap.
 
 ### Libraries and Backblaze B2
 
@@ -48,9 +48,9 @@ The runner switch is `local`, `docker`, or `both`. See [0002](decisions/0002-run
 
 | Surface | Who publishes | Source |
 |---|---|---|
-| Facebook | WordPress orchestrator bot | Post Planner xlsx (`DATE/TIME`, `CAPTION`, `MEDIA URL`) produced by `agents/posting/post_planner.py` |
-| Pinterest | VM scheduler | One library image at a time (Drive, then local, then B2), linked to a WordPress article (`omni/pinterest_drip.py`) |
-| YouTube | VM, `main.py --publish-youtube` | `private` + `publishAt` via `agents/posting/youtube_publisher.py`. A missing local file is read from Drive. |
+| Facebook | WordPress orchestrator bot | Post Planner xlsx (`DATE/TIME`, `CAPTION`, `MEDIA URL`) produced by `distribution/publishers/export/post_planner.py` |
+| Pinterest | VM scheduler | One library image at a time (Drive, then local, then B2), linked to a WordPress article (`distribution/scheduling/drip.py`) |
+| YouTube | VM, `main.py --publish-youtube` | `private` + `publishAt` via `distribution/publishers/api/youtube_upload.py`. A missing local file is read from Drive. |
 
 Reel rows reach Post Planner and YouTube only when the QA report says `verdict=pass`. See [0005](decisions/0005-fail-closed-reel-qa.md).
 
