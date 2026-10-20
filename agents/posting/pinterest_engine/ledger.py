@@ -170,15 +170,24 @@ class PinLedger:
     def seed_board_pins(self, pins: list[dict], *, persist: bool = True) -> int:
         """Add board pins that are not already in the ledger. Returns how many were added.
 
-        ``persist=False`` keeps the rows in memory for this run and does not
+        A ``pin_id`` already stored on any row is left as it is, including
+        older duplicate rows. The seed does not refresh their timestamp.
+        ``persist=False`` keeps new rows in memory for this run and does not
         upload the ledger. Dry runs use that so B2 stays unchanged.
         """
+        known_ids = {
+            str(row.get("pin_id") or "").strip()
+            for row in self.rows
+            if str(row.get("pin_id") or "").strip()
+        }
         added = 0
         for pin in pins:
             title = str(pin.get("title") or "").strip()
             pin_id = str(pin.get("id") or pin.get("pin_id") or "").strip()
             source_hash = str(pin.get("source_hash") or "").strip()
             if not title and not pin_id and not source_hash:
+                continue
+            if pin_id and pin_id in known_ids:
                 continue
             if self.seen(title=title, source_hash=source_hash, post_id=""):
                 continue
@@ -194,6 +203,8 @@ class PinLedger:
                     "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }
             )
+            if pin_id:
+                known_ids.add(pin_id)
             added += 1
         if added and persist:
             self._write()

@@ -3,12 +3,15 @@
 One wake publishes ``PINTEREST_PINS_PER_RUN`` image pins (default 1) for
 every active row in ``config/pinterest_accounts.yaml``, and never more
 than ``PINTEREST_PINS_PER_DAY`` (default 4) once pins already recorded
-that UTC day are counted. Media comes from B2 one object at a time.
-Video files are skipped. Before the first publish the process sleeps
-until the newest PinLedger ``published_utc`` plus one cadence draw
-(``MIN_INTERVAL_HOURS`` to ``MAX_INTERVAL_HOURS``, default 3–6). If that
-moment is already past, it publishes immediately, still under the daily
-cap and the shared ledger duplicate check. A ``published_utc`` in the
+that calendar day are counted. The day is ``PINTEREST_DAY_TZ`` (default
+``America/Sao_Paulo``). Rows with ``seeded=True`` are board history and
+do not count, and they do not move the resume point. Media comes from B2
+one object at a time. Video files are skipped. Before the first publish
+the process sleeps until the newest real PinLedger ``published_utc`` plus
+one cadence draw (``MIN_INTERVAL_HOURS`` to ``MAX_INTERVAL_HOURS``,
+default 3–6). If that moment is already past, it publishes immediately,
+still under the daily cap and the shared ledger duplicate check. A
+``published_utc`` in the
 future cannot stretch that wait past ``MAX_INTERVAL_HOURS``. An empty or
 unreachable ledger keeps the previous random 3–6h startup delay.
 Between wakes it still sleeps a fresh random gap in that range.
@@ -34,6 +37,7 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
@@ -46,6 +50,7 @@ log = logging.getLogger("omni.worker")
 
 _DEFAULT_MIN_HOURS = 3.0
 _DEFAULT_MAX_HOURS = 6.0
+_DEFAULT_DAY_TZ = "America/Sao_Paulo"
 
 
 def _hours(name: str, default: float) -> float:
@@ -98,16 +103,22 @@ def _read_account_ledger(account: Account) -> tuple[list[dict], bool]:
     return PinLedger(account.account_id).read_rows()
 
 
+def _is_seeded(row: dict) -> bool:
+    """Board history copied into the ledger, not a pin this process published."""
+    return row.get("seeded") is True
+
+
 def newest_pin_published(
     accounts: Sequence[Account] | None = None,
     *,
     read_rows: Callable[[Account], tuple[list[dict], bool]] | None = None,
 ) -> datetime | None:
-    """Newest ``published_utc`` across active accounts.
+    """Newest real ``published_utc`` across active accounts.
 
-    ``None`` when every ledger is empty, or when any ledger is unreachable.
-    A partial read is not a safe resume point: the missing account may hold
-    the newest pin.
+    Rows with ``seeded=True`` are ignored, including older duplicates of the
+    same pin id. ``None`` when every ledger is empty, when the only stamps
+    are seeded, or when any ledger is unreachable. A partial read is not a
+    safe resume point: the missing account may hold the newest pin.
     """
     rows_of = read_rows or _read_account_ledger
     chosen = list(accounts) if accounts is not None else active_pinterest_accounts()
@@ -124,7 +135,7 @@ def newest_pin_published(
             log.info("Pin ledger unreachable for %s", account.account_id)
             return None
         for row in rows:
-            if not isinstance(row, dict):
+            if not isinstance(row, dict) or _is_seeded(row):
                 continue
             stamp = _parse_published_utc(row.get("published_utc"))
             if stamp is not None and (newest is None or stamp > newest):
@@ -180,13 +191,23 @@ def pins_per_wake() -> int:
     return min(value, _pins_per_day())
 
 
-def _pins_recorded_on(rows: Sequence[object], day) -> int:
+def _day_timezone() -> ZoneInfo:
+    """Calendar day for ``PINTEREST_PINS_PER_DAY``. Default America/Sao_Paulo."""
+    name = (os.getenv("PINTEREST_DAY_TZ") or "").strip() or _DEFAULT_DAY_TZ
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        log.warning("Ignoring unknown PINTEREST_DAY_TZ=%r; using %s", name, _DEFAULT_DAY_TZ)
+        return ZoneInfo(_DEFAULT_DAY_TZ)
+
+
+def _pins_recorded_on(rows: Sequence[object], day, tz: ZoneInfo) -> int:
     count = 0
     for row in rows:
-        if not isinstance(row, dict) or row.get("pin_recorded") is False:
+        if not isinstance(row, dict) or row.get("pin_recorded") is False or _is_seeded(row):
             continue
         stamp = _parse_published_utc(row.get("published_utc"))
-        if stamp is not None and stamp.astimezone(timezone.utc).date() == day:
+        if stamp is not None and stamp.astimezone(tz).date() == day:
             count += 1
     return count
 
@@ -200,8 +221,10 @@ def wake_pin_allowance(
     """How many pins this wake may publish for ``account``.
 
     The request cannot exceed ``PINTEREST_PINS_PER_DAY``. Rows already
-    recorded on the current UTC day consume that budget. When the ledger
-    cannot be read, that count is unknown and only the per-wake cap applies.
+    recorded on the current calendar day in ``PINTEREST_DAY_TZ`` (default
+    America/Sao_Paulo) consume that budget. Seeded board rows do not. When
+    the ledger cannot be read, that count is unknown and only the per-wake
+    cap applies.
     """
     requested = pins_per_wake()
     moment = now or _utc_now()
@@ -216,7 +239,8 @@ def wake_pin_allowance(
     if not reachable:
         log.info("Pin ledger unreadable for %s; keeping the per-wake cap", account.account_id)
         return requested
-    used = _pins_recorded_on(rows, moment.astimezone(timezone.utc).date())
+    tz = _day_timezone()
+    used = _pins_recorded_on(rows, moment.astimezone(tz).date(), tz)
     return max(0, min(requested, _pins_per_day() - used))
 
 
