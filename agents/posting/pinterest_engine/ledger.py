@@ -63,6 +63,34 @@ class PinLedger:
         self.rows = _parse_jsonl(text or "")
         return self.rows
 
+    def read_rows(self) -> tuple[list[dict], bool]:
+        """Return ``(rows, reachable)`` without writing the ledger.
+
+        Reachable when B2 returns the object, when the key is missing, or
+        when the local cache can be read after B2 cannot. Unreachable when
+        neither copy can be read.
+        """
+        from agents.media.b2_client import read_object_outcome  # noqa: PLC0415
+
+        text, status = read_object_outcome(
+            self.key, client=self.client, bucket=self.bucket
+        )
+        if status == "ok":
+            self.rows = _parse_jsonl(text or "")
+            return self.rows, True
+        if status == "missing":
+            cached, present = self._cache_payload()
+            if present:
+                self.rows = _parse_jsonl(cached)
+                return self.rows, True
+            self.rows = []
+            return [], True
+        cached, present = self._cache_payload()
+        if present:
+            self.rows = _parse_jsonl(cached)
+            return self.rows, True
+        return [], False
+
     def seen(self, *, post_id: str = "", title: str = "", source_hash: str = "") -> bool:
         wanted_title = normalize_title(title)
         wanted_id = (post_id or "").strip()
@@ -214,12 +242,16 @@ class PinLedger:
             return None
 
     def _read_cache(self) -> str:
+        text, present = self._cache_payload()
+        return text if present else ""
+
+    def _cache_payload(self) -> tuple[str, bool]:
         if not self.cache_path.is_file():
-            return ""
+            return "", False
         try:
-            return self.cache_path.read_text(encoding="utf-8")
+            return self.cache_path.read_text(encoding="utf-8"), True
         except OSError:
-            return ""
+            return "", False
 
 
 def _parse_jsonl(text: str) -> list[dict]:

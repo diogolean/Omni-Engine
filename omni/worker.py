@@ -2,10 +2,13 @@
 
 One wake publishes ``PINTEREST_PINS_PER_RUN`` image pins (default 1) for
 every active row in ``config/pinterest_accounts.yaml``. Media comes from
-B2 one object at a time. Video files are skipped. Before the first publish,
-and between wakes, the process sleeps a random gap between
-``MIN_INTERVAL_HOURS`` and ``MAX_INTERVAL_HOURS`` (default 3–6).
-``--once`` and ``--dry-run`` skip that initial delay. ``--dry-run`` builds
+B2 one object at a time. Video files are skipped. Before the first publish
+the process sleeps until the newest PinLedger ``published_utc`` plus one
+cadence draw (``MIN_INTERVAL_HOURS`` to ``MAX_INTERVAL_HOURS``, default
+3–6). If that moment is already past, it publishes immediately. An empty
+or unreachable ledger keeps the previous random 3–6h startup delay.
+Between wakes it still sleeps a fresh random gap in that range.
+``--once`` and ``--dry-run`` skip the initial delay. ``--dry-run`` builds
 the cards and does not call Pinterest.
 
 YouTube scheduling stays on ``main.py --publish-youtube`` (``publishAt``).
@@ -24,6 +27,8 @@ import random
 import signal
 import sys
 import time
+from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +65,92 @@ def interval_seconds(rng: random.Random | None = None) -> float:
         return min_h * 3600.0
     roll = (rng or random).random()
     return (min_h + (max_h - min_h) * roll) * 3600.0
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_published_utc(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _read_account_ledger(account: Account) -> tuple[list[dict], bool]:
+    from agents.posting.pinterest_engine.ledger import PinLedger  # noqa: PLC0415
+
+    return PinLedger(account.account_id).read_rows()
+
+
+def newest_pin_published(
+    accounts: Sequence[Account] | None = None,
+    *,
+    read_rows: Callable[[Account], tuple[list[dict], bool]] | None = None,
+) -> datetime | None:
+    """Newest ``published_utc`` across active accounts.
+
+    ``None`` when every ledger is empty, or when any ledger is unreachable.
+    A partial read is not a safe resume point: the missing account may hold
+    the newest pin.
+    """
+    rows_of = read_rows or _read_account_ledger
+    chosen = list(accounts) if accounts is not None else active_pinterest_accounts()
+    if not chosen:
+        return None
+    newest: datetime | None = None
+    for account in chosen:
+        try:
+            rows, reachable = rows_of(account)
+        except Exception:  # noqa: BLE001 — one bad ledger must not publish early
+            log.info("Pin ledger unreachable for %s", account.account_id)
+            return None
+        if not reachable:
+            log.info("Pin ledger unreachable for %s", account.account_id)
+            return None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            stamp = _parse_published_utc(row.get("published_utc"))
+            if stamp is not None and (newest is None or stamp > newest):
+                newest = stamp
+    return newest
+
+
+def startup_delay_seconds(
+    published_at: datetime | None,
+    *,
+    now: datetime | None = None,
+    rng: random.Random | None = None,
+) -> float:
+    """Seconds to wait before the first publish.
+
+    ``published_at`` is the newest pin time, or ``None`` when the ledger is
+    empty or unreachable. ``None`` keeps the random 3–6h delay. Otherwise
+    the wait is whatever remains of one cadence draw after that pin.
+    """
+    cadence = interval_seconds(rng)
+    if published_at is None:
+        return cadence
+    moment = now or _utc_now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    stamp = published_at
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    remaining = (stamp + timedelta(seconds=cadence) - moment).total_seconds()
+    return max(0.0, remaining)
 
 
 def pins_per_wake() -> int:
@@ -167,10 +258,27 @@ def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
         os.getenv("MAX_INTERVAL_HOURS", "6"),
         dry_run,
     )
-    # A fresh container must not publish in the same minute it starts.
+    # Resume from the last pin. An empty or unreachable ledger keeps the
+    # random startup delay so a restart cannot publish early by accident.
     if not once and not dry_run:
-        pause = interval_seconds()
-        log.info("Initial delay before the first publish: %.0f minutes", pause / 60.0)
+        published_at = newest_pin_published()
+        pause = startup_delay_seconds(published_at)
+        if published_at is None:
+            log.info(
+                "Pin ledger empty or unreachable; initial delay %.0f minutes",
+                pause / 60.0,
+            )
+        elif pause <= 0:
+            log.info(
+                "Last pin at %s is already past the cadence; publishing without the startup delay",
+                published_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+        else:
+            log.info(
+                "Resuming from last pin at %s; initial delay %.0f minutes",
+                published_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                pause / 60.0,
+            )
         _sleep_until(pause, stop)
         if stop["flag"]:
             return

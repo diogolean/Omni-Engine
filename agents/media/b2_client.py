@@ -57,6 +57,7 @@ __all__ = [
     "download_object",
     "list_object_keys",
     "media_bucket_name",
+    "read_object_outcome",
     "read_object_text",
     "resolve_b2_bucket_name",
     "upload_object",
@@ -252,6 +253,59 @@ def read_object_text(key: str, *, client=None, bucket: str | None = None) -> str
         note_download_bytes(len(text.encode("utf-8")) - 1)
     store_text(token, bucket_name, key, text)
     return text
+
+
+def read_object_outcome(
+    key: str, *, client=None, bucket: str | None = None
+) -> tuple[str | None, str]:
+    """Read one small object and say whether the caller can trust the result.
+
+    ``ok`` means ``text`` is the object body, which may be empty. ``missing``
+    means the key is not in the bucket. ``unreachable`` means credentials,
+    the network, or the daily cap stopped the read. A daily cap does not
+    raise here. ``read_object_text`` still raises ``B2DailyCapError``.
+    """
+    bucket_name = (bucket or "").strip() or media_bucket_name()
+    token = client_token(client)
+    cached = cached_text(token, bucket_name, key)
+    if cached is not None:
+        return cached, "ok"
+    try:
+        s3 = client if client is not None else _get_b2_resource().meta.client
+        charge(class_b=1, download_bytes=1)
+        obj = call_with_cap_backoff(
+            lambda: s3.get_object(Bucket=bucket_name, Key=key),
+            what=f"read {key}",
+        )
+    except B2DailyCapError:
+        return None, "unreachable"
+    except Exception as exc:  # noqa: BLE001 — missing key or transport, not a secret
+        logger.info("B2 object not read (%s): %s", type(exc).__name__, key)
+        return None, _object_read_status(exc)
+    body = obj["Body"].read()
+    if isinstance(body, bytes):
+        text = body.decode("utf-8")
+    else:
+        text = str(body)
+    try:
+        if len(text.encode("utf-8")) > 1:
+            note_download_bytes(len(text.encode("utf-8")) - 1)
+    except B2DailyCapError:
+        logger.info("B2 download cap reached after reading %s", key)
+    store_text(token, bucket_name, key, text)
+    return text, "ok"
+
+
+def _object_read_status(exc: BaseException) -> str:
+    response = getattr(exc, "response", None)
+    code = ""
+    if isinstance(response, dict):
+        err = response.get("Error") or {}
+        if isinstance(err, dict):
+            code = str(err.get("Code") or "")
+    if code in {"NoSuchKey", "404", "NotFound", "NoSuchBucket"}:
+        return "missing"
+    return "unreachable"
 
 
 def _is_storage_cap_error(exc: BaseException) -> bool:
