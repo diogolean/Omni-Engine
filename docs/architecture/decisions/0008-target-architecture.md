@@ -4,6 +4,10 @@
 
 Accepted. Design only: no code moves in this PR. The draft refactor PRs #37–#46 are paused, and their destinations change to the ones below.
 
+## Naming recorded at M3
+
+`channels_config/` keeps its name for per-channel content config. The account registry is a separate top-level `accounts/` package, not `distribution/accounts/`. M3 does not add `accounts/`. The ContentItem canonical file stays `channels_config/<channel>/store/content_library.json`. Later steps do not rename `channels_config/` to `channels/`.
+
 ## Context
 
 The repo grew by accretion. Same-purpose code sits in `core/`, `modules/`, `agents/`, `utils/`, `omni/`, `quality/` and `channels_config/`. The audit (2026-10-19) found 13 duplicate groups, about 55 `load_dotenv` call sites, machine paths, and a package name (`omni`) that says nothing about what it does. Four concerns are tangled:
@@ -299,7 +303,7 @@ Governance: every step that changes a home updates `AGENTS.md` and `docs/archite
 Today there are four shapes: the dict rows written by `engine/pipeline/stage_publish.py`; `DistributionRecord` (`modules/distribution_contract.py`, stored in `channels_config/<channel>/store/content_library.json`); `omni.models.Content`; and Pinterest's `outputs/<channel>/{content_library.json,library/}`.
 
 - **Schema:** one pydantic model `shared.contracts.ContentItem` with `schema_version: 1`, based on `DistributionRecord` (the richest of the four).
-- **Canonical path:** `channels/<channel>/store/content_library.json` (today `channels_config/<channel>/store/…`), mirrored through `shared.store`.
+- **Canonical path:** `channels_config/<channel>/store/content_library.json`, mirrored through `shared.store`. (`channels_config/` keeps its name; see *Naming recorded at M3*.)
 - **Ownership:** production is the only writer of new items; distribution writes only publish-status fields through `shared.contracts` helpers.
 - **Compatibility:** read adapters for the other three shapes; a one-shot migration tool upgrades files in place with a backup; adapters are removed in M14.
 

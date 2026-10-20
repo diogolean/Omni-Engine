@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from modules.asset_library import register_generated_asset
-from modules.distribution_contract import (
+from shared.contracts import (
     TITLE_MAX_CHARS,
     BaseMetadata,
+    ContentItem,
     DistributionRecord,
     build_platform_overrides,
     clip_text,
@@ -29,7 +30,7 @@ from modules.distribution_contract import (
     posting_status_from_map,
     upsert_distribution_row,
 )
-from modules.durable_store import restore_channel_state
+from shared.store import restore_channel_state
 from utils.pipeline_paths import channel_store_dir, discover_channel_ids, page_outputs_dir
 
 _LOG = logging.getLogger("metadata_auditor")
@@ -172,14 +173,14 @@ def already_cataloged(rows: list[dict[str, Any]], video: Path) -> bool:
     return False
 
 
-def build_generic_record(channel: str, video: Path) -> DistributionRecord:
+def build_generic_record(channel: str, video: Path) -> ContentItem:
     profile = channel_profile(channel)
     hashtags = list(profile.get("hashtags") or ())
     title = title_from_filename(video)
     caption = title
     if hashtags:
         caption = f"{caption}\n\n{' '.join(hashtags)}"
-    return DistributionRecord(
+    return ContentItem(
         channel_id=channel,
         post_type=str(profile.get("post_type") or "REEL"),
         session_id=video.stem,
@@ -204,7 +205,7 @@ def build_generic_record(channel: str, video: Path) -> DistributionRecord:
 
 
 def persist_generic_record(
-    record: DistributionRecord,
+    record: ContentItem,
     *,
     library_path: Path,
     dry_run: bool = False,

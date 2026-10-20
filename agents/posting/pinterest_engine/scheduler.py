@@ -105,7 +105,7 @@ class FilenameHistory:
     def __init__(self, outputs_dir: Path) -> None:
         self.path = outputs_dir / _HISTORY_FILENAME
         try:
-            from modules.durable_store import hydrate_state_file
+            from shared.store import hydrate_state_file
 
             self.path = hydrate_state_file(self.path)
         except Exception:
@@ -150,7 +150,7 @@ class FilenameHistory:
             fh.write(line + "\n")
         self._seen.add(filename)
         try:
-            from modules.durable_store import sync_state_file
+            from shared.store import sync_state_file
 
             sync_state_file(self.path)
         except Exception:

@@ -764,7 +764,7 @@ class MasterInventory:
         self.inventory_path: Path = self.outputs_dir / MASTER_INVENTORY_FILENAME
         self.content_library_path: Path = self.outputs_dir / "content_library.json"
         try:
-            from modules.durable_store import hydrate_state_file, restore_channel_state
+            from shared.store import hydrate_state_file, restore_channel_state
 
             channel = self.outputs_dir.name
             restore_channel_state(channel)
@@ -792,7 +792,7 @@ class MasterInventory:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.inventory_path)
         try:
-            from modules.durable_store import sync_state_file
+            from shared.store import sync_state_file
 
             sync_state_file(self.inventory_path)
         except Exception:
