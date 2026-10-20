@@ -28,10 +28,10 @@ _ENGINE_ROOT: Path = Path(__file__).resolve().parents[1]
 if str(_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_ENGINE_ROOT))
 
+from shared.logging import setup_gemini_tool_logging
 from utils.gemini_usage import (
     GeminiUsage,
     extract_usage,
-    hush_gemini_sdk_logs,
     log_usage,
     unwrap_json_object,
 )
@@ -273,13 +273,7 @@ def paraphrase_vault(
     return dest
 
 
-def _configure_logging() -> None:
-    if not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s | %(message)s",
-        )
-    hush_gemini_sdk_logs()
+_configure_logging = setup_gemini_tool_logging
 
 
 def main(argv: list[str] | None = None) -> int:

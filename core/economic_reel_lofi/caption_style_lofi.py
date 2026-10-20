@@ -20,6 +20,7 @@ from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFilter, ImageFont
 
 from core.economic_reel_lofi import config as lofi_cfg
+from utils.pipeline_paths import windows_fonts_dir
 
 # ── Shared layout (do not share ECONOMIC_REEL yellow outline style) ──────────
 CAPTION_COLOR: tuple[int, int, int, int] = (255, 255, 255, 255)
@@ -142,7 +143,7 @@ FONT_LIBRARY: dict[str, dict[str, object]] = {
         "candidates": (
             "Fonts/ComicSans/ComicSansMS-Bold.ttf",
             "Fonts/ComicSans/comicbd.ttf",
-            r"C:\Windows\Fonts\comicbd.ttf",
+            str(windows_fonts_dir() / "comicbd.ttf"),
             "Fonts/Poppins/Poppins-Bold.ttf",
             "Fonts/Montserrat/static/Montserrat-Bold.ttf",
         ),

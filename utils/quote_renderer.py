@@ -43,7 +43,7 @@ if str(_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_ENGINE_ROOT))
 
 from utils.ocr_text import strip_wrapping_quotes
-from utils.pipeline_paths import assets_path, page_outputs_dir
+from utils.pipeline_paths import assets_path, page_outputs_dir, windows_fonts_dir
 
 _ASSETS_ROOT: Path = assets_path()
 FACTORY_ROOT: Path = _ASSETS_ROOT.parent
@@ -607,7 +607,7 @@ def _factory_font_fallbacks(factory_roots: Sequence[Path]) -> list[Path]:
             path = root / rel
             if path.is_file():
                 found.append(path)
-    windir = Path(r"C:\Windows\Fonts")
+    windir = windows_fonts_dir()
     for name in ("cour.ttf", "courbd.ttf", "comic.ttf", "georgia.ttf", "arial.ttf"):
         path = windir / name
         if path.is_file():

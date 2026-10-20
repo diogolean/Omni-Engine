@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
+
+from shared.ffmpeg import resolve_ffmpeg as _resolve_ffmpeg
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 SIGNED_SUFFIX = "_signed"
@@ -49,28 +50,8 @@ _DEFAULT_OPTIONS: dict[str, Any] = {
 }
 
 
-def resolve_ffmpeg() -> str:
-    """Return an ffmpeg executable path (PATH, imageio_ffmpeg, or common installs)."""
-    ff = shutil.which("ffmpeg")
-    if ff:
-        return ff
-    try:
-        import imageio_ffmpeg  # type: ignore
-
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and Path(exe).is_file():
-            return str(exe)
-    except Exception:  # noqa: BLE001
-        pass
-    for cand in (
-        Path.home() / "AppData/Local/Programs/Stremio/ffmpeg.exe",
-        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
-    ):
-        if cand.is_file():
-            return str(cand)
-    raise RuntimeError(
-        "ffmpeg not found on PATH, imageio_ffmpeg, or common install paths."
-    )
+# Kept as a public name: core.animator.renderer and tests import it from here.
+resolve_ffmpeg = _resolve_ffmpeg
 
 
 def resolve_processes_dir(source_dir: str | Path) -> Path:

@@ -328,7 +328,7 @@ def _synthesize_sequence_voice_track(
         if voice_only_1 is not None:
             break
         if is_ak and _tts_try < _tts_tries:
-            from modules.reel_artefact.net_retry import retry_sleep as _retry_sleep
+            from shared.retry import retry_sleep as _retry_sleep
 
             _LOG.warning("Pre-image TTS network retry %d", _tts_try)
             _retry_sleep(_tts_try)

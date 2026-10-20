@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from shared.env import env_float
+
 logger = logging.getLogger(__name__)
 
 # A reel binds its page once for the whole process. A .env ACTIVE_PAGE of
@@ -114,14 +116,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None or not str(raw).strip():
-        return default
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return default
+_env_float = env_float
 
 
 def _env_int(name: str, default: int) -> int:

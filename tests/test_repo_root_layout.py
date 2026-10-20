@@ -51,6 +51,7 @@ _ALLOWED_ROOT = {
     "requirements.txt",
     "run_main_noupload.py",
     "scripts",
+    "shared",
     "tests",
     "tools",
     "utils",

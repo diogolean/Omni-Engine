@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from omni.models import Account
+from shared.env import as_bool
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BRANDINGS_PATH = _REPO_ROOT / "config" / "brandings.yaml"
@@ -82,14 +83,7 @@ def _slug_env(prefix: str, branding_id: str) -> str:
     return f"{prefix}_{branding_id.strip().upper()}"
 
 
-def _as_bool(value: Any, *, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
+_as_bool = as_bool
 
 
 def _apply_platform_defaults(

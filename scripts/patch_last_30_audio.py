@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from shared.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 from utils.pipeline_paths import page_outputs_dir
 
 try:
@@ -53,39 +54,8 @@ SFX_FADE_IN_S = 0.2
 _VARIANT_RE = re.compile(r"_v(\d+)$", re.IGNORECASE)
 
 
-def _resolve_ffmpeg() -> str:
-    ff = shutil.which("ffmpeg")
-    if ff:
-        return ff
-    try:
-        import imageio_ffmpeg  # type: ignore
-
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and Path(exe).is_file():
-            return str(exe)
-    except Exception:
-        pass
-    for cand in (
-        Path.home() / "AppData/Local/Programs/Stremio/ffmpeg.exe",
-        Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
-    ):
-        if cand.is_file():
-            return str(cand)
-    raise RuntimeError("ffmpeg not found on PATH / imageio_ffmpeg / common install paths.")
-
-
-def _resolve_ffprobe(ffmpeg: str) -> str | None:
-    fp = shutil.which("ffprobe")
-    if fp:
-        return fp
-    # Same folder as ffmpeg (if a full install)
-    sibling = Path(ffmpeg).with_name("ffprobe.exe")
-    if sibling.is_file():
-        return str(sibling)
-    sibling2 = Path(ffmpeg).with_name("ffprobe")
-    if sibling2.is_file():
-        return str(sibling2)
-    return None
+_resolve_ffmpeg = resolve_ffmpeg
+_resolve_ffprobe = resolve_ffprobe
 
 
 def _audio_duration_s(path: Path, *, ffmpeg: str, ffprobe: str | None) -> float:

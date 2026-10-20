@@ -21,6 +21,8 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
+from shared.env import env_bool
+
 logger = logging.getLogger(__name__)
 
 TaskType = Literal[
@@ -104,11 +106,7 @@ class ModelRoute:
         return list(self.chain)
 
 
-def _bool_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+_bool_env = env_bool
 
 
 def _strip(name: str | None) -> str:

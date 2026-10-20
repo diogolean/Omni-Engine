@@ -36,10 +36,10 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from shared.logging import setup_gemini_tool_logging
 from utils.gemini_usage import (
     GeminiUsage,
     extract_usage,
-    hush_gemini_sdk_logs,
     log_usage,
     unwrap_json_object,
 )
@@ -621,13 +621,7 @@ class OCREngine:
         return {key: "" for key, _path in pending}, GeminiUsage()
 
 
-def _configure_logging() -> None:
-    if not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s | %(message)s",
-        )
-    hush_gemini_sdk_logs()
+_configure_logging = setup_gemini_tool_logging
 
 
 def main(argv: list[str] | None = None) -> int:

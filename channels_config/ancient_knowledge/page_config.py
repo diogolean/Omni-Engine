@@ -14,6 +14,8 @@ Cost mode: HARDCODED to "nano" (economic/lightweight) for all generation.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from config import words_for_duration
 
 # ---------------------------------------------------------------------------
@@ -130,14 +132,10 @@ ELEVENLABS_VOICE_SETTINGS: dict = {
 }
 
 # F5-TTS remote voice reference (channels_config/.../voice_reference/).
-VOICE_REFERENCE_AUDIO: str = (
-    r"C:\dev\omni-engine\channels_config\ancient_knowledge"
-    r"\voice_reference\ancient_knowledge_voice_ref.MP3"
-)
-VOICE_REFERENCE_TEXT: str = (
-    r"C:\dev\omni-engine\channels_config\ancient_knowledge"
-    r"\voice_reference\ancient_knowledge_voice_ref.txt"
-)
+# Resolved next to this file, so it works from any checkout (PC or VM).
+_VOICE_REFERENCE_DIR = Path(__file__).resolve().parent / "voice_reference"
+VOICE_REFERENCE_AUDIO: str = str(_VOICE_REFERENCE_DIR / "ancient_knowledge_voice_ref.MP3")
+VOICE_REFERENCE_TEXT: str = str(_VOICE_REFERENCE_DIR / "ancient_knowledge_voice_ref.txt")
 
 # ---------------------------------------------------------------------------
 # Remote GPU Flux LoRA (ENABLE_REMOTE_GPU_WORKFLOWS=true)

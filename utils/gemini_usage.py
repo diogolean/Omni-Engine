@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from shared.logging import hush_gemini_sdk_logs
+
 # Official Gemini 2.5 Flash list prices (USD / 1M tokens)
 FLASH_INPUT_USD_PER_1M: float = 0.075
 FLASH_OUTPUT_USD_PER_1M: float = 0.30
@@ -34,12 +36,6 @@ class GeminiUsage:
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
         )
-
-
-def hush_gemini_sdk_logs() -> None:
-    """Hide SDK chatter so only our cost / result lines stay visible."""
-    for name in ("httpx", "httpcore", "google_genai", "google_genai.models"):
-        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def flash_cost_usd(input_tokens: int, output_tokens: int) -> float:
