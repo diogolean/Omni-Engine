@@ -32,6 +32,6 @@ Read `docs/architecture/REPO_LAYOUT.md` first.
 - Tests: `tests/` or `channels_config/<channel>/tests/`. Name the file for the behavior, not a round number.
 - Scratch, logs, renders, and review dumps: `outputs/<channel>/` via `temp_path` and `review_path`.
 
-Do not rename `agents/media/`, `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml`, `channels_config/*/store`, `scene_library`, or `artefact_cache`. Compose service names `engine` and `scheduler`, and the `memory` profile, stay as they are. The VM command is `python -m distribution.workers`. A push to `main` deploys the Oracle VM.
+Do not rename `agents/media/`, `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml`, `channels_config/*/store`, `scene_library`, or `artefact_cache`. Compose service names `engine` and `scheduler`, and the `memory` profile, stay as they are. The VM command is `python -m distribution.workers`. `omni/` is a fallback shim for `python -m omni.worker`; new code imports `distribution` and `accounts`. A push to `main` deploys the Oracle VM.
 
 `ACTIVE_PAGE` is set in `main.py` before `engine.runtime` imports the media stack. Later imports read that name at import time. Do not reorder that bootstrap.

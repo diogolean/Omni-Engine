@@ -82,7 +82,7 @@ def test_distribution_read_does_not_import_production() -> None:
         assert not name.startswith(("omni", "agents.posting", "channels_config"))
 
     banned = ("modules.durable_store", "modules.distribution_contract", "modules.memory")
-    for root_name in ("agents/posting", "distribution", "accounts"):
+    for root_name in ("agents/posting", "distribution", "accounts", "omni"):
         for path in (_REPO / root_name).rglob("*.py"):
             text = path.read_text(encoding="utf-8")
             for name in banned:
