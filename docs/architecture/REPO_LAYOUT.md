@@ -15,10 +15,10 @@ Tracked at the repository root:
 | Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml`, `.gitleaksignore` |
 | Containers and CI | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.github/` |
 | Packages | `agents/`, `channels_config/`, `config/`, `core/`, `engine/`, `models_avatar/`, `modules/`, `omni/`, `portfolio_showcase/`, `quality/`, `utils/` |
-| Support trees | `assets/`, `critic_profiles/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
+| Support trees | `assets/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
 | Agent rules | `.cursor/rules/` |
 
-`Fonts/` stays at the root because page configs address fonts as `Fonts/<family>/...` from the repo root. `critic_profiles/` stays at the root because `quality/VisualQA_Agent/visual_critic.py` loads `critic_profiles/<name>.json` from the factory root and from the package.
+`Fonts/` stays at the root because page configs address fonts as `Fonts/<family>/...` from the repo root. Critic profiles live only in `quality/VisualQA_Agent/critic_profiles/`. `visual_critic.py` loads `critic_profiles/<name>.json` from that package.
 
 `config.py` and `channel_loader.py` stay beside `main.py`. `config/` is a data directory (YAML only, not a Python package), and other packages have their own `config.py` (`pinterest_engine`, `economic_reel_lofi`, `VisualQA_Agent`). `import config` is the process settings module. `engine/runtime.py` imports it, and `from channel_loader import load_page_context`, only after `ACTIVE_PAGE` is set. `config.py` uses `Path(__file__).parent` as the repo root to find `.env`. Moving either file would rename that import across the factory and move the `.env` lookup.
 
@@ -35,7 +35,7 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Posting, Pinterest, YouTube, Facebook scheduler | `agents/posting/` | Code. Error screenshots go to `outputs/facebook_scheduler/screenshots/`, not into the package. |
 | B2, Drive, content source | `agents/media/` | Do not move. The B2 client guard forbids direct B2 clients outside this package. |
 | Puppet / Aiwake animator | `core/animator/` | Code. Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
-| Visual QA critic | `quality/VisualQA_Agent/` | Code and package-local critic JSON. Shared profiles stay in root `critic_profiles/`. |
+| Visual QA critic | `quality/VisualQA_Agent/` | Code and package-local critic JSON in `critic_profiles/`. |
 | Cursor rules | `.cursor/rules/` | The whole directory is versioned, including `aiwake-copy.mdc` and `video-pipeline.mdc`. `.cursor/*` other than `rules/` is gitignored. |
 | Channel store | `channels_config/<channel>/store/` | Runtime state stays gitignored and dockerignored, and only lives in the owner's Drive backup. `.dockerignore` excludes `channels_config/*/store/` and re-includes `channels_config/aiwake/store/portfolio/` so those tracked showcase snapshots stay in the image. `store/.gitkeep` is a git placeholder. The Oracle compose file mounts Ancient Knowledge's store over that path. Do not rename it. |
 | Lofi store | `core/economic_reel_lofi/store/` | Files already tracked in this directory stay in git. `aphorism_recent.json` stays gitignored. |

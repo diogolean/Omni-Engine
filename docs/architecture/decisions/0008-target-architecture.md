@@ -256,7 +256,7 @@ deploy/
 | `agents/posting/` | `youtube_publisher`, `facebook_publisher`, `pinterest_engine/publisher`, `pinterest_oauth` → `distribution/publishers/api/`; `facebook_scheduler/` → `distribution/publishers/browser/`; `post_planner` → `distribution/publishers/export/`; `pinterest_engine/{scheduler,ledger,facebook_queue,inventory,library_source}` → `distribution/scheduling/`; `pinterest_engine/{pin_copy,image_transformer,flux_photo,articles,photos}` → `production/formats/pins/`; `pinterest_main`, `publish_existing`, `scheduler_engine` → `tools/` CLIs over distribution |
 | `omni/` | `distribution/` (table above) |
 | `utils/` | `pipeline_paths` → `shared/paths.py`; `process_tools` → `shared/ffmpeg.py`; `run_ledger`, `gemini_usage` → `production/cost/`; `ocr_*`, `quote_renderer` → `production/formats/quotes/`; `cursor_recovery` → deleted (#36) |
-| `quality/VisualQA_Agent/` | `production/qa/judges/visual_critic/` |
+| `quality/VisualQA_Agent/` | `production/qa/judges/visual_critic/`; package `critic_profiles/` → `production/qa/judges/profiles/` |
 | `channels_config/<id>/` | `channels/<id>/` (data + profile); channel code (`wealth_main`, `esp_main`, `handler`, `channel_adapter`) → `production/formats/` or `tools/` |
 | `channels_config/aiwake/` | `products/aiwake/` (generic animation parts → `animation/`) |
 | `channels_config/shared/mei_chrome.py` | `production/formats/mei/` |
@@ -265,7 +265,7 @@ deploy/
 | `docker/`, `Dockerfile`, `docker-compose.yml` | `deploy/docker/`, `deploy/compose/` |
 | `scripts/` | `tools/` (one-offs under `tools/oneoff/`, lofi experiments under `tools/lofi/`) |
 | `portfolio_showcase/` | `tools/portfolio/` (or retire, see `docs/architecture/DEPRECATED.md`) |
-| `critic_profiles/`, `assets/`, `Fonts/` | `production/qa/judges/profiles/`, `assets/` (stays), `assets/fonts/` |
+| `assets/`, `Fonts/` | `assets/` (stays), `assets/fonts/` |
 | `config/`, `docs/`, `tests/` | stay; tests mirror the new tree |
 
 ### Migration plan (small, behavior-preserving PRs)

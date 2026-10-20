@@ -34,7 +34,6 @@ _ALLOWED_ROOT = {
     "config",
     "config.py",
     "core",
-    "critic_profiles",
     "docker",
     "docker-compose.yml",
     "docs",
