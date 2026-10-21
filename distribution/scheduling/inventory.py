@@ -477,10 +477,10 @@ def generate_pin_copy(topic: str, source_text: str, *, variant_idx: int = 0) -> 
     """
     Build pin title, caption, and hook from article text.
 
-    DeepSeek (``DEEPSEEK_API_KEY`` in the environment) is used when it is
-    configured. Otherwise the same template builders as inventory sync fill
-    the fields from the article topic and body. The caller must not pass a
-    filename as *topic*.
+    Writer_Primary on DeepInfra (``agents.mcp.text_model``) writes the fields.
+    Claude is not used here. If that call fails, the same template builders
+    as inventory sync fill the fields from the article topic and body. The
+    caller must not pass a filename as *topic*.
     """
     topic = normalize_pin_text(topic)
     source = normalize_pin_text(source_text)
@@ -609,7 +609,9 @@ def _generate_cheap(
     fact_sheet: str,
     variant_idx: int,
 ) -> dict:
-    """Pin copy on the cheap text stack, then the DeepSeek chat API."""
+    """Pin copy through ``text_model`` Writer_Primary on DeepInfra. No Claude."""
+    del variant_idx
+    from agents.mcp.text_model import complete_writer_primary  # noqa: PLC0415
     from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
 
     source = caption if caption not in ("PENDING_CAPTION", "") else fact_sheet[:500]
@@ -625,34 +627,28 @@ def _generate_cheap(
         "Never use a filename as the title."
     )
     try:
-        from core.cheap_llm import available, complete
-        from core.spend_ledger import SpendCapExceeded
-
-        if available("text"):
-            try:
-                result = complete(
-                    user_msg,
-                    system=system,
-                    json_mode=True,
-                    max_tokens=900,
-                    temperature=0.4,
-                    source="pinterest_pin_copy",
-                )
-            except SpendCapExceeded:
-                raise
-            data = _parse_pin_json(result.text)
-            parsed = {
-                "pinterest_title": sanitize_pin_title(str(data.get("pinterest_title", ""))),
-                "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
-                "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
-            }
-            if parsed.get("pinterest_title") and parsed.get("pinterest_caption"):
-                return parsed
+        result = complete_writer_primary(
+            user_msg,
+            system=system,
+            json_mode=True,
+            max_tokens=900,
+            temperature=0.4,
+        )
+        data = _parse_pin_json(result.text)
     except Exception as exc:  # noqa: BLE001
         if type(exc).__name__ == "SpendCapExceeded":
             raise
-        log.warning("Cheap pin copy failed for '%s': %s", topic, type(exc).__name__)
-    return _generate_deepseek(topic, caption, fact_sheet, variant_idx)
+        log.warning("Writer pin copy failed for '%s': %s", topic, type(exc).__name__)
+        return {}
+    parsed = {
+        "pinterest_title": sanitize_pin_title(str(data.get("pinterest_title", ""))),
+        "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
+        "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
+    }
+    if parsed.get("pinterest_title") and parsed.get("pinterest_caption"):
+        return parsed
+    log.warning("Writer pin copy incomplete for '%s'", topic)
+    return {}
 
 
 _PIN_COPY_MAX_TOKENS = 4096
@@ -889,7 +885,7 @@ class MasterInventory:
         cl_map = self._load_content_library_map()
         log.info("  content_library entries: %d", len(cl_map))
 
-        # Claude only when opted in. Otherwise pin copy stays on the cheap stack.
+        # Claude only when opted in. Otherwise Writer_Primary via text_model.
         client, model = (None, None)
         if use_ai:
             client, model = self._load_ai_client()

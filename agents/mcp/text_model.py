@@ -9,9 +9,11 @@ The older provider chain remains available to the strict archived writer.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 _LOG = logging.getLogger(__name__)
@@ -347,6 +349,63 @@ def _complete_deepseek(prompt: str, *, system: str | None = None) -> TextResult:
             f"DeepSeek returned empty script (finish_reason={choice.finish_reason!r})"
         )
     return log_text_call(provider="deepseek", model=model, prompt=prompt, output=text)
+
+
+WRITER_PRIMARY_DEFAULT = "deepseek-ai/DeepSeek-V4-Flash"
+_WRITER_PRIMARY_PROVIDER = "deepinfra"
+
+
+def writer_primary_model() -> str:
+    """``Model_Preferences.Writer_Primary`` from the shared DNA.
+
+    A Claude id, a ``-latest`` alias, or a missing value is not a writer.
+    The default is DeepSeek V4 Flash.
+    """
+    path = Path(__file__).resolve().parents[1] / "media" / "master_dna.json"
+    model = ""
+    try:
+        prefs = json.loads(path.read_text(encoding="utf-8")).get("Model_Preferences") or {}
+        if isinstance(prefs, dict):
+            model = str(prefs.get("Writer_Primary") or "").strip()
+    except (OSError, ValueError, TypeError):
+        model = ""
+    low = model.lower()
+    if not model or "claude" in low or "latest" in low or "20241022" in low:
+        return WRITER_PRIMARY_DEFAULT
+    return model
+
+
+def complete_writer_primary(
+    prompt: str,
+    *,
+    system: str | None = None,
+    json_mode: bool = False,
+    max_tokens: int = 900,
+    temperature: float = 0.4,
+) -> TextResult:
+    """Writer_Primary on DeepInfra. This function does not call Anthropic."""
+    from core import cheap_llm
+
+    model = writer_primary_model()
+    result = cheap_llm.complete(
+        prompt,
+        system=system,
+        json_mode=json_mode,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        source="pinterest_pin_copy",
+        chain=[(_WRITER_PRIMARY_PROVIDER, model)],
+    )
+    return log_text_call(
+        provider=result.provider or _WRITER_PRIMARY_PROVIDER,
+        model=result.model or model,
+        prompt=prompt,
+        output=result.text,
+        kind="pin_copy",
+        input_tokens_est=result.input_tokens,
+        output_tokens_est=result.output_tokens,
+        cost_usd_est=result.cost_usd,
+    )
 
 
 _PROVIDERS = {
