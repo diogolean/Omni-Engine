@@ -110,7 +110,7 @@ class FilenameHistory:
             self.path = hydrate_state_file(self.path)
         except Exception:
             pass
-        self._seen: set[str] = self._load()
+        self._seen, self._article_rows = self._load()
 
     # ------------------------------------------------------------------
     # Public
@@ -122,6 +122,10 @@ class FilenameHistory:
     def __len__(self) -> int:
         return len(self._seen)
 
+    def article_rows(self) -> list[dict]:
+        """Published rows with timestamp, topic, and article URL when recorded."""
+        return list(self._article_rows)
+
     def record(
         self,
         filename: str,
@@ -129,6 +133,7 @@ class FilenameHistory:
         pin_id: str,
         topic: str,
         timestamp: str | None = None,
+        article: str = "",
     ) -> None:
         """
         Append *filename* to the history file and add it to the in-memory set.
@@ -145,10 +150,18 @@ class FilenameHistory:
         if filename in self._seen:
             return  # idempotent — safe to call multiple times
         ts = timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        line = _HISTORY_SEP.join([ts, filename, post_id, pin_id, topic[:60]])
+        safe_topic = topic.replace("\n", " ").replace(_HISTORY_SEP, " ")[:60]
+        safe_url = (article or "").replace("\n", " ").replace(_HISTORY_SEP, " ").strip()
+        fields = [ts, filename, post_id, pin_id, safe_topic]
+        if safe_url:
+            fields.append(safe_url)
+        line = _HISTORY_SEP.join(fields)
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
         self._seen.add(filename)
+        self._article_rows.append(
+            {"published_utc": ts, "topic": safe_topic, "url": safe_url, "filename": filename}
+        )
         try:
             from shared.store import sync_state_file
 
@@ -160,20 +173,31 @@ class FilenameHistory:
     # ------------------------------------------------------------------
     # Private
 
-    def _load(self) -> set[str]:
+    def _load(self) -> tuple[set[str], list[dict]]:
         if not self.path.is_file():
-            return set()
+            return set(), []
         seen: set[str] = set()
+        rows: list[dict] = []
         for raw in self.path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
             parts = line.split(_HISTORY_SEP)
             # Column 1 (0-indexed) is the filename
-            if len(parts) >= 2:
-                seen.add(parts[1].strip())
+            if len(parts) < 2:
+                continue
+            filename = parts[1].strip()
+            seen.add(filename)
+            rows.append(
+                {
+                    "published_utc": parts[0].strip(),
+                    "filename": filename,
+                    "topic": parts[4].strip() if len(parts) > 4 else "",
+                    "url": parts[5].strip() if len(parts) > 5 else "",
+                }
+            )
         log.debug("History loaded: %d recorded filenames.", len(seen))
-        return seen
+        return seen, rows
 
 
 def _entry_is_video_only(entry: dict) -> bool:
@@ -460,16 +484,8 @@ class PinterestScheduler:
         else:
             candidates = list(unposted)
         total_eligible = len(candidates)
-        batch = candidates[: self.pins_per_run]
 
-        unposted_before_history = len(unposted) + skipped_by_history
-        log.info(
-            "Inventory: %d total | %d unposted-by-flag | %d blocked-by-history | %d selected",
-            len(data["entries"]), unposted_before_history,
-            skipped_by_history, len(batch),
-        )
-
-        if not batch:
+        if not candidates:
             skipped_unlinked = 0
             if wants_articles and unposted and not skipped_by_history:
                 skipped_unlinked = sum(
@@ -509,6 +525,40 @@ class PinterestScheduler:
                 "remaining": total_eligible,
                 "stopped": "b2_daily_cap",
             }
+
+        from distribution.scheduling.inventory import select_pin_batch  # noqa: PLC0415
+
+        batch, article_skipped = select_pin_batch(
+            candidates,
+            history.article_rows(),
+            list(ledger.rows),
+            self.pins_per_run,
+        )
+        skipped_by_history += article_skipped
+        if article_skipped:
+            log.info(
+                "Article history: skipped %d recent duplicate entr%s.",
+                article_skipped,
+                "y" if article_skipped == 1 else "ies",
+            )
+
+        unposted_before_history = len(unposted) + skipped_by_history
+        log.info(
+            "Inventory: %d total | %d unposted-by-flag | %d blocked-by-history | %d selected",
+            len(data["entries"]), unposted_before_history,
+            skipped_by_history, len(batch),
+        )
+        if not batch:
+            log.warning(
+                "No eligible pins remaining after article history filter."
+            )
+            return {
+                "published": 0,
+                "skipped": article_skipped,
+                "skipped_by_history": skipped_by_history,
+                "errors": 0,
+                "remaining": 0,
+            }
         self._postplanner_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
         # Initialise tools. Method comes from the channel pack; default is the
@@ -540,6 +590,10 @@ class PinterestScheduler:
             stats["inventory_built"] = built_entries
 
         for i, entry in enumerate(batch):
+            from distribution.scheduling.inventory import ensure_writer_pin_copy  # noqa: PLC0415
+
+            if ensure_writer_pin_copy(entry, use_ai=True) and not self.dry_run:
+                inv.save(data)
             post_id = entry["post_id"]
             topic = entry.get("topic", "?")
             title = entry.get("pinterest_title", topic)
@@ -707,7 +761,13 @@ class PinterestScheduler:
                         log.warning("B2 daily cap reached — stopping this run.")
                     inv.mark_posted(data, post_id, pin_id)
                     inv.save(data)              # crash-safe: save after EVERY success
-                    history.record(src_filename, post_id, pin_id, topic)
+                    history.record(
+                        src_filename,
+                        post_id,
+                        pin_id,
+                        topic,
+                        article=str(entry.get("target_url") or ""),
+                    )
                     try:
                         ledger.append(
                             {
