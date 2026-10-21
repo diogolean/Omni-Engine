@@ -121,7 +121,58 @@ if GEMINI_IMAGE_SIZE not in {"1K", "2K"}:
 GEMINI_FLASH_IMAGE_1K_USD: float = 0.039
 GEMINI_PRO_IMAGE_1K_USD: float = 0.03
 GEMINI_PRO_IMAGE_2K_USD: float = 0.134
+# Current Messages API id. ``-latest`` aliases and the 3.x family are retired:
+# ``claude-3-5-sonnet-latest`` resolves to ``claude-3-5-sonnet-20241022`` and 404s.
 SAFE_CLAUDE_MODEL: str = "claude-sonnet-4-5"
+
+
+def claude_model_retired(model_id: str | None) -> bool:
+    """True for empty ids, ``-latest`` aliases, and Claude 3.x ids."""
+    low = (model_id or "").strip().lower()
+    if not low:
+        return True
+    if "latest" in low:
+        return True
+    if re.search(r"(?:^|/)claude-3(?:[.\-]|$)", low):
+        return True
+    if "20241022" in low:
+        return True
+    return False
+
+
+def claude_opted_in() -> bool:
+    """Claude runs only when an operator asks for it.
+
+    A stored ``ANTHROPIC_API_KEY`` is not consent. ``USE_CLAUDE=1`` opts in.
+    ``USE_CLAUDE=0`` forces it off. When ``USE_CLAUDE`` is unset, a non-empty
+    ``CLAUDE_MODEL``, ``CLAUDE_POLISH_MODEL``, or ``LOFI_SCRIPT_MODEL=claude``
+    is also an opt-in. The module default of ``CLAUDE_MODEL`` is not.
+    """
+    flag = os.getenv("USE_CLAUDE")
+    if flag is not None and flag.strip():
+        return flag.strip().lower() in {"1", "true", "yes", "on"}
+    if (os.getenv("CLAUDE_MODEL") or "").strip():
+        return True
+    if (os.getenv("CLAUDE_POLISH_MODEL") or "").strip():
+        return True
+    return (os.getenv("LOFI_SCRIPT_MODEL") or "").strip().lower() == "claude"
+
+
+def resolve_claude_model(pinned: str | None = None) -> str:
+    """A current Messages id. Retired aliases are replaced, never returned."""
+    if pinned is None:
+        raw = (os.getenv("CLAUDE_MODEL") or "").strip()
+    else:
+        raw = str(pinned).strip()
+    if raw and not claude_model_retired(raw):
+        return raw
+    if raw and claude_model_retired(raw):
+        logger.warning(
+            "Claude model %s is retired; using %s",
+            raw,
+            SAFE_CLAUDE_MODEL,
+        )
+    return SAFE_CLAUDE_MODEL
 
 # CLI --image-model aliases → native Gemini image SKUs
 IMAGE_MODEL_ALIASES: dict[str, str] = {
@@ -478,7 +529,7 @@ GEMINI_NANO_IMAGE_MODEL: str = os.getenv(
     "GEMINI_NANO_IMAGE_MODEL",
     SAFE_GEMINI_IMAGE_MODEL,
 )
-CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", SAFE_CLAUDE_MODEL)
+CLAUDE_MODEL: str = resolve_claude_model(os.getenv("CLAUDE_MODEL") or SAFE_CLAUDE_MODEL)
 GEMINI_IMAGE_MODEL: str = os.getenv("GEMINI_IMAGE_MODEL", SAFE_GEMINI_IMAGE_MODEL)
 GEMINI_IMAGE_ASPECT_RATIO: str = os.getenv("GEMINI_IMAGE_ASPECT_RATIO", "3:4")
 ECONOMIC_BRAIN_MODE: bool = _bool_env("ECONOMIC_BRAIN_MODE", False)
@@ -760,41 +811,16 @@ def bind_active_page(page: str) -> str:
 # ---------------------------------------------------------------------------
 
 def get_best_claude_model(anthropic_client: object | None = None) -> str:
+    """Current Messages id when Claude is opted in. Empty when it is not.
+
+    The Models API is not queried. It still advertises
+    ``claude-3-5-sonnet-latest``, which 404s on ``/v1/messages`` as
+    ``claude-3-5-sonnet-20241022``.
     """
-    Query the Anthropic Models API and return the best available conversational
-    model. Falls back to SAFE_CLAUDE_MODEL if the API call fails.
-    """
-    if anthropic_client is None:
-        return CLAUDE_MODEL or SAFE_CLAUDE_MODEL
-    try:
-        page = anthropic_client.models.list()  # type: ignore[union-attr]
-        models = list(getattr(page, "data", None) or page)
-        ranked: list[tuple[int, str]] = []
-        for m in models:
-            mid = str(getattr(m, "id", "") or "").strip()
-            low = mid.lower()
-            if "claude" not in low:
-                continue
-            # "claude-3-5-sonnet-latest" is listed and 404s on /v1/messages.
-            if "latest" in low:
-                rank = 5
-            elif "sonnet-4" in low:
-                rank = 0
-            elif "sonnet" in low:
-                rank = 1
-            elif "haiku" in low:
-                rank = 2
-            else:
-                rank = 3
-            ranked.append((rank, mid))
-        if ranked:
-            ranked.sort(key=lambda pair: pair[0])
-            chosen = ranked[0][1]
-            logger.debug("Dynamic Claude model resolved: %s", chosen)
-            return chosen
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Claude model discovery failed (%s); using configured fallback.", exc)
-    return CLAUDE_MODEL or SAFE_CLAUDE_MODEL
+    del anthropic_client
+    if not claude_opted_in():
+        return ""
+    return resolve_claude_model()
 
 
 def get_best_gemini_text_model(client: object | None = None) -> str:  # type: ignore[type-arg]

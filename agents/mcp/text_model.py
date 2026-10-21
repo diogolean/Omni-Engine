@@ -106,18 +106,56 @@ def log_text_call(
     )
 
 
+def _complete_without_claude(prompt: str, *, system: str | None = None) -> TextResult:
+    """DeepInfra / OpenRouter / DeepSeek, then Gemini. No Anthropic call."""
+    try:
+        from core.spend_ledger import SpendCapExceeded
+    except Exception:  # noqa: BLE001
+        SpendCapExceeded = ()  # type: ignore[misc, assignment]
+    try:
+        from core import cheap_llm
+
+        if cheap_llm.available("text"):
+            result = cheap_llm.complete(
+                prompt,
+                system=system,
+                max_tokens=4096,
+                temperature=0.7,
+                source="script",
+            )
+            return log_text_call(
+                provider=result.provider,
+                model=result.model,
+                prompt=prompt,
+                output=result.text,
+                input_tokens_est=result.input_tokens,
+                output_tokens_est=result.output_tokens,
+                cost_usd_est=result.cost_usd,
+            )
+    except SpendCapExceeded:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("cheap text stack failed (%s) — DeepSeek then Gemini", exc)
+    try:
+        return _complete_deepseek(prompt, system=system)
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("DeepSeek script writer failed (%s) — falling back to Gemini", exc)
+        print(f"[LOFI script] WARN DeepSeek failed ({exc}); Gemini fallback")
+        return _complete_gemini(prompt, system=system)
+
+
 def _complete_claude(prompt: str, *, system: str | None = None) -> TextResult:
     import config as app_config
 
+    if not app_config.claude_opted_in():
+        raise RuntimeError("Claude is not opted in — refusing Anthropic script writer")
     api_key = getattr(app_config, "ANTHROPIC_API_KEY", None)
     if not api_key or not str(api_key).strip():
         raise RuntimeError("ANTHROPIC_API_KEY missing — cannot run Claude script writer")
     import anthropic  # noqa: PLC0415
 
     client = anthropic.Anthropic(api_key=str(api_key))
-    model = str(app_config.get_best_claude_model(client) or app_config.SAFE_CLAUDE_MODEL)
-    if "sonnet" not in model.lower():
-        model = str(getattr(app_config, "SAFE_CLAUDE_MODEL", None) or "claude-3-5-sonnet-latest")
+    model = app_config.resolve_claude_model()
     print(f"[LOFI script] writer=claude model={model}")
     sys_prompt = system or (
         "You write continuous first-person spoken-word scripts for short vertical reels. "
@@ -335,19 +373,14 @@ def complete_script(
     kind_l = (kind or "writer").strip().lower() or "writer"
     name = (provider or os.getenv("LOFI_SCRIPT_MODEL") or "").strip().lower()
     claude_ok = kind_l in {"writer", "compose"}
-    if not claude_ok:
-        if name == "claude":
-            print(f"[LOFI llm] Claude blocked for kind={kind_l} — using Gemini")
-        name = "gemini" if name in {"", "claude"} else name
+    if name == "claude":
+        import config as app_config
+
+        if not claude_ok or not app_config.claude_opted_in():
+            print(f"[LOFI llm] Claude off for kind={kind_l} — cheap text stack")
+            name = ""
     if name in _PROVIDERS:
-        if name == "claude" and not claude_ok:
-            return _complete_gemini(prompt, system=system)
         return _PROVIDERS[name](prompt, system=system)
     if claude_ok:
-        try:
-            return _complete_deepseek(prompt, system=system)
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("DeepSeek script writer failed (%s) — falling back to Gemini", exc)
-            print(f"[LOFI script] WARN DeepSeek failed ({exc}); Gemini fallback")
-            return _complete_gemini(prompt, system=system)
+        return _complete_without_claude(prompt, system=system)
     return _complete_gemini(prompt, system=system)

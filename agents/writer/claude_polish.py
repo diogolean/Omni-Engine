@@ -247,32 +247,21 @@ def summarize_cost_log(n: int = 10) -> dict[str, Any]:
     }
 
 
-def _resolve_polish_model(client: Any) -> str:
-    pinned = str(os.getenv("CLAUDE_POLISH_MODEL") or POLISH_MODEL_DEFAULT).strip()
-    dead = ("3-5-sonnet", "claude-3-5", "-latest")
-    if any(tok in pinned for tok in dead):
-        pinned = POLISH_MODEL_DEFAULT
-    try:
-        page = client.models.list()
-        ids = [str(getattr(m, "id", "") or "") for m in (getattr(page, "data", None) or page)]
-    except Exception:  # noqa: BLE001
-        return pinned
-    if pinned in ids:
-        return pinned
-    for mid in ids:
-        low = mid.lower()
-        if "sonnet-5" in low or low.endswith("sonnet-5"):
-            return mid
-    for mid in ids:
-        if "sonnet" in mid.lower():
-            return mid
-    return pinned
+def _resolve_polish_model(client: Any = None) -> str:
+    """Current Messages id. Does not list models; that list includes retired aliases."""
+    del client
+    import config as app_config
+
+    pinned = (os.getenv("CLAUDE_POLISH_MODEL") or "").strip() or POLISH_MODEL_DEFAULT
+    return app_config.resolve_claude_model(pinned)
 
 
 def _client_and_model() -> tuple[Any, str]:
     import config as app_config
     import anthropic
 
+    if not app_config.claude_opted_in():
+        raise RuntimeError("Claude is not opted in — refusing Anthropic polish")
     api_key = getattr(app_config, "ANTHROPIC_API_KEY", None)
     if not api_key or not str(api_key).strip():
         raise RuntimeError("ANTHROPIC_API_KEY missing — cannot polish")

@@ -162,11 +162,16 @@ COMPOSE_MAX_TOKENS = compose_max_tokens()
 
 
 def compose_skip() -> bool:
-    return os.getenv("LOFI_SKIP_CLAUDE_COMPOSE", "").strip().lower() in {
+    """Skip the Claude batch. On unless the operator opted in and did not set the skip flag."""
+    if os.getenv("LOFI_SKIP_CLAUDE_COMPOSE", "").strip().lower() in {
         "1",
         "true",
         "yes",
-    }
+    }:
+        return True
+    from config import claude_opted_in
+
+    return not claude_opted_in()
 
 
 def _normalize_line(text: str) -> str:

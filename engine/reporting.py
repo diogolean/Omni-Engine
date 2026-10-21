@@ -348,11 +348,15 @@ def _snapshot_verified_models(
     if _ak_page:
         humanizer = "Ancient Knowledge narration (live text provider)"
     else:
-        humanizer = (
-            f"Gemini `{text_route.model_id}` (captions + research) [{text_route.tier}]"
-            if economic_brain_mode
-            else f"Anthropic Claude `{app_config.CLAUDE_MODEL}` / Gemini `{text_route.model_id}` [{text_route.tier}]"
-        )
+        if economic_brain_mode or not app_config.claude_opted_in():
+            humanizer = (
+                f"Gemini `{text_route.model_id}` (captions + research) [{text_route.tier}]"
+            )
+        else:
+            humanizer = (
+                f"Anthropic Claude `{app_config.resolve_claude_model()}` / "
+                f"Gemini `{text_route.model_id}` [{text_route.tier}]"
+            )
     if img_override and app_config.is_gemini_image_model(img_override):
         img_pref = app_config.normalize_image_model_id(img_override)
     else:
@@ -456,12 +460,19 @@ def _bootstrap_pipeline_intro(
             app_config.GEMINI_ECONOMIC_BRAIN_MODEL,
             "(fallback chain rotates on 404; see GEMINI_ALERT log lines)",
         )
-    else:
+    elif app_config.claude_opted_in():
         print(
             "[bootstrap] Premium relay | Gemini researcher preference:",
             app_config.GEMINI_RESEARCH_MODEL,
             "| Claude humanizer:",
-            app_config.CLAUDE_MODEL,
+            app_config.resolve_claude_model(),
+        )
+    else:
+        print(
+            "[bootstrap] Text stack: DeepSeek on DeepInfra, OpenRouter, Gemini.",
+            "Claude is off.",
+            "Research preference:",
+            app_config.GEMINI_RESEARCH_MODEL,
         )
 
     print(f"[bootstrap] Verified Image Model: {verified.image_primary_id}")

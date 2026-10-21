@@ -82,7 +82,7 @@ def repair_one_line(
     constraint: str,
     max_words: int,
     max_chars: int,
-    provider: str | None = "claude",
+    provider: str | None = None,
     must_keep: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     """One scoped LLM call containing only the failing line and its constraint."""
