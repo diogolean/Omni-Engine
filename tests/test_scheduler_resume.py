@@ -406,7 +406,8 @@ def test_immediate_restart_keeps_the_daily_cap_and_ledger_dedupe(
 
     ``PINTEREST_PINS_PER_RUN`` is larger than the daily cap, and one of the
     two candidates is already in the ledger. The wake may ask for only the
-    daily cap, and that pin must not be the one already recorded.
+    daily cap. That pin is dropped by the ledger or by article history once
+    its post_id resolves to the same article, and it must not publish.
     """
     import json
 
@@ -471,7 +472,7 @@ def test_immediate_restart_keeps_the_daily_cap_and_ledger_dedupe(
     assert len(results) == 1
     stats = results[0]
     assert stats["published"] == 1
-    assert stats["skipped"] >= 1
+    assert stats["skipped"] + stats.get("skipped_by_history", 0) >= 1
     assert {pin["post_id"] for pin in stats.get("pins") or []} == {"post_giants"}
 
 

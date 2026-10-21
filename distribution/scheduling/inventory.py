@@ -25,8 +25,9 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
 
@@ -277,6 +278,18 @@ _BLOCKED_TITLE_SUFFIXES = (
 )
 
 
+def fit_pin_title(text: str, limit: int = 100) -> str:
+    """At most ``limit`` characters, ending on a word boundary."""
+    raw = (text or "").strip()
+    if len(raw) <= limit:
+        return raw
+    head = raw[:limit]
+    if not raw[limit].isspace() and " " in head:
+        head = head.rsplit(" ", 1)[0]
+    fitted = head.rstrip(" ,;:|-—–").strip()
+    return fitted or raw[:limit].rstrip()
+
+
 def sanitize_pin_title(title: str) -> str:
     """Plain pin title. Template suffixes such as ``| Practical Guide`` are removed."""
     text = polish_pin_text(title)
@@ -293,17 +306,248 @@ def sanitize_pin_title(title: str) -> str:
         text,
         flags=re.IGNORECASE,
     ).strip(" |-—–")
-    return text[:100]
+    return fit_pin_title(text)
 
 
 def build_title_template(topic: str) -> str:
     """Keyword title from the topic. No template suffix is appended."""
-    return sanitize_pin_title(title_case_phrase(topic))[:100]
+    return sanitize_pin_title(title_case_phrase(topic))
 
 
 def build_visual_hook(topic: str) -> str:
     """Short 5-word ALL-CAPS hook for the image overlay."""
     return " ".join(normalize_pin_text(topic).upper().split()[:5])
+
+
+def normalize_article_url(url: str) -> str:
+    """Host plus article path. Scheme, www, query, fragment, and a trailing slash drop out.
+
+    The path stays in the key. A bare host is not an article and produces no key.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "https://" + raw
+    parts = urlsplit(raw)
+    host = (parts.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = re.sub(r"/+", "/", parts.path or "").rstrip("/").lower()
+    if not host or not path:
+        return ""
+    return f"{host}{path}"
+
+
+def normalize_topic_key(topic: str) -> str:
+    """Full topic, lowercased. Shared words such as ancient or city stay in place."""
+    return re.sub(r"[^a-z0-9]+", " ", (topic or "").lower()).strip()
+
+
+_URL_FIELDS = ("article_url", "target_url", "link", "url", "article")
+
+
+def article_match_keys(entry: dict) -> set[str]:
+    """Identity keys for one pin: the article URL, plus the full topic.
+
+    History and ledger rows do not share one name. ``article_url``,
+    ``target_url``, ``link``, ``url``, and the ledger's ``article`` all
+    normalize to the same ``url:`` key. The key is the whole host and path,
+    and the whole topic. Shared words and a shared host do not match.
+    """
+    keys: set[str] = set()
+    for field in _URL_FIELDS:
+        url = normalize_article_url(str(entry.get(field) or ""))
+        if url:
+            keys.add("url:" + url)
+    topic = normalize_topic_key(str(entry.get("topic") or ""))
+    if topic:
+        keys.add("topic:" + topic)
+    return keys
+
+
+def _row_has_url(row: dict) -> bool:
+    return any(normalize_article_url(str(row.get(field) or "")) for field in _URL_FIELDS)
+
+
+def _inventory_by_post_id(inventory: list[dict] | dict | None) -> dict[str, dict]:
+    if not inventory:
+        return {}
+    entries = inventory.get("entries") if isinstance(inventory, dict) else inventory
+    if not isinstance(entries, list):
+        return {}
+    found: dict[str, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        post_id = str(entry.get("post_id") or "").strip()
+        if post_id:
+            found[post_id] = entry
+    return found
+
+
+def _fill_row_from_inventory(row: dict, index: dict[str, dict]) -> dict:
+    """Copy URL and topic from master_inventory when the history row lacks them.
+
+    Lines written before the article column, and ledger rows that only stored
+    ``post_id``, still name the same article once the inventory entry is known.
+    """
+    post_id = str(row.get("post_id") or "").strip()
+    saved = index.get(post_id)
+    if not saved:
+        return row
+    has_topic = bool(normalize_topic_key(str(row.get("topic") or "")))
+    if _row_has_url(row) and has_topic:
+        return row
+    merged = dict(saved)
+    for key, value in row.items():
+        if value not in (None, ""):
+            merged[key] = value
+    return merged
+
+
+def dedup_limits() -> tuple[int, int]:
+    """Recent window for article dedupe. ``0`` turns that axis off.
+
+    ``PINTEREST_DEDUP_RECENT_PINS`` (default 30) and
+    ``PINTEREST_DEDUP_RECENT_DAYS`` (default 7) are optional.
+    """
+    return (
+        _nonnegative_env("PINTEREST_DEDUP_RECENT_PINS", 30),
+        _nonnegative_env("PINTEREST_DEDUP_RECENT_DAYS", 7),
+    )
+
+
+def _nonnegative_env(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _parse_history_time(value: str) -> datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def recent_match_keys(
+    rows: list[dict],
+    *,
+    now: datetime | None = None,
+    limit: int | None = None,
+    within_days: int | None = None,
+    inventory: list[dict] | dict | None = None,
+) -> set[str]:
+    """URL and topic keys from the newest history rows inside the window."""
+    pin_limit, day_limit = dedup_limits()
+    if limit is None:
+        limit = pin_limit
+    if within_days is None:
+        within_days = day_limit
+    if limit <= 0 and within_days <= 0:
+        return set()
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    cutoff = moment - timedelta(days=within_days) if within_days > 0 else None
+    ordered = sorted(
+        rows,
+        key=lambda row: _parse_history_time(str(row.get("published_utc") or ""))
+        or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    index = _inventory_by_post_id(inventory)
+    keys: set[str] = set()
+    kept = 0
+    for row in ordered:
+        stamp = _parse_history_time(str(row.get("published_utc") or ""))
+        if cutoff is not None and stamp is not None and stamp < cutoff:
+            continue
+        if limit > 0 and kept >= limit:
+            break
+        kept += 1
+        keys |= article_match_keys(_fill_row_from_inventory(row, index))
+    return keys
+
+
+def take_fresh_articles(
+    entries: list[dict],
+    keys: set[str],
+    count: int,
+) -> tuple[list[dict], int]:
+    """First ``count`` entries whose article URL or topic is not already recent."""
+    chosen: list[dict] = []
+    skipped = 0
+    seen = set(keys)
+    for entry in entries:
+        identity = article_match_keys(entry)
+        if identity and identity & seen:
+            skipped += 1
+            continue
+        chosen.append(entry)
+        seen |= identity
+        if count > 0 and len(chosen) >= count:
+            break
+    return chosen, skipped
+
+
+def copy_needs_writer(entry: dict, *, force: bool = False) -> bool:
+    """True when saved pin copy is missing, unstamped, or from Claude."""
+    if force:
+        return True
+    if not str(entry.get("pinterest_title") or "").strip():
+        return True
+    if not str(entry.get("pinterest_caption") or "").strip():
+        return True
+    provider = str(entry.get("copy_provider") or "").strip().lower()
+    model = str(entry.get("copy_model") or "").strip().lower()
+    generated = str(entry.get("copy_generated_at") or "").strip()
+    if not provider or not model or not generated:
+        return True
+    if provider in {"template", "anthropic"} or "claude" in provider or "claude" in model:
+        return True
+    return False
+
+
+def select_pin_batch(
+    candidates: list[dict],
+    history_rows: list[dict],
+    ledger_rows: list[dict],
+    count: int,
+    *,
+    now: datetime | None = None,
+    inventory: list[dict] | dict | None = None,
+) -> tuple[list[dict], int]:
+    """Skip recent article URL or topic matches, then take the next candidates."""
+    rows = [row for row in history_rows if isinstance(row, dict)]
+    for row in ledger_rows:
+        if not isinstance(row, dict) or row.get("pin_recorded") is False:
+            continue
+        rows.append(row)
+    keys = recent_match_keys(rows, now=now, inventory=inventory)
+    return take_fresh_articles(candidates, keys, count)
+
+
+def _copy_stamp(provider: str, model: str) -> dict[str, str]:
+    return {
+        "copy_provider": provider,
+        "copy_model": model,
+        "copy_generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
 
 
 def validate_caption_safe(caption: str) -> tuple[bool, str]:
@@ -646,9 +890,68 @@ def _generate_cheap(
         "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
     }
     if parsed.get("pinterest_title") and parsed.get("pinterest_caption"):
+        parsed.update(
+            _copy_stamp(
+                str(getattr(result, "provider", "") or "deepinfra"),
+                str(getattr(result, "model", "") or "deepseek-ai/DeepSeek-V4-Flash"),
+            )
+        )
         return parsed
     log.warning("Writer pin copy incomplete for '%s'", topic)
     return {}
+
+
+def ensure_writer_pin_copy(
+    entry: dict,
+    *,
+    use_ai: bool = True,
+    force: bool = False,
+) -> bool:
+    """Regenerate pin copy with Writer_Primary when it is missing or from Claude.
+
+    Templates fill the fields when the writer call fails. Returns True when
+    the entry was rewritten.
+    """
+    if not copy_needs_writer(entry, force=force):
+        return False
+    topic = normalize_pin_text(str(entry.get("topic") or ""))
+    source = str(entry.get("original_caption") or "")
+    fact = str(entry.get("raw_fact_sheet") or "")
+    try:
+        variant = int(entry.get("variant_index") or 0)
+    except (TypeError, ValueError):
+        variant = 0
+    ai_result = _generate_cheap(topic, source, fact, variant) if use_ai else {}
+    if ai_result:
+        entry.update(ai_result)
+    else:
+        entry["pinterest_title"] = ""
+        entry["pinterest_caption"] = ""
+        entry["visual_hook"] = ""
+        fill_pin_templates(entry, source, variant)
+        entry.update(_copy_stamp("template", "template"))
+    from agents.posting.pinterest_engine.pin_copy import finalize_pin_copy  # noqa: PLC0415
+
+    finalize_pin_copy(entry)
+    return True
+
+
+def fill_pin_templates(entry: dict, source_caption: str, variant_idx: int) -> None:
+    """Fill empty pin fields from the topic and the article text."""
+    topic = entry["topic"]
+    if not entry.get("pinterest_title"):
+        entry["pinterest_title"] = build_title_template(topic)
+    if not entry.get("pinterest_caption"):
+        source = source_caption
+        if is_raw_draft(source):
+            log.debug(
+                "  source_caption is raw draft for '%s' -- using raw_fact_sheet.", topic
+            )
+            fact = entry.get("raw_fact_sheet", "")
+            source = strip_draft_headers(fact) if fact else ""
+        entry["pinterest_caption"] = build_caption_regex(source, variant_idx)
+    if not entry.get("visual_hook"):
+        entry["visual_hook"] = build_visual_hook(topic)
 
 
 _PIN_COPY_MAX_TOKENS = 4096
@@ -885,12 +1188,7 @@ class MasterInventory:
         cl_map = self._load_content_library_map()
         log.info("  content_library entries: %d", len(cl_map))
 
-        # Claude only when opted in. Otherwise Writer_Primary via text_model.
-        client, model = (None, None)
-        if use_ai:
-            client, model = self._load_ai_client()
-
-        # Load all library JSON records
+        # Writer_Primary is the default. Claude copy and unstamped copy are rewritten.
         lib_files = sorted(self.library_dir.glob("post_*.json"))
         if prefer_ids:
             order = {post_id: index for index, post_id in enumerate(prefer_ids)}
@@ -909,7 +1207,7 @@ class MasterInventory:
             has_saved_meta = bool(
                 prev_meta.get("pinterest_title") and prev_meta.get("pinterest_caption")
             )
-            needs_new = force_regenerate or not has_saved_meta
+            needs_new = force_regenerate or copy_needs_writer(prev_meta)
             if limit is not None and needs_new and generated >= limit:
                 if has_saved_meta:
                     entries.append(prev_meta)
@@ -951,12 +1249,6 @@ class MasterInventory:
             local_img = resolve_image_path(combined)
             local_vid = resolve_video_path(combined)
 
-            # Determine if Pinterest metadata needs to be generated
-            has_pinterest_meta = bool(
-                prev.get("pinterest_title") and prev.get("pinterest_caption")
-            )
-            needs_generation = force_regenerate or not has_pinterest_meta
-
             entry: dict = {
                 "post_id": post_id,
                 "channel_id": channel_id,
@@ -973,11 +1265,16 @@ class MasterInventory:
                 "media_kind": "image",
                 "created_utc": raw.get("created_utc", ""),
                 "target_url": (
-                    "" if (cfg.CHANNEL_ID or "") == "ancient_knowledge" else _target_url()
+                    str(prev.get("target_url") or "").strip()
+                    if (cfg.CHANNEL_ID or "") == "ancient_knowledge"
+                    else _target_url()
                 ),
                 "pinterest_title": prev.get("pinterest_title", ""),
                 "pinterest_caption": prev.get("pinterest_caption", ""),
                 "visual_hook": prev.get("visual_hook", ""),
+                "copy_provider": prev.get("copy_provider", ""),
+                "copy_model": prev.get("copy_model", ""),
+                "copy_generated_at": prev.get("copy_generated_at", ""),
                 "publication_status": pub_status,
             }
 
@@ -988,32 +1285,13 @@ class MasterInventory:
             if entry.get("visual_hook"):
                 entry["visual_hook"] = normalize_pin_text(entry["visual_hook"])
 
-            if needs_generation:
-                ai_result = {}
-                if use_ai and client:
-                    ai_result = _generate_ai(
-                        topic, source_caption, raw_fact, client, model, variant_idx
+            if ensure_writer_pin_copy(entry, use_ai=use_ai, force=force_regenerate):
+                log.info("  pin copy refreshed: %s (v%s)", topic, variant_idx)
+                generated += 1
+                if entry.get("pinterest_caption") and has_social_cta(entry["pinterest_caption"]):
+                    entry["pinterest_caption"] = build_caption_regex(
+                        entry["pinterest_caption"], variant_idx
                     )
-                if use_ai and not ai_result:
-                    ai_result = _generate_cheap(
-                        topic, source_caption, raw_fact, variant_idx
-                    )
-                if ai_result:
-                    entry.update(ai_result)
-                    log.info("  AI generated: %s (v%s)", topic, variant_idx)
-                    generated += 1
-                    if client:
-                        time.sleep(ai_delay_sec)
-                else:
-                    self._fill_templates(entry, source_caption, variant_idx)
-                    generated += 1
-
-                # Final safety: strip social CTAs even after AI generation
-                if entry.get("pinterest_caption"):
-                    if has_social_cta(entry["pinterest_caption"]):
-                        entry["pinterest_caption"] = build_caption_regex(
-                            entry["pinterest_caption"], variant_idx
-                        )
 
             from agents.posting.pinterest_engine.pin_copy import finalize_pin_copy  # noqa: PLC0415
 
@@ -1235,29 +1513,8 @@ class MasterInventory:
     def _fill_templates(
         self, entry: dict, source_caption: str, variant_idx: int
     ) -> None:
-        """
-        Fill pinterest fields using fast regex/template mode.
-        Uses truthiness check (not setdefault) to overwrite empty strings.
-        Falls back to raw_fact_sheet if source_caption is an un-humanized draft.
-        """
-        topic = entry["topic"]
-
-        if not entry.get("pinterest_title"):
-            entry["pinterest_title"] = build_title_template(topic)
-
-        if not entry.get("pinterest_caption"):
-            # If the humanized caption is a raw draft, try the fact sheet instead
-            source = source_caption
-            if is_raw_draft(source):
-                log.debug(
-                    "  source_caption is raw draft for '%s' -- using raw_fact_sheet.", topic
-                )
-                fact = entry.get("raw_fact_sheet", "")
-                source = strip_draft_headers(fact) if fact else ""
-            entry["pinterest_caption"] = build_caption_regex(source, variant_idx)
-
-        if not entry.get("visual_hook"):
-            entry["visual_hook"] = build_visual_hook(topic)
+        """Fill empty pin fields from the topic and the article text."""
+        fill_pin_templates(entry, source_caption, variant_idx)
 
     def _recycle_unpaired_videos(
         self,

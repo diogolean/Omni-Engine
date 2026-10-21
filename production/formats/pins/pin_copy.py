@@ -31,8 +31,33 @@ def _fill(template: str, **values: str) -> str:
     return template.format_map(_Blank({key: value or "" for key, value in values.items()})).strip()
 
 
+_TITLE_STOPWORDS = frozenset(
+    {"the", "and", "for", "with", "from", "that", "this", "into", "over"}
+)
+
+
+def _topic_already_named(title: str, topic: str) -> bool:
+    """True when *title* already carries the topic, including after a colon."""
+    title_l = title.lower()
+    topic_l = (topic or "").strip().lower()
+    if not topic_l:
+        return False
+    if topic_l in title_l:
+        return True
+    words = [
+        word
+        for word in re.split(r"[^a-z0-9']+", topic_l)
+        if len(word) > 2 and word not in _TITLE_STOPWORDS
+    ]
+    return bool(words) and all(word in title_l for word in words)
+
+
 def keyword_first_title(title: str, topic: str) -> str:
-    """Search title, subject first, at most 100 characters. No template suffix."""
+    """Search title, subject first, at most 100 characters. No template suffix.
+
+    The topic is not prepended when the title already names it. A title that
+    would pass 100 characters ends on a word boundary.
+    """
     from agents.posting.pinterest_engine.inventory import (  # noqa: PLC0415
         sanitize_pin_title,
         title_case_phrase,
@@ -41,16 +66,17 @@ def keyword_first_title(title: str, topic: str) -> str:
     cleaned = sanitize_pin_title(title)
     subject = sanitize_pin_title(title_case_phrase(topic))
     if not cleaned:
-        return subject[:100]
+        return subject
+    if _topic_already_named(cleaned, subject):
+        return cleaned
     head = ""
     for word in re.split(r"[^A-Za-z0-9']+", subject.lower()):
-        if len(word) > 2:
+        if len(word) > 2 and word not in _TITLE_STOPWORDS:
             head = word
             break
-    opening = cleaned.lower()[: max(24, len(head) + 8)]
-    if head and head not in opening:
+    if head and head not in cleaned.lower():
         cleaned = sanitize_pin_title(f"{subject}: {cleaned}")
-    return cleaned[:100]
+    return cleaned
 
 
 _HOOK_WORD_LIMIT = 8
