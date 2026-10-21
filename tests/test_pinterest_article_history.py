@@ -91,6 +91,117 @@ def test_second_variant_of_the_same_article_is_skipped() -> None:
     assert [entry["post_id"] for entry in batch] == ["post_gobekli"]
 
 
+def test_article_url_only_row_blocks_the_same_article() -> None:
+    """A history row that only names article_url must match target_url."""
+    from distribution.scheduling.inventory import recent_match_keys
+
+    row = {
+        "published_utc": "2026-10-21T04:56:00Z",
+        "article_url": "https://ancientknowledge.eokviral.com/sumerian/",
+    }
+    keys = recent_match_keys([row], now=_NOW)
+    assert "url:ancientknowledge.eokviral.com/sumerian" in keys
+    for field in ("target_url", "link", "url", "article"):
+        keys = recent_match_keys(
+            [
+                {
+                    "published_utc": "2026-10-21T04:56:00Z",
+                    field: "https://www.ancientknowledge.eokviral.com/sumerian/?utm=1",
+                }
+            ],
+            now=_NOW,
+        )
+        assert "url:ancientknowledge.eokviral.com/sumerian" in keys
+    candidates = [
+        {
+            "post_id": "post_20260719_223247_440964_v01",
+            "topic": "Sumerian king list",
+            "target_url": "https://ancientknowledge.eokviral.com/sumerian/",
+        },
+        {
+            "post_id": "post_gobekli",
+            "topic": "Gobekli Tepe",
+            "target_url": "https://ancientknowledge.eokviral.com/gobekli/",
+        },
+    ]
+    batch, skipped = select_pin_batch(candidates, [row], [], 1, now=_NOW)
+    assert skipped == 1
+    assert [entry["post_id"] for entry in batch] == ["post_gobekli"]
+
+
+def test_post_id_only_row_uses_the_inventory_article() -> None:
+    """Pre-#62 rows can be post_id alone. The inventory entry supplies the URL."""
+    posted = "post_20260719_215835_642753_v01"
+    nxt = "post_20260719_223247_440964_v01"
+    row = {
+        "published_utc": "2026-10-21T02:01:00Z",
+        "post_id": posted,
+    }
+    inventory = [
+        {
+            "post_id": posted,
+            "topic": "Sumerian tablets",
+            "target_url": "https://ancientknowledge.eokviral.com/sumerian/",
+        }
+    ]
+    candidates = [
+        {
+            "post_id": nxt,
+            "topic": "Sumerian king list",
+            "target_url": "https://www.ancientknowledge.eokviral.com/sumerian/",
+        },
+        {
+            "post_id": "post_gobekli",
+            "topic": "Gobekli Tepe",
+            "target_url": "https://ancientknowledge.eokviral.com/gobekli/",
+        },
+    ]
+    batch, skipped = select_pin_batch(
+        candidates, [row], [], 1, now=_NOW, inventory=inventory
+    )
+    assert skipped == 1
+    assert [entry["post_id"] for entry in batch] == ["post_gobekli"]
+
+
+def test_old_history_line_without_a_url_uses_the_inventory(tmp_path: Path) -> None:
+    """Pre-#62 history is topic and post_id. The next variant has another topic."""
+    posted = "post_20260719_215835_642753_v01"
+    nxt = "post_20260719_223247_440964_v01"
+    (tmp_path / "scheduled_history.txt").write_text(
+        "2026-10-21T02:01:00Z | sumerian-a.jpg | "
+        f"{posted} | pin-2301 | Sumerian tablets\n",
+        encoding="utf-8",
+    )
+    rows = FilenameHistory(tmp_path).article_rows()
+    assert rows[0]["url"] == ""
+    assert rows[0]["post_id"] == posted
+    assert rows[0]["topic"] == "Sumerian tablets"
+    inventory = [
+        {
+            "post_id": posted,
+            "topic": "Sumerian tablets",
+            "target_url": "https://ancientknowledge.eokviral.com/sumerian/",
+        }
+    ]
+    candidates = [
+        {
+            "post_id": nxt,
+            "topic": "Sumerian king list",
+            "target_url": "https://www.ancientknowledge.eokviral.com/sumerian/",
+        },
+        {
+            "post_id": "post_gobekli",
+            "topic": "Gobekli Tepe",
+            "target_url": "https://ancientknowledge.eokviral.com/gobekli/",
+        },
+    ]
+    batch, skipped = select_pin_batch(
+        candidates, rows, [], 1, now=_NOW, inventory=inventory
+    )
+    assert skipped == 1
+    assert [entry["post_id"] for entry in batch] == ["post_gobekli"]
+
+
 def test_article_outside_the_window_can_publish(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PINTEREST_DEDUP_RECENT_DAYS", "7")
     monkeypatch.setenv("PINTEREST_DEDUP_RECENT_PINS", "30")
@@ -205,6 +316,41 @@ def test_missing_or_claude_copy_is_regenerated_with_writer_primary(
     assert ensure_writer_pin_copy(bare, use_ai=True) is True
     assert bare["copy_provider"] == "deepinfra"
     assert bare["copy_model"] == "deepseek-ai/DeepSeek-V4-Flash"
+
+
+def test_rebuild_keeps_a_saved_article_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ancient Knowledge rebuilds must not wipe the article already on the entry."""
+    from agents.posting.pinterest_engine import config as cfg
+
+    _clear_opt_in(monkeypatch)
+    cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)
+
+    def _writer_off(*_args: object, **_kwargs: object) -> TextResult:
+        raise RuntimeError("writer off")
+
+    monkeypatch.setattr("agents.mcp.text_model.complete_writer_primary", _writer_off)
+    _library(tmp_path, "post_20260719_215835_642753_v01", "Sumerian tablets", "Clay.")
+    _save_inventory(
+        tmp_path,
+        {
+            "post_id": "post_20260719_215835_642753_v01",
+            "topic": "Sumerian tablets",
+            "target_url": "https://ancientknowledge.eokviral.com/sumerian/",
+            "pinterest_title": "Sumerian tablets",
+            "pinterest_caption": "Clay still holds the list.",
+            "visual_hook": "WHO KEPT THE CLAY",
+            "copy_provider": "deepinfra",
+            "copy_model": "deepseek-ai/DeepSeek-V4-Flash",
+            "copy_generated_at": "2026-10-20T12:00:00Z",
+        },
+    )
+    data = MasterInventory(outputs_dir=tmp_path).build(use_ai=True, dry_run=True)
+    assert (
+        data["entries"][0]["target_url"]
+        == "https://ancientknowledge.eokviral.com/sumerian/"
+    )
 
 
 def test_trusted_writer_copy_is_kept(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

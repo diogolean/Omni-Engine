@@ -340,18 +340,65 @@ def normalize_topic_key(topic: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (topic or "").lower()).strip()
 
 
+_URL_FIELDS = ("article_url", "target_url", "link", "url", "article")
+
+
 def article_match_keys(entry: dict) -> set[str]:
-    """Identity keys for one pin: the article URL and the topic."""
+    """Identity keys for one pin: every URL field, plus the topic.
+
+    History and ledger rows do not share one name. ``article_url``,
+    ``target_url``, ``link``, ``url``, and the ledger's ``article`` all
+    normalize to the same ``url:`` key.
+    """
     keys: set[str] = set()
-    url = normalize_article_url(
-        str(entry.get("target_url") or entry.get("article") or entry.get("url") or "")
-    )
+    for field in _URL_FIELDS:
+        url = normalize_article_url(str(entry.get(field) or ""))
+        if url:
+            keys.add("url:" + url)
     topic = normalize_topic_key(str(entry.get("topic") or ""))
-    if url:
-        keys.add("url:" + url)
     if topic:
         keys.add("topic:" + topic)
     return keys
+
+
+def _row_has_url(row: dict) -> bool:
+    return any(normalize_article_url(str(row.get(field) or "")) for field in _URL_FIELDS)
+
+
+def _inventory_by_post_id(inventory: list[dict] | dict | None) -> dict[str, dict]:
+    if not inventory:
+        return {}
+    entries = inventory.get("entries") if isinstance(inventory, dict) else inventory
+    if not isinstance(entries, list):
+        return {}
+    found: dict[str, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        post_id = str(entry.get("post_id") or "").strip()
+        if post_id:
+            found[post_id] = entry
+    return found
+
+
+def _fill_row_from_inventory(row: dict, index: dict[str, dict]) -> dict:
+    """Copy URL and topic from master_inventory when the history row lacks them.
+
+    Lines written before the article column, and ledger rows that only stored
+    ``post_id``, still name the same article once the inventory entry is known.
+    """
+    post_id = str(row.get("post_id") or "").strip()
+    saved = index.get(post_id)
+    if not saved:
+        return row
+    has_topic = bool(normalize_topic_key(str(row.get("topic") or "")))
+    if _row_has_url(row) and has_topic:
+        return row
+    merged = dict(saved)
+    for key, value in row.items():
+        if value not in (None, ""):
+            merged[key] = value
+    return merged
 
 
 def dedup_limits() -> tuple[int, int]:
@@ -398,6 +445,7 @@ def recent_match_keys(
     now: datetime | None = None,
     limit: int | None = None,
     within_days: int | None = None,
+    inventory: list[dict] | dict | None = None,
 ) -> set[str]:
     """URL and topic keys from the newest history rows inside the window."""
     pin_limit, day_limit = dedup_limits()
@@ -417,6 +465,7 @@ def recent_match_keys(
         or datetime.min.replace(tzinfo=timezone.utc),
         reverse=True,
     )
+    index = _inventory_by_post_id(inventory)
     keys: set[str] = set()
     kept = 0
     for row in ordered:
@@ -426,7 +475,7 @@ def recent_match_keys(
         if limit > 0 and kept >= limit:
             break
         kept += 1
-        keys |= article_match_keys(row)
+        keys |= article_match_keys(_fill_row_from_inventory(row, index))
     return keys
 
 
@@ -476,21 +525,15 @@ def select_pin_batch(
     count: int,
     *,
     now: datetime | None = None,
+    inventory: list[dict] | dict | None = None,
 ) -> tuple[list[dict], int]:
     """Skip recent article URL or topic matches, then take the next candidates."""
-    rows = list(history_rows)
+    rows = [row for row in history_rows if isinstance(row, dict)]
     for row in ledger_rows:
-        if row.get("pin_recorded") is False:
+        if not isinstance(row, dict) or row.get("pin_recorded") is False:
             continue
-        rows.append(
-            {
-                "published_utc": row.get("published_utc") or "",
-                "url": row.get("url") or row.get("article") or "",
-                "article": row.get("article") or "",
-                "topic": row.get("topic") or "",
-            }
-        )
-    keys = recent_match_keys(rows, now=now)
+        rows.append(row)
+    keys = recent_match_keys(rows, now=now, inventory=inventory)
     return take_fresh_articles(candidates, keys, count)
 
 
@@ -1217,7 +1260,9 @@ class MasterInventory:
                 "media_kind": "image",
                 "created_utc": raw.get("created_utc", ""),
                 "target_url": (
-                    "" if (cfg.CHANNEL_ID or "") == "ancient_knowledge" else _target_url()
+                    str(prev.get("target_url") or "").strip()
+                    if (cfg.CHANNEL_ID or "") == "ancient_knowledge"
+                    else _target_url()
                 ),
                 "pinterest_title": prev.get("pinterest_title", ""),
                 "pinterest_caption": prev.get("pinterest_caption", ""),

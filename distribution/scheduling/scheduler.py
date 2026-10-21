@@ -79,7 +79,7 @@ def _write_dry_run_card(account_id: str, post_id: str, pin_bytes: bytes) -> Path
 # ---------------------------------------------------------------------------
 # Stored at outputs/scheduled_history.txt.
 # Format (one line per published pin):
-#   2026-07-03T15:04:00Z | source_filename.jpg | post_id | pin_id | topic
+#   2026-07-03T15:04:00Z | source_filename.jpg | post_id | pin_id | topic | article_url
 # The *filename* column is what is checked; all other columns are for auditing.
 
 _HISTORY_FILENAME = "scheduled_history.txt"
@@ -160,7 +160,13 @@ class FilenameHistory:
             fh.write(line + "\n")
         self._seen.add(filename)
         self._article_rows.append(
-            {"published_utc": ts, "topic": safe_topic, "url": safe_url, "filename": filename}
+            {
+                "published_utc": ts,
+                "post_id": post_id,
+                "topic": safe_topic,
+                "url": safe_url,
+                "filename": filename,
+            }
         )
         try:
             from shared.store import sync_state_file
@@ -192,6 +198,7 @@ class FilenameHistory:
                 {
                     "published_utc": parts[0].strip(),
                     "filename": filename,
+                    "post_id": parts[2].strip() if len(parts) > 2 else "",
                     "topic": parts[4].strip() if len(parts) > 4 else "",
                     "url": parts[5].strip() if len(parts) > 5 else "",
                 }
@@ -528,11 +535,22 @@ class PinterestScheduler:
 
         from distribution.scheduling.inventory import select_pin_batch  # noqa: PLC0415
 
+        # Ancient Knowledge rebuilds clear target_url. Posted rows still need
+        # that link so a history line that only stored post_id can match.
+        missing_url = [
+            entry
+            for entry in (data.get("entries") or [])
+            if isinstance(entry, dict) and not str(entry.get("target_url") or "").strip()
+        ]
+        if missing_url:
+            self._attach_article_links(missing_url)
+
         batch, article_skipped = select_pin_batch(
             candidates,
             history.article_rows(),
             list(ledger.rows),
             self.pins_per_run,
+            inventory=data.get("entries") or [],
         )
         skipped_by_history += article_skipped
         if article_skipped:
