@@ -526,7 +526,7 @@ def build_prompt(brief: WriterBrief, *, reference_seed: int | None = None) -> st
 
 
 def _writer_provider() -> str:
-    return (os.getenv("LOFI_WRITER_MODEL") or "gemini38").strip().lower()
+    return (os.getenv("LOFI_WRITER_MODEL") or "lofi_writer").strip().lower()
 
 
 def _extract_json(text: str) -> dict[str, Any]:

@@ -1030,14 +1030,23 @@ def is_verified_instrumental_bgm(path: Path | str) -> bool:
 
 
 def list_library_bgm_tracks(engine_root: Path) -> list[Path]:
-    """Library BGM from wonder_feed/audio/bgm — instrumentals only."""
-    bgm_dir = Path(engine_root) / str(
-        getattr(lofi_cfg, "BGM_DIR_REL", "channels_config/wonder_feed/audio/bgm")
-    )
+    """Instrumental library BGM from the first folder in ``bgm_dirs`` that has any.
+
+    Order: ``LOFI_BGM_DIR`` (env), then ``channels_config/wonder_feed/audio/bgm``.
+    """
+    for bgm_dir in lofi_cfg.bgm_dirs(engine_root):
+        tracks = _verified_tracks(bgm_dir)
+        if tracks:
+            return tracks
+    return []
+
+
+def _verified_tracks(bgm_dir: Path) -> list[Path]:
     if not bgm_dir.is_dir():
         return []
     out: list[Path] = []
-    for p in sorted(bgm_dir.glob("*.mp3")):
+    candidates = [p for p in bgm_dir.iterdir() if p.suffix.lower() == ".mp3"]
+    for p in sorted(candidates):
         if not is_verified_instrumental_bgm(p):
             continue
         try:
@@ -2342,13 +2351,15 @@ def assemble_lofi_reel(
         audio_clips_to_close.append(vo_full)
     bgm_full_vol = float(getattr(lofi_cfg, "BGM_VOLUME", 0.38))
     if bgm is None or not Path(bgm).is_file():
-        msg = (
-            f"LOFI BGM required but no library .mp3 found under "
-            f"{Path(engine_root) / lofi_cfg.BGM_DIR_REL}"
-        )
-        if bool(getattr(lofi_cfg, "REQUIRE_BGM", True)):
+        searched = ", ".join(str(d) for d in lofi_cfg.bgm_dirs(engine_root))
+        msg = f"LOFI BGM: no instrumental .mp3 found (searched {searched})"
+        if bool(getattr(lofi_cfg, "REQUIRE_BGM", False)):
             raise RuntimeError(msg)
-        _LOG.warning(msg)
+        print(
+            f"[LOFI assemble] WARNING {msg} — rendering with the VOICE TRACK ONLY. "
+            "Set LOFI_BGM_DIR or copy instrumentals into the bgm folder."
+        )
+        _LOG.warning("%s — voice only", msg)
     else:
         bac = AudioFileClip(str(bgm))
         audio_clips_to_close.append(bac)
@@ -2484,7 +2495,7 @@ def assemble_lofi_reel(
         elif bool(getattr(lofi_cfg, "REQUIRE_VOICEOVER", False)):
             raise RuntimeError("LOFI voiceover required but no VO clips were provided")
     except Exception as exc:  # noqa: BLE001
-        if bool(getattr(lofi_cfg, "REQUIRE_BGM", True)) or bool(
+        if bool(getattr(lofi_cfg, "REQUIRE_BGM", False)) or bool(
             getattr(lofi_cfg, "REQUIRE_VOICEOVER", False)
         ):
             raise RuntimeError(f"LOFI audio mix failed: {exc}") from exc

@@ -540,8 +540,12 @@ LOFI_DEV_IMAGE_MODEL: str = _ACTIVE_STYLE.model
 LOFI_DEV_IMAGE_STEPS: int = int(_ACTIVE_STYLE.steps)
 LOFI_DEV_GUIDANCE_SCALE: float = float(_ACTIVE_STYLE.guidance_scale)
 DEFAULT_VISUAL_IDENTITY_PROFILE: str = _ACTIVE_STYLE.profile_name
-# FLUX.1-dev is the production default. flux2-dev remains an explicit override.
-LOFI_FLUX_BACKEND: str = str(os.environ.get("LOFI_FLUX_BACKEND") or "dev").strip()
+# FLUX.1-schnell is the production default: it is the only generator the
+# near-zero cost rule allows (about $0.0018 per 720x1280 still at 4 steps).
+# ``LOFI_FLUX_BACKEND=dev`` / ``flux2-dev`` stay explicit, opt-in overrides.
+LOFI_FLUX_BACKEND: str = str(os.environ.get("LOFI_FLUX_BACKEND") or "schnell").strip()
+LOFI_SCHNELL_IMAGE_MODEL: str = "black-forest-labs/FLUX.1-schnell"
+LOFI_SCHNELL_IMAGE_STEPS: int = int(os.environ.get("LOFI_SCHNELL_STEPS") or 4)
 LOFI_FLUX2_DEV_MODEL: str = "black-forest-labs/FLUX.2-dev"
 LOFI_FLUX2_DEV_STEPS: int = 24
 LOFI_FLUX2_DEV_GUIDANCE_SCALE: float = 5.5
@@ -549,7 +553,7 @@ LOFI_FLUX2_DEV_GUIDANCE_SCALE: float = 5.5
 
 def flux_backend() -> str:
     return str(
-        os.environ.get("LOFI_FLUX_BACKEND") or LOFI_FLUX_BACKEND or "dev"
+        os.environ.get("LOFI_FLUX_BACKEND") or LOFI_FLUX_BACKEND or "schnell"
     ).strip().lower()
 
 
@@ -745,7 +749,7 @@ def lofi_image_cost_per_call_usd(
                 "billed DeepInfra FLUX-1-dev formula."
             ),
         }
-    steps = int(schnell_steps or 4)
+    steps = int(schnell_steps or LOFI_SCHNELL_IMAGE_STEPS)
     usd = estimate_deepinfra_schnell_cost_usd(width, height, steps)
     return usd, {
         "backend": "schnell",
@@ -1071,6 +1075,24 @@ DUST_PARTICLE_COUNT: int = 48
 DUST_PARTICLE_OPACITY: float = 0.12
 # Library BGM — random pick, trimmed to clip length (no generated beds)
 BGM_DIR_REL: str = "channels_config/wonder_feed/audio/bgm"
+
+
+def bgm_dirs(engine_root: Path | str) -> list[Path]:
+    """BGM folders in lookup order: ``LOFI_BGM_DIR`` entries, then BGM_DIR_REL.
+
+    ``LOFI_BGM_DIR`` holds one or more folders separated by ``os.pathsep``;
+    relative entries resolve against the engine root. Only local files are
+    read, so the lookup never costs money.
+    """
+    root = Path(engine_root)
+    out: list[Path] = []
+    for raw in (os.environ.get("LOFI_BGM_DIR") or "").split(os.pathsep):
+        raw = raw.strip()
+        if raw:
+            p = Path(raw).expanduser()
+            out.append(p if p.is_absolute() else root / p)
+    out.append(root / BGM_DIR_REL)
+    return out
 BGM_QUARANTINE_DIRNAME: str = "_quarantine_vocals"
 # Dump-named reference rips (0816.MP3) and leftover beds stay out of the pool.
 BGM_DENY_NAME_RE: str = r"^\d{3,8}(\(\d+\))?$"
@@ -1089,7 +1111,10 @@ BGM_GAP_CENTER_FACTOR_MIN: float = 0.25
 BGM_GAP_CENTER_FACTOR_MAX: float = 2.20
 BGM_GAP_RAMP_S: float = 0.08
 BGM_EXCLUDE_PREFIXES: tuple[str, ...] = ("lofi_bed",)
-REQUIRE_BGM: bool = True
+# A missing BGM library no longer fails the reel: the mix falls back to the
+# voice track alone with a loud warning. ``LOFI_REQUIRE_BGM=1`` restores the
+# hard failure. Generated ``lofi_bed_*`` files stay excluded (see above).
+REQUIRE_BGM: bool = (os.environ.get("LOFI_REQUIRE_BGM") or "").strip() == "1"
 # Voiceover (ElevenLabs) — first-class TTS knobs (change these, not call sites).
 # Valid TTS_SPEED range: 0.7–1.2 (API floor 0.70, default 1.0). See docs/elevenlabs_tts.md.
 ENABLE_VOICEOVER: bool = True

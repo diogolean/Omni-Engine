@@ -221,9 +221,15 @@ def _complete_gemini(
         response,
         fallback_input=estimate_tokens(blob),
     )
+    # The cheap chain usually answers before Gemini is called; label the call
+    # with the provider that really served it, not the Gemini id it stood in for.
+    served = str(getattr(response, "model_version", "") or "")
+    provider, _, served_model = served.partition(":")
+    if not (getattr(response, "provider", None) and served_model):
+        provider, served_model = "gemini", (chain[0] if chain else "gemini")
     return log_text_call(
-        provider="gemini",
-        model=(chain[0] if chain else "gemini"),
+        provider=provider,
+        model=served_model,
         prompt=blob,
         output=text,
         input_tokens_est=in_tokens,
@@ -412,6 +418,9 @@ _PROVIDERS = {
     "claude": _complete_claude,
     "gemini": _complete_gemini,
     "gemini37": _complete_gemini_flash,
+    # ``lofi_writer`` is the LOFI default: cheap chain first (DeepSeek on
+    # DeepInfra), Gemini Flash only as fallback. ``gemini38`` is the old alias.
+    "lofi_writer": _complete_gemini_flash,
     "gemini38": _complete_gemini_flash,
     "gemini-3.7-flash": _complete_gemini_flash,
     "models/gemini-3.7-flash": _complete_gemini_flash,

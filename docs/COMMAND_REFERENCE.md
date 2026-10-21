@@ -230,6 +230,13 @@ Default writer mode is `emotional`: original micro-philosophical storytelling in
 `python main.py --page wonder_feed --post-type ECONOMIC_REEL_LOFI --lofi-resume-from outputs/wonder_feed/clips/lofi_pipeline_….json --lofi-approve-gate 2`  
 *// Resume a held run after reviewing Stage 3 assembled prompts; Stage 4 (stills, VO) runs.*
 
+**Cost and models (near-zero rule, cap US$0.05 per reel):**
+- Stills: FLUX.1-schnell on DeepInfra, 4 steps (`LOFI_SCHNELL_STEPS`), about $0.0018 per 720×1280 still. Every still is priced before the call (refused past the cap) and booked in `core/spend_ledger.py`. `LOFI_FLUX_BACKEND=dev` / `flux2-dev` are opt-in only (Dev is about $0.0063 per still and broke the cap at 8 stills).
+- Writer: provider `lofi_writer` (alias `gemini38`). The cheap chain answers first (DeepSeek-V4-Flash on DeepInfra); Gemini Flash is only the fallback. Logs name the provider that really served the call.
+- Still critic (`quality/VisualQA_Agent/visual_critic.py`): cheap vision chain (OpenRouter Gemma 3 12B, then Qwen / GLM), candidate plus 2 style refs. `VISUALQA_CRITIC_PROVIDER=gemini` opts back into Gemini Vision with edge/torso crops.
+- Renderer: LOFI still compiles with MoviePy (`core/economic_reel_lofi/assembler.py`). Grain screen-blend, per-frame captions, logo and Ken Burns run frame by frame in NumPy there; moving them to an ffmpeg filtergraph is a rewrite, not a switch, so it stays a follow-up. The shared ffmpeg renderer (`core/reel_ffmpeg_render.py`) pins the voice mix with `-t` so it cannot run forever.
+- BGM (local files only, never a paid call): first the folders in `LOFI_BGM_DIR` (one or more, separated by `;` on Windows and `:` on Linux), then `channels_config/wonder_feed/audio/bgm/` (git-ignored). Only verified instrumentals count; generated `lofi_bed_*` beds and `_quarantine_vocals/` stay out. With no track the reel renders with the voice track alone and prints a WARNING; `LOFI_REQUIRE_BGM=1` turns that back into a failure. ElevenLabs Music is not wired into LOFI, so it is never used as a fallback.
+
 Duration: default 27s / 9 nominal beats. Actual slides follow measured VO, normally 2.5–4.0s; narration is never cut. Larger `--duration` adds beats (max 90s). Visual style is `riso_retro_flat_v4` in `core/economic_reel_lofi/style_modules/`.
 
 `python main.py --page wonder_feed --post-type ECONOMIC_REEL_LOFI --script-only --module relationship --lofi-theme hope`  

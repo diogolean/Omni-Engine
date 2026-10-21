@@ -6,10 +6,16 @@ gate screens stills before any vision model. Older tests exercise the Nano
 Banana rungs and the LLM judge with tiny stub images, so they get the old
 switches back here. ``tests/test_near_zero_cost.py`` clears both to test
 the production defaults.
+
+The real ``.env`` is never loaded in tests (see ``tests/env_isolation.py``).
 """
 from __future__ import annotations
 
 import pytest
+
+from tests.env_isolation import isolate_dotenv
+
+isolate_dotenv()
 
 
 @pytest.fixture(autouse=True)

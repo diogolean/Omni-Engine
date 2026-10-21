@@ -56,13 +56,41 @@ def _stamp_gen_meta(
 
 # Active style identity for ECONOMIC_REEL_LOFI (never inherit global env model).
 LOFI_IMAGE_PROVIDER: str = "together.ai"
-LOFI_IMAGE_MODEL: str = lofi_cfg.LOFI_DEV_IMAGE_MODEL
-LOFI_IMAGE_STEPS: int = int(lofi_cfg.LOFI_DEV_IMAGE_STEPS)
-LOFI_IMAGE_GUIDANCE_SCALE: float = float(lofi_cfg.LOFI_DEV_GUIDANCE_SCALE)
+# The default (non-Dev) path is FLUX.1-schnell. It used to borrow the Dev
+# model id, so a "schnell" run still billed Flux Dev.
+LOFI_IMAGE_MODEL: str = lofi_cfg.LOFI_SCHNELL_IMAGE_MODEL
+LOFI_IMAGE_STEPS: int = int(lofi_cfg.LOFI_SCHNELL_IMAGE_STEPS)
+LOFI_IMAGE_GUIDANCE_SCALE: float = 0.0
 # Actual per-call resolution — aliases of config so cost accounting and
 # generation always request the same size (720×1280 exact 9:16).
 LOFI_IMAGE_WIDTH: int = int(lofi_cfg.LOFI_IMAGE_WIDTH)
 LOFI_IMAGE_HEIGHT: int = int(lofi_cfg.LOFI_IMAGE_HEIGHT)
+
+
+def _preflight_still(model: str) -> tuple[float, str]:
+    """Price one still for the active backend; refuse it past the reel cap.
+
+    Returns ``(usd, provider)`` from ``lofi_image_cost_per_call_usd``, the same
+    formula the run log prints, so the ledger and the log agree.
+    """
+    from core import spend_ledger
+
+    usd, meta = lofi_cfg.lofi_image_cost_per_call_usd()
+    provider = str(meta.get("provider") or "deepinfra")
+    spend_ledger.preflight(
+        usd, provider=provider, model=model, source="economic_reel_lofi.image_gen",
+    )
+    return usd, provider
+
+
+def _record_still(model: str, usd: float, provider: str) -> None:
+    """Book one generated still in the spend ledger so the $0.05 cap sees it."""
+    from core import spend_ledger
+
+    spend_ledger.record(
+        provider=provider, model=model, cost_usd=usd, kind="image", images=1,
+        source="economic_reel_lofi.image_gen",
+    )
 
 
 def build_scene_prompt(
@@ -121,7 +149,10 @@ def generate_scene_image(
     verbatim: bool | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """
-    Generate one vertical still via the active Together.ai model, without LoRA.
+    Generate one vertical still with FLUX.1-schnell (DeepInfra), without LoRA.
+
+    The still is priced before the call (refused past the reel cap) and booked
+    in ``core.spend_ledger`` after it lands.
 
     Returns (output_path, resolved_mood_meta).
     """
@@ -159,6 +190,7 @@ def generate_scene_image(
         f"[LOFI image_gen] request={width}x{height} "
         f"aspect={width / max(height, 1):.6f} target_9_16=0.562500"
     )
+    usd, provider = _preflight_still(LOFI_IMAGE_MODEL)
     t0 = time.perf_counter()
     gen = TogetherImageGenerator(model=LOFI_IMAGE_MODEL)
     gen.generate_image(
@@ -177,6 +209,7 @@ def generate_scene_image(
     elapsed = time.perf_counter() - t0
     if not output_path.is_file():
         raise FileNotFoundError(f"Active Flux model did not write image: {output_path}")
+    _record_still(LOFI_IMAGE_MODEL, usd, provider)
     enforce_full_bleed(output_path)
     print(
         f"[LOFI image_gen] OK | file={output_path.name} | "
@@ -345,6 +378,7 @@ def generate_scene_image_dev(
         f"[LOFI image_gen_dev] request={width}x{height} "
         f"aspect={width / max(height, 1):.6f} target_9_16=0.562500"
     )
+    usd, provider = _preflight_still(model)
     t0 = time.perf_counter()
     gen = TogetherImageGenerator(model=model)
     gen.generate_image(
@@ -363,6 +397,7 @@ def generate_scene_image_dev(
     elapsed = time.perf_counter() - t0
     if not output_path.is_file():
         raise FileNotFoundError(f"Flux Dev did not write image: {output_path}")
+    _record_still(model, usd, provider)
     enforce_full_bleed(output_path)
     print(
         f"[LOFI image_gen_dev] OK | file={output_path.name} | "
