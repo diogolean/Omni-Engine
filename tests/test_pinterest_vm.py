@@ -852,6 +852,14 @@ def _prepare_channel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         lambda self: (None, None),
     )
 
+    def _writer_off(*_args, **_kwargs):
+        raise RuntimeError("writer disabled in pinterest vm tests")
+
+    monkeypatch.setattr(
+        "agents.mcp.text_model.complete_writer_primary",
+        _writer_off,
+    )
+
 
 def test_dry_run_renders_library_photo_and_links_the_article(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
