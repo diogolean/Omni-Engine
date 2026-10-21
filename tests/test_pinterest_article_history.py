@@ -202,6 +202,69 @@ def test_old_history_line_without_a_url_uses_the_inventory(tmp_path: Path) -> No
     assert [entry["post_id"] for entry in batch] == ["post_gobekli"]
 
 
+def test_shared_generic_words_do_not_block() -> None:
+    """Ancient, lost, and city appear in many topics. Only the full topic matches."""
+    history = [
+        {
+            "published_utc": "2026-10-21T04:56:00Z",
+            "topic": "The ancient lost city",
+            "article_url": "https://ancientknowledge.eokviral.com/paititi/",
+        }
+    ]
+    candidates = [
+        {
+            "post_id": "tartaria",
+            "topic": "Another ancient lost city",
+            "target_url": "https://ancientknowledge.eokviral.com/tartaria/",
+        },
+        {
+            "post_id": "underwater",
+            "topic": "Ancient lost city under the sea",
+            "target_url": "https://ancientknowledge.eokviral.com/underwater-cities/",
+        },
+    ]
+    batch, skipped = select_pin_batch(candidates, history, [], 2, now=_NOW)
+    assert skipped == 0
+    assert [entry["post_id"] for entry in batch] == ["tartaria", "underwater"]
+
+
+def test_same_domain_different_paths_do_not_block() -> None:
+    """The host is not the article. A different path, or no path, stays free."""
+    from distribution.scheduling.inventory import normalize_article_url, recent_match_keys
+
+    assert normalize_article_url("https://ancientknowledge.eokviral.com/") == ""
+    assert normalize_article_url("https://ancientknowledge.eokviral.com") == ""
+    history = [
+        {
+            "published_utc": "2026-10-21T04:56:00Z",
+            "topic": "Sumerian tablets",
+            "article": "https://www.ancientknowledge.eokviral.com/sumerian/?utm=1",
+        },
+        {
+            "published_utc": "2026-10-21T03:00:00Z",
+            "url": "https://ancientknowledge.eokviral.com/",
+        },
+    ]
+    keys = recent_match_keys(history, now=_NOW)
+    assert "url:ancientknowledge.eokviral.com" not in keys
+    assert "url:ancientknowledge.eokviral.com/sumerian" in keys
+    candidates = [
+        {
+            "post_id": "tartaria",
+            "topic": "Tartaria and the mudflood",
+            "target_url": "https://ancientknowledge.eokviral.com/tartaria/",
+        },
+        {
+            "post_id": "underwater",
+            "topic": "Ancient underwater cities",
+            "target_url": "https://ancientknowledge.eokviral.com/underwater-cities/",
+        },
+    ]
+    batch, skipped = select_pin_batch(candidates, history, [], 2, now=_NOW)
+    assert skipped == 0
+    assert [entry["post_id"] for entry in batch] == ["tartaria", "underwater"]
+
+
 def test_article_outside_the_window_can_publish(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PINTEREST_DEDUP_RECENT_DAYS", "7")
     monkeypatch.setenv("PINTEREST_DEDUP_RECENT_PINS", "30")

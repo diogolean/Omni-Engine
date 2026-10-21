@@ -320,7 +320,10 @@ def build_visual_hook(topic: str) -> str:
 
 
 def normalize_article_url(url: str) -> str:
-    """Host and path only. Scheme, www, query, fragment, and a trailing slash drop out."""
+    """Host plus article path. Scheme, www, query, fragment, and a trailing slash drop out.
+
+    The path stays in the key. A bare host is not an article and produces no key.
+    """
     raw = (url or "").strip()
     if not raw:
         return ""
@@ -331,12 +334,13 @@ def normalize_article_url(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     path = re.sub(r"/+", "/", parts.path or "").rstrip("/").lower()
-    if not host and not path:
+    if not host or not path:
         return ""
     return f"{host}{path}"
 
 
 def normalize_topic_key(topic: str) -> str:
+    """Full topic, lowercased. Shared words such as ancient or city stay in place."""
     return re.sub(r"[^a-z0-9]+", " ", (topic or "").lower()).strip()
 
 
@@ -344,11 +348,12 @@ _URL_FIELDS = ("article_url", "target_url", "link", "url", "article")
 
 
 def article_match_keys(entry: dict) -> set[str]:
-    """Identity keys for one pin: every URL field, plus the topic.
+    """Identity keys for one pin: the article URL, plus the full topic.
 
     History and ledger rows do not share one name. ``article_url``,
     ``target_url``, ``link``, ``url``, and the ledger's ``article`` all
-    normalize to the same ``url:`` key.
+    normalize to the same ``url:`` key. The key is the whole host and path,
+    and the whole topic. Shared words and a shared host do not match.
     """
     keys: set[str] = set()
     for field in _URL_FIELDS:
