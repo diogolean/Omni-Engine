@@ -18,7 +18,7 @@ Tracked at the repository root:
 | Support trees | `assets/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
 | Agent rules | `.cursor/rules/` |
 
-`Fonts/` stays at the root because page configs address fonts as `Fonts/<family>/...` from the repo root. Critic profiles live only in `quality/VisualQA_Agent/critic_profiles/`. `visual_critic.py` loads `critic_profiles/<name>.json` from that package.
+`Fonts/` stays at the root because page configs address fonts as `Fonts/<family>/...` from the repo root. Critic profiles live only in `production/qa/judges/profiles/`. `visual_critic.py` loads `profiles/<name>.json` from that folder. `quality/VisualQA_Agent/` is a shim.
 
 `config.py` and `channel_loader.py` stay beside `main.py`. `config/` is a data directory (YAML only, not a Python package), and other packages have their own `config.py` (`pinterest_engine`, `economic_reel_lofi`, `VisualQA_Agent`). `import config` is the process settings module. `engine/runtime.py` imports it, and `from channel_loader import load_page_context`, only after `ACTIVE_PAGE` is set. `config.py` uses `Path(__file__).parent` as the repo root to find `.env`. Moving either file would rename that import across the factory and move the `.env` lookup.
 
@@ -35,7 +35,7 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Publishers | `distribution/publishers/` | API (`pinterest`, `youtube`, `pinterest_oauth`), browser (`facebook_scheduler`), and Post Planner export. Error screenshots go to `outputs/facebook_scheduler/screenshots/`, not into the package. Some old imports under `agents/posting/` are still shims. |
 | B2, Drive, content source | `agents/media/` | Do not move. The B2 client guard forbids direct B2 clients outside this package. |
 | Puppet / Aiwake animator | `core/animator/` | Code. Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
-| Visual QA critic | `quality/VisualQA_Agent/` | Code and package-local critic JSON in `critic_profiles/`. |
+| Visual QA critic | `production/qa/judges/visual_critic/` | Code and the DNA JSON. Profiles are `production/qa/judges/profiles/`. `quality/VisualQA_Agent/` is a shim. |
 | Cursor rules | `.cursor/rules/` | The whole directory is versioned, including `aiwake-copy.mdc` and `video-pipeline.mdc`. `.cursor/*` other than `rules/` is gitignored. |
 | Channel store | `channels_config/<channel>/store/` | Runtime state stays gitignored and dockerignored, and only lives in the owner's Drive backup. `.dockerignore` excludes `channels_config/*/store/` and re-includes `channels_config/aiwake/store/portfolio/` so those tracked showcase snapshots stay in the image. `store/.gitkeep` is a git placeholder. The Oracle compose file mounts Ancient Knowledge's store over that path. Do not rename it. |
 | Lofi store | `core/economic_reel_lofi/store/` | Files already tracked in this directory stay in git. `aphorism_recent.json` stays gitignored. |
@@ -46,6 +46,11 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Scheduling | `distribution/scheduling/` | Pinterest drip, scheduler, pin ledger, inventory, library source, and the Facebook queue. Pin copy, photos, articles, and image generation live in `production/formats/pins/`. |
 | Account registry | `accounts/` | `brandings.py`, `tokens.py`, `pinterest.py`. Not `distribution/accounts/` and not a rename of `channels_config/`. |
 | Pin production | `production/formats/pins/` | Copy, articles, photo-vs-graphic check, Flux stills, the card renderer, and the pin channel config module. `agents/posting/pinterest_engine/` keeps shims for those names. Root `config.py` is not split. |
+| Providers | `production/providers/` | `llm/` (cheap stack, router, Gemini helpers, `text_model`), `image/` (adapters, prompt compilers, free photos, remote GPU, Wan), `tts/`, `vision/`, `avatar/` (`models_avatar` is a shim). The default text model is the cheap stack. Claude is opt-in. |
+| Cost | `production/cost/` | `spend_ledger` (owner of `REEL_REEL_BUDGET_USD`), `cost_tracker`, `google_guardrail`, `gemini_usage`, `run_ledger`. The old `core` and `utils` paths are shims. |
+| Media | `production/media/` | Brand compose, still and reel ffmpeg render, scene pacing, audio chunking. |
+| Reel QA | `production/qa/` | Reel gate (`modules/reel_qa` is a shim) and `judges/` (visual eval, writer gate, visual critic). |
+| Writers | `production/writers/` | Caption and script writers, plus `rag/`. `agents/writer` and `agents/rag` are shims. |
 
 `shared/` is the home for env getters, paths, logging, ffmpeg, image MIME, network retry, the durable channel store, the content contract, and the memory client (ADR 0008 M2 and M3). `utils/pipeline_paths.py` is `shared.paths`. `utils/process_tools.py` is `shared.ffmpeg`. `modules/reel_artefact/net_retry.py` is `shared.retry`. `modules/durable_store.py` is `shared.store`. `modules/distribution_contract.py` is `shared.contracts`. `modules/memory/` is `shared.memory`. New code imports `shared`. The old modules stay as shims so existing imports and monkeypatches keep one object.
 
@@ -91,4 +96,4 @@ These already have a home. Do not invent a second one, and do not add empty plac
 
 `from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged.
 
-QA stays in `modules/reel_qa/`. Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Pin production lives in `production/formats/pins/`. `omni/` is gone. Some old `agents/posting/` module paths are still shims onto those packages. `engine/` does not grow a second copy. Root `config.py` stays until the last M8 pull request.
+Reel QA lives in `production/qa/` (`modules/reel_qa/` is a shim). Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Pin production lives in `production/formats/pins/`. Providers, cost, media, and writers live under `production/` as well. `omni/` is gone. Some old module paths are still shims onto those packages. `engine/` does not grow a second copy. Root `config.py` stays until the last M8 pull request. Pipeline and the content library stay where they are until that pull request.

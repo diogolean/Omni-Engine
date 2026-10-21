@@ -217,7 +217,7 @@ def test_planner_cost_line_uses_the_reel_channel(caplog) -> None:
     bind_cost_channel("ancient_knowledge")
     try:
         tracker = GoogleCostTracker()
-        with caplog.at_level(logging.INFO, logger="core.google_guardrail"):
+        with caplog.at_level(logging.INFO, logger="production.cost.google_guardrail"):
             tracker.record(
                 model="models/gemini-2.5-flash",
                 kind="text",

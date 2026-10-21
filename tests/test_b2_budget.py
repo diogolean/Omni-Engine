@@ -413,7 +413,11 @@ def test_recycled_client_identity_does_not_reuse_a_listing(budget: Path) -> None
 
 def test_runpod_s3_refuses_backblaze_before_creating_a_client() -> None:
     source = (
-        Path(__file__).resolve().parents[1] / "core" / "remote_gpu_manager.py"
+        Path(__file__).resolve().parents[1]
+        / "production"
+        / "providers"
+        / "image"
+        / "remote_gpu_manager.py"
     ).read_text(encoding="utf-8")
     function = source.split("def _get_runpod_s3_client", 1)[1].split("\ndef ", 1)[0]
     refuse_at = function.index("_refuse_backblaze_endpoint")

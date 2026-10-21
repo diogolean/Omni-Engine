@@ -53,7 +53,7 @@ def test_sophie_is_not_a_video_channel() -> None:
 
 
 def test_package_does_not_reference_aiwake() -> None:
-    root = _REPO / "models_avatar"
+    root = _REPO / "production" / "providers" / "avatar"
     for path in root.rglob("*"):
         if path.suffix not in {".py", ".md", ".yaml", ".yml", ".json"}:
             continue
@@ -91,7 +91,15 @@ def test_sophie_fast_spec_matches_the_reference_pass() -> None:
 
 
 def test_reference_workflow_file_keeps_the_lora_chain() -> None:
-    path = _REPO / "models_avatar" / "avatars" / "sophie_bennet" / "workflow_fast.json"
+    path = (
+        _REPO
+        / "production"
+        / "providers"
+        / "avatar"
+        / "avatars"
+        / "sophie_bennet"
+        / "workflow_fast.json"
+    )
     workflow = json.loads(path.read_text(encoding="utf-8"))
     assert workflow["1"]["inputs"]["ckpt_name"] == "cyberrealisticXL_v100_fp16.safetensors"
     assert workflow["2"]["inputs"]["model"] == ["1", 0]

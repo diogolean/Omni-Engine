@@ -1,33 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Give the closing CTA its own still instead of holding the last narration frame."""
+"""Compatibility shim. The implementation is production.qa.cta_beat."""
 from __future__ import annotations
 
+import sys
 
-def with_cta_beat(
-    snippets: list[str],
-    durations: list[float],
-    cta_text: str,
-    cta_hold: float,
-) -> tuple[list[str], list[float], int | None]:
-    """Return snippets, durations, and the CTA beat index.
+if __name__ == "__main__":
+    import runpy
 
-    Audio-first timing folds the CTA hold into the last narration still, so
-    the judge scores the CTA line against that artefact frame. Peel the hold
-    back and append a CTA beat. When the last slot is already only the CTA
-    window, replace its line with the CTA text.
-    """
-    text = " ".join((cta_text or "").split())
-    snips = [str(item or "") for item in (snippets or [])]
-    durs = [float(item or 0.0) for item in (durations or [])]
-    if not text or not snips or not durs or len(snips) != len(durs):
-        return snips, durs, None
-    if " ".join(snips[-1].split()) == text:
-        return snips, durs, len(snips) - 1
-    hold = max(0.5, float(cta_hold or 0.0))
-    if durs[-1] > hold + 0.4:
-        durs[-1] = max(0.5, durs[-1] - hold)
-        snips.append(text)
-        durs.append(hold)
-        return snips, durs, len(snips) - 1
-    snips[-1] = text
-    return snips, durs, len(snips) - 1
+    runpy.run_module("production.qa.cta_beat", run_name="__main__")
+else:
+    from production.qa import cta_beat as _impl
+
+    sys.modules[__name__] = _impl
