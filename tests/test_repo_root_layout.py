@@ -45,6 +45,7 @@ _ALLOWED_ROOT = {
     "models_avatar",
     "modules",
     "portfolio_showcase",
+    "production",
     "pyproject.toml",
     "quality",
     "requirements-ci.txt",

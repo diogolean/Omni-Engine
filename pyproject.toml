@@ -4,7 +4,7 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts"]
+src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts", "production"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -75,9 +75,10 @@ ignore = ["E501", "E402", "E731", "E741"]
 "distribution/scheduling/library_source.py" = ["F401", "F841", "I001"]
 "distribution/scheduling/queue.py" = ["F401", "F841", "I001"]
 "distribution/scheduling/scheduler.py" = ["F401", "F841", "I001"]
+"production/formats/pins/**" = ["F401", "F841", "I001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts"]
+known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts", "production"]
 
 # ADR 0008 M1. These names are today's packages, standing in for the target
 # layers until the moves land. CI runs them in report-only mode; M14 makes
@@ -87,8 +88,8 @@ known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_c
 # shared stand-ins that remain: utils.pipeline_paths, utils.process_tools,
 # modules.durable_store, modules.distribution_contract, modules.memory
 # animation: core.animator
-# production: engine, modules, agents.{media,writer,rag,orchestrator,mcp},
-#   models_avatar, core
+# production: production (M8 pins), plus today's stand-ins engine, modules,
+#   agents.{media,writer,rag,orchestrator,mcp}, models_avatar, core
 # distribution: distribution, accounts, and the agents.posting shims
 # products.aiwake: channels_config.aiwake
 # channels: the other channels_config packages
@@ -104,6 +105,7 @@ root_packages = [
     "utils",
     "distribution",
     "accounts",
+    "production",
 ]
 include_external_packages = false
 
@@ -119,6 +121,7 @@ forbidden_modules = [
     "engine",
     "modules",
     "models_avatar",
+    "production",
 ]
 
 [[tool.importlinter.contracts]]
@@ -134,6 +137,7 @@ source_modules = [
     "agents.mcp",
     "models_avatar",
     "core",
+    "production",
 ]
 forbidden_modules = [
     "distribution",
@@ -160,6 +164,7 @@ forbidden_modules = [
     "models_avatar",
     "core",
     "channels_config.aiwake",
+    "production",
 ]
 
 [[tool.importlinter.contracts]]
@@ -175,6 +180,7 @@ source_modules = [
     "shared",
     "utils",
     "models_avatar",
+    "production",
 ]
 forbidden_modules = ["channels_config.aiwake"]
 
@@ -191,6 +197,7 @@ forbidden_modules = [
     "agents.orchestrator",
     "agents.mcp",
     "models_avatar",
+    "production",
 ]
 
 [[tool.importlinter.contracts]]
@@ -216,6 +223,7 @@ forbidden_modules = [
     "accounts",
     "models_avatar",
     "channels_config.aiwake",
+    "production",
 ]
 
 [[tool.importlinter.contracts]]
@@ -234,6 +242,7 @@ forbidden_modules = [
     "accounts",
     "channels_config",
     "models_avatar",
+    "production",
 ]
 
 [[tool.importlinter.contracts]]
@@ -250,4 +259,5 @@ forbidden_modules = [
     "channels_config",
     "models_avatar",
     "utils",
+    "production",
 ]

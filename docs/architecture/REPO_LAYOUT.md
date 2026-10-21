@@ -14,7 +14,7 @@ Tracked at the repository root:
 | Entry points | `main.py`, `config.py`, `channel_loader.py`. `run_main_noupload.py` is an allowed entry point when it is added. Do not rename it. |
 | Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml`, `.gitleaksignore` |
 | Containers and CI | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.github/` |
-| Packages | `accounts/`, `agents/`, `channels_config/`, `config/`, `core/`, `distribution/`, `engine/`, `models_avatar/`, `modules/`, `portfolio_showcase/`, `quality/`, `shared/`, `utils/` |
+| Packages | `accounts/`, `agents/`, `channels_config/`, `config/`, `core/`, `distribution/`, `engine/`, `models_avatar/`, `modules/`, `portfolio_showcase/`, `production/`, `quality/`, `shared/`, `utils/` |
 | Support trees | `assets/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
 | Agent rules | `.cursor/rules/` |
 
@@ -43,8 +43,9 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Channel operator env | `channels_config/<id>/.env.<id>` on the host, seen in the container as `channels_env/<id>/.env.<id>` | The compose file mounts `./channels_config` at `/opt/omni-engine/channels_env`. Do not change that mount. |
 | Pinterest account map | `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml` | Do not rename. Article cache for Ancient Knowledge is `outputs/ancient_knowledge/article_cache/` and is gitignored with the rest of `outputs/`. |
 | Worker entry | `python -m distribution.workers --role engine` and `--role scheduler` | The implementation is `distribution/workers/runtime.py`. Compose, the Dockerfile `CMD`, and the VM use that module. Flags stay `--role`, `--once`, `--dry-run`, `--account`, and `--pins`. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
-| Scheduling | `distribution/scheduling/` | Pinterest drip, scheduler, pin ledger, inventory, library source, and the Facebook queue. Pin copy, photos, articles, and image generation stay in `agents/posting/pinterest_engine/` until the production move. |
+| Scheduling | `distribution/scheduling/` | Pinterest drip, scheduler, pin ledger, inventory, library source, and the Facebook queue. Pin copy, photos, articles, and image generation live in `production/formats/pins/`. |
 | Account registry | `accounts/` | `brandings.py`, `tokens.py`, `pinterest.py`. Not `distribution/accounts/` and not a rename of `channels_config/`. |
+| Pin production | `production/formats/pins/` | Copy, articles, photo-vs-graphic check, Flux stills, the card renderer, and the pin channel config module. `agents/posting/pinterest_engine/` keeps shims for those names. Root `config.py` is not split. |
 
 `shared/` is the home for env getters, paths, logging, ffmpeg, image MIME, network retry, the durable channel store, the content contract, and the memory client (ADR 0008 M2 and M3). `utils/pipeline_paths.py` is `shared.paths`. `utils/process_tools.py` is `shared.ffmpeg`. `modules/reel_artefact/net_retry.py` is `shared.retry`. `modules/durable_store.py` is `shared.store`. `modules/distribution_contract.py` is `shared.contracts`. `modules/memory/` is `shared.memory`. New code imports `shared`. The old modules stay as shims so existing imports and monkeypatches keep one object.
 
@@ -90,4 +91,4 @@ These already have a home. Do not invent a second one, and do not add empty plac
 
 `from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged.
 
-QA stays in `modules/reel_qa/`. Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. `omni/` is gone. Some old `agents/posting/` module paths are still shims onto those packages. `engine/` does not grow a second copy. Pin production (copy, photos, articles, the image transformer) stays in `agents/posting/pinterest_engine/` until it moves to `production/formats/pins/`.
+QA stays in `modules/reel_qa/`. Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Pin production lives in `production/formats/pins/`. `omni/` is gone. Some old `agents/posting/` module paths are still shims onto those packages. `engine/` does not grow a second copy. Root `config.py` stays until the last M8 pull request.
