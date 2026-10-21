@@ -265,7 +265,7 @@ TOGETHER_429_BACKOFF_MAX_S: float = float(os.getenv("TOGETHER_429_BACKOFF_MAX_S"
 DRAFT_IMAGE_SIZE: tuple[int, int] = (768, 1344)
 PRODUCTION_IMAGE_SIZE: tuple[int, int] = (768, 1344)
 
-# VisualQA_Agent critic calibration (also mirrored in quality/VisualQA_Agent/config.py)
+# VisualQA_Agent critic calibration (also mirrored in production/qa/judges/visual_critic/config.py)
 MAX_RETRIES: int = 5
 QUALITY_THRESHOLD: float = 6.0
 

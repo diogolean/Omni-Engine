@@ -2,9 +2,9 @@
 """
 Inspect the VisualQA Chroma DB (or JSON fallback) for ancient_knowledge.
 
-Connects to quality/VisualQA_Agent/chroma_db regardless of VISUALQA_USE_CHROMA.
+Connects to production/qa/judges/visual_critic/chroma_db regardless of VISUALQA_USE_CHROMA.
 If Chroma is empty, missing, or disabled, dumps
-quality/VisualQA_Agent/channel_dna_store.json instead.
+production/qa/judges/visual_critic/channel_dna_store.json instead.
 
 Writes chroma_dump.json and chroma_dump.md in the project root.
 """
@@ -28,8 +28,9 @@ if str(_ROOT) not in sys.path:
 
 CHANNEL = "ancient_knowledge"
 COLLECTION_NAME = "channel_aesthetics_v2"
-CHROMA_DIR = _ROOT / "VisualQA_Agent" / "chroma_db"
-JSON_STORE = _ROOT / "VisualQA_Agent" / "channel_dna_store.json"
+_CRITIC = _ROOT / "production" / "qa" / "judges" / "visual_critic"
+CHROMA_DIR = _CRITIC / "chroma_db"
+JSON_STORE = _CRITIC / "channel_dna_store.json"
 OUT_JSON = _ROOT / "chroma_dump.json"
 OUT_MD = _ROOT / "chroma_dump.md"
 EMBED_PREVIEW = 8
@@ -260,7 +261,7 @@ def _to_markdown(dump: dict[str, Any]) -> str:
     fb = dump.get("json_fallback") or {}
     lines.extend(
         [
-            "## JSON store (quality/VisualQA_Agent/channel_dna_store.json)",
+            "## JSON store (production/qa/judges/visual_critic/channel_dna_store.json)",
             "",
             f"- Path: `{fb.get('path')}`",
             f"- Exists: `{fb.get('exists')}`",

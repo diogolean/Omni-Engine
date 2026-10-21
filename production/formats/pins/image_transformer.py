@@ -552,7 +552,7 @@ class PinTransformer:
         if source is not None:
             return source
         try:
-            from agents.media.free_images.integrate import load_card_source
+            from production.providers.image.free.integrate import load_card_source
 
             return load_card_source(record, self.pins_dir, allow_flux=False)
         except Exception as exc:  # noqa: BLE001

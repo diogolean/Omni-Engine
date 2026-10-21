@@ -1,47 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Extension points that are intentionally not implemented.
-
-Civitai on-site generation and Gemini image generation can be added later
-behind :class:`models_avatar.backends.base.GenerationBackend`. These classes
-fail loudly. They do not return a placeholder image or call a live API.
-"""
+"""Compatibility shim. The implementation is production.providers.avatar.backends.stubs."""
 from __future__ import annotations
 
-from models_avatar.backends.base import GenerationJob, GenerationResult
-from models_avatar.errors import BackendNotImplemented
+import sys
 
+if __name__ == "__main__":
+    import runpy
 
-class CivitaiOnsiteBackend:
-    """Future Civitai on-site image generation.
+    runpy.run_module("production.providers.avatar.backends.stubs", run_name="__main__")
+else:
+    from production.providers.avatar.backends import stubs as _impl
 
-    The public REST API used by :mod:`models_avatar.civitai.client` covers
-    model metadata and file download. It does not document a stable
-    text-to-image job API. Implement :meth:`generate` when that exists.
-    """
-
-    name = "civitai_onsite"
-
-    def generate(self, job: GenerationJob) -> GenerationResult:  # noqa: ARG002
-        raise BackendNotImplemented(
-            "Civitai on-site generation is not implemented. "
-            "Add a GenerationBackend that submits a documented Civitai "
-            "image job and writes job.dest. Do not fake the image."
-        )
-
-
-class GeminiImageBackend:
-    """Future Gemini image backend.
-
-    When this is implemented, route the call through ``core.google_guardrail``
-    so the factory billing caps still apply. This stub does not import or
-    call the Gemini client.
-    """
-
-    name = "gemini_image"
-
-    def generate(self, job: GenerationJob) -> GenerationResult:  # noqa: ARG002
-        raise BackendNotImplemented(
-            "Gemini image generation is not implemented. "
-            "Wire core.google_guardrail and write job.dest when adding it. "
-            "Do not fake the image."
-        )
+    sys.modules[__name__] = _impl

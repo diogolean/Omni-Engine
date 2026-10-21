@@ -52,7 +52,7 @@ def generate_flux_photo(
     stem: str,
 ) -> Path | None:
     """Render one FLUX.1-schnell image into ``dest_dir``. Returns the file or None."""
-    from agents.media.providers.image_provider import get_image_adapter  # noqa: PLC0415
+    from production.providers.image.image_provider import get_image_adapter  # noqa: PLC0415
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     adapter = get_image_adapter(model_id=FLUX_SCHNELL)
