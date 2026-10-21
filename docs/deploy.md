@@ -19,7 +19,7 @@ The job name on pull requests stays `lint and tests` (`.github/workflows/validat
 - `./channels_config` at `channels_env/` inside the container, beside the image's channel package
 - `./state/ancient_knowledge/store` onto `channels_config/ancient_knowledge/store`
 
-That last mount is the Ancient Knowledge store only. Aiwake's committed store stays in the image. The worker entry is `python -m distribution.workers`. `python -m omni.worker` still runs that same main as a fallback. Service names, mounts, and the lack of a healthcheck are unchanged.
+That last mount is the Ancient Knowledge store only. Aiwake's committed store stays in the image. The worker entry is `python -m distribution.workers`.
 
 The scheduler is Compose profile `scheduler`. Deploy does not start it unless `SCHEDULER_ENABLED=1`. Supermemory is profile `memory` and is also not started by deploy.
 

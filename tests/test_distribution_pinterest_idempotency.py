@@ -15,25 +15,12 @@ from pathlib import Path
 
 import pytest
 
-import accounts.brandings as brandings
-import accounts.pinterest as pinterest_accounts
-import accounts.tokens as tokens
 import agents.posting.pinterest_engine.ledger as legacy_ledger
 import agents.posting.pinterest_engine.publisher as legacy_publisher
 import distribution.publishers.api.pinterest as pinterest_api
-import distribution.publishers.base as base
-import distribution.scheduling.drip as drip
 import distribution.scheduling.ledger as pin_ledger
 import distribution.workers.__main__ as worker_main
 import distribution.workers.runtime as runtime
-import omni.accounts as omni_accounts
-import omni.adapters.pinterest as omni_pinterest
-import omni.config as omni_config
-import omni.models as omni_models
-import omni.pinterest_accounts as omni_pinterest_accounts
-import omni.pinterest_drip as omni_drip
-import omni.publisher as omni_publisher
-import omni.worker as omni_worker
 from distribution.publishers.base import (
     Account,
     Content,
@@ -46,15 +33,9 @@ from distribution.scheduling.ledger import PinLedger, ledger_object_key, normali
 
 
 def test_old_and_new_pinterest_modules_are_one_object() -> None:
-    assert legacy_publisher is pinterest_api is omni_pinterest
+    assert legacy_publisher is pinterest_api
     assert legacy_publisher.PinterestPublisher is pinterest_api.PinterestPublisher
     assert legacy_publisher.PinterestAccountPublisher is pinterest_api.PinterestAccountPublisher
-    assert omni_models is omni_publisher is base
-    assert omni_drip is drip
-    assert omni_worker is runtime
-    assert omni_config is brandings
-    assert omni_accounts is tokens
-    assert omni_pinterest_accounts is pinterest_accounts
     assert legacy_ledger is pin_ledger
     assert legacy_ledger.ledger_object_key is ledger_object_key
     assert legacy_ledger.normalize_title is normalize_title
@@ -207,16 +188,22 @@ def test_already_posted_record_does_not_call_pinterest(
 
 
 def test_worker_cli_keeps_role_once_dry_run_account_and_pins() -> None:
-    """Compose calls ``distribution.workers``. ``omni.worker`` is the same fallback."""
+    """Compose and the image call ``python -m distribution.workers`` with these flags."""
     import subprocess
 
-    for module in ("distribution.workers", "omni.worker"):
-        proc = subprocess.run(
-            [sys.executable, "-m", module, "--help"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert proc.returncode == 0, proc.stderr
-        for flag in ("--role", "--once", "--dry-run", "--account", "--pins"):
-            assert flag in proc.stdout
+    proc = subprocess.run(
+        [sys.executable, "-m", "distribution.workers", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    for flag in ("--role", "--once", "--dry-run", "--account", "--pins"):
+        assert flag in proc.stdout
+    missing = subprocess.run(
+        [sys.executable, "-m", "omni.worker", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing.returncode != 0
