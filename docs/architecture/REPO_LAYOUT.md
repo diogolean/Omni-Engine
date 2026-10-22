@@ -34,8 +34,8 @@ These already have a home. Do not invent a second one, and do not add empty plac
 |---|---|---|
 | Publishers | `distribution/publishers/` | API (`pinterest`, `youtube`, `pinterest_oauth`), browser (`facebook_scheduler`), and Post Planner export. Error screenshots go to `outputs/facebook_scheduler/screenshots/`, not into the package. Some old imports under `agents/posting/` are still shims. |
 | B2, Drive, imgbb | `shared/storage/` | The only boto3 B2 client is `shared/storage/b2_client.py`. `agents/media/b2_client.py` is a shim. The direct-client guard allows that shim and the storage module, and still skips the rest of `agents/media/`. |
-| Parametric animation | `animation/parametric/` | Product-agnostic engine. Public facade is `animation/api.py` (`render_dynamic_animation`). The renderer is `animation/parametric/renderer.py` and stays an ffmpeg pipe. `core/animator/` keeps re-export shims until M14, plus the Aiwake plate, voices, puppet factories, and harness (TODO M10). Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
-| Product shows | `products/` | Reserved root so import-linter can forbid `animation` → `products`. Empty until M10, which moves Aiwake to `products/aiwake/`. |
+| Parametric animation | `animation/parametric/` | Product-agnostic engine. Public facade is `animation/api.py` (`render_dynamic_animation`). The renderer is `animation/parametric/renderer.py` and stays an ffmpeg pipe. `core/animator/` re-exports that engine, and re-exports the Aiwake plate, voices, puppet factories, and harness, until M14. Those Aiwake modules live in `products/aiwake/animator/`. Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
+| Product shows | `products/` | Aiwake is `products/aiwake/` (pipeline, personas, prompts, tools, tests, settings, and the puppet harness). `channels_config/aiwake/` keeps the store and re-exports the show until M14. Import-linter forbids `animation` → `products`. |
 | Visual QA critic | `production/qa/judges/visual_critic/` | Code and the DNA JSON. Profiles are `production/qa/judges/profiles/`. `quality/VisualQA_Agent/` is a shim. |
 | Cursor rules | `.cursor/rules/` | The whole directory is versioned, including `aiwake-copy.mdc` and `video-pipeline.mdc`. `.cursor/*` other than `rules/` is gitignored. |
 | Channel store | `channels_config/<channel>/store/` | Runtime state stays gitignored and dockerignored, and only lives in the owner's Drive backup. `.dockerignore` excludes `channels_config/*/store/` and re-includes `channels_config/aiwake/store/portfolio/` so those tracked showcase snapshots stay in the image. `store/.gitkeep` is a git placeholder. The Oracle compose file mounts Ancient Knowledge's store over that path. Do not rename it. |
@@ -76,7 +76,8 @@ These already have a home. Do not invent a second one, and do not add empty plac
 
 - Factory tests: `tests/`
 - Channel tests: `channels_config/<channel>/tests/`
-- A channel keeps its own `page_config.py`, prompts, and tests beside each other.
+- Aiwake tests: `products/aiwake/tests/`. The channel slot `channels_config/aiwake/` keeps `store/` (tracked `store/portfolio/`, gitignored runtime state) and does not keep a second copy of the tests.
+- A channel keeps its own `page_config.py`, prompts, and tests beside each other. Aiwake prompts live in `products/aiwake/prompts/`.
 - Pytest collects `test_*.py` from those trees. Probe scripts live in `scripts/`, not in `tests/`.
 - Test helpers imported only by tests (`caption_fixtures.py`, `cv_ground_truth.py`) stay next to the tests that use them.
 

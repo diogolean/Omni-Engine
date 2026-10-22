@@ -50,22 +50,24 @@ def test_leaf_shim_sources_point_at_the_implementation() -> None:
     facade = (_REPO / "core" / "animator" / "__init__.py").read_text(encoding="utf-8")
     assert "sys.modules[__name__]" not in facade
     plate = (_REPO / "core" / "animator" / "aiwake_plate.py").read_text(encoding="utf-8")
-    assert "register_asset_provider" in plate
-    assert "asset_generator" in plate
+    assert "products.aiwake.animator.plate" in plate
+    assert "sys.modules[__name__]" in plate
+    impl = (_REPO / "products" / "aiwake" / "animator" / "plate.py").read_text(encoding="utf-8")
+    assert "register_asset_provider" in impl
+    assert "asset_generator" in impl
 
 
 def test_aiwake_harness_stays_out_of_animation() -> None:
-    assert voice.assign_debater_voices.__module__ == "core.animator.voice.registry"
+    assert voice.assign_debater_voices.__module__ == "products.aiwake.animator.voice.registry"
     assert not (_ANIMATION / "parametric" / "voice").exists()
     create_puppet = _REPO / "core" / "animator" / "factory" / "create_puppet.py"
-    assert create_puppet.is_file()
-    assert "TODO M10" in create_puppet.read_text(encoding="utf-8")
+    assert "products.aiwake.animator.factory.create_puppet" in create_puppet.read_text(encoding="utf-8")
+    assert (_REPO / "products" / "aiwake" / "animator" / "factory" / "create_puppet.py").is_file()
     assert (_REPO / "core" / "animator" / "pipeline.py").is_file()
     assert (_REPO / "core" / "animator" / "factory" / "one_shot_factory.py").is_file()
     assert (_REPO / "core" / "animator" / "asset_generator.py").is_file()
-    assert "TODO M10" in (_REPO / "core" / "animator" / "voice" / "registry.py").read_text(
-        encoding="utf-8"
-    )
+    registry = (_REPO / "core" / "animator" / "voice" / "registry.py").read_text(encoding="utf-8")
+    assert "products.aiwake.animator.voice.registry" in registry
     puppet_source = (_ANIMATION / "parametric" / "puppet.py").read_text(encoding="utf-8")
     assert "asset_generator" not in puppet_source
     assert "register_asset_provider" in puppet_source

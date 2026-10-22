@@ -1,19 +1,8 @@
-# -*- coding: utf-8 -*-
-"""Model-agnostic LLM strategies for Aiwake."""
+"""Compatibility shim. The implementation is products.aiwake.models."""
 from __future__ import annotations
 
-from .base import LLMError, LLMProvider, LLMResponse
-from .llm_factory import LLMFactory, available_providers, force_offline, register_provider
-from .sync import SyncError, sync_openrouter_models
+from products.aiwake import models as _impl
 
-__all__ = [
-    "LLMError",
-    "LLMFactory",
-    "LLMProvider",
-    "LLMResponse",
-    "SyncError",
-    "available_providers",
-    "force_offline",
-    "register_provider",
-    "sync_openrouter_models",
-]
+
+def __getattr__(attr: str):
+    return getattr(_impl, attr)

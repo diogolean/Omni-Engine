@@ -20,11 +20,41 @@ if str(_FACTORY) not in sys.path:
     sys.path.insert(0, str(_FACTORY))
 
 from modules.metadata_auditor import (  # noqa: E402
+    AuditItem,
     print_audit_report,
+    register_channel_backfill,
     run_all_channels_backfill,
     run_channel_backfill,
 )
 from utils.pipeline_paths import discover_channel_ids  # noqa: E402
+
+
+def _install_aiwake_backfill() -> None:
+    """Register the debate-transcript builder without a factory import of the show."""
+    from products.aiwake.tools.backfill_metadata import run_backfill
+    from shared.store import restore_channel_state
+
+    def _adapt(
+        *,
+        outputs_dir: Path | None = None,
+        dry_run: bool = False,
+        restore: bool = False,
+    ) -> list[AuditItem]:
+        if restore:
+            restore_channel_state("aiwake")
+        raw = run_backfill(outputs_dir=outputs_dir, dry_run=dry_run)
+        return [
+            AuditItem(
+                video_path=row.video_path,
+                record=row.record,
+                asset_id=row.asset_id,
+                status=row.status,
+                detail=row.detail,
+            )
+            for row in raw
+        ]
+
+    register_channel_backfill("aiwake", _adapt)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _install_aiwake_backfill()
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

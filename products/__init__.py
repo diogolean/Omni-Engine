@@ -1,5 +1,6 @@
-"""Reserved root for product shows.
+"""Product shows.
 
-M10 moves Aiwake here (``products/aiwake/``). This package has no show code
-yet. ``animation`` is not allowed to import it.
+Aiwake lives in ``products.aiwake``. This package does not import it, so
+loading ``products`` does not load the show. ``animation`` is not allowed
+to import it.
 """

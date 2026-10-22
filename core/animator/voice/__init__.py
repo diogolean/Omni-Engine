@@ -1,24 +1,8 @@
-# TODO M10: move this Aiwake-specific module to products/aiwake/.
-"""Exclusive character-to-voice reservations for the debate engine."""
+"""Compatibility shim. The implementation is products.aiwake.animator.voice."""
+from __future__ import annotations
 
-from .registry import (
-    ANDREW,
-    BRIAN,
-    CHRISTOPHER,
-    ERIC,
-    RYAN,
-    VoiceCollisionError,
-    assign_debater_voices,
-    voice_for,
-)
+from products.aiwake.animator import voice as _impl
 
-__all__ = [
-    "ANDREW",
-    "BRIAN",
-    "CHRISTOPHER",
-    "ERIC",
-    "RYAN",
-    "VoiceCollisionError",
-    "assign_debater_voices",
-    "voice_for",
-]
+
+def __getattr__(attr: str):
+    return getattr(_impl, attr)

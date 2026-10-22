@@ -23,6 +23,7 @@ _CONTRACTS = (
     "Channel packages do not import the factory or Aiwake",
     "Path and process helpers do not import the factory",
     "Shared does not import the factory",
+    "Nothing outside products imports products.aiwake",
 )
 
 
