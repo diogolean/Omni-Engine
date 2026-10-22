@@ -17,8 +17,11 @@ unreachable ledger keeps the previous random 3–6h startup delay.
 The chosen wake is written per channel to ``outputs/scheduler/next_wake.json``
 on the data volume. A restart reuses that clock when it is still ahead,
 publishes once if the wake was missed by at most 30 minutes, and only
-then draws a new gap. Between wakes it still sleeps a fresh random gap
-in that range.
+then draws a new gap. A ledger pin at or after that wake minus 5 minutes
+is the slot already posted, so the process waits out the cadence instead
+of posting it again. Between wakes it still sleeps a fresh random gap
+in that range. A wake file that cannot be written is logged and ignored;
+the process keeps the in-memory delay.
 ``--once`` and ``--dry-run`` skip the initial delay. ``--dry-run`` builds
 the cards and does not call Pinterest.
 
@@ -32,6 +35,7 @@ has a process to attach to. It does not generate content by itself.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -59,6 +63,8 @@ _DEFAULT_MAX_HOURS = 6.0
 _DEFAULT_DAY_TZ = "America/Sao_Paulo"
 # A deploy that lands during the wake still publishes that wake once.
 _WAKE_GRACE = timedelta(minutes=30)
+# A pin this close to the saved wake is that slot, already in the ledger.
+_CATCHUP_MARGIN = timedelta(minutes=5)
 
 
 def _hours(name: str, default: float) -> float:
@@ -225,12 +231,16 @@ def _load_wake_state() -> dict[str, str]:
 
 
 def _write_wake_state(channels: dict[str, str]) -> None:
+    """Persist the wake clock. A full or read-only volume must not kill the loop."""
     path = scheduler_state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"channels": dict(sorted(channels.items()))}
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"channels": dict(sorted(channels.items()))}
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except OSError as exc:
+        log.warning("Could not save scheduler wake to %s: %s", path, exc)
 
 
 def load_channel_wake(channel: str) -> datetime | None:
@@ -259,6 +269,70 @@ def remember_next_wake(when: datetime) -> None:
     _save_wake_updates(_load_wake_state(), {channel: when for channel in channels})
 
 
+def _reader_accepts_accounts(reader: Callable) -> bool:
+    """False for the zero-argument ledger stubs the scheduler tests install."""
+    try:
+        parameters = inspect.signature(reader).parameters
+    except (TypeError, ValueError):
+        return False
+    if any(item.kind == inspect.Parameter.VAR_POSITIONAL for item in parameters.values()):
+        return True
+    positional = [
+        item
+        for item in parameters.values()
+        if item.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+    ]
+    return len(positional) >= 1
+
+
+def _as_utc(moment: datetime) -> datetime:
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def _published_for_channel(channel: str, published_at: datetime | None) -> datetime | None:
+    """Newest real pin for one channel.
+
+    ``published_at`` is the stamp startup already read. It stands in when
+    this channel has no account row, or when the ledger reader cannot take
+    an account list.
+    """
+    if not _reader_accepts_accounts(newest_pin_published):
+        return published_at
+    try:
+        accounts = [
+            account
+            for account in active_pinterest_accounts()
+            if str(account.account_id or "").strip() == channel
+        ]
+    except Exception:  # noqa: BLE001 — a bad yaml still has the startup stamp
+        log.info("Pinterest accounts unreadable; using the shared ledger stamp")
+        return published_at
+    if not accounts:
+        return published_at
+    return newest_pin_published(accounts)
+
+
+def _pin_covers_saved_wake(
+    channel: str,
+    saved: datetime,
+    published_at: datetime | None,
+) -> datetime | None:
+    """Ledger stamp when this channel already published the saved slot."""
+    stamp = _published_for_channel(channel, published_at)
+    if stamp is None:
+        return None
+    stamp = _as_utc(stamp)
+    if stamp < _as_utc(saved) - _CATCHUP_MARGIN:
+        return None
+    return stamp
+
+
 def resolve_startup_delay(
     published_at: datetime | None,
     *,
@@ -268,9 +342,11 @@ def resolve_startup_delay(
     """Seconds to sleep before the first publish, and why.
 
     ``reuse`` keeps a saved wake that is still ahead. ``missed`` means a
-    saved wake fell inside the 30-minute grace, so this process publishes
-    once and the following wake is stored first. ``due`` means the ledger
-    cadence has already elapsed and there is nothing saved to reuse.
+    saved wake fell inside the 30-minute grace and the ledger has no pin
+    for it, so this process publishes once and the following wake is
+    stored first. A pin within 5 minutes before that wake is the slot, and
+    the wait is a fresh gap from the pin (``draw``). ``due`` means the
+    ledger cadence has already elapsed and there is nothing saved to reuse.
     ``draw`` is a fresh gap, the same rule as a process with no wake file.
     """
     moment = now or _utc_now()
@@ -305,10 +381,46 @@ def resolve_startup_delay(
                 updates[channel] = drawn
             future.append(drawn)
     if missed:
+        covered: list[datetime] = []
+        pending: list[str] = []
+        for channel in missed:
+            saved = _parse_published_utc(state.get(channel))
+            stamp = (
+                _pin_covers_saved_wake(channel, saved, published_at) if saved is not None else None
+            )
+            if stamp is None:
+                pending.append(channel)
+            else:
+                covered.append(stamp)
+        if not pending:
+            # The deploy restarted after the pin landed and before the next
+            # wake was saved. Wait out the cadence from that pin.
+            anchor = max(covered)
+            delay = startup_delay_seconds(anchor, now=moment, rng=rng)
+            log.info(
+                "Pin at %s is within %.0f minutes of the saved wake; not repeating that slot",
+                _format_utc(anchor),
+                _CATCHUP_MARGIN.total_seconds() / 60.0,
+            )
+            if delay <= 0:
+                follow = moment + timedelta(seconds=interval_seconds(rng))
+                for channel in missed:
+                    updates[channel] = follow
+                _save_wake_updates(state, updates)
+                return 0.0, "due"
+            drawn_wake = moment + timedelta(seconds=delay)
+            for channel in missed:
+                updates[channel] = drawn_wake
+            future.append(drawn_wake)
+            _save_wake_updates(state, updates)
+            soonest = min(future)
+            reason = "draw" if soonest == drawn_wake else "reuse"
+            return max(0.0, (soonest - moment).total_seconds()), reason
         # Store the next wake before publishing. A second start then waits
-        # instead of posting this slot again.
+        # instead of posting this slot again. Read the saved stamps first:
+        # the write below replaces them in ``state``.
         had_saved_wake = any(
-            _parse_published_utc(state.get(channel)) is not None for channel in missed
+            _parse_published_utc(state.get(channel)) is not None for channel in pending
         )
         follow = moment + timedelta(seconds=interval_seconds(rng))
         for channel in missed:

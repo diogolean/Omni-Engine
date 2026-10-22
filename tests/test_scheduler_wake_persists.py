@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -147,3 +148,77 @@ def test_wake_older_than_the_grace_is_redrawn(monkeypatch: pytest.MonkeyPatch) -
     run_scheduler(once=False, dry_run=False)
     assert sleeps == [pytest.approx(3 * 3600)]
     assert load_channel_wake(_CHANNEL) == _NOW + timedelta(hours=3)
+
+
+def test_restart_during_publish_does_not_repeat_the_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pin within 5 minutes before the saved wake is that slot, already posted."""
+    wake = _NOW - timedelta(minutes=8)
+    pin_at = wake - timedelta(minutes=5)
+    save_channel_wake(_CHANNEL, wake)
+    monkeypatch.setenv("MIN_INTERVAL_HOURS", "4")
+    monkeypatch.setenv("MAX_INTERVAL_HOURS", "4")
+    asked: list[list[str]] = []
+
+    def published(accounts=None, *, read_rows=None):
+        del read_rows
+        if accounts is not None:
+            asked.append([account.account_id for account in accounts])
+        return pin_at
+
+    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", published)
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float, stop: dict) -> None:
+        sleeps.append(seconds)
+        stop["flag"] = True
+
+    def refuse_publish(*, dry_run: bool = False) -> list:
+        del dry_run
+        raise AssertionError("the slot is already in the ledger")
+
+    monkeypatch.setattr("distribution.workers.runtime._sleep_until", fake_sleep)
+    monkeypatch.setattr("distribution.workers.runtime.run_cycle", refuse_publish)
+    run_scheduler(once=False, dry_run=False)
+    remaining = 4 * 3600 - 13 * 60
+    assert asked == [[_CHANNEL]]
+    assert sleeps == [pytest.approx(remaining)]
+    assert load_channel_wake(_CHANNEL) == _NOW + timedelta(seconds=remaining)
+
+
+def test_wake_write_failure_keeps_the_ledger_delay(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """A read-only wake file logs a warning and the in-memory delay still applies."""
+    blocker = tmp_path / "scheduler"
+    blocker.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(
+        "distribution.workers.runtime.scheduler_state_path",
+        lambda: blocker / "next_wake.json",
+    )
+    monkeypatch.setenv("MIN_INTERVAL_HOURS", "4")
+    monkeypatch.setenv("MAX_INTERVAL_HOURS", "4")
+    monkeypatch.setattr(
+        "distribution.workers.runtime.newest_pin_published",
+        lambda: _NOW - timedelta(hours=1),
+    )
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float, stop: dict) -> None:
+        sleeps.append(seconds)
+        stop["flag"] = True
+
+    def refuse_publish(*, dry_run: bool = False) -> list:
+        del dry_run
+        raise AssertionError("the startup delay was skipped")
+
+    monkeypatch.setattr("distribution.workers.runtime._sleep_until", fake_sleep)
+    monkeypatch.setattr("distribution.workers.runtime.run_cycle", refuse_publish)
+    with caplog.at_level(logging.WARNING, logger="omni.worker"):
+        save_channel_wake(_CHANNEL, _NOW + timedelta(hours=2))
+        run_scheduler(once=False, dry_run=False)
+    assert sleeps == [pytest.approx(3 * 3600)]
+    assert any("Could not save scheduler wake" in record.message for record in caplog.records)
