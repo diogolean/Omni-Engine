@@ -14,7 +14,11 @@ still under the daily cap and the shared ledger duplicate check. A
 ``published_utc`` in the
 future cannot stretch that wait past ``MAX_INTERVAL_HOURS``. An empty or
 unreachable ledger keeps the previous random 3–6h startup delay.
-Between wakes it still sleeps a fresh random gap in that range.
+The chosen wake is written per channel to ``outputs/scheduler/next_wake.json``
+on the data volume. A restart reuses that clock when it is still ahead,
+publishes once if the wake was missed by at most 30 minutes, and only
+then draws a new gap. Between wakes it still sleeps a fresh random gap
+in that range.
 ``--once`` and ``--dry-run`` skip the initial delay. ``--dry-run`` builds
 the cards and does not call Pinterest.
 
@@ -28,6 +32,7 @@ has a process to attach to. It does not generate content by itself.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import random
@@ -45,12 +50,15 @@ if str(_ROOT) not in sys.path:
 
 from accounts.pinterest import active_pinterest_accounts  # noqa: E402
 from distribution.publishers.base import Account  # noqa: E402
+from shared.paths import outputs_root  # noqa: E402
 
 log = logging.getLogger("omni.worker")
 
 _DEFAULT_MIN_HOURS = 3.0
 _DEFAULT_MAX_HOURS = 6.0
 _DEFAULT_DAY_TZ = "America/Sao_Paulo"
+# A deploy that lands during the wake still publishes that wake once.
+_WAKE_GRACE = timedelta(minutes=30)
 
 
 def _hours(name: str, default: float) -> float:
@@ -169,6 +177,154 @@ def startup_delay_seconds(
     remaining = (stamp + timedelta(seconds=cadence) - moment).total_seconds()
     ceiling = max(0.0, _hours("MAX_INTERVAL_HOURS", _DEFAULT_MAX_HOURS)) * 3600.0
     return min(max(0.0, remaining), ceiling)
+
+
+def scheduler_state_path() -> Path:
+    """Per-channel wake clock on the outputs volume. This file is not in git."""
+    return outputs_root() / "scheduler" / "next_wake.json"
+
+
+def _format_utc(moment: datetime) -> str:
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _scheduler_channel_ids() -> list[str]:
+    """Active Pinterest channel ids. Empty when the account file cannot be read."""
+    try:
+        accounts = active_pinterest_accounts()
+    except Exception:  # noqa: BLE001 — a bad yaml must not erase the wake clock
+        log.info("Pinterest accounts unreadable; using the shared scheduler wake")
+        return []
+    found: list[str] = []
+    for account in accounts:
+        channel = str(account.account_id or "").strip()
+        if channel and channel not in found:
+            found.append(channel)
+    return found
+
+
+def _load_wake_state() -> dict[str, str]:
+    path = scheduler_state_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError):
+        log.info("Ignoring unreadable scheduler wake file %s", path)
+        return {}
+    channels = raw.get("channels") if isinstance(raw, dict) else None
+    if not isinstance(channels, dict):
+        return {}
+    loaded: dict[str, str] = {}
+    for key, value in channels.items():
+        if isinstance(key, str) and isinstance(value, str) and key.strip():
+            loaded[key] = value
+    return loaded
+
+
+def _write_wake_state(channels: dict[str, str]) -> None:
+    path = scheduler_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"channels": dict(sorted(channels.items()))}
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def load_channel_wake(channel: str) -> datetime | None:
+    """Saved ``next_wake_utc`` for ``channel``, or ``None`` when it is absent."""
+    return _parse_published_utc(_load_wake_state().get(channel))
+
+
+def save_channel_wake(channel: str, when: datetime) -> None:
+    """Remember ``when`` as this channel's next wake without dropping the others."""
+    state = _load_wake_state()
+    state[channel] = _format_utc(when)
+    _write_wake_state(state)
+
+
+def _save_wake_updates(state: dict[str, str], updates: dict[str, datetime]) -> None:
+    if not updates:
+        return
+    for channel, when in updates.items():
+        state[channel] = _format_utc(when)
+    _write_wake_state(state)
+
+
+def remember_next_wake(when: datetime) -> None:
+    """Point every active channel at the same following wake."""
+    channels = _scheduler_channel_ids() or ["scheduler"]
+    _save_wake_updates(_load_wake_state(), {channel: when for channel in channels})
+
+
+def resolve_startup_delay(
+    published_at: datetime | None,
+    *,
+    now: datetime | None = None,
+    rng: random.Random | None = None,
+) -> tuple[float, str]:
+    """Seconds to sleep before the first publish, and why.
+
+    ``reuse`` keeps a saved wake that is still ahead. ``missed`` means a
+    saved wake fell inside the 30-minute grace, so this process publishes
+    once and the following wake is stored first. ``due`` means the ledger
+    cadence has already elapsed and there is nothing saved to reuse.
+    ``draw`` is a fresh gap, the same rule as a process with no wake file.
+    """
+    moment = now or _utc_now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    channels = _scheduler_channel_ids() or ["scheduler"]
+    state = _load_wake_state()
+    grace = _WAKE_GRACE.total_seconds()
+    future: list[datetime] = []
+    missed: list[str] = []
+    fresh: list[str] = []
+    for channel in channels:
+        saved = _parse_published_utc(state.get(channel))
+        if saved is not None and saved > moment:
+            future.append(saved)
+            continue
+        if saved is not None and (moment - saved).total_seconds() <= grace:
+            missed.append(channel)
+            continue
+        fresh.append(channel)
+
+    updates: dict[str, datetime] = {}
+    drawn: datetime | None = None
+    if fresh and not missed:
+        delay = startup_delay_seconds(published_at, now=moment, rng=rng)
+        if delay <= 0:
+            missed.extend(fresh)
+            fresh = []
+        else:
+            drawn = moment + timedelta(seconds=delay)
+            for channel in fresh:
+                updates[channel] = drawn
+            future.append(drawn)
+    if missed:
+        # Store the next wake before publishing. A second start then waits
+        # instead of posting this slot again.
+        had_saved_wake = any(
+            _parse_published_utc(state.get(channel)) is not None for channel in missed
+        )
+        follow = moment + timedelta(seconds=interval_seconds(rng))
+        for channel in missed:
+            updates[channel] = follow
+        _save_wake_updates(state, updates)
+        return 0.0, "missed" if had_saved_wake else "due"
+    if updates:
+        _save_wake_updates(state, updates)
+    if not future:
+        delay = startup_delay_seconds(published_at, now=moment, rng=rng)
+        wake = moment + timedelta(seconds=max(0.0, delay))
+        _save_wake_updates(state, {channel: wake for channel in channels})
+        return max(0.0, delay), "draw"
+    soonest = min(future)
+    reason = "draw" if drawn is not None and soonest == drawn else "reuse"
+    return max(0.0, (soonest - moment).total_seconds()), reason
 
 
 def _pins_per_day() -> int:
@@ -355,12 +511,19 @@ def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
         os.getenv("MAX_INTERVAL_HOURS", "6"),
         dry_run,
     )
-    # Resume from the last pin. An empty or unreachable ledger keeps the
-    # random startup delay so a restart cannot publish early by accident.
+    # Resume from the saved wake when it is still ahead. Otherwise the last
+    # pin, or a random gap when the ledger is empty or unreachable.
     if not once and not dry_run:
         published_at = newest_pin_published()
-        pause = startup_delay_seconds(published_at)
-        if published_at is None:
+        pause, reason = resolve_startup_delay(published_at)
+        if reason == "reuse":
+            log.info("Reusing saved wake; initial delay %.0f minutes", pause / 60.0)
+        elif reason == "missed":
+            log.info(
+                "Saved wake was missed within %.0f minutes; publishing that wake once",
+                _WAKE_GRACE.total_seconds() / 60.0,
+            )
+        elif published_at is None:
             log.info(
                 "Pin ledger empty or unreachable; initial delay %.0f minutes",
                 pause / 60.0,
@@ -384,6 +547,8 @@ def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
         if once or stop["flag"]:
             return
         pause = interval_seconds()
+        if not dry_run:
+            remember_next_wake(_utc_now() + timedelta(seconds=pause))
         log.info("Next drip in %.0f minutes", pause / 60.0)
         _sleep_until(pause, stop)
 
