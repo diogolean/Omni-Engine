@@ -108,7 +108,7 @@ def test_reel_stills_through_the_main_entry(tmp_path: Path, monkeypatch) -> None
             logs.append(record.getMessage())
 
     handler = _Handler()
-    climb_log = logging.getLogger("modules.reel_artefact.climb")
+    climb_log = logging.getLogger("production.formats.economic_reel.artefact.climb")
     climb_log.addHandler(handler)
     climb_log.setLevel(logging.INFO)
     import modules.reel_qa.relevance as relevance

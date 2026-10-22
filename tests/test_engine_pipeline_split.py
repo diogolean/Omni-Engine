@@ -7,7 +7,16 @@ import inspect
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-ENGINE = ROOT / "engine"
+# The pipeline implementation. channel_context, page_profile, and the agentic
+# package were not part of the engine/ split this test locks.
+ENGINE = ROOT / "production" / "pipeline"
+_NOT_ENGINE = {"channel_context.py", "page_profile.py", "post_type_registry.py"}
+
+
+def _engine_sources() -> list[Path]:
+    files = [path for path in ENGINE.glob("*.py") if path.name not in _NOT_ENGINE]
+    files.extend((ENGINE / "stages").rglob("*.py"))
+    return files
 
 # Parameter names of the public functions before the split.
 ENTRY_PARAMS = {
@@ -171,7 +180,7 @@ def _params(fn: object) -> tuple[list[str], list[str]]:
 
 def test_engine_files_stay_under_a_thousand_lines() -> None:
     offenders = []
-    for path in ENGINE.rglob("*.py"):
+    for path in _engine_sources():
         count = len(path.read_text(encoding="utf-8").splitlines())
         if count > 1000:
             offenders.append(f"{path.relative_to(ROOT)}:{count}")
@@ -221,7 +230,7 @@ def test_cli_destinations_are_unchanged() -> None:
 
 
 def test_split_modules_still_name_the_same_env_vars() -> None:
-    blob = "\n".join(path.read_text(encoding="utf-8") for path in ENGINE.rglob("*.py"))
+    blob = "\n".join(path.read_text(encoding="utf-8") for path in _engine_sources())
     missing = sorted(name for name in ENV_NAMES if name not in blob)
     assert missing == []
 
