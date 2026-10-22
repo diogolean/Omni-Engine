@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 import threading
 
-from agents.orchestrator.agents.base import BaseAgent
-from agents.orchestrator.llm import complete_json
-from agents.orchestrator.state import PipelineState
-from agents.orchestrator.starters import (
+from production.pipeline.agentic.agents.base import BaseAgent
+from production.pipeline.agentic.llm import complete_json
+from production.pipeline.agentic.state import PipelineState
+from production.pipeline.agentic.starters import (
     forbidden_opener_rules_block,
     has_forbidden_opener,
     iter_starter_styles,

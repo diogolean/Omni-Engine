@@ -28,7 +28,7 @@ Optional heavy dependencies (moviepy, OpenCV, google-genai) are skipped with `py
 Read `docs/architecture/REPO_LAYOUT.md` first.
 
 - Root: entry points, config, containers, CI, docs, and the packages on that allowlist.
-- New pipeline steps: `engine/`, or the package that already owns the concern (`production/qa/`, `production/providers/`, `production/media/`, `production/writers/`, `distribution/publishers/`, `agents/media/`). Pin production is `production/formats/pins/`. Cost is `production/cost/`.
+- New pipeline steps: `production/pipeline/`, or the package that already owns the concern (`production/qa/`, `production/providers/`, `production/media/`, `production/writers/`, `production/formats/`, `production/library/`, `distribution/publishers/`, `shared/storage/`). `engine/` is a shim. Pin production is `production/formats/pins/`. Cost is `production/cost/`. Root `config.py` is the settings facade.
 - Tests: `tests/` or `channels_config/<channel>/tests/`. Name the file for the behavior, not a round number.
 - Scratch, logs, renders, and review dumps: `outputs/<channel>/` via `temp_path` and `review_path`.
 

@@ -1,9 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Compatibility shim. The implementation is :mod:`shared.retry`."""
+"""Compatibility shim. The implementation is production.formats.economic_reel.artefact.net_retry."""
 from __future__ import annotations
 
 import sys
 
-from shared import retry as _retry
+if __name__ == "__main__":
+    import runpy
 
-sys.modules[__name__] = _retry
+    runpy.run_module("production.formats.economic_reel.artefact.net_retry", run_name="__main__")
+else:
+    from production.formats.economic_reel.artefact import net_retry as _impl
+
+    sys.modules[__name__] = _impl

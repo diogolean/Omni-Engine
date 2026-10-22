@@ -37,7 +37,7 @@ PACK = (
     "regret_structure_v1",
     "belonging_structure_v1",
 )
-STORE = Path("core/economic_reel_lofi/store")
+STORE = Path("production/formats/lofi/store")
 
 scripts: list[dict] = []
 for name in PACK:

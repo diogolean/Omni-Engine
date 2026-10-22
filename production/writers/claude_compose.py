@@ -8,7 +8,7 @@ import os
 import re
 from typing import Any
 
-from core.economic_reel_lofi import config as lofi_cfg
+from production.formats.lofi import config as lofi_cfg
 from production.writers.claude_polish import (
     POLISH_MODEL_DEFAULT,
     _POLL_MAX_S,

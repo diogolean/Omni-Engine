@@ -70,7 +70,7 @@ def refine_prompt(
     if found:
         locked = found.group(1).strip()
     try:
-        from modules.reel_grounding.brief import build_episode_brief, visual_for_beat
+        from production.formats.economic_reel.grounding.brief import build_episode_brief, visual_for_beat
 
         brief = build_episode_brief(episode_subject or spoken, spoken)
         visual = visual_for_beat(brief, spoken, locked_object=locked)

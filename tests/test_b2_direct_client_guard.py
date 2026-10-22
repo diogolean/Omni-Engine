@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Fail CI when a non-test module builds a Backblaze client on its own.
 
-``agents/media/b2_client.py`` is the only place that may construct a boto3
-S3 client for B2 or call b2sdk. RunPod's S3 endpoint is a different service
-and stays allowed.
+``shared/storage/b2_client.py`` is the only place that may construct a boto3
+S3 client for B2 or call b2sdk. ``agents/media/b2_client.py`` is the shim.
+RunPod's S3 endpoint is a different service and stays allowed.
 """
 
 from __future__ import annotations
@@ -40,11 +40,16 @@ def _is_test_path(path: Path) -> bool:
 
 
 def _under_media_client(path: Path) -> bool:
+    """The budgeted B2 client, at its old shim path or its shared.storage home."""
     try:
         relative = path.relative_to(_REPO)
     except ValueError:
         relative = path
-    return relative.parts[:2] == ("agents", "media")
+    posix = relative.as_posix()
+    return posix in {
+        "agents/media/b2_client.py",
+        "shared/storage/b2_client.py",
+    } or relative.parts[:2] == ("agents", "media")
 
 
 def _is_s3_factory(node: ast.Call) -> bool:

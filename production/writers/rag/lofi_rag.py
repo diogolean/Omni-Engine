@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi import lofi_collections as store
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi import lofi_collections as store
 
 _RAG_LOG: list[dict[str, Any]] = []
 

@@ -26,7 +26,7 @@ out = {
     "script": script,
 }
 dest = Path(
-    "core/economic_reel_lofi/store/locked_script_communication_v2_assemble.json"
+    "production/formats/lofi/store/locked_script_communication_v2_assemble.json"
 )
 dest.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 print(f"wrote {dest} accepts={out['manual_accept_scenes']}")

@@ -1,9 +1,13 @@
-# -*- coding: utf-8 -*-
-"""CLI entry. Flags are built in cli_parser; the run sequence is cli_run."""
+"""Compatibility shim. The implementation is production.pipeline.cli."""
 from __future__ import annotations
 
-from engine.cli_parser import _together_cli_image_model, parse_cli_args
-from engine.cli_run import run_parsed_cli
+import sys
 
-def cli() -> None:
-    run_parsed_cli(parse_cli_args())
+if __name__ == "__main__":
+    import runpy
+
+    runpy.run_module("production.pipeline.cli", run_name="__main__")
+else:
+    from production.pipeline import cli as _impl
+
+    sys.modules[__name__] = _impl

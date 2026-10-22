@@ -35,7 +35,7 @@ def _threshold() -> float:
         return float(ancient_mystery_quality_threshold(QUALITY_THRESHOLD))
     except Exception:
         try:
-            from agents.orchestrator.criteria import QUALITY_THRESHOLD as _AK_T
+            from production.pipeline.agentic.criteria import QUALITY_THRESHOLD as _AK_T
 
             return float(_AK_T)
         except Exception:
@@ -44,7 +44,7 @@ def _threshold() -> float:
 
 def _shift_prompt(prompt: str, attempt: int) -> str:
     try:
-        from agents.orchestrator.criteria import CAMERA_REWRITE_CYCLE
+        from production.pipeline.agentic.criteria import CAMERA_REWRITE_CYCLE
 
         cam = CAMERA_REWRITE_CYCLE[int(attempt) % len(CAMERA_REWRITE_CYCLE)]
     except Exception:

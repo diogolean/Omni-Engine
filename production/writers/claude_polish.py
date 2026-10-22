@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.economic_reel_lofi import config as lofi_cfg
+from production.formats.lofi import config as lofi_cfg
 
 _LOG = logging.getLogger(__name__)
 

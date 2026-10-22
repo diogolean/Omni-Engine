@@ -287,7 +287,7 @@ def _scene_for(
     site = extract_site(text, anchors)
     entity_bit = (", ".join(entities[:4])) if entities else ""
     try:
-        from modules.reel_grounding.prompt import ground_image_prompt
+        from production.formats.economic_reel.grounding.prompt import ground_image_prompt
 
         prompt = ground_image_prompt(
             topic=anchors or text,

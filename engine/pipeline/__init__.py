@@ -1,6 +1,10 @@
-# -*- coding: utf-8 -*-
-"""Pipeline stages split out of the variant worker.
+"""Compatibility shim. This package lives in production.pipeline.stages."""
+from __future__ import annotations
 
-Importing this package does not load the media stack. Import
-engine.orchestrator or a stage module for the entrypoints.
-"""
+import importlib
+
+_impl = importlib.import_module("production.pipeline.stages")
+
+
+def __getattr__(name: str):
+    return getattr(_impl, name)

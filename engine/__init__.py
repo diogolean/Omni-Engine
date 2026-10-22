@@ -1,6 +1,10 @@
-# -*- coding: utf-8 -*-
-"""Pipeline steps extracted from main.py.
+"""Compatibility shim. This package lives in production.pipeline."""
+from __future__ import annotations
 
-Import concrete modules (`engine.cli`, `engine.orchestrator`). Importing
-this package does not load the media stack.
-"""
+import importlib
+
+_impl = importlib.import_module("production.pipeline")
+
+
+def __getattr__(name: str):
+    return getattr(_impl, name)

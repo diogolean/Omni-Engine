@@ -528,7 +528,7 @@ def generate_scene_prompts(
             _next_spoken = (
                 chunks[_chunk_i + 1].text if _chunk_i + 1 < len(chunks) else ""
             )
-            from modules.reel_grounding.prompt import assemble_beat
+            from production.formats.economic_reel.grounding.prompt import assemble_beat
 
             _plan = assemble_beat(
                 topic=str(dna.get("topic") or ""),

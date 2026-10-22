@@ -57,8 +57,8 @@ def main() -> None:
         )
     )
     write_job(
-        "core/economic_reel_lofi/store/locked_script_loneliness_v1.json",
-        "core/economic_reel_lofi/store/locked_script_loneliness_v1_assemble.json",
+        "production/formats/lofi/store/locked_script_loneliness_v1.json",
+        "production/formats/lofi/store/locked_script_loneliness_v1_assemble.json",
         "outputs/wonder_feed/assets/lofi_run_20260823_060758_02",
         [f"outputs/wonder_feed/assets/lofi_run_20260823_060758_02/scene_{i:02d}.png" for i in range(1, 10)],
         [8],
@@ -75,8 +75,8 @@ def main() -> None:
     for i in range(1, 10):
         images.append(f"{work}/_regen_scene_05" if i == 5 else f"{work}/scene_{i:02d}.png")
     write_job(
-        "core/economic_reel_lofi/store/locked_script_loss_v1.json",
-        "core/economic_reel_lofi/store/locked_script_loss_v1_reuse.json",
+        "production/formats/lofi/store/locked_script_loss_v1.json",
+        "production/formats/lofi/store/locked_script_loss_v1_reuse.json",
         work,
         images,
         [],
@@ -107,8 +107,8 @@ def main() -> None:
         "outputs/wonder_feed/assets/lofi_run_20260823_044616_03/_regen_scene_09",
     ]
     write_job(
-        "core/economic_reel_lofi/store/locked_script_forgiveness_v1.json",
-        "core/economic_reel_lofi/store/locked_script_forgiveness_v1_reuse.json",
+        "production/formats/lofi/store/locked_script_forgiveness_v1.json",
+        "production/formats/lofi/store/locked_script_forgiveness_v1_reuse.json",
         "outputs/wonder_feed/assets/lofi_run_20260823_044616_03",
         images,
         [2, 6],

@@ -455,6 +455,131 @@ def font_dirs() -> list[Path]:
     return dirs
 
 
+def resolve_page_layout(
+    engine_root: Path,
+    *,
+    page: str | None = None,
+    rebind: bool = False,
+) -> dict[str, object]:
+    """Page paths, output dirs, and YouTube credential defaults for one page.
+
+    Called by root ``config`` after ``.env`` loads. Importing ``shared.paths``
+    does not create directories. ``rebind`` matches ``bind_active_page``:
+    it writes ``ACTIVE_PAGE`` and also creates the clips directory.
+    """
+    from shared.env import resolve_path
+
+    if page is not None:
+        slug = (page or "").strip().lower() or "anna_protocol"
+        os.environ["ACTIVE_PAGE"] = slug
+    active_page = os.getenv("ACTIVE_PAGE", "anna_protocol")
+    channels_root = engine_root / "channels_config"
+    legacy_root = engine_root / "pages_config"
+    pages_root = channels_root if channels_root.is_dir() else legacy_root
+    active_dir = (
+        (channels_root / active_page)
+        if (channels_root / active_page).is_dir()
+        else (legacy_root / active_page)
+    )
+    persona = active_dir / "persona_dna.py"
+    master = active_dir / "master_dna.json"
+    # Historical fallback directory name is ``agents.media`` (a dot), not agents/media.
+    if not master.is_file() and active_page == "anna_protocol":
+        master = engine_root / "agents.media" / "master_dna.json"
+    if not persona.is_file() and active_page == "anna_protocol":
+        persona = engine_root / "agents.media" / "persona_dna.py"
+
+    page_ref_avatar = active_dir / "avatar_reference" / "avatar.png"
+    reference_avatar_windows = resolve_path(
+        os.getenv("REFERENCE_AVATAR_PATH"),
+        drive_root()
+        / "@_Content 2026"
+        / "The Holistic Legacy - Anna's Protocol"
+        / "Anna's Automated Image Posts Engine"
+        / "avatar_reference"
+        / "avatar.png",
+    )
+    ref_avatar_default = (
+        page_ref_avatar if page_ref_avatar.parent.is_dir() else reference_avatar_windows
+    )
+    reference_image = resolve_path(os.getenv("REFERENCE_IMAGE_PATH"), ref_avatar_default)
+    page_digital_products = active_dir / "product_reference"
+    default_digital_products = engine_root / "product_reference" / "Digital Products"
+    digital_products = resolve_path(
+        os.getenv("DIGITAL_PRODUCTS_PATH"),
+        page_digital_products if page_digital_products.is_dir() else default_digital_products,
+    )
+    outputs = outputs_root()
+    page_outputs = page_outputs_dir(active_page)
+    assets_dir = page_assets_dir(active_page)
+    library_dir = page_outputs / "library"
+    store_dir = channel_store_dir(active_page)
+    sample_v3 = engine_root / "sample_bulk_posts_import_3.xlsx"
+    sample_legacy = engine_root / "sample_bulk_posts_import.xlsx"
+    bulk_template = sample_v3 if sample_v3.is_file() else sample_legacy
+    planner = page_outputs / "automated_bulk_posts_import.xlsx"
+    legacy_planner = engine_root / "automated_bulk_posts_import.xlsx"
+
+    outputs.mkdir(parents=True, exist_ok=True)
+    page_outputs.mkdir(parents=True, exist_ok=True)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    library_dir.mkdir(parents=True, exist_ok=True)
+    if rebind:
+        (page_outputs / "clips").mkdir(parents=True, exist_ok=True)
+    elif legacy_planner.is_file() and not planner.exists():
+        import shutil
+
+        try:
+            shutil.copy2(legacy_planner, planner)
+        except OSError:
+            _LOG.debug("Legacy planner copy skipped.", exc_info=True)
+
+    return {
+        "ACTIVE_PAGE": active_page,
+        "CHANNELS_CONFIG_ROOT": channels_root,
+        "_LEGACY_PAGES_CONFIG_ROOT": legacy_root,
+        "PAGES_CONFIG_ROOT": pages_root,
+        "ACTIVE_PAGE_DIR": active_dir,
+        "PERSONA_DNA_PATH": persona,
+        "MASTER_DNA_PATH": master,
+        "_page_ref_avatar": page_ref_avatar,
+        "_REFERENCE_AVATAR_WINDOWS": reference_avatar_windows,
+        "_ref_avatar_default": ref_avatar_default,
+        "REFERENCE_IMAGE_PATH": reference_image,
+        "_page_digital_products": page_digital_products,
+        "_DEFAULT_DIGITAL_PRODUCTS": default_digital_products,
+        "DIGITAL_PRODUCTS_PATH": digital_products,
+        "PDF_CHUNK_CHAR_LIMIT": int(os.getenv("PDF_CHUNK_CHAR_LIMIT", "48000")),
+        "OUTPUTS_DIR": outputs,
+        "OUTPUT_PATH": outputs,
+        "FACTORY_ASSETS_DIR": assets_root(),
+        "ASSETS_PATH": assets_root(),
+        "PAGE_OUTPUTS_DIR": page_outputs,
+        "ASSETS_DIR": assets_dir,
+        "LIBRARY_DIR": library_dir,
+        "CHANNEL_STORE_DIR": store_dir,
+        "CONTENT_LIBRARY_PATH": store_dir / "content_library.json",
+        "SESSION_HOOKS_CACHE_PATH": store_dir / "session_hooks_cache.json",
+        "_SAMPLE_BULK_V3": sample_v3,
+        "_SAMPLE_BULK_LEGACY": sample_legacy,
+        "BULK_POSTS_TEMPLATE_XLSX": bulk_template,
+        "POST_PLANNER_XLSX": planner,
+        "_LEGACY_PLANNER_XLSX": legacy_planner,
+        "YOUTUBE_CLIENT_SECRETS": os.getenv(
+            "YOUTUBE_CLIENT_SECRETS",
+            str(engine_root / "client_secret.json"),
+        ),
+        "YOUTUBE_TOKEN_DIR": os.getenv(
+            "YOUTUBE_TOKEN_DIR",
+            str(engine_root / "credentials" / "tokens"),
+        ),
+        "YOUTUBE_PENDING_QUEUE_PATH": os.getenv(
+            "YOUTUBE_PENDING_QUEUE_PATH",
+            str(engine_root / "credentials" / "pending_youtube_uploads.json"),
+        ),
+    }
+
+
 def find_font(*names: str) -> Path | None:
     """First existing font file among ``names``, searched across ``font_dirs()``.
 

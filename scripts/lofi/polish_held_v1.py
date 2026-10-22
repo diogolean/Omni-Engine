@@ -29,7 +29,7 @@ from core.economic_reel_lofi.setting_archetypes import (
     classify_setting_archetype,
 )
 
-STORE = Path("core/economic_reel_lofi/store")
+STORE = Path("production/formats/lofi/store")
 PACK = (
     "forgiveness_structure_v1",
     "loss_structure_v1",

@@ -1,12 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Mutable bindings for one variant-worker run."""
+"""Compatibility shim. The implementation is production.pipeline.stages.state."""
 from __future__ import annotations
 
+import sys
 
-class VariantState:
-    """Names the worker used to keep as locals.
+if __name__ == "__main__":
+    import runpy
 
-    An attribute exists only after a stage assigns it. Reading a
-    missing attribute fails the same way an unbound local did.
-    ``getattr(state, name, default)`` replaces ``locals().get``.
-    """
+    runpy.run_module("production.pipeline.stages.state", run_name="__main__")
+else:
+    from production.pipeline.stages import state as _impl
+
+    sys.modules[__name__] = _impl

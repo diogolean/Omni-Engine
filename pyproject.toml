@@ -61,7 +61,7 @@ ignore = ["E501", "E402", "E731", "E741"]
 "tools/**" = ["F401", "F841", "I001"]
 "utils/**" = ["F401", "F841", "I001"]
 "main.py" = ["F401", "F841", "I001"]
-"config.py" = ["F401", "F841", "I001"]
+"config.py" = ["F401", "F841", "I001", "F821"]
 "channel_loader.py" = ["F401", "F841", "I001"]
 # Moved out of agents/posting with the same legacy lint debt. New distribution
 # modules (base, registry, drip, the worker, accounts) are not listed here.
@@ -82,6 +82,16 @@ ignore = ["E501", "E402", "E731", "E741"]
 "production/media/**" = ["F401", "F841", "I001"]
 "production/qa/**" = ["F401", "F841", "I001"]
 "production/writers/**" = ["F401", "F841", "I001"]
+# M8 part 3. Same legacy lint debt as the packages these files left.
+"production/pipeline/**" = ["F401", "F841", "I001"]
+"production/library/**" = ["F401", "F841", "I001"]
+"production/formats/economic_reel/**" = ["F401", "F841", "I001"]
+"production/formats/lofi/**" = ["F401", "F841", "I001"]
+"production/formats/wealth/**" = ["F401", "F841", "I001"]
+"production/formats/reference/**" = ["F401", "F841", "I001"]
+"production/formats/quotes/**" = ["F401", "F841", "I001"]
+"production/formats/mei/**" = ["F401", "F841", "I001"]
+"shared/storage/**" = ["F401", "F841", "I001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts", "production"]
@@ -94,8 +104,8 @@ known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_c
 # shared stand-ins that remain: utils.pipeline_paths, utils.process_tools,
 # modules.durable_store, modules.distribution_contract, modules.memory
 # animation: core.animator
-# production: production (M8 pins, providers, cost, qa, media, writers),
-#   plus today's stand-ins engine, modules, agents.orchestrator, core
+# production: production (M8), plus shim trees that still import as
+#   engine, modules, agents.orchestrator, core
 # distribution: distribution, accounts, and the agents.posting shims
 # products.aiwake: channels_config.aiwake
 # channels: the other channels_config packages

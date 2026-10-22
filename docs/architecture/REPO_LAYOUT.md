@@ -20,7 +20,7 @@ Tracked at the repository root:
 
 `Fonts/` stays at the root because page configs address fonts as `Fonts/<family>/...` from the repo root. Critic profiles live only in `production/qa/judges/profiles/`. `visual_critic.py` loads `profiles/<name>.json` from that folder. `quality/VisualQA_Agent/` is a shim.
 
-`config.py` and `channel_loader.py` stay beside `main.py`. `config/` is a data directory (YAML only, not a Python package), and other packages have their own `config.py` (`pinterest_engine`, `economic_reel_lofi`, `VisualQA_Agent`). `import config` is the process settings module. `engine/runtime.py` imports it, and `from channel_loader import load_page_context`, only after `ACTIVE_PAGE` is set. `config.py` uses `Path(__file__).parent` as the repo root to find `.env`. Moving either file would rename that import across the factory and move the `.env` lookup.
+`config.py` and `channel_loader.py` stay beside `main.py` as facades. `config/` is a data directory (YAML only, not a Python package), and other packages have their own `config.py` (`production/formats/pins`, `production/formats/lofi`, `production/qa/judges/visual_critic`). `import config` is the process settings module. It loads `.env` with `override=True` (preserving a preset `ACTIVE_PAGE`) and re-exports `shared.env`, `shared.paths.resolve_page_layout`, `production.providers.settings`, and `production.cost.pricing`. `production/pipeline/runtime.py` imports it, and `from channel_loader import load_page_context`, only after `ACTIVE_PAGE` is set. `channel_loader.py` is a shim for `production.pipeline.channel_context`. `ENGINE_ROOT` is the repository root.
 
 The three requirement files stay split. `requirements.txt` is the full local install (`mediapipe`, `pyautogui`). `requirements-docker.txt` is the arm64 image and drops those two (no aarch64 wheel, and no desktop on the VM). `requirements-ci.txt` is the pull-request subset so CI does not install the media stack. One combined file would either put desktop packages in the Oracle image or drop pins the VM needs.
 
@@ -33,24 +33,27 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Tree | Home | Notes |
 |---|---|---|
 | Publishers | `distribution/publishers/` | API (`pinterest`, `youtube`, `pinterest_oauth`), browser (`facebook_scheduler`), and Post Planner export. Error screenshots go to `outputs/facebook_scheduler/screenshots/`, not into the package. Some old imports under `agents/posting/` are still shims. |
-| B2, Drive, content source | `agents/media/` | Do not move. The B2 client guard forbids direct B2 clients outside this package. |
+| B2, Drive, imgbb | `shared/storage/` | The only boto3 B2 client is `shared/storage/b2_client.py`. `agents/media/b2_client.py` is a shim. The direct-client guard allows that shim and the storage module, and still skips the rest of `agents/media/`. |
 | Puppet / Aiwake animator | `core/animator/` | Code. Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
 | Visual QA critic | `production/qa/judges/visual_critic/` | Code and the DNA JSON. Profiles are `production/qa/judges/profiles/`. `quality/VisualQA_Agent/` is a shim. |
 | Cursor rules | `.cursor/rules/` | The whole directory is versioned, including `aiwake-copy.mdc` and `video-pipeline.mdc`. `.cursor/*` other than `rules/` is gitignored. |
 | Channel store | `channels_config/<channel>/store/` | Runtime state stays gitignored and dockerignored, and only lives in the owner's Drive backup. `.dockerignore` excludes `channels_config/*/store/` and re-includes `channels_config/aiwake/store/portfolio/` so those tracked showcase snapshots stay in the image. `store/.gitkeep` is a git placeholder. The Oracle compose file mounts Ancient Knowledge's store over that path. Do not rename it. |
-| Lofi store | `core/economic_reel_lofi/store/` | Files already tracked in this directory stay in git. `aphorism_recent.json` stays gitignored. |
+| Lofi store | `production/formats/lofi/store/` | Files already tracked in this directory stay in git. `aphorism_recent.json` stays gitignored, including the old `core/economic_reel_lofi/store/` path. |
 | Committed artefact photos | `channels_config/<channel>/artefact_cache/<entity>/` | Photographs shipped with the repo. The runtime cache under `store/artefact_cache/` stays gitignored. |
 | Channel operator env | `channels_config/<id>/.env.<id>` on the host, seen in the container as `channels_env/<id>/.env.<id>` | The compose file mounts `./channels_config` at `/opt/omni-engine/channels_env`. Do not change that mount. |
 | Pinterest account map | `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml` | Do not rename. Article cache for Ancient Knowledge is `outputs/ancient_knowledge/article_cache/` and is gitignored with the rest of `outputs/`. |
 | Worker entry | `python -m distribution.workers --role engine` and `--role scheduler` | The implementation is `distribution/workers/runtime.py`. Compose, the Dockerfile `CMD`, and the VM use that module. Flags stay `--role`, `--once`, `--dry-run`, `--account`, and `--pins`. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
 | Scheduling | `distribution/scheduling/` | Pinterest drip, scheduler, pin ledger, inventory, library source, and the Facebook queue. Pin copy, photos, articles, and image generation live in `production/formats/pins/`. |
 | Account registry | `accounts/` | `brandings.py`, `tokens.py`, `pinterest.py`. Not `distribution/accounts/` and not a rename of `channels_config/`. |
-| Pin production | `production/formats/pins/` | Copy, articles, photo-vs-graphic check, Flux stills, the card renderer, and the pin channel config module. `agents/posting/pinterest_engine/` keeps shims for those names. Root `config.py` is not split. |
+| Pin production | `production/formats/pins/` | Copy, articles, photo-vs-graphic check, Flux stills, the card renderer, and the pin channel config module. `agents/posting/pinterest_engine/` keeps shims for those names. |
 | Providers | `production/providers/` | `llm/` (cheap stack, router, Gemini helpers, `text_model`), `image/` (adapters, prompt compilers, free photos, remote GPU, Wan), `tts/`, `vision/`, `avatar/` (`models_avatar` is a shim). The default text model is the cheap stack. Claude is opt-in. |
 | Cost | `production/cost/` | `spend_ledger` (owner of `REEL_REEL_BUDGET_USD`), `cost_tracker`, `google_guardrail`, `gemini_usage`, `run_ledger`. The old `core` and `utils` paths are shims. |
 | Media | `production/media/` | Brand compose, still and reel ffmpeg render, scene pacing, audio chunking. |
 | Reel QA | `production/qa/` | Reel gate (`modules/reel_qa` is a shim) and `judges/` (visual eval, writer gate, visual critic). |
 | Writers | `production/writers/` | Caption and script writers, plus `rag/`. `agents/writer` and `agents/rag` are shims. |
+| Pipeline | `production/pipeline/` | Stages are `production/pipeline/stages/`. The agentic package is `production/pipeline/agentic/`. `engine/` and `agents/orchestrator/` and `channel_loader.py` are shims. `main.py` stays the CLI. |
+| Library | `production/library/` | `content_library`, `durable_library`, `content_source`, `asset_library`. The old `agents.media` and `modules.asset_library` paths are shims. |
+| Formats | `production/formats/` | `pins/`, `economic_reel/` (artefact, grounding, hook, shot planner), `lofi/`, `wealth/` (including `fingerprint_engine`), `reference/`, `quotes/`, `mei/`. Old packages are shims. |
 
 `shared/` is the home for env getters, paths, logging, ffmpeg, image MIME, network retry, the durable channel store, the content contract, and the memory client (ADR 0008 M2 and M3). `utils/pipeline_paths.py` is `shared.paths`. `utils/process_tools.py` is `shared.ffmpeg`. `modules/reel_artefact/net_retry.py` is `shared.retry`. `modules/durable_store.py` is `shared.store`. `modules/distribution_contract.py` is `shared.contracts`. `modules/memory/` is `shared.memory`. New code imports `shared`. The old modules stay as shims so existing imports and monkeypatches keep one object.
 
@@ -78,22 +81,22 @@ These already have a home. Do not invent a second one, and do not add empty plac
 
 ## Pipeline code extracted from `main.py`
 
-`main.py` is the CLI process: UTF-8 setup, Drive-text repair, `--page` pre-parse, `.env`, then a call to `cli()`. The steps live in `engine/`:
+`main.py` is the CLI process: UTF-8 setup, Drive-text repair, `--page` pre-parse, `.env`, then a call to `cli()`. The steps live in `production/pipeline/`. `engine/` is a shim onto that package.
 
 | Module | Responsibility |
 |---|---|
-| `engine/bootstrap.py` | UTF-8, source repair, page pre-parse |
-| `engine/geo_anchors.py` | `_GEO_ANCHORS`. Import the table from this module. |
-| `engine/runtime.py` | Imports that must run after `ACTIVE_PAGE` is set, then the page rebind |
-| `engine/acts.py` | Post-type predicates, act descriptors, topic entities |
-| `engine/voice.py` | Script trim, TTS stitch, voice track |
-| `engine/stills.py` | Still cache, parallel act jobs |
-| `engine/reporting.py` | Cost and run summaries |
-| `engine/orchestrator.py` | Re-exports `produce`, the variant worker, agentic stills, and `--test-images` |
-| `engine/pipeline/` | Stage modules behind that re-export. `variant.py` sequences them. See [main-module-map.md](main-module-map.md) |
-| `engine/cli.py` | `cli()`. Flags are in `engine/cli_parser.py`. The run sequence is `engine/cli_run.py` |
-| `engine/log.py` | Logger proxy bound to `main`'s logger |
+| `production/pipeline/bootstrap.py` | UTF-8, source repair, page pre-parse |
+| `production/pipeline/geo_anchors.py` | `_GEO_ANCHORS`. Import the table from this module. |
+| `production/pipeline/runtime.py` | Imports that must run after `ACTIVE_PAGE` is set, then the page rebind |
+| `production/pipeline/acts.py` | Post-type predicates, act descriptors, topic entities |
+| `production/pipeline/voice.py` | Script trim, TTS stitch, voice track |
+| `production/pipeline/stills.py` | Still cache, parallel act jobs |
+| `production/pipeline/reporting.py` | Cost and run summaries |
+| `production/pipeline/orchestrator.py` | Re-exports `produce`, the variant worker, agentic stills, and `--test-images` |
+| `production/pipeline/stages/` | Stage modules behind that re-export. `variant.py` sequences them. See [main-module-map.md](main-module-map.md) |
+| `production/pipeline/cli.py` | `cli()`. Flags are in `cli_parser.py`. The run sequence is `cli_run.py` |
+| `production/pipeline/log.py` | Logger proxy bound to `main`'s logger |
 
-`from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged.
+`from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged. `import engine.cli` still loads the same module object as `production.pipeline.cli`.
 
-Reel QA lives in `production/qa/` (`modules/reel_qa/` is a shim). Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Pin production lives in `production/formats/pins/`. Providers, cost, media, and writers live under `production/` as well. `omni/` is gone. Some old module paths are still shims onto those packages. `engine/` does not grow a second copy. Root `config.py` stays until the last M8 pull request. Pipeline and the content library stay where they are until that pull request.
+Reel QA lives in `production/qa/` (`modules/reel_qa/` is a shim). Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Formats, the pipeline, the content library, providers, cost, media, and writers live under `production/`. B2, Drive, and imgbb live in `shared/storage/`. `omni/` is gone. Old import paths stay as shims until M14. Do not add a second copy under `engine/`, `core/`, or `modules/`.

@@ -17,7 +17,7 @@ from core.economic_reel_lofi.setting_archetypes import (
     score_composition_types,
 )
 
-path = Path("core/economic_reel_lofi/store/locked_script_communication_v2.json")
+path = Path("production/formats/lofi/store/locked_script_communication_v2.json")
 data = json.loads(path.read_text(encoding="utf-8"))
 for row in data["lines"]:
     row["setting_archetype"] = classify_setting_archetype(

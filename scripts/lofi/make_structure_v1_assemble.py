@@ -11,7 +11,7 @@ if str(_REORG_ROOT) not in _reorg_sys.path:
 import json
 from pathlib import Path
 
-STORE = Path("core/economic_reel_lofi/store")
+STORE = Path("production/formats/lofi/store")
 
 PACK = {
     "forgiveness": "locked_script_forgiveness_v1_assemble.json",

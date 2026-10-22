@@ -43,7 +43,7 @@ def main() -> None:
     _report_beats("gold B", list(_GOLD_CADENCE_BEATS_B), 3)
     for name in ("loss", "loneliness", "forgiveness"):
         data = json.loads(
-            Path(f"core/economic_reel_lofi/store/locked_script_{name}_v1.json").read_text(
+            Path(f"production/formats/lofi/store/locked_script_{name}_v1.json").read_text(
                 encoding="utf-8"
             )
         )

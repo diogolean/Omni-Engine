@@ -1,15 +1,10 @@
-# -*- coding: utf-8 -*-
-"""Channel contracts — engines depend on this package, never on a page JSON schema."""
+"""Compatibility shim. This package lives in production.pipeline.interfaces."""
 from __future__ import annotations
 
-from core.interfaces.channel import BaseChannelConfig, VisualRules
-from core.interfaces.factory import ChannelFactory, ISOLATED_CHANNEL_IDS
-from core.interfaces.legacy_adapter import LegacyChannelAdapter
+import importlib
 
-__all__ = [
-    "BaseChannelConfig",
-    "VisualRules",
-    "ChannelFactory",
-    "ISOLATED_CHANNEL_IDS",
-    "LegacyChannelAdapter",
-]
+_impl = importlib.import_module("production.pipeline.interfaces")
+
+
+def __getattr__(name: str):
+    return getattr(_impl, name)

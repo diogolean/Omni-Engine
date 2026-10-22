@@ -13,7 +13,7 @@ from typing import Any
 
 from production.writers.freeform_writer import ScriptDraft, _extract_json, _writer_provider
 from production.writers.writer_brief import WriterBrief
-from core.economic_reel_lofi import config as lofi_cfg
+from production.formats.lofi import config as lofi_cfg
 
 
 def count_words(text: str) -> int:

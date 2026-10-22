@@ -53,8 +53,8 @@ def main() -> None:
     old = gates_of("outputs/wonder_feed/clips/lofi_hold_loss_20260823_044007_v01.json")
     work = "outputs/wonder_feed/assets/lofi_run_20260823_044007_01"
     write(
-        "core/economic_reel_lofi/store/locked_script_loss_v1.json",
-        "core/economic_reel_lofi/store/locked_script_loss_v1_reuse.json",
+        "production/formats/lofi/store/locked_script_loss_v1.json",
+        "production/formats/lofi/store/locked_script_loss_v1_reuse.json",
         work,
         [f"{work}/_regen_scene_05" if i == 5 else f"{work}/scene_{i:02d}.png" for i in range(1, 10)],
         [],
@@ -75,8 +75,8 @@ def main() -> None:
         "outputs/wonder_feed/assets/lofi_run_20260823_061123_02/scene_09.png",
     ]
     write(
-        "core/economic_reel_lofi/store/locked_script_forgiveness_v1.json",
-        "core/economic_reel_lofi/store/locked_script_forgiveness_v1_assemble.json",
+        "production/formats/lofi/store/locked_script_forgiveness_v1.json",
+        "production/formats/lofi/store/locked_script_forgiveness_v1_assemble.json",
         "outputs/wonder_feed/assets/lofi_run_20260823_044616_03",
         images,
         [2, 6, 9],

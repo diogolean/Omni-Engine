@@ -102,7 +102,7 @@ def ensure_flux_photo(
     record["image_relative"] = relative
     record["generated_by"] = "flux.1-schnell"
     try:
-        from agents.media.b2_client import upload_object  # noqa: PLC0415
+        from shared.storage.b2_client import upload_object  # noqa: PLC0415
 
         upload_object(
             prefix + relative,

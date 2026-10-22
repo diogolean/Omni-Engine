@@ -126,12 +126,12 @@ def _walk(obj):
 
 
 FILES = [
-    ROOT / "core/economic_reel_lofi/data/seed_themes_relationship.json",
-    ROOT / "core/economic_reel_lofi/data/seed_themes_parenting.json",
-    ROOT / "core/economic_reel_lofi/data/seed_concrete_details_relationship.json",
-    ROOT / "core/economic_reel_lofi/data/seed_concrete_details_parenting.json",
-    ROOT / "core/economic_reel_lofi/store/lofi_theme_bank_relationship.json",
-    ROOT / "core/economic_reel_lofi/store/lofi_theme_bank_parenting.json",
+    ROOT / "production/formats/lofi/data/seed_themes_relationship.json",
+    ROOT / "production/formats/lofi/data/seed_themes_parenting.json",
+    ROOT / "production/formats/lofi/data/seed_concrete_details_relationship.json",
+    ROOT / "production/formats/lofi/data/seed_concrete_details_parenting.json",
+    ROOT / "production/formats/lofi/store/lofi_theme_bank_relationship.json",
+    ROOT / "production/formats/lofi/store/lofi_theme_bank_parenting.json",
 ]
 
 

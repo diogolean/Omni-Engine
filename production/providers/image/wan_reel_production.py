@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from core.post_type_registry import register_post_type
+from production.pipeline.post_type_registry import register_post_type
 
 logger = logging.getLogger(__name__)
 
