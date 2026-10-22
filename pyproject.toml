@@ -130,7 +130,7 @@ root_packages = [
 include_external_packages = false
 
 [[tool.importlinter.contracts]]
-name = "Animation does not import products, channels, distribution, or the factory pipeline"
+name = "Animation does not import products, channels, or the factory pipeline"
 type = "forbidden"
 source_modules = ["animation"]
 forbidden_modules = [
