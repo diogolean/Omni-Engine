@@ -40,7 +40,7 @@ The engine, the scheduler, and scripts on one machine share a file-locked counte
 
 ### PC runner
 
-GPU and Windows-only work stays on the PC: Aiwake animated episodes (`channels_config/aiwake/` plus `core/animator/`) and Master Mei batches that need the local factory tree. `utils/pipeline_paths.py` still resolves `WINDOWS_FACTORY_ROOT` when the matching env path is unset, so those machines keep their Drive layout.
+GPU and Windows-only work stays on the PC: Aiwake animated episodes (`channels_config/aiwake/` plus the `core/animator/` harness; the parametric engine is `animation/parametric/`) and Master Mei batches that need the local factory tree. `utils/pipeline_paths.py` still resolves `WINDOWS_FACTORY_ROOT` when the matching env path is unset, so those machines keep their Drive layout.
 
 The runner switch is `local`, `docker`, or `both`. See [0002](decisions/0002-runner-switch-local-docker-both.md).
 

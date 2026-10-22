@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """Computer-vision helpers for automatic puppet rigging.
 
 The package intentionally does not import ``head_analyzer`` at import time;

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """Procedural fallback generator for puppet skins.
 
 If a character's PNG layers do not exist yet under ``{ASSETS_PATH}/puppets/``,

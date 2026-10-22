@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """Emotional acting poses, kept separate from the phonetic Rhubarb mouths.
 
 Phonetic lip-sync stays in ``visemes.py``. This module draws the acting

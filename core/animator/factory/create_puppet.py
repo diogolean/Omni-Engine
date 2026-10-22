@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """End-to-end prompt/image-to-puppet command-line utility.
 
 Usage:

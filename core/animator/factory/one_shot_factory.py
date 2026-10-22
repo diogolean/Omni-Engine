@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """One-shot puppet factory. BiRefNet alpha is saved exactly as the model returns it.
 
 Usage:

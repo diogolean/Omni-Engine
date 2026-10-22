@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """One-click landmark analysis and inspection for isolated puppet heads.
 
 The analyzer works entirely in head-local pixels.  Transparent alpha gives

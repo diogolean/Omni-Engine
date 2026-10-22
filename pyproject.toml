@@ -4,7 +4,7 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts", "production"]
+src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts", "production", "animation", "products"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
@@ -92,9 +92,10 @@ ignore = ["E501", "E402", "E731", "E741"]
 "production/formats/quotes/**" = ["F401", "F841", "I001"]
 "production/formats/mei/**" = ["F401", "F841", "I001"]
 "shared/storage/**" = ["F401", "F841", "I001"]
+"animation/**" = ["F401", "F841", "I001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts", "production"]
+known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts", "production", "animation", "products"]
 
 # ADR 0008 M1. These names are today's packages, standing in for the target
 # layers until the moves land. CI runs them in report-only mode; M14 makes
@@ -103,7 +104,8 @@ known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_c
 # shared is the real layer (ADR 0008 M2 and M3). Shims stay until M14.
 # shared stand-ins that remain: utils.pipeline_paths, utils.process_tools,
 # modules.durable_store, modules.distribution_contract, modules.memory
-# animation: core.animator
+# animation: animation (parametric engine). core.animator is the shim plus
+# the Aiwake plate, voices, and harness until M10.
 # production: production (M8), plus shim trees that still import as
 #   engine, modules, agents.orchestrator, core
 # distribution: distribution, accounts, and the agents.posting shims
@@ -122,15 +124,18 @@ root_packages = [
     "distribution",
     "accounts",
     "production",
+    "animation",
+    "products",
 ]
 include_external_packages = false
 
 [[tool.importlinter.contracts]]
-name = "Animation does not import products, distribution, or the factory pipeline"
+name = "Animation does not import products, channels, distribution, or the factory pipeline"
 type = "forbidden"
-source_modules = ["core.animator"]
+source_modules = ["animation"]
 forbidden_modules = [
     "channels_config",
+    "products",
     "distribution",
     "accounts",
     "agents",
@@ -181,6 +186,7 @@ forbidden_modules = [
     "core",
     "channels_config.aiwake",
     "production",
+    "animation",
 ]
 
 [[tool.importlinter.contracts]]
@@ -197,6 +203,7 @@ source_modules = [
     "utils",
     "models_avatar",
     "production",
+    "animation",
 ]
 forbidden_modules = ["channels_config.aiwake"]
 
