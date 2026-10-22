@@ -323,14 +323,23 @@ class AnimationRenderer:
                 frames_written += 1
         except (BrokenPipeError, OSError) as exc:
             stderr = _finish_ffmpeg_pipe(proc, timeout=30)
-            raise _FfmpegFailure(
-                str(exc) + " :: " + stderr.decode("utf-8", "ignore")[-2000:],
-                [],
-            )
+            elapsed = time.perf_counter() - start
+            # -shortest closes stdin once the audio ends. A clean exit with
+            # a finished file is the stop, not a failed encode.
+            if proc.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+                _LOG.info(
+                    "ffmpeg closed the frame pipe after %d frame(s) (exit 0)",
+                    frames_written,
+                )
+                return frames_written, elapsed
+            raise _FfmpegFailure(_ffmpeg_failure_text(stderr, exc, proc.returncode), [])
         stderr = _finish_ffmpeg_pipe(proc, timeout=120)
         elapsed = time.perf_counter() - start
         if proc.returncode != 0 or not output_path.is_file():
-            raise _FfmpegFailure(stderr.decode("utf-8", "ignore")[-2000:], [])
+            raise _FfmpegFailure(
+                _ffmpeg_failure_text(stderr, None, proc.returncode),
+                [],
+            )
         return frames_written, elapsed
 
 
@@ -338,6 +347,20 @@ class _FfmpegFailure(RuntimeError):
     def __init__(self, message: str, consumed_frames: list[np.ndarray]) -> None:
         super().__init__(message)
         self.consumed_frames = consumed_frames
+
+
+def _ffmpeg_failure_text(
+    stderr: bytes,
+    exc: BaseException | None,
+    returncode: int | None,
+) -> str:
+    """Surface ffmpeg's own stderr. A closed pipe often has an empty one."""
+    detail = stderr.decode("utf-8", "ignore").strip()
+    if not detail:
+        detail = f"ffmpeg exited {returncode} with empty stderr"
+    if exc is None:
+        return detail[-2000:]
+    return f"{exc} :: {detail[-2000:]}"
 
 
 def _finish_ffmpeg_pipe(proc: subprocess.Popen, timeout: float) -> bytes:

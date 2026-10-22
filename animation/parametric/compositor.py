@@ -87,6 +87,8 @@ PRODUCTION_FRAMING_IDS: frozenset[str] = frozenset()
 CAMERA_TIGHT_ZOOM = 1.40
 # 0.8 s at 30 fps: a fast initial push that settles gently on the eyes/mouth.
 _ZOOM_EASE_FRAMES = 24
+# Hold after the last word. The session mix bakes this into the waveform;
+# the frame loop does not add it again past the analyzer timeline.
 POST_ROLL_S = 1.5
 # Historical names for the right-facing and left-facing lead docks.
 # Every hero uses them; they are not a character lookup.
@@ -328,20 +330,11 @@ class ShotReverseShotCompositor:
                 float(np.percentile(levels, 80)) if levels else 1.0
             )
         current = next((s for s in camera_speakers if s in self.rigs), None) or next(iter(self.rigs))
-        last_turn_end_frame = max(
-            (
-                index + 1
-                for index, speaker in enumerate(camera_speakers)
-                if speaker is not None
-            ),
-            default=0,
-        )
-        post_roll_frames = int(analyzed.fps * POST_ROLL_S)
-        total_frames = max(
-            analyzed.n_frames,
-            int(math.ceil(analyzed.duration_s * analyzed.fps)),
-            last_turn_end_frame + post_roll_frames,
-        )
+        # Stop on the analyzer timeline (the waveform, or duration_override).
+        # A post-roll past that timeline kept writing after ffmpeg closed
+        # stdin at -shortest. Silence that already fits in the waveform,
+        # including the 1.5s tail the session mix adds, is inside n_frames.
+        total_frames = analyzed.n_frames
         for index in range(total_frames):
             t = analyzed.frame_time(index)
             if (

@@ -288,10 +288,8 @@ class PuppetSkin:
             _LOG.info("no puppet.json at %s — invoking V3 auto-rigger", puppet_dir)
             auto_rig_character(puppet_dir, puppet_dir.name)
         else:
-            from .asset_generator import ensure_puppet_manifest  # noqa: PLC0415
-
             _LOG.info("no character art at %s — generating a default skin", puppet_dir)
-            ensure_puppet_manifest(puppet_dir)
+            _ensure_manifest(puppet_dir)
         skin = cls.load(puppet_dir)
         skin.ensure_assets()
         return skin
@@ -451,10 +449,13 @@ class PuppetSkin:
         missing = self.missing_layers()
         if not missing:
             return
-        from .asset_generator import generate_puppet_assets  # noqa: PLC0415
-
-        _LOG.info("generating %d missing layer(s) for %r: %s", len(missing), self.character_id, missing)
-        generate_puppet_assets(self, missing=missing)
+        _LOG.info(
+            "generating %d missing layer(s) for %r: %s",
+            len(missing),
+            self.character_id,
+            missing,
+        )
+        _generate_assets(self, missing=missing)
 
 
 def _as_vec2(value) -> tuple[int, int]:
@@ -463,9 +464,92 @@ def _as_vec2(value) -> tuple[int, int]:
 
 
 # Fallback canvas-size guess used only when a hand-authored ``puppet.json``
-# omits an anchor entirely. Real generation always uses ``asset_generator``'s
-# canonical canvas size, which matches this default.
+# omits an anchor entirely. The neutral placeholder paints this same canvas.
 _DEFAULT_CANVAS_SIZE: tuple[int, int] = (480, 760)
+
+
+def register_asset_provider(ensure_manifest, generate_assets) -> None:
+    """Install the product that fills a puppet directory which has no art.
+
+    ``ensure_manifest(puppet_dir)`` writes ``puppet.json`` and returns its
+    path. ``generate_assets(skin, *, missing)`` writes the PNG layers listed
+    in ``missing``. Animation does not import a product generator; the
+    product facade registers one. Until then the neutral placeholder below
+    is what ``load_or_create`` calls.
+    """
+    global _ensure_manifest, _generate_assets
+    _ensure_manifest = ensure_manifest
+    _generate_assets = generate_assets
+
+
+def _placeholder_ensure_manifest(puppet_dir: Path) -> Path:
+    """Write a generic ``puppet.json`` so a bare directory can still render."""
+    puppet_dir = Path(puppet_dir)
+    puppet_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = puppet_dir / "puppet.json"
+    if manifest_path.is_file():
+        return manifest_path
+    width, height = _DEFAULT_CANVAS_SIZE
+    manifest = {
+        "character_id": puppet_dir.name,
+        "canvas_size": [width, height],
+        "anchors": {
+            "mouth": [width // 2, int(height * 0.42)],
+            "left_eye": [int(width * 0.38), int(height * 0.30)],
+            "right_eye": [int(width * 0.62), int(height * 0.30)],
+            "eye_radius": max(4, width // 12),
+            "head_pivot": [width // 2, int(height * 0.34)],
+            "neck_pivot": [width // 2, int(height * 0.50)],
+        },
+        "theme": {"glow_color": "#8AA0B0", "glow_radius": 12},
+        "layers": {key: f"{key}.png" for key in ALL_LAYER_KEYS},
+        "asset_provider": "neutral-placeholder",
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
+def _placeholder_generate_assets(skin, *, missing: list[str] | None = None) -> None:
+    """Paint flat stand-in layers. A product provider replaces this."""
+    skin.root.mkdir(parents=True, exist_ok=True)
+    size = (
+        int(skin.reference_canvas_size[0]),
+        int(skin.reference_canvas_size[1]),
+    )
+    keys = list(missing) if missing is not None else list(ALL_LAYER_KEYS)
+    for key in keys:
+        path = skin.layer_path(key)
+        if path.is_file():
+            continue
+        image = Image.new("RGBA", size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        if key == "bg":
+            draw.rectangle((0, 0, size[0] - 1, size[1] - 1), fill=(18, 22, 28, 255))
+        elif key in {"body", "head"}:
+            draw.ellipse(
+                (size[0] // 6, size[1] // 10, size[0] * 5 // 6, size[1] * 7 // 10),
+                fill=(70, 84, 96, 255),
+            )
+        elif key == "glow":
+            draw.ellipse(
+                (size[0] // 4, size[1] // 5, size[0] * 3 // 4, size[1] * 3 // 5),
+                fill=(120, 160, 180, 90),
+            )
+        else:
+            draw.ellipse(
+                (size[0] // 3, size[1] // 3, size[0] * 2 // 3, size[1] // 2),
+                fill=(210, 214, 220, 255),
+            )
+        image.save(path)
+
+
+def use_placeholder_asset_provider() -> None:
+    """Put the neutral placeholder back. Tests use this to isolate the engine."""
+    register_asset_provider(_placeholder_ensure_manifest, _placeholder_generate_assets)
+
+
+_ensure_manifest = _placeholder_ensure_manifest
+_generate_assets = _placeholder_generate_assets
 
 
 class PuppetRig:
@@ -1474,7 +1558,9 @@ __all__ = [
     "emotion_brow_state",
     "emotion_rest_mouth_state",
     "onset_rest_mouth",
+    "register_asset_provider",
     "rest_mouth_layer_key",
     "supported_rest_mouth",
+    "use_placeholder_asset_provider",
     "viseme_layer_key",
 ]

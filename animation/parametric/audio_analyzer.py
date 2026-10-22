@@ -113,13 +113,15 @@ class AudioAnalyzer:
         """
         audio_path = Path(audio_path)
         mono, sr, probed_duration = load_mono_waveform(audio_path)
-        # A duration override may extend a render, but can never truncate
-        # authored audio. Cutting the analyzer timeline used to clip the final
-        # sentence even though the mux still held the full waveform.
-        duration_s = max(
-            probed_duration,
-            duration_override if duration_override is not None else 0.0,
-        )
+        # No override: the timeline is the waveform, which is what a finished
+        # puppet render already uses. An override is the timeline the caller
+        # asked for, including a shorter one. The frame loop stops there so
+        # ffmpeg's ``-shortest`` is not asked to drop frames the compositor
+        # already emitted.
+        if duration_override is None:
+            duration_s = probed_duration
+        else:
+            duration_s = float(duration_override)
         duration_s = max(duration_s, 1.0 / self.fps)
 
         n_frames = max(1, int(math.ceil(duration_s * self.fps)))

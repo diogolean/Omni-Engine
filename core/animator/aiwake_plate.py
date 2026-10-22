@@ -55,10 +55,23 @@ def _stamp_scene_brows(layer, rig_brows, expression, color):
     return stamp_scene_brows(layer, rig_brows, expression, color)
 
 
+def _ensure_aiwake_manifest(puppet_dir):
+    from core.animator.asset_generator import ensure_puppet_manifest
+
+    return ensure_puppet_manifest(puppet_dir)
+
+
+def _generate_aiwake_assets(skin, *, missing=None):
+    from core.animator.asset_generator import generate_puppet_assets
+
+    return generate_puppet_assets(skin, missing=missing)
+
+
 def apply_puppet(module: Any) -> None:
     module.character_eye_nudge = character_eye_nudge
     module.character_brow_adjust = character_brow_adjust
     module.stamp_scene_brows = _stamp_scene_brows
+    module.register_asset_provider(_ensure_aiwake_manifest, _generate_aiwake_assets)
 
 
 def apply_rigger(module: Any) -> None:

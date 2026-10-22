@@ -42,6 +42,18 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _skip_without_artist_manifest(*character_ids: str) -> None:
+    missing = [
+        character_id
+        for character_id in character_ids
+        if not (DEFAULT_PUPPETS_DIR / character_id / "puppet.json").is_file()
+    ]
+    if missing:
+        pytest.skip(
+            "artist puppet manifests are not in this checkout: " + ", ".join(missing)
+        )
+
+
 def _assert_artist_override() -> list[str]:
     reports = []
     for character_id in ("gemini_cyborg_v2", "llama_cyborg_v2"):
@@ -129,10 +141,12 @@ def _run_auto_rig(root: Path) -> tuple[float, dict]:
 
 
 def test_v2_artist_skins_use_override_path_unchanged() -> None:
+    _skip_without_artist_manifest("gemini_cyborg_v2", "llama_cyborg_v2")
     _assert_artist_override()
 
 
 def test_legacy_v2_skins_use_immutable_54b1b5d_camera() -> None:
+    _skip_without_artist_manifest("gemini_cyborg_v2", "llama_cyborg_v2")
     for character_id, facing in (
         ("gemini_cyborg_v2", "right"),
         ("llama_cyborg_v2", "left"),
