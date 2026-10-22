@@ -57,7 +57,7 @@ These modules are still large and were not split in the same change. They are co
 
 - `production/formats/lofi/visual_identity.py`
 - `production/formats/lofi/pipeline.py`
-- `core/animator/factory/one_shot_factory.py`
+- `core/animator/factory/one_shot_factory.py` (Aiwake harness; the parametric engine is `animation/parametric/`)
 - `agents/writer/script_agent.py`
 - `core/animator/vision/head_analyzer.py`
 - `core/reel_sequence_engine.py`

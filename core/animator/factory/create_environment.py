@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """Generate shared 16:9 reverse-angle environments for the animator."""
 from __future__ import annotations
 

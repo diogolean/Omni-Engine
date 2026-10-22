@@ -15,7 +15,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 
 _CONTRACTS = (
-    "Animation does not import products, distribution, or the factory pipeline",
+    "Animation does not import products, channels, or the factory pipeline",
     "Production does not import distribution",
     "Distribution does not import production, animation, or products",
     "Factory code does not import Aiwake",

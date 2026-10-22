@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """Debate test renderer: character mouths, male voices, and contraplano cuts.
 
 A contraplano pass uses the approved three-quarter views. ChatGPT stands on

@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """Character-specific Rhubarb mouths for the cyborg puppets.
 
 ChatGPT is a sleek aerodynamic capsule: a thin caramel stroke and one ivory

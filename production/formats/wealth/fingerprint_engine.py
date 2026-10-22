@@ -50,7 +50,8 @@ _DEFAULT_OPTIONS: dict[str, Any] = {
 }
 
 
-# Kept as a public name: core.animator.renderer and tests import it from here.
+# Kept as a public name: tests import it from here. The animator resolves
+# ffmpeg through shared.ffmpeg (the same function).
 resolve_ffmpeg = _resolve_ffmpeg
 
 

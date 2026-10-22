@@ -1,21 +1,20 @@
-"""V3 autonomous puppet ingestion and rigging.
+"""Compatibility shim. The parametric rig lives in animation.parametric.factory.
 
-The factory is deliberately separate from the V2 renderer.  It only turns
-previously unrigged character art into the existing ``puppet.json`` contract.
+Aiwake puppet factories stay in this package until M10 (products/aiwake/).
 """
-from .color_extractor import PuppetPalette, extract_palette
-from .landmark_detector import FacialLandmarks, detect_landmarks
-from .puppet_matrix import PUPPET_MATRIX, PuppetMatrixTransform, solve_puppet_matrix
-from .rigger import auto_rig_character, has_character_imagery
+from __future__ import annotations
 
-__all__ = [
-    "FacialLandmarks",
-    "PuppetPalette",
-    "PUPPET_MATRIX",
-    "PuppetMatrixTransform",
-    "auto_rig_character",
-    "detect_landmarks",
-    "extract_palette",
-    "has_character_imagery",
-    "solve_puppet_matrix",
-]
+import importlib
+
+_impl = importlib.import_module("animation.parametric.factory")
+from core.animator.aiwake_plate import apply_rigger
+
+apply_rigger(importlib.import_module("animation.parametric.factory.rigger"))
+
+
+def __getattr__(name: str):
+    return getattr(_impl, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(dir(_impl)))

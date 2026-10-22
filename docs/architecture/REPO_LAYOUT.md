@@ -14,7 +14,7 @@ Tracked at the repository root:
 | Entry points | `main.py`, `config.py`, `channel_loader.py`. `run_main_noupload.py` is an allowed entry point when it is added. Do not rename it. |
 | Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml`, `.gitleaksignore` |
 | Containers and CI | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.github/` |
-| Packages | `accounts/`, `agents/`, `channels_config/`, `config/`, `core/`, `distribution/`, `engine/`, `models_avatar/`, `modules/`, `portfolio_showcase/`, `production/`, `quality/`, `shared/`, `utils/` |
+| Packages | `accounts/`, `agents/`, `animation/`, `channels_config/`, `config/`, `core/`, `distribution/`, `engine/`, `models_avatar/`, `modules/`, `portfolio_showcase/`, `production/`, `products/`, `quality/`, `shared/`, `utils/` |
 | Support trees | `assets/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
 | Agent rules | `.cursor/rules/` |
 
@@ -34,7 +34,8 @@ These already have a home. Do not invent a second one, and do not add empty plac
 |---|---|---|
 | Publishers | `distribution/publishers/` | API (`pinterest`, `youtube`, `pinterest_oauth`), browser (`facebook_scheduler`), and Post Planner export. Error screenshots go to `outputs/facebook_scheduler/screenshots/`, not into the package. Some old imports under `agents/posting/` are still shims. |
 | B2, Drive, imgbb | `shared/storage/` | The only boto3 B2 client is `shared/storage/b2_client.py`. `agents/media/b2_client.py` is a shim. The direct-client guard allows that shim and the storage module, and still skips the rest of `agents/media/`. |
-| Puppet / Aiwake animator | `core/animator/` | Code. Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
+| Parametric animation | `animation/parametric/` | Product-agnostic engine. Public facade is `animation/api.py` (`render_dynamic_animation`). The renderer is `animation/parametric/renderer.py` and stays an ffmpeg pipe. `core/animator/` keeps re-export shims until M14, plus the Aiwake plate, voices, puppet factories, and harness (TODO M10). Downloaded binaries stay in `core/animator/bin/` and are gitignored. |
+| Product shows | `products/` | Reserved root so import-linter can forbid `animation` → `products`. Empty until M10, which moves Aiwake to `products/aiwake/`. |
 | Visual QA critic | `production/qa/judges/visual_critic/` | Code and the DNA JSON. Profiles are `production/qa/judges/profiles/`. `quality/VisualQA_Agent/` is a shim. |
 | Cursor rules | `.cursor/rules/` | The whole directory is versioned, including `aiwake-copy.mdc` and `video-pipeline.mdc`. `.cursor/*` other than `rules/` is gitignored. |
 | Channel store | `channels_config/<channel>/store/` | Runtime state stays gitignored and dockerignored, and only lives in the owner's Drive backup. `.dockerignore` excludes `channels_config/*/store/` and re-includes `channels_config/aiwake/store/portfolio/` so those tracked showcase snapshots stay in the image. `store/.gitkeep` is a git placeholder. The Oracle compose file mounts Ancient Knowledge's store over that path. Do not rename it. |
@@ -99,4 +100,4 @@ These already have a home. Do not invent a second one, and do not add empty plac
 
 `from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged. `import engine.cli` still loads the same module object as `production.pipeline.cli`.
 
-Reel QA lives in `production/qa/` (`modules/reel_qa/` is a shim). Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Formats, the pipeline, the content library, providers, cost, media, and writers live under `production/`. B2, Drive, and imgbb live in `shared/storage/`. `omni/` is gone. Old import paths stay as shims until M14. Do not add a second copy under `engine/`, `core/`, or `modules/`.
+Reel QA lives in `production/qa/` (`modules/reel_qa/` is a shim). Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Formats, the pipeline, the content library, providers, cost, media, and writers live under `production/`. The parametric animation engine lives in `animation/parametric/` (`animation/api.py` is the facade). B2, Drive, and imgbb live in `shared/storage/`. `omni/` is gone. Old import paths stay as shims until M14. Do not add a second copy under `engine/`, `core/`, or `modules/`.

@@ -1085,11 +1085,9 @@ def render_debate_animation(
         )
     if not enable_cta:
         spoken_end = max((turn.end_time for turn in turns if (turn.text or "").strip()), default=0.0)
-        effective_duration = (
-            max(total_duration, duration_override)
-            if duration_override is not None
-            else total_duration
-        )
+        # None keeps the waveform length. A caller override, including a
+        # shorter one, is the timeline the engine renders.
+        effective_duration = duration_override
         outro_start_s = None
         outro_frame = None
         subtitle_fade_s = loop_tail_s
@@ -1101,12 +1099,8 @@ def render_debate_animation(
     else:
         hook = pick_cynical_hook(transcript.session_id)
         dialogue_duration = total_duration
-        mastered_duration = _append_typewriter_outro(merged_audio_path, hook)
-        effective_duration = (
-            max(mastered_duration, duration_override)
-            if duration_override is not None
-            else mastered_duration
-        )
+        _append_typewriter_outro(merged_audio_path, hook)
+        effective_duration = duration_override
         outro_start_s = dialogue_duration
         outro_frame = _terminal_outro_painter(hook, width=width, height=height, fps=fps)
         subtitle_fade_s = 0.0

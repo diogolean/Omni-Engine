@@ -1,3 +1,4 @@
+# TODO M10: move this Aiwake-specific module to products/aiwake/.
 """Deterministic Skia mouth library for the two cyborg lineages.
 
 Every sprite is authored on a 512x512 transparent canvas at 3x resolution,
