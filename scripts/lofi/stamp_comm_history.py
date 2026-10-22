@@ -14,7 +14,7 @@ from core.economic_reel_lofi import lofi_collections as rag
 from core.economic_reel_lofi.setting_archetypes import classify_setting_archetype
 
 script = json.loads(
-    Path("core/economic_reel_lofi/store/locked_script_communication_v2.json").read_text(
+    Path("production/formats/lofi/store/locked_script_communication_v2.json").read_text(
         encoding="utf-8"
     )
 )

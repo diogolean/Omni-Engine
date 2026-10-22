@@ -45,13 +45,13 @@ def _active_channel(channel=None):
     """Resolve the injected channel, or the hybrid factory for ACTIVE_PAGE."""
     if channel is not None:
         return channel
-    from core.interfaces.factory import ChannelFactory
+    from production.pipeline.interfaces.factory import ChannelFactory
 
     return ChannelFactory.from_env()
 
 
 def _is_isolated_channel(channel=None) -> bool:
-    from core.interfaces.factory import ChannelFactory
+    from production.pipeline.interfaces.factory import ChannelFactory
 
     ch = _active_channel(channel)
     return ChannelFactory.is_isolated(ch.channel_id)
@@ -813,7 +813,7 @@ def build_reel_narration_prompt(
             _cid = str(getattr(_active_channel(channel), "channel_id", "") or "")
         except Exception:  # noqa: BLE001
             _cid = ""
-        from modules.reel_grounding.config import angle_memory_for
+        from production.formats.economic_reel.grounding.config import angle_memory_for
 
         if angle_memory_for(_cid, _mode):
             _pool: list[str] = []
@@ -830,7 +830,7 @@ def build_reel_narration_prompt(
                 _pool = []
             if not _pool:
                 _pool = list(_REEL_INVESTIGATION_ANGLES)
-            from modules.reel_grounding.memory import plan_episode_angle
+            from production.formats.economic_reel.grounding.memory import plan_episode_angle
 
             _plan = plan_episode_angle(channel=_cid, topic=topic, pool=_pool)
             if _plan.angle:
@@ -1323,7 +1323,7 @@ class CaptionEngine:
         writer_model: str | None = None,
         channel=None,
     ) -> None:
-        from core.interfaces.factory import ChannelFactory
+        from production.pipeline.interfaces.factory import ChannelFactory
 
         self._channel = channel or ChannelFactory.from_env()
         self.last_seo_title = ""
@@ -1626,7 +1626,7 @@ class CaptionEngine:
             + f"\n{corpus_close}"
         )
         model = research_model_override or self._research_model
-        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+        from production.formats.economic_reel.artefact.provider_health import provider_dead as _gemini_dead
 
         if self._is_ancient_knowledge() and _gemini_dead("gemini"):
             fallback = self._complete_ancient_text(full_prompt)
@@ -1720,7 +1720,7 @@ class CaptionEngine:
 
         chain = list(self._text_model_chain)
         _batch_prompt = instruction + f"\n\n{corpus_open}\n" + context + f"\n{corpus_close}"
-        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+        from production.formats.economic_reel.artefact.provider_health import provider_dead as _gemini_dead
 
         if self._is_ancient_knowledge() and _gemini_dead("gemini"):
             fallback = self._complete_ancient_text(_batch_prompt)
@@ -1861,7 +1861,7 @@ class CaptionEngine:
 
     def _text_fallbacks(self):
         """OpenRouter, then DeepSeek. Claude only when the operator opted in."""
-        from modules.reel_artefact.provider_health import openrouter_text
+        from production.formats.economic_reel.artefact.provider_health import openrouter_text
 
         def _deepseek(body: str) -> str:
             return self._deepseek_complete(body, max_tokens=1800)
@@ -1896,7 +1896,7 @@ class CaptionEngine:
         """
         if not self._is_ancient_knowledge():
             return ""
-        from modules.reel_artefact.provider_health import complete_ak_text
+        from production.formats.economic_reel.artefact.provider_health import complete_ak_text
 
         fallbacks = self._text_fallbacks()
         cheap = [pair for pair in fallbacks if pair[0] != "anthropic"]
@@ -1910,7 +1910,7 @@ class CaptionEngine:
     def _ancient_after_gemini(self, prompt: str, exc: BaseException | None) -> str:
         if not self._is_ancient_knowledge():
             return ""
-        from modules.reel_artefact.provider_health import is_billing_or_auth, mark_dead
+        from production.formats.economic_reel.artefact.provider_health import is_billing_or_auth, mark_dead
 
         if exc is not None and is_billing_or_auth(exc):
             mark_dead("gemini", str(exc))
@@ -1970,7 +1970,7 @@ class CaptionEngine:
             _rag_channel_name = ""
         _angle_block = ""
         _chosen_angle = ""
-        from modules.reel_grounding.config import angle_memory_for
+        from production.formats.economic_reel.grounding.config import angle_memory_for
 
         if angle_memory_for(_rag_channel_name, narrative_mode):
             _pool: list[str] = []
@@ -1984,7 +1984,7 @@ class CaptionEngine:
                 _pool = []
             if not _pool:
                 _pool = list(_REEL_INVESTIGATION_ANGLES)
-            from modules.reel_grounding.memory import plan_episode_angle
+            from production.formats.economic_reel.grounding.memory import plan_episode_angle
 
             _plan = plan_episode_angle(
                 channel=_rag_channel_name,
@@ -2222,7 +2222,7 @@ class CaptionEngine:
                 return _try_gemini(attempt=1, raise_errors=True)
 
             def _refine_script(text: str) -> str:
-                from modules.reel_artefact.script_grounding import (
+                from production.formats.economic_reel.artefact.script_grounding import (
                     extract_narration,
                     repair_hook_if_only_miss,
                     strip_spoken_cta,
@@ -2234,7 +2234,7 @@ class CaptionEngine:
                 )
 
             def _accept_script(text: str) -> bool:
-                from modules.reel_artefact.script_grounding import (
+                from production.formats.economic_reel.artefact.script_grounding import (
                     grounding_problem,
                     script_is_usable,
                 )
@@ -2313,13 +2313,13 @@ class CaptionEngine:
             clean = inject_philosophical_breaks(clean)
         else:
             clean = _metrics_script(raw)
-            from modules.reel_artefact.script_date import ensure_topic_date
-            from modules.reel_artefact.script_length import AK_NARRATION_S, soft_ceiling
+            from production.formats.economic_reel.artefact.script_date import ensure_topic_date
+            from production.formats.economic_reel.artefact.script_length import AK_NARRATION_S, soft_ceiling
 
             clean = ensure_topic_date(clean, topic)
             # Soft ceiling only. No rewrite, and no cut inside a sentence.
             if _rag_channel_name == "ancient_knowledge":
-                from modules.reel_artefact.script_grounding import strip_spoken_cta
+                from production.formats.economic_reel.artefact.script_grounding import strip_spoken_cta
 
                 clean = strip_spoken_cta(clean)
                 clean = soft_ceiling(clean, max_seconds=AK_NARRATION_S)
@@ -2467,7 +2467,7 @@ class CaptionEngine:
         mode_tag = "humanized"
         econ = model_id or app_config.GEMINI_ECONOMIC_BRAIN_MODEL
         gemini_contents = f"{_smart_bait_system}\n\n{prompt}"
-        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+        from production.formats.economic_reel.artefact.provider_health import provider_dead as _gemini_dead
 
         if self._is_ancient_knowledge() and _gemini_dead("gemini"):
             raw_response = self._complete_ancient_text(gemini_contents)
@@ -2691,7 +2691,7 @@ class CaptionEngine:
         raw_response = ""
         mode_tag = "humanized"
         _long_prompt = f"{_long_caption_system}\n\n{prompt}"
-        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+        from production.formats.economic_reel.artefact.provider_health import provider_dead as _gemini_dead
 
         if self._is_ancient_knowledge() and _gemini_dead("gemini"):
             raw_response = self._complete_ancient_text(_long_prompt)
@@ -2895,7 +2895,7 @@ class CaptionEngine:
             channel=self._channel,
             cta_caption_format=cta_caption_format,
         )
-        from modules.reel_artefact.provider_health import provider_dead as _gemini_dead
+        from production.formats.economic_reel.artefact.provider_health import provider_dead as _gemini_dead
 
         if self._is_ancient_knowledge() and _gemini_dead("gemini"):
             fallback = self._complete_ancient_text(_voice_prompt)

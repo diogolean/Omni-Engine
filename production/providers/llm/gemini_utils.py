@@ -464,7 +464,7 @@ def generate_content_with_model_fallback(
     if cheap is not None:
         return cheap
 
-    from modules.reel_artefact.provider_health import dead_reason, provider_dead
+    from production.formats.economic_reel.artefact.provider_health import dead_reason, provider_dead
 
     if provider_dead("gemini"):
         raise RuntimeError(f"gemini dead: {dead_reason('gemini') or 'billing'}")
@@ -537,7 +537,7 @@ def generate_content_with_model_fallback(
                 raise
             except (_g_errors.APIError, Exception) as exc:  # noqa: BLE001
                 last = exc
-                from modules.reel_artefact.provider_health import (  # noqa: PLC0415
+                from production.formats.economic_reel.artefact.provider_health import (  # noqa: PLC0415
                     is_billing_or_auth,
                     mark_dead,
                     provider_dead,

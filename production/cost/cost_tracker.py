@@ -675,7 +675,7 @@ class CostTracker:
         Return a serialisable snapshot of the cost run.
 
         Compatible with ``write_atomic_json`` / ``merge_update_json``
-        from ``agents.media.durable_library``.
+        from ``production.library.durable_library``.
         """
         with self._lock:
             entries = list(self._entries)

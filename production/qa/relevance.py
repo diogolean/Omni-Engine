@@ -354,7 +354,7 @@ def _verdict_from_payload(
     ):
         if "contains_forbidden_object" not in defects:
             defects.append("contains_forbidden_object")
-    from modules.reel_artefact.asset_pool import museum_object_photo
+    from production.formats.economic_reel.artefact.asset_pool import museum_object_photo
 
     museum = score_against == "narration" and museum_object_photo(described)
     if museum:
@@ -568,7 +568,7 @@ def evaluate_chunk_relevance(
         )
         images.append(reference)
         labels.append("reference")
-    from modules.reel_artefact.provider_health import (
+    from production.formats.economic_reel.artefact.provider_health import (
         is_billing_or_auth,
         mark_dead,
         provider_dead,

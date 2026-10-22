@@ -204,7 +204,7 @@ class ScriptDraft:
 
     @property
     def estimated_seconds(self) -> float:
-        from core.economic_reel_lofi import config as lofi_cfg
+        from production.formats.lofi import config as lofi_cfg
 
         wps = lofi_cfg.narration_wps()
         if wps <= 0:
@@ -224,7 +224,7 @@ class ScriptDraft:
         lines gets 9 stills however long those lines run. Captions cycle over
         the held still. Nothing is rewritten, reordered or dropped.
         """
-        from core.economic_reel_lofi import config as lofi_cfg
+        from production.formats.lofi import config as lofi_cfg
 
         max_w, max_c = lofi_cfg.thematic_caption_limits()
         return [(line, split_long_line(line, max_w, max_c)) for line in self.lines]
@@ -454,7 +454,7 @@ pipeline makes the final per-scene celestial allocation and adds full prompts.""
 
 
 def _niche_key(brief: WriterBrief | None = None) -> str:
-    from core.economic_reel_lofi.niche_presets import normalize_niche_key
+    from production.formats.lofi.niche_presets import normalize_niche_key
 
     if brief is None:
         return "relationship"
@@ -465,7 +465,7 @@ def _niche_key(brief: WriterBrief | None = None) -> str:
 
 
 def system_prompt_for(brief: WriterBrief | None = None) -> str:
-    from core.economic_reel_lofi.niche_presets import (
+    from production.formats.lofi.niche_presets import (
         get_niche_preset,
         writer_system_extras,
     )
@@ -478,7 +478,7 @@ _SYSTEM = system_prompt_for()
 
 
 def _output_contract(brief: WriterBrief | None = None) -> str:
-    from core.economic_reel_lofi import config as lofi_cfg
+    from production.formats.lofi import config as lofi_cfg
 
     meta = (brief.meta if brief is not None else {}) or {}
     beat_s = float(meta.get("beat_duration_s") or meta.get("scene_duration_s") or lofi_cfg.beat_duration_s())

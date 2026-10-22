@@ -430,8 +430,8 @@ def draft_to_script(
     which is what keeps meaning-based anchoring, composition variety and object
     licensing working exactly as they do today.
     """
-    from core.economic_reel_lofi import config as lofi_cfg
-    from core.economic_reel_lofi.visual_identity import act_for_index
+    from production.formats.lofi import config as lofi_cfg
+    from production.formats.lofi.visual_identity import act_for_index
 
     brief = draft.brief
     units = draft.image_units()

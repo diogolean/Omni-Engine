@@ -199,7 +199,7 @@ def complete(
 ) -> CheapResult:
     """Run the cheapest provider that answers. Raises CheapLLMUnavailable."""
     from production.cost import spend_ledger
-    from modules.reel_artefact.provider_health import mark_dead, provider_dead
+    from production.formats.economic_reel.artefact.provider_health import mark_dead, provider_dead
 
     kind = "vision" if images else "text"
     order = list(chain) if chain is not None else (vision_chain() if images else text_chain())

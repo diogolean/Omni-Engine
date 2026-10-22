@@ -92,7 +92,15 @@ PostPlanner_B2_*.xlsx
 postplan_*.xlsx
 
 # Temp / cache files
+# Lofi recent-aphorism cache. The package moved; ignore both homes.
 core/economic_reel_lofi/store/aphorism_recent.json
+production/formats/lofi/store/aphorism_recent.json
+
+# Visual critic index. The package moved; ignore the old tree and the new one.
+quality/VisualQA_Agent/chroma_db/
+quality/VisualQA_Agent/.channel_cache
+production/qa/judges/visual_critic/chroma_db/
+production/qa/judges/visual_critic/.channel_cache
 *.tmp
 *TEMP_MPY_wvf_snd*
 .cache/

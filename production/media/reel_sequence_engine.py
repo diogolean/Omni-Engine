@@ -1266,7 +1266,7 @@ def build_sequence_script_prompt(
         and _mode != "warrior_discipline"
     )
     if _ak:
-        from modules.reel_artefact.script_length import AK_NARRATION_S, soft_word_ceiling
+        from production.formats.economic_reel.artefact.script_length import AK_NARRATION_S, soft_word_ceiling
 
         total_words = min(int(total_words), soft_word_ceiling(AK_NARRATION_S))
         words_per_act = max(1, int(total_words) // max(1, n_acts))
@@ -1347,8 +1347,8 @@ STRICT RULES:
 {anti_repeat_block}
 Write the complete {n_acts}-act script now:"""
 
-    from modules.reel_artefact.asset_pool import asset_prompt_block
-    from modules.reel_artefact.flux_policy import ak_narration_rule, script_filmable_rule
+    from production.formats.economic_reel.artefact.asset_pool import asset_prompt_block
+    from production.formats.economic_reel.artefact.flux_policy import ak_narration_rule, script_filmable_rule
 
     if _ak:
         _filmable = ak_narration_rule()
@@ -1827,7 +1827,7 @@ def _build_act_clip(
     _mp = _MOTION_PROFILES[act_index % len(_MOTION_PROFILES)]
     if not protect_headroom:
         try:
-            from modules.reel_artefact.motion import motion_override
+            from production.formats.economic_reel.artefact.motion import motion_override
 
             _slow = motion_override(image_path)
         except Exception:  # noqa: BLE001
@@ -2740,7 +2740,7 @@ def compile_sequence_reel(
     _video_override = list(act_video_paths) if act_video_paths else []
     _hold_first = False
     try:
-        from modules.reel_hook.parallax import hook_video_override  # noqa: PLC0415
+        from production.formats.economic_reel.hook.parallax import hook_video_override  # noqa: PLC0415
 
         if episode_dir:
             _hook_dir = Path(episode_dir) / "hook"

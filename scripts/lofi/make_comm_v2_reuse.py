@@ -10,7 +10,7 @@ if str(_REORG_ROOT) not in _reorg_sys.path:
 import json
 from pathlib import Path
 
-ROOT = Path("core/economic_reel_lofi/store")
+ROOT = Path("production/formats/lofi/store")
 v2 = json.loads((ROOT / "locked_script_communication_v2.json").read_text(encoding="utf-8"))
 v1 = json.loads((ROOT / "locked_script_communication_v1_reuse.json").read_text(encoding="utf-8"))
 old_lines = {int(r["scene"]): r for r in v1["script"]["lines"]}

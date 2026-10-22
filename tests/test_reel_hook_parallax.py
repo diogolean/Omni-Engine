@@ -66,7 +66,7 @@ def test_missing_deps_fall_back_to_ken_burns(tmp_path: Path, monkeypatch, caplog
         raise AssertionError("renderer must not run without its packages")
 
     monkeypatch.setattr(parallax, "_render", _boom)
-    with caplog.at_level("WARNING", logger="modules.reel_hook.parallax"):
+    with caplog.at_level("WARNING", logger="production.formats.economic_reel.hook.parallax"):
         videos, hold = parallax.hook_video_override(
             [_still(tmp_path)], None, act_duration=4.5, out_dir=tmp_path,
         )

@@ -301,7 +301,7 @@ def image_unit_cost_usd(model_id: str | None) -> float:
 def _flash_image_usd(model_id: str | None) -> float:
     """Nano Banana list price. Unknown flash-image ids use the 1K default."""
     try:
-        from modules.reel_artefact.pricing import NANOBANANA_USD
+        from production.formats.economic_reel.artefact.pricing import NANOBANANA_USD
     except Exception:
         return IMAGE_FLASH_1K_USD
     key = (model_id or "").strip()
@@ -685,7 +685,7 @@ def guarded_generate_content(
             raise
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            from modules.reel_artefact.provider_health import (  # noqa: PLC0415
+            from production.formats.economic_reel.artefact.provider_health import (  # noqa: PLC0415
                 is_billing_or_auth,
                 mark_dead,
             )

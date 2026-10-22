@@ -15,7 +15,7 @@ from PIL import Image
 
 def _ordered_variant_source() -> str:
     """Stage bodies in the order `_produce_variant_worker` calls them."""
-    root = Path(__file__).resolve().parents[1] / "engine" / "pipeline"
+    root = Path(__file__).resolve().parents[1] / "production" / "pipeline" / "stages"
     sources: dict[str, str] = {}
     for path in root.glob("stage_*.py"):
         text = path.read_text(encoding="utf-8")

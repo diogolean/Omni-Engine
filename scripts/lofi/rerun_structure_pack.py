@@ -38,7 +38,7 @@ from core.economic_reel_lofi.setting_archetypes import (
     score_setting_archetypes,
 )
 
-STORE = Path("core/economic_reel_lofi/store")
+STORE = Path("production/formats/lofi/store")
 PACK = (
     ("forgiveness", "definition_then_evidence", ""),
     ("loss", "negation_list_to_permission", ""),

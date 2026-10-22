@@ -1,25 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Print the object resolved for each spoken beat. No image calls.
-
-    python -m modules.reel_grounding.report "Lost OOPArts" "script text"
-"""
+"""Compatibility shim. The implementation is production.formats.economic_reel.grounding.report."""
 from __future__ import annotations
 
 import sys
 
-from modules.reel_grounding.prompt import format_resolved_objects
-from modules.reel_qa.beats import split_sentences
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    topic = args[0] if args else ""
-    script = args[1] if len(args) > 1 else sys.stdin.read()
-    beats = split_sentences(script)
-    egypt = ["pyramid", "egyptian", "egypt", "pharaoh", "sphinx"]
-    print(format_resolved_objects(topic, script, beats, banned=egypt))
-    return 0
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import runpy
+
+    runpy.run_module("production.formats.economic_reel.grounding.report", run_name="__main__")
+else:
+    from production.formats.economic_reel.grounding import report as _impl
+
+    sys.modules[__name__] = _impl

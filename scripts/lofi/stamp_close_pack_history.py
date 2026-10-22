@@ -15,7 +15,7 @@ from core.economic_reel_lofi.setting_archetypes import classify_setting_archetyp
 
 JOBS = (
     {
-        "lock": "core/economic_reel_lofi/store/locked_script_loss_v1.json",
+        "lock": "production/formats/lofi/store/locked_script_loss_v1.json",
         "theme": "loss",
         "subtheme": "what_the_leaving_took",
         "close_variant": "silhouette",
@@ -24,7 +24,7 @@ JOBS = (
         "source": "locked_script_loss_v1",
     },
     {
-        "lock": "core/economic_reel_lofi/store/locked_script_loneliness_v1.json",
+        "lock": "production/formats/lofi/store/locked_script_loneliness_v1.json",
         "theme": "loneliness",
         "subtheme": "the_room_that_stays_empty",
         "close_variant": "portrait_close",
@@ -33,7 +33,7 @@ JOBS = (
         "source": "locked_script_loneliness_v1",
     },
     {
-        "lock": "core/economic_reel_lofi/store/locked_script_forgiveness_v1.json",
+        "lock": "production/formats/lofi/store/locked_script_forgiveness_v1.json",
         "theme": "forgiveness",
         "subtheme": "putting_the_weight_down",
         "close_variant": "silhouette",

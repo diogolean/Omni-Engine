@@ -12,7 +12,7 @@ from utils.pipeline_paths import coerce_outputs_path
 import json
 from pathlib import Path
 
-STORE = Path("core/economic_reel_lofi/store")
+STORE = Path("production/formats/lofi/store")
 HOLDS = {
     "regret": coerce_outputs_path("outputs/wonder_feed/clips/lofi_hold_regret_20260823_203537_v01.json"),
     "belonging": coerce_outputs_path("outputs/wonder_feed/clips/lofi_hold_belonging_20260823_203846_v02.json"),

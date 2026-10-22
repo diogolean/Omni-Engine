@@ -240,7 +240,7 @@ class WriterBrief:
     def assignment_block(self) -> str:
         """The part of the writer prompt that changes per episode."""
         parts: list[str] = []
-        from core.economic_reel_lofi import config as lofi_cfg
+        from production.formats.lofi import config as lofi_cfg
 
         if self.mode == "quote":
             parts.append(lofi_cfg.hook_line_brevity_clause())

@@ -209,7 +209,7 @@ def test_class_c_limit_from_env(
     del budget
     monkeypatch.setenv("B2_DAILY_CLASS_C", "0")
     client = _Client()
-    with caplog.at_level(logging.WARNING, logger="agents.media.b2_budget"):
+    with caplog.at_level(logging.WARNING, logger="shared.storage.b2_budget"):
         with pytest.raises(B2DailyCapError):
             list_object_keys("any/", client=client, bucket="bucket")
         with pytest.raises(B2DailyCapError):

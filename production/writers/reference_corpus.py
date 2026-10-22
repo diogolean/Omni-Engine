@@ -12,7 +12,7 @@ import random
 from pathlib import Path
 from typing import Any
 
-from core.economic_reel_lofi import config as lofi_cfg
+from production.formats.lofi import config as lofi_cfg
 
 _STORE_NAME = "writer_reference_corpus"
 _CACHE: dict[str, Any] | None = None

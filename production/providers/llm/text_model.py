@@ -233,7 +233,7 @@ def _complete_gemini(
 
 def _complete_gemini_flash(prompt: str, *, system: str | None = None) -> TextResult:
     """LOFI emotional writer: one requested model, one application-level call."""
-    from core.economic_reel_lofi import config as lofi_cfg
+    from production.formats.lofi import config as lofi_cfg
 
     model = str(
         os.environ.get("LOFI_EMOTIONAL_WRITER_MODEL")

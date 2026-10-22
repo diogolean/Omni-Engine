@@ -25,7 +25,7 @@ os.environ.setdefault("LOFI_SKIP_COHERENCE_LLM", "1")
 PACK = ("loss_v1", "loneliness_v1", "forgiveness_v1")
 scripts: list[dict] = []
 for name in PACK:
-    path = Path(f"core/economic_reel_lofi/store/locked_script_{name}.json")
+    path = Path(f"production/formats/lofi/store/locked_script_{name}.json")
     scripts.append(json.loads(path.read_text(encoding="utf-8")))
 
 seen_records: list[dict] = []

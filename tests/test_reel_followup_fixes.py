@@ -43,7 +43,7 @@ def test_main_gate_calls_match_visual_qa_signature() -> None:
     """Every keyword the variant worker passes into the still gate is a real parameter."""
     allowed = set(inspect.signature(generate_and_gate).parameters)
     found = 0
-    root = Path("engine/pipeline")
+    root = Path("production/pipeline/stages")
     for path in sorted(root.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):

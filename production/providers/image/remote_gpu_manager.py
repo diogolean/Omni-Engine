@@ -188,7 +188,7 @@ def _refuse_backblaze_endpoint(endpoint: str) -> None:
     A B2 endpoint here would list and download outside the daily budget.
     B2 traffic goes through ``agents.media.b2_client`` instead.
     """
-    from agents.media.b2_budget import is_backblaze_endpoint  # noqa: PLC0415
+    from shared.storage.b2_budget import is_backblaze_endpoint  # noqa: PLC0415
 
     if is_backblaze_endpoint(endpoint):
         raise RemoteGPUError(

@@ -9,16 +9,16 @@ import random
 import re
 from typing import Any
 
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi import lofi_collections as rag
-from core.economic_reel_lofi.setting_archetypes import (
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi import lofi_collections as rag
+from production.formats.lofi.setting_archetypes import (
     assess_cross_run_settings,
     enforce_composition_variety,
     enforce_setting_archetype_variety,
     score_composition_types,
     score_setting_archetypes,
 )
-from core.economic_reel_lofi.visual_identity import (
+from production.formats.lofi.visual_identity import (
     DEFAULT_SETTING_OBJECT_PAIRS,
     act_for_index,
     apply_anchor_callback_beats,
@@ -1562,7 +1562,7 @@ def _finalize_thematic_narrative(
     assign_close_beat(lines, theme=theme, module=module)
     _retie_beat_visuals(lines, pool)
     prev_arch = rag.preceding_setting_archetypes(module)
-    from core.economic_reel_lofi.setting_archetypes import ARCHETYPE_ORDER
+    from production.formats.lofi.setting_archetypes import ARCHETYPE_ORDER
 
     prefer_new = [a for a in ARCHETYPE_ORDER if a not in set(prev_arch)]
     enforce_setting_archetype_variety(
@@ -3275,7 +3275,7 @@ def _narrative_gate_reasons(data: dict[str, Any], module: str) -> list[str]:
     mono_path = bool(data.get("monologue_split") or data.get("source_monologue"))
     mono = str(data.get("source_monologue") or data.get("monologue") or "")
     if mono_path:
-        from core.economic_reel_lofi.theme_guard import assess_theme_drift
+        from production.formats.lofi.theme_guard import assess_theme_drift
 
         drift_rep = assess_theme_drift(mono, str(data.get("theme") or ""))
         data["theme_drift"] = drift_rep
@@ -3572,7 +3572,7 @@ def _rewrite_line_constraints(
 ) -> list[str]:
     """Repair only over-cap beats; structural failures stay for outer retry."""
     from production.writers.spoken_budget import repair_one_line, trim_at_clause_boundary
-    from core.economic_reel_lofi.theme_guard import assess_theme_drift
+    from production.formats.lofi.theme_guard import assess_theme_drift
 
     max_w, max_c = lofi_cfg.thematic_caption_limits()
     mono = " ".join(texts)
@@ -3734,7 +3734,7 @@ def generate_script(
         else ""
     )
     pool = setting_object_pool(theme_row)
-    from core.economic_reel_lofi.setting_archetypes import (
+    from production.formats.lofi.setting_archetypes import (
         classify_setting_archetype,
     )
 
@@ -3830,7 +3830,7 @@ def generate_script(
     q_seed = seed.get("quote") if isinstance(seed.get("quote"), dict) else None
     q_text = str((q_seed or {}).get("quote_text") or "").strip()
     if q_seed and q_text:
-        from core.economic_reel_lofi.reference_guard import banned_hook_text
+        from production.formats.lofi.reference_guard import banned_hook_text
 
         if not banned_hook_text(q_text):
             quote_block = (

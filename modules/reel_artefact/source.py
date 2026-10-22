@@ -1,29 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Sidecar that tells the judge which photograph a still came from."""
+"""Compatibility shim. The implementation is production.formats.economic_reel.artefact.source."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
+import sys
 
+if __name__ == "__main__":
+    import runpy
 
-def source_sidecar_path(image_path: Path | str) -> Path:
-    return Path(str(image_path) + ".source.json")
+    runpy.run_module("production.formats.economic_reel.artefact.source", run_name="__main__")
+else:
+    from production.formats.economic_reel.artefact import source as _impl
 
-
-def write_source_sidecar(image_path: Path | str, payload: dict) -> Path:
-    path = source_sidecar_path(image_path)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    return path
-
-
-def source_meta(image_path: Path | str | None) -> dict:
-    if not image_path:
-        return {}
-    path = source_sidecar_path(image_path)
-    if not path.is_file():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    sys.modules[__name__] = _impl

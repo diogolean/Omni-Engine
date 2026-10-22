@@ -75,3 +75,25 @@ def load_project_dotenv(env_path: Path) -> None:
         return
     if env_path.is_file():
         load_dotenv(dotenv_path=env_path, override=False, encoding="utf-8-sig")
+
+
+def load_factory_dotenv(env_path: Path) -> tuple[Path, bool]:
+    """Load the factory ``.env`` over process keys, keeping a preset page.
+
+    This is the root ``config`` bootstrap (``override=True``). A page already
+    in ``ACTIVE_PAGE`` wins over the file. ``load_project_dotenv`` stays
+    non-clobbering and still honors ``OMNI_SKIP_DOTENV``; this loader does not,
+    matching the historical ``config`` import.
+    """
+    resolved = env_path.expanduser().resolve()
+    preserved_page = (os.environ.get("ACTIVE_PAGE") or "").strip()
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return resolved, False
+    if not resolved.is_file():
+        return resolved, False
+    loaded = bool(load_dotenv(dotenv_path=resolved, override=True, encoding="utf-8-sig"))
+    if preserved_page:
+        os.environ["ACTIVE_PAGE"] = preserved_page
+    return resolved, loaded

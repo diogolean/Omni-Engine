@@ -88,7 +88,7 @@ def resolve_policy(channel: str | None, page_cfg: dict | None = None) -> str:
 def _load_page_cfg(channel: str) -> dict:
     lookup = _ALIASES.get(channel, channel)
     try:
-        from channel_loader import load_page_context
+        from production.pipeline.channel_context import load_page_context
 
         ctx = load_page_context(lookup)
         page_cfg = getattr(ctx, "page_cfg", None)

@@ -30,8 +30,8 @@ def _remember(
     first_pass: bool | None,
 ) -> None:
     try:
-        from modules.reel_grounding.memory import remember
-        from modules.reel_grounding.prompt import primary_subject
+        from production.formats.economic_reel.grounding.memory import remember
+        from production.formats.economic_reel.grounding.prompt import primary_subject
 
         score = verdict.get("relevance_score")
         try:
@@ -85,7 +85,7 @@ def _blocked(
 def _artefact_reference(path: Path, kwargs: dict[str, Any]) -> tuple[str, str]:
     """Reference photo and shape stored beside a Commons or Nano Banana still."""
     try:
-        from modules.reel_artefact.source import source_meta
+        from production.formats.economic_reel.artefact.source import source_meta
     except Exception:  # noqa: BLE001
         return "", str(kwargs.get("canonical_shape") or "")
     meta = source_meta(path)

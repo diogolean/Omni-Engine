@@ -61,7 +61,7 @@ def reel_cap_usd() -> float:
 
 def _stills_spent() -> float:
     try:
-        from modules.reel_artefact.budget import reel_spent
+        from production.formats.economic_reel.artefact.budget import reel_spent
 
         return float(reel_spent())
     except Exception:  # noqa: BLE001

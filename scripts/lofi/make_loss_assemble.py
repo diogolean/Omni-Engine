@@ -14,7 +14,7 @@ from pathlib import Path
 
 STILLS = coerce_outputs_path("outputs/wonder_feed/clips/lofi_stills_loss_20260823_061347_v01.json")
 WORK = "outputs/wonder_feed/assets/lofi_run_20260823_061347_01"
-OUT = Path("core/economic_reel_lofi/store/locked_script_loss_v1_assemble.json")
+OUT = Path("production/formats/lofi/store/locked_script_loss_v1_assemble.json")
 
 
 def main() -> None:

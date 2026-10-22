@@ -10,7 +10,7 @@ if str(_REORG_ROOT) not in _reorg_sys.path:
 import json
 from pathlib import Path
 
-ROOT = Path("core/economic_reel_lofi/store")
+ROOT = Path("production/formats/lofi/store")
 
 REWRITES = {
     "loss": [

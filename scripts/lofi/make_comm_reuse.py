@@ -38,7 +38,7 @@ envelope = {
     "script": script,
 }
 out = Path(
-    "core/economic_reel_lofi/store/locked_script_communication_v1_reuse.json"
+    "production/formats/lofi/store/locked_script_communication_v1_reuse.json"
 )
 out.write_text(json.dumps(envelope, indent=2, ensure_ascii=False), encoding="utf-8")
 print(f"wrote {out} images={len(images)} accept=[6]")
