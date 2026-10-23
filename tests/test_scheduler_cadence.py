@@ -196,11 +196,16 @@ def test_catchup_after_a_covered_wake_keeps_the_7_to_9_hour_gap(
     monkeypatch.setenv("MAX_INTERVAL_HOURS", "9")
     pin_at = wake - timedelta(minutes=5)
 
-    def published(accounts=None, *, read_rows=None):
-        del accounts, read_rows
+    def channel_reader(accounts):
+        del accounts
         return pin_at
 
-    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", published)
+    # The startup stamp does not cover the wake. The injected reader does.
+    monkeypatch.setattr(
+        "distribution.workers.runtime.newest_pin_published",
+        lambda: _NOW - timedelta(hours=6),
+    )
+    monkeypatch.setattr("distribution.workers.runtime._channel_ledger_reader", channel_reader)
     sleeps, fake_sleep = _stop_on_second_sleep()
     monkeypatch.setattr("distribution.workers.runtime._sleep_until", fake_sleep)
     monkeypatch.setattr(

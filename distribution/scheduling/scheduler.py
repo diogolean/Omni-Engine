@@ -769,11 +769,36 @@ class PinterestScheduler:
                 stats["published"] += 1
 
             else:
-                # --- Live publish ---
+                # Reserve before the API call. A kill after Pinterest accepts
+                # the pin still leaves a row seen() will skip.
+                article = str(entry.get("target_url") or "")
+                try:
+                    ledger.reserve(
+                        post_id=post_id,
+                        title=title,
+                        source_hash=source_hash,
+                        article=article,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+                    self._drop_reservation(ledger, post_id, source_hash)
+                    if isinstance(exc, B2DailyCapError):
+                        stats["stopped"] = "b2_daily_cap"
+                        log.warning("B2 daily cap reached — stopping this run.")
+                        break
+                    log.error("  Could not reserve ledger row for %s: %s", post_id, exc)
+                    stats["errors"] += 1
+                    continue
+
                 try:
                     result = publisher.publish(entry, pin_bytes)
                 except Exception as exc:  # noqa: BLE001
-                    from distribution.publishers.api.pinterest import PinterestTokenExpiredError  # noqa: PLC0415
+                    from distribution.publishers.api.pinterest import (  # noqa: PLC0415
+                        PinterestTokenExpiredError,
+                    )
+
+                    self._drop_reservation(ledger, post_id, source_hash)
                     if isinstance(exc, PinterestTokenExpiredError):
                         inv.save(data)
                         raise
@@ -802,18 +827,16 @@ class PinterestScheduler:
                         post_id,
                         pin_id,
                         topic,
-                        article=str(entry.get("target_url") or ""),
+                        article=article,
                     )
                     try:
-                        ledger.append(
-                            {
-                                "post_id": post_id,
-                                "title": title,
-                                "pin_id": pin_id,
-                                "source_hash": source_hash,
-                                "article": entry.get("target_url") or "",
-                                "facebook_exported": exported,
-                            }
+                        ledger.complete(
+                            post_id=post_id,
+                            title=title,
+                            pin_id=pin_id,
+                            source_hash=source_hash,
+                            article=article,
+                            facebook_exported=exported,
                         )
                     except Exception as exc:  # noqa: BLE001
                         from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
@@ -830,6 +853,7 @@ class PinterestScheduler:
                         pin_id, src_filename,
                     )
                 else:
+                    self._drop_reservation(ledger, post_id, source_hash)
                     log.warning("  Soft failure for %s -- NOT recorded in history.", post_id)
                     stats["errors"] += 1
 
@@ -853,6 +877,17 @@ class PinterestScheduler:
             stats["skipped_by_history"], stats["errors"], stats["remaining"],
         )
         return stats
+
+    def _drop_reservation(self, ledger, post_id: str, source_hash: str) -> None:
+        """Forget an unsent reservation. A release failure must not publish again."""
+        try:
+            ledger.release(post_id=post_id, source_hash=source_hash)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "  Could not release ledger reservation for %s (%s).",
+                post_id,
+                type(exc).__name__,
+            )
 
     def _queue_facebook(self, entry: dict, pin_bytes: bytes, ledger, *, record_note: bool) -> bool:
         """Append a Post Planner row for a card that was just committed.

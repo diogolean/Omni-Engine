@@ -4,8 +4,9 @@ name: Deploy
 # succeeds, so the Oracle VM and the GHCR tags move for a sha that already
 # passed lint, the factory tests, the Aiwake tests, and the secret scan.
 # workflow_dispatch rolls back to an image tag that is already in GHCR and
-# does not rebuild. image_tag is required: an empty run must not deploy the
-# SHA of whichever ref was selected in the Actions UI.
+# does not rebuild. image_tag is required and must be a 40-character SHA or
+# latest. An empty run must not deploy the SHA of whichever ref was selected
+# in the Actions UI.
 on:
   workflow_run:
     workflows: ["Validate"]
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Required. Git SHA or latest already in GHCR. Does not deploy the selected branch SHA."
+        description: "Required. 40-character git SHA or latest already in GHCR. Does not deploy the selected branch SHA."
         required: true
         type: string
 
@@ -172,11 +173,13 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.image_tag }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             if [ -z "$INPUT_TAG" ]; then
-              echo "image_tag is required. Pass a git SHA already in GHCR, or latest." >&2
+              echo "image_tag is required. Pass a 40-character git SHA already in GHCR, or latest." >&2
               exit 1
             fi
             TAG="$INPUT_TAG"
@@ -200,8 +203,18 @@ jobs:
             echo "Refusing event: $EVENT_NAME" >&2
             exit 1
           fi
-          if ! [[ "$TAG" =~ ^(latest|[0-9a-f]{7,40})$ ]]; then
+          if ! [[ "$TAG" =~ ^(latest|[0-9a-f]{40})$ ]]; then
             echo "Refusing image tag: $TAG" >&2
+            echo "Pass a 40-character git SHA already in GHCR, or latest." >&2
+            exit 1
+          fi
+          if ! printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null; then
+            echo "Could not sign in to GHCR. Refusing to deploy." >&2
+            exit 1
+          fi
+          REF="ghcr.io/diogolean/omni-engine:${TAG}"
+          if ! docker manifest inspect "$REF" >/dev/null; then
+            echo "Refusing deploy. ${REF} is not in GHCR." >&2
             exit 1
           fi
           echo "deploy=yes" >> "$GITHUB_OUTPUT"

@@ -1237,6 +1237,8 @@ def test_live_card_appends_a_facebook_postplanner_row(
     _prepare_channel(monkeypatch, tmp_path)
     monkeypatch.delenv("B2_BUCKET_NAME", raising=False)
 
+    events: list[str] = []
+
     class _Publisher:
         def __init__(self, *args, **kwargs) -> None:
             del args, kwargs
@@ -1246,6 +1248,8 @@ def test_live_card_appends_a_facebook_postplanner_row(
 
         def publish(self, record, pin_bytes):
             del pin_bytes
+            events.append("publish")
+            assert events[0] == "ledger"
             assert str(record.get("target_url") or "").startswith(_SITE)
             assert "sales" not in str(record.get("target_url") or "")
             return {"id": "pin-live"}
@@ -1266,6 +1270,15 @@ def test_live_card_appends_a_facebook_postplanner_row(
             image_key: _photo(),
         }
     )
+    real_put = client.put_object
+
+    def put_object(**kwargs):
+        key = str(kwargs.get("Key") or "")
+        if key.endswith("pinterest/ledger/ancient_knowledge.jsonl"):
+            events.append("ledger")
+        return real_put(**kwargs)
+
+    client.put_object = put_object
     stats = publish_account(
         _ancient(),
         pins=1,
@@ -1281,6 +1294,9 @@ def test_live_card_appends_a_facebook_postplanner_row(
         ],
     )
     assert stats["published"] == 1
+    assert events[0] == "ledger"
+    assert "publish" in events
+    assert events.index("publish") < events.index("ledger", 1)
     folder = tmp_path / "ancient_knowledge" / "postplanner"
     cumulative = _sheet_rows(folder / "cumulative.xlsx")
     assert cumulative[0] == ("DATE / TIME", "CAPTION", "MEDIA URL")
@@ -1301,6 +1317,77 @@ def test_live_card_appends_a_facebook_postplanner_row(
     ledger = client.objects["pinterest/ledger/ancient_knowledge.jsonl"].decode()
     assert '"facebook_exported": true' in ledger
     assert '"pin_id": "pin-live"' in ledger
+    rows = [json.loads(line) for line in ledger.splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0]["reserved"] is False
+
+
+def test_publish_failure_releases_the_ledger_reservation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed Pinterest call drops the reservation so the next run can publish."""
+    _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.delenv("B2_BUCKET_NAME", raising=False)
+    events: list[str] = []
+
+    class _Publisher:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def validate_token(self) -> bool:
+            return True
+
+        def publish(self, record, pin_bytes):
+            del record, pin_bytes
+            events.append("publish")
+            raise RuntimeError("pinterest down")
+
+    monkeypatch.setattr(
+        "agents.posting.pinterest_engine.publisher.PinterestPublisher",
+        _Publisher,
+    )
+    record_key = "ancient_knowledge/library/post_reserve_release.json"
+    image_key = "ancient_knowledge/library/images/reserve-release.jpg"
+    client = FakeS3(
+        {
+            record_key: _library_record(
+                "gobekli-tepe",
+                "Gobekli Tepe pillars",
+                "images/reserve-release.jpg",
+            ),
+            image_key: _photo(),
+        }
+    )
+    real_put = client.put_object
+
+    def put_object(**kwargs):
+        key = str(kwargs.get("Key") or "")
+        if key.endswith("pinterest/ledger/ancient_knowledge.jsonl"):
+            events.append("ledger")
+        return real_put(**kwargs)
+
+    client.put_object = put_object
+    stats = publish_account(
+        _ancient(),
+        pins=1,
+        dry_run=False,
+        client=client,
+        catalog=[
+            Article(
+                url=f"{_SITE}/gobekli-tepe",
+                topic="Gobekli Tepe pillars",
+                body="A temple older than pottery.",
+                slug="gobekli-tepe",
+            )
+        ],
+    )
+    assert stats["published"] == 0
+    assert stats["errors"] == 1
+    assert events[0] == "ledger"
+    assert events.index("publish") == 1
+    ledger = client.objects["pinterest/ledger/ancient_knowledge.jsonl"].decode()
+    assert "post_reserve_release" not in ledger
+    assert '"reserved": true' not in ledger
 
 
 def test_facebook_row_is_skipped_when_the_ledger_already_exported_it(
