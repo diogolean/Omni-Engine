@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from channels_config.shared.persona_bind import read_dna
 from production.writers.persona import ENGINE_ROOT, channel_profile_rows, load_persona
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -178,3 +179,27 @@ def test_active_page_facade_matches_the_loader() -> None:
     expected = load_persona("wonder_feed")
     assert display == expected.display_name
     assert context.rstrip("\n") == expected.persona_context_block()
+
+
+def test_bom_prefixed_master_dna_loads(tmp_path: Path) -> None:
+    channel = tmp_path / "channels_config" / "bom_voice"
+    channel.mkdir(parents=True)
+    payload = {
+        "Subject": "Bom Voice",
+        "persona": {"name": "Bom Voice", "core_mission": "read the mission"},
+        "Physical_Appearance": {"Age": 9, "Hair": "h"},
+        "Brand_Voice_&_Mission": {"Tone": "t", "Voice_Persona": "vp"},
+        "cta_options": ["Comment the year."],
+    }
+    raw = json.dumps(payload).encode("utf-8")
+    (channel / "master_dna.json").write_bytes(b"\xef\xbb\xbf" + raw)
+
+    dna = read_dna(channel / "master_dna.json")
+    assert dna["Subject"] == "Bom Voice"
+    assert dna["persona"]["core_mission"] == "read the mission"
+    assert list(dna)[0] == "Subject"
+
+    persona = load_persona("bom_voice", root=tmp_path)
+    assert persona.display_name == "Bom Voice"
+    assert persona.age_years == 9
+    assert "Bom Voice" in persona.persona_context_block()
