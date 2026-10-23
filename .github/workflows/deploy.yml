@@ -71,7 +71,7 @@ jobs:
         if: steps.fresh.outputs.push == 'yes'
         with:
           context: .
-          file: Dockerfile
+          file: deploy/docker/Dockerfile
           platforms: linux/arm64
           push: true
           tags: |
@@ -127,8 +127,8 @@ jobs:
       - uses: docker/build-push-action@v6
         if: steps.fresh.outputs.push == 'yes'
         with:
-          context: docker/supermemory
-          file: docker/supermemory/Dockerfile
+          context: deploy/docker/supermemory
+          file: deploy/docker/supermemory/Dockerfile
           platforms: linux/arm64
           push: true
           tags: |
@@ -223,10 +223,10 @@ jobs:
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
             "mkdir -p /opt/omni-engine/credentials /opt/omni-engine/outputs/logs /opt/omni-engine/scripts /opt/omni-engine/channels_config/ancient_knowledge /opt/omni-engine/channels_config/anna_protocol"
           scp -i ~/.ssh/vm_key "${known[@]}" \
-            docker-compose.yml "$VM_USER@$VM_HOST:/opt/omni-engine/docker-compose.yml"
+            deploy/compose/docker-compose.yml "$VM_USER@$VM_HOST:/opt/omni-engine/docker-compose.yml"
           scp -i ~/.ssh/vm_key "${known[@]}" \
-            scripts/backup_supermemory.sh "$VM_USER@$VM_HOST:/opt/omni-engine/scripts/backup_supermemory.sh"
+            deploy/vm/backup_supermemory.sh "$VM_USER@$VM_HOST:/opt/omni-engine/scripts/backup_supermemory.sh"
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
             "chmod 755 /opt/omni-engine/scripts/backup_supermemory.sh"
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
-            "IMAGE_TAG='$IMAGE_TAG' bash -s" < .github/scripts/remote-deploy.sh
+            "IMAGE_TAG='$IMAGE_TAG' bash -s" < deploy/vm/remote-deploy.sh

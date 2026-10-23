@@ -228,7 +228,7 @@ REMOTE_GPU_BASE_URL: str = _strip_url_fragment(
     os.getenv("REMOTE_GPU_BASE_URL") or os.getenv("COMFYUI_BASE_URL") or ""
 )
 REMOTE_GPU_WORKFLOWS_DIR: str = (
-    os.getenv("REMOTE_GPU_WORKFLOWS_DIR") or "infra/runpod/workflows"
+    os.getenv("REMOTE_GPU_WORKFLOWS_DIR") or "deploy/runpod/workflows"
 ).strip()
 REMOTE_GPU_POLL_INTERVAL_S: float = float(os.getenv("REMOTE_GPU_POLL_INTERVAL_S") or "2.0")
 REMOTE_GPU_TIMEOUT_S: float = float(os.getenv("REMOTE_GPU_TIMEOUT_S") or "600")

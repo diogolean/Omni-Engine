@@ -10,7 +10,7 @@ The scheduler posts real Pinterest pins. A push to `main` rebuilds the image. St
 
 ## Decision
 
-`.github/scripts/remote-deploy.sh` starts the `engine` service only.
+`deploy/vm/remote-deploy.sh` starts the `engine` service only. M12 moved it out of `.github/scripts/`.
 
 The scheduler stays stopped unless `/opt/omni-engine/.env` contains `SCHEDULER_ENABLED=1` (also `true`, `yes`, or `on`). An operator can also start it by hand:
 
@@ -18,7 +18,7 @@ The scheduler stays stopped unless `/opt/omni-engine/.env` contains `SCHEDULER_E
 docker compose --profile scheduler up -d scheduler
 ```
 
-`docker-compose.yml` documents the same rule: the `scheduler` service is behind the `scheduler` profile and is not part of a normal `up`.
+`deploy/compose/docker-compose.yml` documents the same rule: the `scheduler` service is behind the `scheduler` profile and is not part of a normal `up`. The workflow copies that file to `/opt/omni-engine/docker-compose.yml`.
 
 ## Consequences
 

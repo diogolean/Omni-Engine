@@ -549,7 +549,7 @@ Channel context (`--channel`) loads `channels_config/<id>/` and routes inventory
 # 3. Utility, QA & Maintenance Commands
 
 `python tests/test_remote_gpu.py --dry-run`  
-*// Loads ComfyUI workflow JSONs under infra/runpod/workflows/, prints node counts and config, and makes no HTTP calls.*
+*// Loads ComfyUI workflow JSONs under deploy/runpod/workflows/, prints node counts and config, and makes no HTTP calls.*
 
 `python tests/test_remote_gpu.py --image --base-url http://127.0.0.1:8188 --mode comfyui`  
 *// Live Flux Dev txt2img smoke test against a local/pod ComfyUI. Saves under outputs/remote_gpu_tests/.*

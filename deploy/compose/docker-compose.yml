@@ -12,8 +12,19 @@
 #   docker compose --profile memory up -d supermemory
 # No host port is published. The engine uses http://supermemory:6767.
 #
-# Local build (any arch): docker compose up -d --build engine
-# VM deploy uses the image already pushed to GHCR and does not need the Dockerfile.
+# Home of this file: deploy/compose/docker-compose.yml.
+# GitHub Actions copies it to /opt/omni-engine/docker-compose.yml.
+# remote-deploy.sh then runs `docker compose` in that directory with no -f.
+# Bind mounts and env_file stay project-root relatives. Compose v2 resolves
+# them against the project directory. Do not rewrite them to ../.. .
+# On the VM copy that would point at /opt.
+# Engine build context is that same project directory. The Dockerfile path
+# is deploy/docker/Dockerfile (there is no root symlink; a Windows checkout
+# with core.symlinks=false would not follow one). Supermemory context is
+# deploy/docker/supermemory.
+# Local:
+#   docker compose --project-directory <repo> -f deploy/compose/docker-compose.yml up -d --build engine
+# The VM pulls the GHCR image and does not build.
 
 name: omni-engine
 
@@ -22,7 +33,7 @@ services:
     image: ghcr.io/diogolean/omni-engine:${OMNI_IMAGE_TAG:-latest}
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: deploy/docker/Dockerfile
     env_file:
       - .env
     environment:
@@ -52,7 +63,7 @@ services:
     image: ghcr.io/diogolean/omni-engine:${OMNI_IMAGE_TAG:-latest}
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: deploy/docker/Dockerfile
     env_file:
       - .env
     environment:
@@ -89,7 +100,7 @@ services:
   supermemory:
     image: ghcr.io/diogolean/supermemory-server:${SUPERMEMORY_IMAGE_TAG:-0.0.9}
     build:
-      context: docker/supermemory
+      context: deploy/docker/supermemory
       dockerfile: Dockerfile
     env_file:
       - .env
