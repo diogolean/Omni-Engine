@@ -48,6 +48,13 @@ from distribution.scheduling.drip import (
 )
 from distribution.workers.runtime import run_pinterest_drip, run_scheduler
 
+
+@pytest.fixture(autouse=True)
+def _isolated_scheduler_wake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep one test's saved wake from delaying the next test."""
+    state = tmp_path / "scheduler" / "next_wake.json"
+    monkeypatch.setattr("distribution.workers.runtime.scheduler_state_path", lambda: state)
+
 _SITE = "https://ancientknowledge.eokviral.com"
 _IMAGE_KEY = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.jpg"
 _SIDECAR_KEY = "fbcards/2026-10-04/ancientknowl_10-04_2130_baalbek.json"

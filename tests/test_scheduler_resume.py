@@ -22,6 +22,13 @@ from distribution.workers.runtime import (
 _NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_scheduler_wake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep one test's saved wake from delaying the next test."""
+    state = tmp_path / "scheduler" / "next_wake.json"
+    monkeypatch.setattr("distribution.workers.runtime.scheduler_state_path", lambda: state)
+
+
 class _Body:
     def __init__(self, data: bytes) -> None:
         self._data = data
