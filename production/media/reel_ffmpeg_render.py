@@ -141,7 +141,12 @@ def media_duration_s(path: Path) -> float:
             "-of", "csv=p=0",
             str(path),
         ],
-        capture_output=True, text=True, timeout=20, check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=20,
+        check=False,
     )
     if proc.returncode != 0 or not (proc.stdout or "").strip():
         raise RuntimeError((proc.stderr or "ffprobe failed").strip()[-200:])
@@ -157,7 +162,12 @@ def ffmpeg_has_libass() -> bool:
     try:
         proc = subprocess.run(
             [exe, "-hide_banner", "-filters"],
-            capture_output=True, text=True, timeout=15, check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -357,9 +367,18 @@ def _ffmpeg_timeout_s() -> float:
 def _run(cmd: list[str]) -> None:
     # s23d: one beat's ffmpeg sat at near-zero CPU for 27 minutes and held the
     # whole reel. A stuck encode now fails the beat instead of the machine.
+    # capture_output leaves stdin as a pipe. ffmpeg reads that pipe and waits.
+    # This build's flag is `-stdin` (a boolean), not `-nostdin`, so the pipe
+    # is closed here instead of passing a flag the binary rejects.
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, check=False, timeout=_ffmpeg_timeout_s(),
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=_ffmpeg_timeout_s(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"ffmpeg timed out after {exc.timeout:.0f}s") from exc
@@ -566,8 +585,11 @@ def output_has_audio(path: Path) -> bool | None:
             "-of", "csv=p=0",
             str(path),
         ],
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
+        timeout=20,
         check=False,
     )
     if proc.returncode != 0:
@@ -755,7 +777,9 @@ def compile_ffmpeg_reel(
             "-map", "0:v", "-map", "[a]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
+            # apad and a looped bed never end. -t stops the mux at the picture.
             "-shortest",
+            "-t", f"{total:.3f}",
             str(out),
         ]
         _run(cmd)

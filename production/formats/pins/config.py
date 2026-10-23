@@ -32,7 +32,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from shared.env import parse_interval_hours, resolve_path
+from shared.env import env_bool, parse_interval_hours, resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -67,10 +67,22 @@ _SCHEDULER_ENV_KEYS = (
 
 
 def _load_dotenv_file(env_path: Path) -> tuple[Path, bool]:
-    """Load a .env file with utf-8-sig so Drive BOM ghosts are stripped."""
+    """Load a .env file with utf-8-sig so Drive BOM ghosts are stripped.
+
+    ``OMNI_SKIP_DOTENV`` skips files inside the repo (the developer ``.env``
+    and channel env files). A path outside the repo still loads, so a test
+    can point this at a temp file.
+    """
     resolved = env_path.expanduser().resolve()
     if not resolved.is_file():
         return resolved, False
+    if env_bool("OMNI_SKIP_DOTENV"):
+        try:
+            resolved.relative_to(ENGINE_ROOT.resolve())
+        except ValueError:
+            pass
+        else:
+            return resolved, False
 
     raw = resolved.read_bytes()
     utf8_bom = bytes([0xEF, 0xBB, 0xBF])

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from products.aiwake.tools.library_audit import (
@@ -9,7 +10,6 @@ from products.aiwake.tools.library_audit import (
     run_audit,
 )
 from products.aiwake.tools.post_planner import (
-    MAX_HASHTAGS,
     SOCIAL_RENDER_NOTE,
     extract_hashtags,
 )
@@ -136,6 +136,7 @@ def test_run_audit_moves_rejects_and_exports_clean_planners(tmp_path: Path) -> N
         store_dir=store,
         dry_run=False,
         export_planner=True,
+        now=datetime(2026, 6, 1, 15, tzinfo=timezone.utc),
     )
     assert report.analyzed == 3
     assert "keep_clone" in report.approved
@@ -147,7 +148,8 @@ def test_run_audit_moves_rejects_and_exports_clean_planners(tmp_path: Path) -> N
     kept = json.loads(library.read_text(encoding="utf-8"))
     assert {row["session_id"] for row in kept} == {"keep_clone", "keep_unique"}
     for row in kept:
-        assert len(extract_hashtags(row["post_planner_caption"])) == MAX_HASHTAGS
+        # install_publishable applies the SEO pack: topic, both models, #AIvsAI.
+        assert len(extract_hashtags(row["post_planner_caption"])) == 4
         assert "\n\n" in row["post_planner_caption"]
         assert len(row["platform_overrides"]["youtube"]["title"]) <= 70
         assert "http" not in row["linkedin_caption"].lower()

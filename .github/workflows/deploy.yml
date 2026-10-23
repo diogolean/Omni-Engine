@@ -1,7 +1,14 @@
 name: Deploy
 
+# Push to main runs Validate first. This workflow starts only after that run
+# succeeds, so the Oracle VM and the GHCR tags move for a sha that already
+# passed lint, the factory tests, the Aiwake tests, and the secret scan.
+# workflow_dispatch still rolls back to an image tag that is already in GHCR
+# and does not rebuild.
 on:
-  push:
+  workflow_run:
+    workflows: ["Validate"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -21,10 +28,17 @@ concurrency:
 jobs:
   build:
     name: build arm64 image
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: docker/setup-qemu-action@v3
 
@@ -44,20 +58,27 @@ jobs:
           push: true
           tags: |
             ghcr.io/diogolean/omni-engine:latest
-            ghcr.io/diogolean/omni-engine:${{ github.sha }}
+            ghcr.io/diogolean/omni-engine:${{ github.event.workflow_run.head_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
             org.opencontainers.image.source=https://github.com/diogolean/Omni-Engine
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
 
   # Publishes the image only. The VM deploy job does not start this container.
   supermemory-image:
     name: build supermemory arm64 image
-    if: github.event_name == 'push'
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: docker/setup-qemu-action@v3
 
@@ -77,20 +98,36 @@ jobs:
           push: true
           tags: |
             ghcr.io/diogolean/supermemory-server:0.0.9
-            ghcr.io/diogolean/supermemory-server:${{ github.sha }}
+            ghcr.io/diogolean/supermemory-server:${{ github.event.workflow_run.head_sha }}
           cache-from: type=gha,scope=supermemory
           cache-to: type=gha,scope=supermemory,mode=max
           labels: |
             org.opencontainers.image.source=https://github.com/diogolean/Omni-Engine
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
 
   deploy:
     name: ssh deploy
     needs: build
-    if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    if: >-
+      always() && (
+        (
+          github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main'
+          && needs.build.result == 'success'
+        )
+        || (
+          github.event_name == 'workflow_dispatch'
+          && needs.build.result == 'skipped'
+        )
+      )
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Resolve image tag
         id: tag
@@ -98,10 +135,13 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.image_tag }}
           SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            TAG="$HEAD_SHA"
           else
             TAG="$SHA"
           fi

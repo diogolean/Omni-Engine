@@ -1,5 +1,6 @@
 # Pull-request validation only. The media stack stays in requirements.txt.
 pytest>=8.0.0
+pytest-timeout>=2.3.1
 PyYAML>=6.0
 # v3 API. The 5.x SDK speaks /ns/{namespace} and does not work with server 0.0.8.
 supermemory==3.62.0
