@@ -51,10 +51,12 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Cost | `production/cost/` | `spend_ledger` (owner of `REEL_REEL_BUDGET_USD`), `cost_tracker`, `google_guardrail`, `gemini_usage`, `run_ledger`. The old `core` and `utils` paths are shims. |
 | Media | `production/media/` | Brand compose, still and reel ffmpeg render, scene pacing, audio chunking. |
 | Reel QA | `production/qa/` | Reel gate (`modules/reel_qa` is a shim) and `judges/` (visual eval, writer gate, visual critic). |
-| Writers | `production/writers/` | Caption and script writers, plus `rag/`. `agents/writer` and `agents/rag` are shims. |
+| Writers | `production/writers/` | Caption and script writers, plus `rag/`. `persona.py` is the one persona loader: it reads `channels_config/<channel>/master_dna.json` and does not store that channel's prompt sentences. `persona_dna.py` binds `ACTIVE_PAGE` at import. `agents/writer` and `agents/rag` are shims. |
 | Pipeline | `production/pipeline/` | Stages are `production/pipeline/stages/`. The agentic package is `production/pipeline/agentic/`. `engine/` and `agents/orchestrator/` and `channel_loader.py` are shims. `main.py` stays the CLI. |
 | Library | `production/library/` | `content_library`, `durable_library`, `content_source`, `asset_library`. The old `agents.media` and `modules.asset_library` paths are shims. |
 | Formats | `production/formats/` | `pins/`, `economic_reel/` (artefact, grounding, hook, shot planner), `lofi/`, `wealth/` (including `fingerprint_engine`), `reference/`, `quotes/`, `mei/`. Old packages are shims. |
+
+`python tools/channel_cli.py --channel <id>` is the operator CLI. A channel folder's `cli.py` owns that channel's commands. Folders without one use the Pinterest CLI (`tools/pinterest_cli.py`). `agents/posting/pinterest_main.py`, `channels_config/endless_summer_paradise/esp_main.py`, and `channels_config/principles_of_wealth_finance_economics/wealth_main.py` are shims until M14.
 
 `shared/` is the home for env getters, paths, logging, ffmpeg, image MIME, network retry, the durable channel store, the content contract, and the memory client (ADR 0008 M2 and M3). `utils/pipeline_paths.py` is `shared.paths`. `utils/process_tools.py` is `shared.ffmpeg`. `modules/reel_artefact/net_retry.py` is `shared.retry`. `modules/durable_store.py` is `shared.store`. `modules/distribution_contract.py` is `shared.contracts`. `modules/memory/` is `shared.memory`. New code imports `shared`. The old modules stay as shims so existing imports and monkeypatches keep one object.
 
