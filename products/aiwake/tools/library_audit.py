@@ -12,6 +12,7 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -28,7 +29,6 @@ from products.aiwake.contracts import (
 from products.aiwake.tools.library_sanitize import has_prompt_leakage
 from products.aiwake.tools.post_planner import (
     CHANNEL_ID,
-    MAX_HASHTAGS,
     extract_hashtags,
     load_dialogue,
     run_planner,
@@ -399,6 +399,7 @@ def run_audit(
     store_dir: Path | None = None,
     dry_run: bool = False,
     export_planner: bool = True,
+    now: datetime | None = None,
 ) -> AuditReport:
     persist_store = library_path is None
     if persist_store:
@@ -447,6 +448,7 @@ def run_audit(
                 library_path=path,
                 outputs_dir=media_root,
                 upload_b2=False,
+                now=now,
             )
             if persist_store:
                 linkedin_entries = build_linkedin_planner_entries(entries)
@@ -463,8 +465,11 @@ def run_audit(
                 str(row.get("final_caption") or ""),
                 str(((row.get("platform_overrides") or {}).get("youtube") or {}).get("caption") or ""),
             ):
-                if field and len(extract_hashtags(field)) > MAX_HASHTAGS:
-                    report.caption_errors.append(f"{session_id_of(row)}: >{MAX_HASHTAGS} hashtags")
+                # Social captions allow 3–5. The SEO pack writes four
+                # (topic, both models, #AIvsAI). MAX_HASHTAGS stays 3 for the
+                # older planner path that prunes to that cap.
+                if field and len(extract_hashtags(field)) > 5:
+                    report.caption_errors.append(f"{session_id_of(row)}: >5 hashtags")
                     report.captions_ok = False
             from products.aiwake.tools.metadata_generator import TITLE_MAX_CHARS, has_chapter_timestamps
 

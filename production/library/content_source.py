@@ -322,7 +322,9 @@ def _copy_b2_records(library: Path, prefix: str, *, client, bucket: str | None) 
         if not text:
             continue
         dest = library / name
-        dest.write_text(text, encoding="utf-8")
+        # Keep the object bytes. write_text's default newline turns LF into
+        # CRLF on Windows and the downloaded JSON no longer matches B2.
+        dest.write_text(text, encoding="utf-8", newline="\n")
         written += 1
     if written:
         log.info("Copied %d library record(s) from B2.", written)

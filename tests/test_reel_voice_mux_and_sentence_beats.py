@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import math
+import shutil
 import struct
+import subprocess
 import wave
 from pathlib import Path
 
@@ -73,16 +75,23 @@ def _tone(path: Path, freq: float, seconds: float, *, sr: int = 16000, amp: floa
         handle.writeframes(frames)
 
 
-def _band_energy(path: Path, freq: float, *, sr: int = 16000) -> float:
-    import subprocess
+def _require_ffmpeg() -> None:
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg and ffprobe are not on PATH")
 
+
+def _band_energy(path: Path, freq: float, *, sr: int = 16000) -> float:
+    # stdin must be closed. capture_output leaves a pipe open and ffmpeg waits.
     proc = subprocess.run(
         [
             "ffmpeg", "-v", "error", "-i", str(path),
             "-ac", "1", "-ar", str(sr), "-f", "s16le", "-",
         ],
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         check=False,
+        timeout=30,
     )
     data = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float64)
     if data.size < sr // 10:
@@ -103,31 +112,33 @@ def _pattern(path: Path, shift: int, color: tuple[int, int, int] = (220, 40, 40)
 
 
 def _media_duration(path: Path) -> float:
-    import subprocess
-
     proc = subprocess.run(
         [
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "csv=p=0", str(path),
         ],
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         check=False,
+        timeout=20,
     )
     return float((proc.stdout or "0").strip() or 0.0)
 
 
 def _pix_fmt(path: Path) -> str:
-    import subprocess
-
     proc = subprocess.run(
         [
             "ffprobe", "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", str(path),
         ],
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         check=False,
+        timeout=20,
     )
     return (proc.stdout or "").strip()
 
@@ -360,6 +371,7 @@ def test_baghdad_search_includes_the_site_queries() -> None:
     reason="ffmpeg libass missing",
 )
 def test_ffmpeg_reel_keeps_the_voice(tmp_path: Path) -> None:
+    _require_ffmpeg()
     from core.reel_ffmpeg_render import compile_ffmpeg_reel, output_has_audio
 
     voice = tmp_path / "voice.wav"
@@ -392,6 +404,7 @@ def test_ffmpeg_reel_keeps_the_voice(tmp_path: Path) -> None:
 )
 def test_offline_reel_compiles_with_voice_and_no_adjacent_dupes(tmp_path: Path) -> None:
     """Mocked stills, real ffmpeg. The gate the live smoke did not have."""
+    _require_ffmpeg()
     from core.reel_ffmpeg_render import output_has_audio
     from core.reel_sequence_engine import compile_sequence_reel
     from modules.reel_artefact.diversity import claim_diverse, reset_diversity
@@ -451,6 +464,7 @@ def test_offline_reel_compiles_with_voice_and_no_adjacent_dupes(tmp_path: Path) 
 def test_moviepy_fallback_keeps_the_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _require_ffmpeg()
     pytest.importorskip("moviepy")
     from core.reel_ffmpeg_render import output_has_audio
     from core.reel_sequence_engine import compile_sequence_reel

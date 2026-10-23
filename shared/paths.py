@@ -19,7 +19,7 @@ import logging
 import os
 from pathlib import Path
 
-from shared.env import load_project_dotenv
+from shared.env import env_bool, load_project_dotenv
 
 _FACTORY_ROOT: Path = Path(__file__).resolve().parents[1]
 _LOG = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ _warned_local_fallback = False
 
 def _parse_dotenv_file(name: str) -> str | None:
     """Read a single key from the factory ``.env`` without requiring python-dotenv."""
+    if env_bool("OMNI_SKIP_DOTENV"):
+        return None
     env_path = _FACTORY_ROOT / ".env"
     if not env_path.is_file():
         return None

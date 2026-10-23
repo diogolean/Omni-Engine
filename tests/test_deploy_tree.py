@@ -78,12 +78,22 @@ def test_workflow_changes_only_the_paths_the_vm_reads() -> None:
     assert "< deploy/vm/remote-deploy.sh" in workflow
     assert "needs: build\n" in workflow
     assert "needs: [build, supermemory-image]" not in workflow
+    # #70 gates deploy on a fresh main. The guard stays in both image jobs
+    # and in the tag step. Do not drop it when retargeting paths.
+    assert workflow.count("git ls-remote origin main") == 3
+    assert "file: Dockerfile\n" not in workflow
+    assert "context: docker/supermemory\n" not in workflow
     validate = (_ROOT / ".github" / "workflows" / "validate.yml").read_text(
         encoding="utf-8"
     )
     assert "Dockerfile" not in validate
     assert "docker-compose" not in validate
     assert "deploy/" not in validate
+    assert validate.count("bash .github/scripts/install-ffmpeg.sh") == 2
+    installer = _ROOT / ".github" / "scripts" / "install-ffmpeg.sh"
+    assert installer.is_file()
+    assert not installer.is_symlink()
+    assert not (_ROOT / "deploy" / "vm" / "install-ffmpeg.sh").exists()
 
 
 def test_vm_scripts_still_run_from_opt_omni_engine() -> None:

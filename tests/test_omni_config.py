@@ -102,6 +102,30 @@ def test_legacy_token_used_when_account_env_is_empty(monkeypatch: pytest.MonkeyP
     assert resolve_pinterest_token(account) == "token-legacy"
 
 
+def test_channel_dotenv_stays_unread_while_dotenv_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A live channels_config/<brand>/.env must not beat the legacy test token."""
+    root = tmp_path / "repo"
+    channel = root / "channels_config" / "ancient_knowledge"
+    channel.mkdir(parents=True)
+    (channel / ".env").write_text("PINTEREST_ACCESS_TOKEN=from-channel-file\n", encoding="utf-8")
+    monkeypatch.setattr("accounts.tokens.repo_root", lambda: root)
+    monkeypatch.setenv("OMNI_SKIP_DOTENV", "1")
+    monkeypatch.delenv("PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE", raising=False)
+    monkeypatch.setenv("PINTEREST_ACCESS_TOKEN", "token-legacy")
+    account = Account(
+        branding="ancient_knowledge",
+        platform="pinterest",
+        account_id="ancient_knowledge",
+        token_env="PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE",
+        extra={"legacy_token_env": "PINTEREST_ACCESS_TOKEN"},
+    )
+    assert resolve_pinterest_token(account) == "token-legacy"
+    monkeypatch.delenv("OMNI_SKIP_DOTENV", raising=False)
+    assert resolve_pinterest_token(account) == "from-channel-file"
+
+
 def test_rotated_token_is_written_to_the_account_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

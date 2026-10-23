@@ -9,7 +9,77 @@ the production defaults.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# A developer machine keeps tokens, OUTPUT_PATH, and Drive ids in .env.
+# Tests that need one of these set it themselves. The prefixes are the ones
+# that made the Windows run pick a live pin, a live board, or a live ledger.
+_HERMETIC_PREFIXES = (
+    "PINTEREST_",
+    "B2_",
+    "AWS_",
+    "GOOGLE_",
+    "DRIVE_",
+    "ELEVENLABS_",
+    "ANTHROPIC_",
+    "OPENAI_",
+    "DEEPSEEK_",
+    "GEMINI_",
+    "TOGETHER_",
+    "REPLICATE_",
+    "FACEBOOK_",
+    "YOUTUBE_",
+    "TIKTOK_",
+)
+_HERMETIC_KEYS = (
+    "OUTPUT_PATH",
+    "OUTPUTS_DIR",
+    "ASSETS_PATH",
+    "FONT_DIRS",
+    "FFMPEG_BINARY",
+    "FFPROBE_BINARY",
+    "LIBRARY_SOURCE",
+    "MIN_INTERVAL_HOURS",
+    "MAX_INTERVAL_HOURS",
+    "POSTING_INTERVAL_HOURS",
+    "USE_CLAUDE",
+    "CLAUDE_MODEL",
+    "OMNI_LEDGER_PATH",
+    "OMNI_DRIVE_ROOT",
+    "ACTIVE_PAGE",
+)
+
+
+def _portable_font(path: str) -> bool:
+    """Keep repo and Linux fonts. Drop the Windows Fonts directory."""
+    lowered = str(path).replace("\\", "/").lower()
+    return "/windows/fonts/" not in lowered
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_machine(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Drop the developer .env, ledger, and system fonts for this test."""
+    monkeypatch.setenv("OMNI_SKIP_DOTENV", "1")
+    for key in list(os.environ):
+        if key.startswith(_HERMETIC_PREFIXES) or key in _HERMETIC_KEYS:
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path / "outputs"))
+    try:
+        from production.formats.pins import image_transformer as cards
+    except Exception:  # noqa: BLE001
+        return
+    monkeypatch.setattr(
+        cards,
+        "_SERIF_CANDIDATES",
+        [path for path in cards._SERIF_CANDIDATES if _portable_font(path)],
+    )
+    monkeypatch.setattr(
+        cards,
+        "_SANS_CANDIDATES",
+        [path for path in cards._SANS_CANDIDATES if _portable_font(path)],
+    )
 
 
 @pytest.fixture(autouse=True)

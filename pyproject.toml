@@ -1,5 +1,8 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# One stuck ffmpeg or network call fails the test instead of the job.
+# Requires pytest-timeout (requirements-ci.txt). 120s covers a short render.
+timeout = 120
 
 [tool.ruff]
 line-length = 100

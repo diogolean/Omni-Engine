@@ -61,11 +61,20 @@ def test_find_font_prefers_font_dirs_then_repo(monkeypatch, tmp_path) -> None:
 
 
 def test_ancient_knowledge_voice_reference_is_repo_relative() -> None:
+    """The path is resolved beside page_config. A checkout under C:\\dev is fine.
+
+    The source must not hardcode a machine path. ``Path.resolve()`` is absolute
+    on every OS, including a Windows tree that lives at ``C:\\dev``.
+    """
     mod = importlib.import_module("channels_config.ancient_knowledge.page_config")
+    source = Path(mod.__file__).read_text(encoding="utf-8")
+    assert 'r"C:\\dev' not in source
+    assert "C:/dev" not in source
     text = Path(mod.VOICE_REFERENCE_TEXT)
+    audio = Path(mod.VOICE_REFERENCE_AUDIO)
+    voice_dir = Path(mod.__file__).resolve().parent / "voice_reference"
     assert text.is_file()
-    assert "C:\\dev" not in mod.VOICE_REFERENCE_AUDIO
-    assert Path(mod.VOICE_REFERENCE_AUDIO).parent == text.parent
+    assert audio.parent == text.parent == voice_dir
 
 
 def test_no_hardcoded_drive_letters_in_engine_code() -> None:
