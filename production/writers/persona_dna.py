@@ -1,272 +1,62 @@
 # -*- coding: utf-8 -*-
-"""
-Multi-page persona dispatch module — Unified Multi-Page Factory edition.
+"""ACTIVE_PAGE facade over :func:`production.writers.persona.load_persona`.
 
-This module is the single Python interface layer for all persona data across
-ALL pages. It resolves the active page from the ACTIVE_PAGE environment
-variable (set by main.py before any import) and loads the corresponding
-channels_config/{page}/master_dna.json at runtime.
-
-Downstream consumers (VisualArchitect, CaptionEngine, subject_brain, etc.)
-import directly from this module:
-
-    from production.writers.persona_dna import contextual_cta_keyword, persona_context_block
-
-The module dynamically delegates to the correct page's master_dna.json.
-
-Page DNA files
---------------
-    channels_config/anna_protocol/master_dna.json  (active: holistic legacy)
-    channels_config/master_mei/master_dna.json     (active SUPER: Protocol for Liberation)
-    channels_config/wonder_feed/master_dna.json    (blueprint: emotional intelligence)
-    channels_config/down_dirty/master_dna.json     (blueprint: matrix escape)
-
-Zero hard-coding of keywords, themes, or philosophy is permitted in this file;
-every value originates from the active page's master_dna.json.
+Downstream modules keep importing these names. The values are bound once, from
+the DNA file of ``ACTIVE_PAGE`` (default ``anna_protocol``), the same way the
+previous loader bound them at import. Channel prompt copy is not stored here.
 """
 from __future__ import annotations
 
-import json
 import os
-import random
-from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Resolve the active master_dna.json path from ACTIVE_PAGE env var.
-# This env var is set by main.py BEFORE any imports, ensuring this module
-# picks up the correct page on first import.
-# NOTE: __file__ is inside production/writers/, so parents[2] is the project root.
-# ---------------------------------------------------------------------------
+from production.writers.persona import ENGINE_ROOT as _ENGINE_ROOT
+from production.writers.persona import load_persona
 
-_ENGINE_ROOT = Path(__file__).resolve().parents[2]
-_ACTIVE_PAGE: str = os.environ.get("ACTIVE_PAGE", "anna_protocol")
+_ACTIVE_PAGE = os.environ.get("ACTIVE_PAGE", "anna_protocol")
+_persona = load_persona(_ACTIVE_PAGE)
 
-_candidate_dna = _ENGINE_ROOT / "channels_config" / _ACTIVE_PAGE / "master_dna.json"
-_legacy_dna = _ENGINE_ROOT / "pages_config" / _ACTIVE_PAGE / "master_dna.json"
-
-# Fallback hierarchy:
-#   1. channels_config/{page}/master_dna.json   (primary — channel-isolated)
-#   2. pages_config/{page}/master_dna.json      (legacy folder name)
-#   3. agents.media/master_dna.json            (legacy anna_protocol path)
-#   4. Minimal stub dict (reference-based pages that skip the LLM-image pipeline)
-if _candidate_dna.is_file():
-    _MASTER_DNA_PATH: Path | None = _candidate_dna
-elif _legacy_dna.is_file():
-    _MASTER_DNA_PATH = _legacy_dna
-elif _ACTIVE_PAGE == "anna_protocol":
-    _MASTER_DNA_PATH = _ENGINE_ROOT / "agents.media" / "master_dna.json"
-else:
-    # For reference-based pages (e.g. momma_circle REFERENCE_BASED_REELS) the
-    # image/avatar pipeline is not used, so persona_dna values are never read.
-    # Log a warning and fall back to a stub rather than crashing at import time.
-    import logging as _logging
-    _logging.getLogger(__name__).warning(
-        "persona_dna: master_dna.json not found for page '%s' at %s. "
-        "Using minimal stub DNA — reference-based pipeline will still function. "
-        "Create channels_config/%s/master_dna.json to enable full LLM persona features.",
-        _ACTIVE_PAGE, _candidate_dna, _ACTIVE_PAGE,
-    )
-    _MASTER_DNA_PATH = None
-
-
-def _load() -> dict:
-    if _MASTER_DNA_PATH is None:
-        # Return a minimal stub — all downstream consumers guard with .get() defaults.
-        _page_label = _ACTIVE_PAGE.replace("_", " ").title()
-        return {
-            "Subject": _page_label,
-            "display_name": _page_label,
-            "Physical_Appearance": {},
-            "Brand_Voice_&_Mission": {
-                "Tone": "warm, engaging, authentic",
-                "Mission_Statement": f"Create high-quality content for the {_page_label} channel.",
-                "Themes": "",
-                "Target_Audience": "Social media audience",
-                "Voice_Persona": f"The {_page_label} voice.",
-            },
-            "Core_Directive": f"Produce compelling content for {_page_label}.",
-            "Core_Natural_Mechanics": [],
-            "Philosophical_Core": {
-                "Core_Belief": "",
-                "The_Conflict": "",
-                "Science_Metaphors": [],
-                "Voice_Adjectives": ["warm", "authentic", "engaging"],
-                "Banned_Name_References": [],
-            },
-            "Narrative_Angles": [],
-            "Batch_Research": {
-                "Default_Batch_Size": 10,
-                "Delimiter_Open": "===TOPIC_",
-                "Delimiter_Close": "===",
-                "Words_Per_Narrative": "150-220",
-                "Rotation_Pattern": "",
-            },
-            "Call_To_Action_Inventory": {
-                "Authorized_Keywords": ["save", "share", "follow", "comment"],
-                "Theme_Keyword_Map": {},
-                "CTA_Voice_Instruction": "Invite the audience to engage warmly.",
-            },
-            "Environments": [],
-            "Camera_Angles": [],
-            "Times_Of_Day": [],
-            "Anna_Actions": [],
-            "Legacy_Rule": {"Probability": 0.0},
-        }
-    return json.loads(_MASTER_DNA_PATH.read_text(encoding="utf-8-sig"))
-
-
-_P = _load()
-
-# ---------------------------------------------------------------------------
-# Core identity
-# ---------------------------------------------------------------------------
-
-ANNA_DISPLAY_NAME: str = _P.get("Subject", "Anna")
-ANNA_AGE_YEARS: int = _P.get("Physical_Appearance", {}).get("Age", 0)
-
-_phys = _P.get("Physical_Appearance", {})
-ANNA_PHYSICAL: str = (
-    f"{ANNA_AGE_YEARS}-year-old: "
-    f"{_phys.get('Hair', '')}. "
-    f"Physique: {_phys.get('Physique', '')}. "
-    f"Skin: {_phys.get('Skin_Texture', '')} "
-    f"Visual standard: {_phys.get('Visual_Standard', '')}"
-)
-
-_voice = _P.get("Brand_Voice_&_Mission", {})
-ANNA_VOICE_PRINCIPLES: str = (
-    f"Tone: {_voice.get('Tone', '')}. "
-    f"Mission: {_voice.get('Mission_Statement', '')}. "
-    f"Themes: {_voice.get('Themes', '')}."
-)
-
-ANNA_EXPERTISE_LENS: str = (
-    f"Target audience: {_voice.get('Target_Audience', '')}. "
-    + _voice.get("Voice_Persona", "")
-)
-
-CORE_DIRECTIVE: str = _P.get("Core_Directive", "")
-CORE_MECHANICS: list[str] = _P.get("Core_Natural_Mechanics", [])
-
-# ---------------------------------------------------------------------------
-# Philosophical core
-# ---------------------------------------------------------------------------
-
-_PHIL = _P.get("Philosophical_Core", {})
-PHILOSOPHY_CORE_BELIEF: str = _PHIL.get("Core_Belief", "")
-PHILOSOPHY_THE_CONFLICT: str = _PHIL.get("The_Conflict", "")
-PHILOSOPHY_SCIENCE_METAPHORS: list[str] = _PHIL.get("Science_Metaphors", [])
-PHILOSOPHY_VOICE_ADJECTIVES: list[str] = _PHIL.get("Voice_Adjectives", [])
-PHILOSOPHY_BANNED_NAMES: list[str] = _PHIL.get("Banned_Name_References", [])
-
-# ---------------------------------------------------------------------------
-# Narrative angles for batch research
-# ---------------------------------------------------------------------------
-
-NARRATIVE_ANGLES: list[dict] = _P.get("Narrative_Angles", [])
-
-_BATCH = _P.get("Batch_Research", {})
-BATCH_DEFAULT_SIZE: int = _BATCH.get("Default_Batch_Size", 20)
-BATCH_DELIMITER_OPEN: str = _BATCH.get("Delimiter_Open", "===NARRATIVE_")
-BATCH_DELIMITER_CLOSE: str = _BATCH.get("Delimiter_Close", "===")
-BATCH_WORDS_PER_NARRATIVE: str = _BATCH.get("Words_Per_Narrative", "150-250")
-BATCH_ROTATION_PATTERN: str = _BATCH.get("Rotation_Pattern", "")
-
-# ---------------------------------------------------------------------------
-# CTA inventory
-# ---------------------------------------------------------------------------
-
-_CTA_INV = _P.get("Call_To_Action_Inventory", {})
-CTA_KEYWORDS: list[str] = _CTA_INV.get("Authorized_Keywords", [])
-_THEME_MAP: dict[str, str] = _CTA_INV.get("Theme_Keyword_Map", {})
-CTA_VOICE_INSTRUCTION: str = _CTA_INV.get("CTA_Voice_Instruction", "")
-
-# ---------------------------------------------------------------------------
-# Visual / image data
-# ---------------------------------------------------------------------------
-
-ENVIRONMENTS: list[dict] = _P.get("Environments", [])
-CAMERA_ANGLES: list[str] = _P.get("Camera_Angles", [])
-TIMES_OF_DAY: list[str] = _P.get("Times_Of_Day", [])
-ANNA_ACTIONS: list[str] = _P.get("Anna_Actions", [])
-LEGACY_RULE: dict = _P.get("Legacy_Rule", {"Probability": 0.0})
-
-# ---------------------------------------------------------------------------
-# CTA keyword selection
-# ---------------------------------------------------------------------------
+ANNA_DISPLAY_NAME: str = _persona.display_name
+ANNA_AGE_YEARS: int = _persona.age_years
+ANNA_PHYSICAL: str = _persona.physical
+ANNA_VOICE_PRINCIPLES: str = _persona.voice_principles
+ANNA_EXPERTISE_LENS: str = _persona.expertise_lens
+CORE_DIRECTIVE: str = _persona.core_directive
+CORE_MECHANICS: list[str] = _persona.core_mechanics
+PHILOSOPHY_CORE_BELIEF: str = _persona.philosophy_core_belief
+PHILOSOPHY_THE_CONFLICT: str = _persona.philosophy_the_conflict
+PHILOSOPHY_SCIENCE_METAPHORS: list[str] = _persona.philosophy_science_metaphors
+PHILOSOPHY_VOICE_ADJECTIVES: list[str] = _persona.philosophy_voice_adjectives
+PHILOSOPHY_BANNED_NAMES: list[str] = _persona.philosophy_banned_names
+NARRATIVE_ANGLES: list[dict] = _persona.narrative_angles
+BATCH_DEFAULT_SIZE: int = _persona.batch_default_size
+BATCH_DELIMITER_OPEN: str = _persona.batch_delimiter_open
+BATCH_DELIMITER_CLOSE: str = _persona.batch_delimiter_close
+BATCH_WORDS_PER_NARRATIVE: str = _persona.batch_words_per_narrative
+BATCH_ROTATION_PATTERN: str = _persona.batch_rotation_pattern
+CTA_KEYWORDS: list[str] = _persona.cta_keywords
+CTA_VOICE_INSTRUCTION: str = _persona.cta_voice_instruction
+ENVIRONMENTS: list = _persona.environments
+CAMERA_ANGLES: list[str] = _persona.camera_angles
+TIMES_OF_DAY: list[str] = _persona.times_of_day
+ANNA_ACTIONS: list[str] = _persona.actions
+LEGACY_RULE: dict = _persona.legacy_rule
 
 
 def contextual_cta_keyword(topic: str) -> str:
-    """
-    Select the CTA keyword most relevant to the post topic.
-
-    Scans the topic string against every key in the active page's
-    Theme_Keyword_Map (longest keys first to avoid short-fragment collisions),
-    returns the mapped keyword on first match. Falls back to a random keyword.
-    """
-    topic_lower = topic.lower()
-    for fragment in sorted(_THEME_MAP.keys(), key=len, reverse=True):
-        if fragment in topic_lower:
-            return _THEME_MAP[fragment]
-    return random_cta_keyword()
+    return _persona.contextual_cta_keyword(topic)
 
 
 def random_cta_keyword() -> str:
-    """Return one random authorized CTA keyword for the active page."""
-    return random.choice(CTA_KEYWORDS) if CTA_KEYWORDS else "RESTORE"
-
-
-# ---------------------------------------------------------------------------
-# Prompt context helpers
-# ---------------------------------------------------------------------------
+    return _persona.random_cta_keyword()
 
 
 def philosophy_block() -> str:
-    """
-    Philosophy constraint block injected into researcher and humanizer prompts.
-    Encodes the active page's core conflict, science metaphors, and narrative angles.
-    """
-    metaphors = "\n".join(f"  - {m}" for m in PHILOSOPHY_SCIENCE_METAPHORS)
-    angles = "\n".join(
-        f"  - {a.get('code', '')}: {a.get('description', '')}"
-        for a in NARRATIVE_ANGLES
-    )
-    banned = ", ".join(f'"{n}"' for n in PHILOSOPHY_BANNED_NAMES) or "none"
-    return (
-        f"PHILOSOPHY CORE:\n"
-        f"  Belief: {PHILOSOPHY_CORE_BELIEF}\n"
-        f"  The Conflict: {PHILOSOPHY_THE_CONFLICT}\n\n"
-        f"SCIENCE / SYSTEM METAPHORS (use when relevant):\n{metaphors}\n\n"
-        f"NARRATIVE ANGLES AVAILABLE:\n{angles}\n\n"
-        f"BANNED NAME REFERENCES (never appear in any output): {banned}"
-    )
+    return _persona.philosophy_block()
 
 
 def persona_context_block() -> str:
-    """Compact block injected into every LLM research/humanizer prompt."""
-    mechanics = "\n".join(f"  - {m}" for m in CORE_MECHANICS)
-    return (
-        f"Identity: {ANNA_DISPLAY_NAME}, age {ANNA_AGE_YEARS}.\n"
-        f"Core directive: {CORE_DIRECTIVE}\n"
-        f"Physical: {ANNA_PHYSICAL}\n"
-        f"Audience lens: {ANNA_EXPERTISE_LENS}\n"
-        f"Voice: {ANNA_VOICE_PRINCIPLES}\n"
-        f"Core mechanics:\n{mechanics}\n\n"
-        f"{philosophy_block()}"
-    )
+    return _persona.persona_context_block()
 
 
 def visual_style_block() -> str:
-    """Compact visual / environment block for image-prompt builders."""
-    env = _P.get("Visual_Environment_&_Composition", {})
-    phys = _P.get("Physical_Appearance", {})
-    env_names = [e["name"] for e in ENVIRONMENTS]
-    lines = [
-        f"Subject: {ANNA_DISPLAY_NAME}, age {ANNA_AGE_YEARS}. {phys.get('Hair', '')}.",
-        f"Physique: {phys.get('Physique', '')}.",
-        f"Skin realism: {phys.get('Skin_Texture', '')}",
-        f"Visual standard: {phys.get('Visual_Standard', '')}",
-        f"Atmosphere: {env.get('Atmosphere', 'Dramatic, atmospheric, high-fidelity.')}",
-        f"Available environments: {'; '.join(env_names)}",
-    ]
-    return "\n".join(lines)
+    return _persona.visual_style_block()
