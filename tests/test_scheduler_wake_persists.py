@@ -161,13 +161,16 @@ def test_restart_during_publish_does_not_repeat_the_slot(
     monkeypatch.setenv("MAX_INTERVAL_HOURS", "4")
     asked: list[list[str]] = []
 
-    def published(accounts=None, *, read_rows=None):
-        del read_rows
-        if accounts is not None:
-            asked.append([account.account_id for account in accounts])
+    def channel_reader(accounts):
+        asked.append([account.account_id for account in accounts])
         return pin_at
 
-    monkeypatch.setattr("distribution.workers.runtime.newest_pin_published", published)
+    # The startup stamp does not cover the wake. The injected reader does.
+    monkeypatch.setattr(
+        "distribution.workers.runtime.newest_pin_published",
+        lambda: _NOW - timedelta(hours=6),
+    )
+    monkeypatch.setattr("distribution.workers.runtime._channel_ledger_reader", channel_reader)
     sleeps: list[float] = []
 
     def fake_sleep(seconds: float, stop: dict) -> None:
@@ -222,3 +225,16 @@ def test_wake_write_failure_keeps_the_ledger_delay(
         run_scheduler(once=False, dry_run=False)
     assert sleeps == [pytest.approx(3 * 3600)]
     assert any("Could not save scheduler wake" in record.message for record in caplog.records)
+
+
+def test_channel_reader_is_injected_not_inspected() -> None:
+    """Per-channel ledger reads take an injected reader, not inspect.signature."""
+    source = (
+        Path(__file__)
+        .resolve()
+        .parents[1]
+        .joinpath("distribution", "workers", "runtime.py")
+        .read_text(encoding="utf-8")
+    )
+    assert "inspect" not in source
+    assert "_channel_ledger_reader" in source

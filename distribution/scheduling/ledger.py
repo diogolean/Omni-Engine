@@ -134,6 +134,99 @@ class PinLedger:
         self.rows.append(stored)
         self._write()
 
+    def reserve(
+        self,
+        *,
+        post_id: str = "",
+        title: str = "",
+        source_hash: str = "",
+        article: str = "",
+    ) -> None:
+        """Persist a row ``seen()`` treats as already published, before the API call.
+
+        The row has an empty ``pin_id`` and ``reserved=True``. It does not set
+        ``pin_recorded`` false, because that flag is how Facebook notes stay
+        invisible to ``seen()``. A kill after the Pinterest call still finds
+        this row, so the next run does not publish a second pin. A second
+        reserve for the same post does not add another row.
+        """
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        for row in self.rows:
+            if _open_reservation(row, post_id=wanted, source_hash=wanted_hash):
+                return
+        self.rows.append(
+            {
+                "account": self.account_id,
+                "post_id": wanted,
+                "title": str(title or ""),
+                "pin_id": "",
+                "source_hash": wanted_hash,
+                "article": str(article or ""),
+                "seeded": False,
+                "facebook_exported": False,
+                "reserved": True,
+                "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+        self._write()
+
+    def complete(
+        self,
+        *,
+        post_id: str,
+        pin_id: str,
+        facebook_exported: bool = False,
+        title: str = "",
+        source_hash: str = "",
+        article: str = "",
+    ) -> None:
+        """Store ``pin_id`` on the reserved row. Does not append a second row."""
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        for row in reversed(self.rows):
+            if not _open_reservation(row, post_id=wanted, source_hash=wanted_hash):
+                continue
+            row["pin_id"] = str(pin_id or "")
+            row["reserved"] = False
+            row["facebook_exported"] = bool(facebook_exported)
+            if title:
+                row["title"] = str(title)
+            if article:
+                row["article"] = str(article)
+            if wanted_hash and not str(row.get("source_hash") or "").strip():
+                row["source_hash"] = wanted_hash
+            self._write()
+            return
+        self.append(
+            {
+                "post_id": wanted,
+                "title": title,
+                "pin_id": pin_id,
+                "source_hash": source_hash,
+                "article": article,
+                "facebook_exported": facebook_exported,
+            }
+        )
+
+    def release(self, *, post_id: str = "", source_hash: str = "") -> None:
+        """Drop an unsent reservation so a failed call can be retried.
+
+        Facebook notes (``pin_recorded`` false) and seeded board rows stay.
+        A row that already has a ``pin_id`` stays too.
+        """
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        kept = [
+            row
+            for row in self.rows
+            if not _open_reservation(row, post_id=wanted, source_hash=wanted_hash)
+        ]
+        if len(kept) == len(self.rows):
+            return
+        self.rows = kept
+        self._write()
+
     def note_facebook_export(self, *, post_id: str, article: str = "") -> None:
         """Remember a Facebook row without treating the pin as already published.
 
@@ -263,6 +356,20 @@ class PinLedger:
             return self.cache_path.read_text(encoding="utf-8"), True
         except OSError:
             return "", False
+
+
+def _open_reservation(row: dict, *, post_id: str, source_hash: str) -> bool:
+    """True for a row reserved before Pinterest accepted the pin."""
+    if row.get("reserved") is not True:
+        return False
+    if str(row.get("pin_id") or "").strip():
+        return False
+    if row.get("pin_recorded") is False or row.get("seeded") is True:
+        return False
+    if post_id and str(row.get("post_id") or "") == post_id:
+        return True
+    row_hash = str(row.get("source_hash") or "").strip()
+    return bool(source_hash) and bool(row_hash) and row_hash == source_hash and not post_id
 
 
 def _parse_jsonl(text: str) -> list[dict]:

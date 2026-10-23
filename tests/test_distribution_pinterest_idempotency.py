@@ -156,6 +156,90 @@ def test_pin_ledger_dedup_keys_are_unchanged(tmp_path: Path) -> None:
     assert ledger.seen(source_hash="abc123") is False
 
 
+def test_reservation_blocks_a_second_pin_until_it_is_released(tmp_path: Path) -> None:
+    """A row written before the API call is visible to seen(), with no pin id yet."""
+    ledger = PinLedger("ancient_knowledge", cache_path=tmp_path / "ancient_knowledge.jsonl")
+    ledger.rows = [
+        {
+            "post_id": "facebook-note",
+            "title": "Stone Circle",
+            "source_hash": "note-hash",
+            "pin_recorded": False,
+            "facebook_exported": True,
+            "seeded": False,
+        },
+        {
+            "post_id": "",
+            "title": "Board history",
+            "pin_id": "pin-seed",
+            "source_hash": "seed-hash",
+            "seeded": True,
+        },
+    ]
+    ledger.reserve(
+        post_id="ancient_knowledge:post-9",
+        title="New Stone",
+        source_hash="img-9",
+        article="https://example.test/new",
+    )
+    stored = [
+        json.loads(line)
+        for line in (tmp_path / "ancient_knowledge.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(stored) == 3
+    reserved = stored[-1]
+    assert reserved["pin_id"] == ""
+    assert reserved["reserved"] is True
+    assert reserved.get("pin_recorded") is not False
+    assert ledger.seen(post_id="ancient_knowledge:post-9") is True
+    assert ledger.seen(title="New Stone") is True
+    assert ledger.seen(source_hash="img-9") is True
+
+    ledger.reserve(
+        post_id="ancient_knowledge:post-9",
+        title="New Stone",
+        source_hash="img-9",
+    )
+    assert len(ledger.rows) == 3
+
+    ledger.release(post_id="ancient_knowledge:post-9", source_hash="img-9")
+    assert ledger.seen(post_id="ancient_knowledge:post-9") is False
+    assert ledger.seen(title="New Stone") is False
+    assert ledger.seen(source_hash="img-9") is False
+    assert any(row.get("pin_recorded") is False for row in ledger.rows)
+    assert any(row.get("seeded") is True and row.get("pin_id") == "pin-seed" for row in ledger.rows)
+    assert len(ledger.rows) == 2
+
+
+def test_complete_fills_the_reserved_row_without_a_second_append(tmp_path: Path) -> None:
+    ledger = PinLedger("ancient_knowledge", cache_path=tmp_path / "ancient_knowledge.jsonl")
+    ledger.reserve(
+        post_id="ancient_knowledge:post-9",
+        title="New Stone",
+        source_hash="img-9",
+        article="https://example.test/new",
+    )
+    stamp = ledger.rows[0]["published_utc"]
+    ledger.complete(
+        post_id="ancient_knowledge:post-9",
+        pin_id="pin-live",
+        title="New Stone",
+        source_hash="img-9",
+        article="https://example.test/new",
+        facebook_exported=True,
+    )
+    assert len(ledger.rows) == 1
+    row = ledger.rows[0]
+    assert row["pin_id"] == "pin-live"
+    assert row["reserved"] is False
+    assert row["facebook_exported"] is True
+    assert row["published_utc"] == stamp
+    assert ledger.seen(post_id="ancient_knowledge:post-9") is True
+    ledger.release(post_id="ancient_knowledge:post-9", source_hash="img-9")
+    assert len(ledger.rows) == 1
+    assert ledger.rows[0]["pin_id"] == "pin-live"
+
+
 def test_already_posted_record_does_not_call_pinterest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
