@@ -1,19 +1,8 @@
-# -*- coding: utf-8 -*-
-"""Room observers — the side-effect layer."""
+"""Compatibility shim. The implementation is products.aiwake.observers."""
 from __future__ import annotations
 
-from .core import (
-    ConsoleObserver,
-    MemoryObserver,
-    MetricsObserver,
-    TranscriptObserver,
-    VoiceObserver,
-)
+from products.aiwake import observers as _impl
 
-__all__ = [
-    "ConsoleObserver",
-    "MemoryObserver",
-    "MetricsObserver",
-    "TranscriptObserver",
-    "VoiceObserver",
-]
+
+def __getattr__(attr: str):
+    return getattr(_impl, attr)

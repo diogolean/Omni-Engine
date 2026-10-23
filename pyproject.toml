@@ -45,6 +45,7 @@ ignore = ["E501", "E402", "E731", "E741"]
 "agents/media/visual_roles.py" = ["F401", "F841", "I001"]
 "agents/media/__init__.py" = ["F401", "F841", "I001"]
 "channels_config/**" = ["F401", "F841", "I001"]
+"products/aiwake/**" = ["F401", "F841", "I001"]
 "config/**" = ["F401", "F841", "I001"]
 "core/**" = ["F401", "F841", "I001"]
 "engine/**" = ["F401", "F841", "I001"]
@@ -104,12 +105,12 @@ known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_c
 # shared is the real layer (ADR 0008 M2 and M3). Shims stay until M14.
 # shared stand-ins that remain: utils.pipeline_paths, utils.process_tools,
 # modules.durable_store, modules.distribution_contract, modules.memory
-# animation: animation (parametric engine). core.animator is the shim plus
-# the Aiwake plate, voices, and harness until M10.
+# animation: animation (parametric engine). core.animator re-exports it.
+#   Aiwake plate, voices, and harness live in products.aiwake.animator.
 # production: production (M8), plus shim trees that still import as
 #   engine, modules, agents.orchestrator, core
 # distribution: distribution, accounts, and the agents.posting shims
-# products.aiwake: channels_config.aiwake
+# products.aiwake: the show. channels_config.aiwake re-exports it until M14.
 # channels: the other channels_config packages
 [tool.importlinter]
 root_packages = [
@@ -185,8 +186,10 @@ forbidden_modules = [
     "models_avatar",
     "core",
     "channels_config.aiwake",
+    "products.aiwake",
     "production",
     "animation",
+    "products",
 ]
 
 [[tool.importlinter.contracts]]
@@ -210,7 +213,7 @@ forbidden_modules = ["channels_config.aiwake"]
 [[tool.importlinter.contracts]]
 name = "Aiwake does not import the production pipeline"
 type = "forbidden"
-source_modules = ["channels_config.aiwake"]
+source_modules = ["products.aiwake"]
 forbidden_modules = [
     "engine",
     "modules",
@@ -246,6 +249,7 @@ forbidden_modules = [
     "accounts",
     "models_avatar",
     "channels_config.aiwake",
+    "products.aiwake",
     "production",
 ]
 
@@ -283,4 +287,28 @@ forbidden_modules = [
     "models_avatar",
     "utils",
     "production",
+]
+
+[[tool.importlinter.contracts]]
+name = "Nothing outside products imports products.aiwake"
+type = "forbidden"
+source_modules = [
+    "animation",
+    "core",
+    "shared",
+    "production",
+    "engine",
+    "modules",
+    "agents",
+    "distribution",
+    "accounts",
+    "channels_config",
+    "utils",
+    "models_avatar",
+]
+forbidden_modules = ["products.aiwake"]
+ignore_imports = [
+    "core.animator.** -> products.aiwake.**",
+    "channels_config.aiwake -> products.aiwake",
+    "channels_config.aiwake.** -> products.aiwake.**",
 ]

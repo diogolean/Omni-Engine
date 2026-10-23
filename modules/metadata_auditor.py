@@ -5,9 +5,10 @@ Restores ``channels_config/<channel>/store/`` from the G: outputs tree,
 scans rendered MP4s, and upserts ``content_library.json`` +
 ``asset_library.json`` through the durable dual-write path.
 
-Aiwake keeps a debate-transcript builder in
-``channels_config.aiwake.tools.backfill_metadata``. Every other channel
-gets a lean filename-based catalog row.
+Aiwake's debate-transcript builder lives in
+``products.aiwake.tools.backfill_metadata``. The generic tool registers
+that builder before it runs. Every other channel gets a lean
+filename-based catalog row.
 """
 from __future__ import annotations
 
@@ -34,6 +35,20 @@ from shared.store import restore_channel_state
 from utils.pipeline_paths import channel_store_dir, discover_channel_ids, page_outputs_dir
 
 _LOG = logging.getLogger("metadata_auditor")
+
+# Product backfills register here. This module does not import a show.
+_SPECIALIZED: dict[str, Callable[..., list[AuditItem]]] = {}
+
+
+def register_channel_backfill(
+    channel: str,
+    fn: Callable[..., list[AuditItem]],
+) -> None:
+    """Install one channel's catalog builder. The generic tool calls this."""
+    slug = (channel or "").strip().lower()
+    if not slug:
+        raise ValueError("channel slug is required")
+    _SPECIALIZED[slug] = fn
 
 _SKIP_DIR_NAMES = frozenset({
     "tmp", "temp", "scratch", "__pycache__", ".git", "needs_metadata",
@@ -269,31 +284,6 @@ def run_generic_backfill(
     return items
 
 
-def _run_aiwake_backfill(
-    *,
-    outputs_dir: Path | None,
-    dry_run: bool,
-    restore: bool,
-) -> list[AuditItem]:
-    from channels_config.aiwake.tools.backfill_metadata import run_backfill
-
-    if restore:
-        restore_channel_state("aiwake")
-    raw = run_backfill(outputs_dir=outputs_dir, dry_run=dry_run)
-    items: list[AuditItem] = []
-    for row in raw:
-        items.append(
-            AuditItem(
-                video_path=row.video_path,
-                record=row.record,
-                asset_id=row.asset_id,
-                status=row.status,
-                detail=row.detail,
-            )
-        )
-    return items
-
-
 def run_channel_backfill(
     channel: str,
     *,
@@ -309,12 +299,11 @@ def run_channel_backfill(
     profile = channel_profile(slug)
     if specialized is not None:
         return specialized(outputs_dir=outputs_dir, dry_run=dry_run, restore=False)
-    if profile.get("specialized") and slug == "aiwake":
-        return _run_aiwake_backfill(
-            outputs_dir=outputs_dir,
-            dry_run=dry_run,
-            restore=False,
-        )
+    hook = _SPECIALIZED.get(slug)
+    if hook is not None:
+        return hook(outputs_dir=outputs_dir, dry_run=dry_run, restore=False)
+    if profile.get("specialized"):
+        _LOG.warning("no specialized backfill registered for %s; using generic", slug)
     return run_generic_backfill(
         slug,
         outputs_dir=outputs_dir,

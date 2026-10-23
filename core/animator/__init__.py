@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Compatibility facade. The parametric engine lives in ``animation.parametric``.
 
-Aiwake voices, puppet factories, arenas, and harness output stay in this
-package until M10 (``products/aiwake/``). Importing this facade registers
-the Aiwake scene resolver and the Aiwake seating plate.
+Aiwake voices, puppet factories, arenas, and harness output live in
+``products/aiwake/``. The modules beside this facade re-export them until
+M14. Importing this facade registers the Aiwake scene resolver and the
+Aiwake seating plate.
 """
 from __future__ import annotations
 

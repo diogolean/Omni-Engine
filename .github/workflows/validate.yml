@@ -54,12 +54,48 @@ jobs:
           # (test_b2_budget, test_b2_direct_client_guard, test_drive_source,
           # test_upload_clips_b2_budget, test_pinterest_vm, and the publisher tests).
           # The visual-QA chain tests run: the default chain is qwen-only and
-          # fails closed. The remaining deselects failed in isolation on the
-          # base branch before the engine refactor.
+          # fails closed. Aiwake tests run in the aiwake job so this job does
+          # not collect them twice. The lofi deselect failed in isolation on
+          # the base branch before the engine refactor.
           pytest -q tests channels_config \
-            --deselect tests/test_lofi_emotional_pipeline.py::test_gemini38_provider_uses_only_configured_primary_model \
-            --deselect channels_config/aiwake/tests/test_caption_validator.py::test_truncated_plugs_it_fails \
-            --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_tiktok_caption_is_hook_quote_trigger \
-            --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_planner_imports_root_videos_with_optimized_captions \
-            --deselect channels_config/aiwake/tests/test_distribution_pipeline.py::test_update_scheduled_touches_private_matches_only \
-            --deselect channels_config/aiwake/tests/test_library_audit.py::test_run_audit_moves_rejects_and_exports_clean_planners
+            --ignore=channels_config/aiwake \
+            --deselect tests/test_lofi_emotional_pipeline.py::test_gemini38_provider_uses_only_configured_primary_model
+
+  aiwake:
+    name: aiwake tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libass9
+
+      - name: Install validation dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements-ci.txt
+
+      - name: Import smoke
+        run: |
+          python - << 'PY'
+          from products.aiwake import run_pipeline
+          from channels_config.aiwake import run_pipeline as shim_run
+          assert shim_run is run_pipeline
+          import core.animator.aiwake_plate as plate
+          import products.aiwake.animator.plate as impl
+          assert plate.apply_puppet is impl.apply_puppet
+          PY
+
+      - name: Test
+        run: |
+          # The five deselects failed in isolation on the base branch.
+          pytest -q products/aiwake \
+            --deselect products/aiwake/tests/test_caption_validator.py::test_truncated_plugs_it_fails \
+            --deselect products/aiwake/tests/test_distribution_pipeline.py::test_tiktok_caption_is_hook_quote_trigger \
+            --deselect products/aiwake/tests/test_distribution_pipeline.py::test_planner_imports_root_videos_with_optimized_captions \
+            --deselect products/aiwake/tests/test_distribution_pipeline.py::test_update_scheduled_touches_private_matches_only \
+            --deselect products/aiwake/tests/test_library_audit.py::test_run_audit_moves_rejects_and_exports_clean_planners

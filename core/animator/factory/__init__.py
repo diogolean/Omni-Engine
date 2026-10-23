@@ -1,6 +1,7 @@
 """Compatibility shim. The parametric rig lives in animation.parametric.factory.
 
-Aiwake puppet factories stay in this package until M10 (products/aiwake/).
+Aiwake puppet factories live in products.aiwake.animator.factory and are
+re-exported by the sibling modules here until M14.
 """
 from __future__ import annotations
 

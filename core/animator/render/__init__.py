@@ -1,2 +1,8 @@
-# TODO M10: move this Aiwake-specific module to products/aiwake/.
-"""Render-time sprite helpers for the animator."""
+"""Compatibility shim. The implementation is products.aiwake.animator.render."""
+from __future__ import annotations
+
+from products.aiwake.animator import render as _impl
+
+
+def __getattr__(attr: str):
+    return getattr(_impl, attr)

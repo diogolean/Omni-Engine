@@ -76,8 +76,8 @@ def test_no_hardcoded_drive_letters_in_engine_code() -> None:
         rel = path.relative_to(root)
         if rel.parts[0] in {"tests", ".git", ".venv", "venv", "node_modules"} or path in allowed:
             continue
-        if rel.parts[:2] == ("channels_config", "aiwake"):
-            continue  # Aiwake stays self-contained.
+        if rel.parts[:2] in {("channels_config", "aiwake"), ("products", "aiwake")}:
+            continue  # Aiwake stays self-contained. The show lives in products/aiwake.
         text = path.read_text(encoding="utf-8", errors="ignore")
         for needle in (
             'r"G:\\',

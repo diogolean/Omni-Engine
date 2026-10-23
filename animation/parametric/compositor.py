@@ -65,8 +65,8 @@ PRESENT_DROP_PX = 30
 # Product seating (which character ids get an extra scale, drop, or roll)
 # is installed by the compatibility shim. This package ships identity
 # defaults so a new show does not inherit another product's plate.
-# TODO M10: those numbers live in core/animator/aiwake_plate.py until
-# products/aiwake/ exists.
+# Product seating numbers live in products.aiwake.animator.plate.
+# The core.animator shims install them.
 DEBATER_PRESENT_IDS: frozenset[str] = frozenset()
 DEBATER_EXTRA_SCALE = 1.0
 DEBATER_EXTRA_DROP_PX = 0
