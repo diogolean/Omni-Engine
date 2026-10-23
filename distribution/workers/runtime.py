@@ -21,7 +21,9 @@ then draws a new gap. A ledger pin at or after that wake minus 5 minutes
 is the slot already posted, so the process waits out the cadence instead
 of posting it again. Between wakes it still sleeps a fresh random gap
 in that range. A wake file that cannot be written is logged and ignored;
-the process keeps the in-memory delay.
+the process keeps the in-memory delay. The running process keeps the
+``MIN_INTERVAL_HOURS`` / ``MAX_INTERVAL_HOURS`` it started with when a
+channel ``.env`` reloads.
 ``--once`` and ``--dry-run`` skip the initial delay. ``--dry-run`` builds
 the cards and does not call Pinterest.
 
@@ -78,12 +80,30 @@ def _hours(name: str, default: float) -> float:
         return default
 
 
-def interval_seconds(rng: random.Random | None = None) -> float:
-    """Random seconds in ``[MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS]``."""
+# Set for the life of one ``run_scheduler`` call. A drip reloads ``.env`` with
+# override, and that must not move the next wake off the cadence this process
+# started with.
+_bound_cadence: tuple[float, float] | None = None
+
+
+def _interval_bounds() -> tuple[float, float]:
+    """``(min_hours, max_hours)`` for the next gap.
+
+    Inside ``run_scheduler`` this is the pair captured at startup. Outside it,
+    it is the current ``MIN_INTERVAL_HOURS`` / ``MAX_INTERVAL_HOURS``.
+    """
+    if _bound_cadence is not None:
+        return _bound_cadence
     min_h = _hours("MIN_INTERVAL_HOURS", _DEFAULT_MIN_HOURS)
     max_h = _hours("MAX_INTERVAL_HOURS", _DEFAULT_MAX_HOURS)
     if max_h < min_h:
         min_h, max_h = max_h, min_h
+    return min_h, max_h
+
+
+def interval_seconds(rng: random.Random | None = None) -> float:
+    """Random seconds in ``[MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS]``."""
+    min_h, max_h = _interval_bounds()
     if max_h == min_h:
         return min_h * 3600.0
     roll = (rng or random).random()
@@ -181,7 +201,7 @@ def startup_delay_seconds(
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=timezone.utc)
     remaining = (stamp + timedelta(seconds=cadence) - moment).total_seconds()
-    ceiling = max(0.0, _hours("MAX_INTERVAL_HOURS", _DEFAULT_MAX_HOURS)) * 3600.0
+    ceiling = max(0.0, _interval_bounds()[1]) * 3600.0
     return min(max(0.0, remaining), ceiling)
 
 
@@ -607,6 +627,32 @@ def run_one_account(account_id: str, *, pins: int, dry_run: bool) -> dict:
 
 
 def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
+    """One scheduler process. The cadence is fixed at entry.
+
+    ``publish_account`` reloads the channel ``.env`` with override. That file
+    often still has the example ``MIN_INTERVAL_HOURS=3`` / ``MAX_INTERVAL_HOURS=6``.
+    Binding the pair here keeps missed wakes, catch-up wakes, and the gap
+    after an empty inventory on the hours this process was started with.
+    """
+    global _bound_cadence
+    min_h = _hours("MIN_INTERVAL_HOURS", _DEFAULT_MIN_HOURS)
+    max_h = _hours("MAX_INTERVAL_HOURS", _DEFAULT_MAX_HOURS)
+    if max_h < min_h:
+        min_h, max_h = max_h, min_h
+    _bound_cadence = (min_h, max_h)
+    try:
+        _run_scheduler(once=once, dry_run=dry_run, min_hours=min_h, max_hours=max_h)
+    finally:
+        _bound_cadence = None
+
+
+def _run_scheduler(
+    *,
+    once: bool,
+    dry_run: bool,
+    min_hours: float,
+    max_hours: float,
+) -> None:
     stop = {"flag": False}
 
     def _stop(signum, _frame) -> None:
@@ -617,10 +663,10 @@ def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
     signal.signal(signal.SIGINT, _stop)
 
     log.info(
-        "Scheduler up | pins_per_wake=%s interval=%s-%sh dry_run=%s",
+        "Scheduler up | pins_per_wake=%s interval=%g-%gh dry_run=%s",
         pins_per_wake(),
-        os.getenv("MIN_INTERVAL_HOURS", "3"),
-        os.getenv("MAX_INTERVAL_HOURS", "6"),
+        min_hours,
+        max_hours,
         dry_run,
     )
     # Resume from the saved wake when it is still ahead. Otherwise the last
@@ -661,7 +707,12 @@ def run_scheduler(*, once: bool = False, dry_run: bool = False) -> None:
         pause = interval_seconds()
         if not dry_run:
             remember_next_wake(_utc_now() + timedelta(seconds=pause))
-        log.info("Next drip in %.0f minutes", pause / 60.0)
+        log.info(
+            "Next drip in %.0f minutes (interval=%g-%gh)",
+            pause / 60.0,
+            min_hours,
+            max_hours,
+        )
         _sleep_until(pause, stop)
 
 
