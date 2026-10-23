@@ -4,7 +4,7 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts", "production", "animation", "products"]
+src = ["tests", "engine", "agents", "core", "modules", "utils", "channels_config", "scripts", "shared", "distribution", "accounts", "production", "animation", "products", "deploy", "infra"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

@@ -1,4 +1,4 @@
-"""RunPod workflow JSON lives in deploy/runpod/workflows/.
+"""RunPod workflow JSON lives in ``deploy/runpod/workflows/``.
 
-infra/runpod is a symlink to this package until M14.
+``infra.runpod`` re-exports this package until M14.
 """

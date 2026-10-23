@@ -1,25 +1,16 @@
 # -*- coding: utf-8 -*-
 """deploy/ is the home of images, compose, VM scripts, and RunPod workflows.
 
-Old paths stay as symlinks until M14. The file copied to the VM keeps
-project-root relatives so /opt/omni-engine/docker-compose.yml still mounts
-the same host paths.
+Git tracks no symlinks. A Windows checkout with core.symlinks=false would
+otherwise materialize them as plain text. infra.runpod and infra.serverless
+are Python shims until M14.
 """
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-
-_SHIMS = {
-    "Dockerfile": "deploy/docker/Dockerfile",
-    "docker-compose.yml": "deploy/compose/docker-compose.yml",
-    "docker/supermemory": "deploy/docker/supermemory",
-    ".github/scripts/remote-deploy.sh": "deploy/vm/remote-deploy.sh",
-    "scripts/backup_supermemory.sh": "deploy/vm/backup_supermemory.sh",
-    "infra/runpod": "deploy/runpod",
-    "infra/serverless": "deploy/runpod/serverless",
-}
 
 # Bind mounts the VM copy must keep. Rewriting these to ../.. would
 # point /opt/omni-engine/docker-compose.yml at /opt.
@@ -32,11 +23,19 @@ _VM_MOUNTS = (
 )
 
 
-def test_old_paths_are_symlinks_until_m14() -> None:
-    for old, new in _SHIMS.items():
-        link = _ROOT / old
-        assert link.is_symlink(), old
-        assert link.resolve() == (_ROOT / new).resolve()
+def test_repo_tracks_no_symlinks() -> None:
+    out = subprocess.check_output(
+        ["git", "ls-files", "-s"],
+        cwd=_ROOT,
+        text=True,
+    )
+    links = [line for line in out.splitlines() if line.startswith("120000 ")]
+    assert links == []
+    assert not (_ROOT / "Dockerfile").exists()
+    assert not (_ROOT / "docker-compose.yml").exists()
+    assert not (_ROOT / "docker").exists()
+    assert not (_ROOT / ".github" / "scripts" / "remote-deploy.sh").exists()
+    assert not (_ROOT / "scripts" / "backup_supermemory.sh").exists()
 
 
 def test_compose_relatives_match_the_vm_project_directory() -> None:
@@ -45,8 +44,9 @@ def test_compose_relatives_match_the_vm_project_directory() -> None:
     )
     assert "context: ../.." not in text
     assert "context: ." in text
-    assert "dockerfile: Dockerfile" in text
-    assert "context: docker/supermemory" in text
+    assert text.count("dockerfile: deploy/docker/Dockerfile") == 2
+    assert "context: deploy/docker/supermemory" in text
+    assert "context: docker/supermemory" not in text
     assert "env_file:" in text
     for mount in _VM_MOUNTS:
         assert mount in text
@@ -102,6 +102,16 @@ def test_vm_scripts_still_run_from_opt_omni_engine() -> None:
     assert "python scripts/backup_supermemory.py --upload-only" in backup
 
 
+def test_infra_packages_reexport_deploy() -> None:
+    import deploy.runpod as runpod
+    import deploy.runpod.serverless as serverless
+    import infra.runpod as shim_runpod
+    import infra.serverless as shim_serverless
+
+    assert shim_runpod is runpod
+    assert shim_serverless is serverless
+
+
 def test_runpod_workflows_resolve_from_the_new_home(monkeypatch) -> None:
     from production.providers.image.remote_gpu_manager import workflows_dir
 
@@ -111,4 +121,10 @@ def test_runpod_workflows_resolve_from_the_new_home(monkeypatch) -> None:
     assert found == canonical
     assert (found / "flux_schnell_text_to_img.json").is_file()
     monkeypatch.setenv("REMOTE_GPU_WORKFLOWS_DIR", "infra/runpod/workflows")
+    assert workflows_dir() == canonical
+    monkeypatch.setenv("REMOTE_GPU_WORKFLOWS_DIR", r"infra\runpod\workflows")
+    assert workflows_dir() == canonical
+    legacy = _ROOT / "infra" / "runpod" / "workflows"
+    assert not legacy.is_dir()
+    monkeypatch.setenv("REMOTE_GPU_WORKFLOWS_DIR", str(legacy))
     assert workflows_dir() == canonical

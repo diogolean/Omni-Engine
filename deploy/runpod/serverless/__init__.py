@@ -1,4 +1,4 @@
-"""Serverless execution uses production.providers.image.remote_gpu_manager.
+"""Serverless execution uses ``production.providers.image.remote_gpu_manager``.
 
-infra/serverless is a symlink to this package until M14.
+``infra.serverless`` re-exports this package until M14.
 """

@@ -10,7 +10,7 @@ The scheduler posts real Pinterest pins. A push to `main` rebuilds the image. St
 
 ## Decision
 
-`deploy/vm/remote-deploy.sh` starts the `engine` service only. M12 moved it from `.github/scripts/remote-deploy.sh`; that path is a symlink until M14.
+`deploy/vm/remote-deploy.sh` starts the `engine` service only. M12 moved it out of `.github/scripts/`.
 
 The scheduler stays stopped unless `/opt/omni-engine/.env` contains `SCHEDULER_ENABLED=1` (also `true`, `yes`, or `on`). An operator can also start it by hand:
 
