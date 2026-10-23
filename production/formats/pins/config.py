@@ -57,6 +57,15 @@ CHANNEL_ID: str | None = None
 CHANNEL_CONTENT_PATH: Path | None = None
 
 
+# The scheduler container sets these. A channel .env must not replace a
+# value the process already has. POSTING_INTERVAL_HOURS is not one of them.
+_SCHEDULER_ENV_KEYS = (
+    "MIN_INTERVAL_HOURS",
+    "MAX_INTERVAL_HOURS",
+    "PINTEREST_PINS_PER_DAY",
+)
+
+
 def _load_dotenv_file(env_path: Path) -> tuple[Path, bool]:
     """Load a .env file with utf-8-sig so Drive BOM ghosts are stripped."""
     resolved = env_path.expanduser().resolve()
@@ -72,8 +81,14 @@ def _load_dotenv_file(env_path: Path) -> tuple[Path, bool]:
         except OSError:
             pass
 
+    preserved = {
+        key: os.environ[key]
+        for key in _SCHEDULER_ENV_KEYS
+        if (os.environ.get(key) or "").strip()
+    }
     loaded = bool(load_dotenv(dotenv_path=resolved, override=True, encoding="utf-8-sig"))
     _honour_blank_env_values(resolved)
+    os.environ.update(preserved)
     return resolved, loaded
 
 

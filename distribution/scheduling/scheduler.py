@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 import sys
@@ -39,6 +40,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from agents.posting.pinterest_engine import config as cfg  # noqa: E402
+from shared.env import parse_interval_hours  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -267,6 +269,19 @@ def get_entry_filename(entry: dict) -> str:
 # Public scheduling helpers
 # ---------------------------------------------------------------------------
 
+def _env_interval_hours() -> tuple[float, float]:
+    """Live MIN_INTERVAL_HOURS / MAX_INTERVAL_HOURS.
+
+    The process environment is the scheduler cadence. A channel file that
+    still says 3 and 6 does not win when those keys were already set.
+    """
+    min_hours = parse_interval_hours("MIN_INTERVAL_HOURS", float(cfg.MIN_INTERVAL_HOURS))
+    max_hours = parse_interval_hours("MAX_INTERVAL_HOURS", float(cfg.MAX_INTERVAL_HOURS))
+    if max_hours < min_hours:
+        min_hours, max_hours = max_hours, min_hours
+    return min_hours, max_hours
+
+
 def get_random_interval(
     min_hours: float | None = None,
     max_hours: float | None = None,
@@ -275,10 +290,12 @@ def get_random_interval(
     Return a random interval in MINUTES between min_hours and max_hours.
     Reads MIN_INTERVAL_HOURS / MAX_INTERVAL_HOURS from env if not passed.
     """
-    if min_hours is None:
-        min_hours = cfg.MIN_INTERVAL_HOURS
-    if max_hours is None:
-        max_hours = cfg.MAX_INTERVAL_HOURS
+    if min_hours is None or max_hours is None:
+        env_min, env_max = _env_interval_hours()
+        if min_hours is None:
+            min_hours = env_min
+        if max_hours is None:
+            max_hours = env_max
 
     min_minutes = int(min_hours * 60)
     max_minutes = int(max_hours * 60)
@@ -362,12 +379,13 @@ class PinterestScheduler:
         self.pins_per_run = pins_per_run or _resolve_pins_per_run()
         self.context = context or {}
 
+        env_min, env_max = _env_interval_hours()
         log.info(
             "Scheduler ready: pins_per_run=%d  dry_run=%s  no_wait=%s  "
             "interval=%.1f-%.1fh",
             self.pins_per_run, dry_run, no_wait,
-            min_interval_hours or cfg.MIN_INTERVAL_HOURS,
-            max_interval_hours or cfg.MAX_INTERVAL_HOURS,
+            env_min if min_interval_hours is None else min_interval_hours,
+            env_max if max_interval_hours is None else max_interval_hours,
         )
 
     # ------------------------------------------------------------------
@@ -958,8 +976,6 @@ class PinterestScheduler:
                 entry["_skip_article"] = linked
 
     def _load_ledger(self):
-        import os  # noqa: PLC0415
-
         from distribution.scheduling.ledger import (  # noqa: PLC0415
             PinLedger,
             fetch_board_pins,
