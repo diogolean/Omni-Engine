@@ -1,1 +1,0 @@
-../deploy/vm/backup_supermemory.sh

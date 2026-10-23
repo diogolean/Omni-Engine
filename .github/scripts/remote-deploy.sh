@@ -1,1 +1,0 @@
-../../deploy/vm/remote-deploy.sh
