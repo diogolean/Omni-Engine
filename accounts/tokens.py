@@ -9,6 +9,7 @@ from pathlib import Path
 
 from accounts.brandings import repo_root
 from distribution.publishers.base import Account
+from shared.env import env_bool
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -37,9 +38,14 @@ def is_unset(value: str | None) -> bool:
 def channel_env_file(branding: str) -> Path | None:
     """Same candidate order as the Pinterest CLI, excluding the shared root ``.env``.
 
+    ``OMNI_SKIP_DOTENV`` hides a developer channel ``.env`` so tests resolve
+    only the process environment.
+
     ``channels_env/`` is the read-write mount of the host ``channels_config``
     tree, so a refreshed token written there survives the next container.
     """
+    if env_bool("OMNI_SKIP_DOTENV"):
+        return None
     root = repo_root()
     slug = branding.strip()
     candidates = [

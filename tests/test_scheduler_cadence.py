@@ -119,6 +119,24 @@ def test_dotenv_reload_keeps_the_process_cadence_and_daily_cap(
     assert two == 1
 
 
+def test_skip_dotenv_does_not_reload_a_repo_env_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """configure() must not pull a developer .env back over the test process."""
+    from production.formats.pins import config as cfg
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("PINTEREST_BOARD_NAME=from-repo-file\n", encoding="utf-8")
+    monkeypatch.setattr(cfg, "ENGINE_ROOT", tmp_path)
+    monkeypatch.setenv("OMNI_SKIP_DOTENV", "1")
+    monkeypatch.delenv("PINTEREST_BOARD_NAME", raising=False)
+    _load_dotenv_file(env_file)
+    assert "PINTEREST_BOARD_NAME" not in os.environ
+    monkeypatch.delenv("OMNI_SKIP_DOTENV", raising=False)
+    _load_dotenv_file(env_file)
+    assert os.getenv("PINTEREST_BOARD_NAME") == "from-repo-file"
+
+
 def test_unset_scheduler_keys_still_load_from_the_env_file(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -377,8 +377,12 @@ def test_grounding_keeps_projector_wall_quote() -> None:
 
 
 def test_update_scheduled_touches_private_matches_only(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+
     from products.aiwake.tests.caption_fixtures import install_publishable
     from products.aiwake.tools.update_youtube_scheduled import update_scheduled
+
+    frozen = datetime(2026, 6, 1, 12, tzinfo=timezone.utc)
 
     rows = [
         install_publishable({
@@ -392,7 +396,7 @@ def test_update_scheduled_touches_private_matches_only(tmp_path: Path) -> None:
         {
             "id": "abc123",
             "snippet": {"title": "Old title", "description": "Old", "categoryId": "28", "defaultLanguage": "en"},
-            "status": {"privacyStatus": "private", "publishAt": "2026-10-01T22:00:00Z"},
+            "status": {"privacyStatus": "private", "publishAt": "2026-06-15T22:00:00Z"},
         },
         {"id": "public1", "snippet": {"title": "Live"}, "status": {"privacyStatus": "public"}},
         {"id": "orphan", "snippet": {"title": "Orphan"}, "status": {"privacyStatus": "private"}},
@@ -410,7 +414,9 @@ def test_update_scheduled_touches_private_matches_only(tmp_path: Path) -> None:
         assert snippet["title"]
         return video_id
 
-    preview = update_scheduled(rows, lister, updater, apply=False, outputs_dir=tmp_path)
+    preview = update_scheduled(
+        rows, lister, updater, apply=False, outputs_dir=tmp_path, now=frozen
+    )
     assert seen == []
     assert any(item["video_id"] == "abc123" and item["action"] == "UPDATE" for item in preview["actions"])
     applied = update_scheduled(
@@ -420,6 +426,7 @@ def test_update_scheduled_touches_private_matches_only(tmp_path: Path) -> None:
         apply=True,
         dryrun_path=Path(preview["dryrun_path"]),
         outputs_dir=tmp_path,
+        now=frozen,
     )
     assert applied["updated"] == ["abc123"]
     assert seen[0]["id"] == "abc123"
