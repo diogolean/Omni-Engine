@@ -3,8 +3,9 @@ name: Deploy
 # Push to main runs Validate first. This workflow starts only after that run
 # succeeds, so the Oracle VM and the GHCR tags move for a sha that already
 # passed lint, the factory tests, the Aiwake tests, and the secret scan.
-# workflow_dispatch still rolls back to an image tag that is already in GHCR
-# and does not rebuild.
+# workflow_dispatch rolls back to an image tag that is already in GHCR and
+# does not rebuild. image_tag is required: an empty run must not deploy the
+# SHA of whichever ref was selected in the Actions UI.
 on:
   workflow_run:
     workflows: ["Validate"]
@@ -13,8 +14,8 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Git SHA (or latest) already in GHCR. Set this to roll back. Empty deploys the current SHA."
-        required: false
+        description: "Required. Git SHA or latest already in GHCR. Does not deploy the selected branch SHA."
+        required: true
         type: string
 
 permissions:
@@ -40,17 +41,34 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Skip when main has moved
+        id: fresh
+        run: |
+          set -euo pipefail
+          MAIN_SHA="$(git ls-remote origin main | awk '$2 == "refs/heads/main" {print $1}')"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          if [ -n "$MAIN_SHA" ] && [ "$HEAD_SHA" = "$MAIN_SHA" ]; then
+            echo "push=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not pushing :latest. ${HEAD_SHA} is not origin/main ${MAIN_SHA:-<unreadable>}." >&2
+            echo "push=no" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/setup-qemu-action@v3
+        if: steps.fresh.outputs.push == 'yes'
 
       - uses: docker/setup-buildx-action@v3
+        if: steps.fresh.outputs.push == 'yes'
 
       - uses: docker/login-action@v3
+        if: steps.fresh.outputs.push == 'yes'
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/build-push-action@v6
+        if: steps.fresh.outputs.push == 'yes'
         with:
           context: .
           file: Dockerfile
@@ -80,17 +98,34 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Skip when main has moved
+        id: fresh
+        run: |
+          set -euo pipefail
+          MAIN_SHA="$(git ls-remote origin main | awk '$2 == "refs/heads/main" {print $1}')"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          if [ -n "$MAIN_SHA" ] && [ "$HEAD_SHA" = "$MAIN_SHA" ]; then
+            echo "push=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not pushing the supermemory tag. ${HEAD_SHA} is not origin/main ${MAIN_SHA:-<unreadable>}." >&2
+            echo "push=no" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/setup-qemu-action@v3
+        if: steps.fresh.outputs.push == 'yes'
 
       - uses: docker/setup-buildx-action@v3
+        if: steps.fresh.outputs.push == 'yes'
 
       - uses: docker/login-action@v3
+        if: steps.fresh.outputs.push == 'yes'
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/build-push-action@v6
+        if: steps.fresh.outputs.push == 'yes'
         with:
           context: docker/supermemory
           file: docker/supermemory/Dockerfile
@@ -127,31 +162,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Dispatch copies compose from main. It must not check out a branch
+          # whose SHA was never built.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
 
       - name: Resolve image tag
         id: tag
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ inputs.image_tag }}
-          SHA: ${{ github.sha }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_TAG" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -z "$INPUT_TAG" ]; then
+              echo "image_tag is required. Pass a git SHA already in GHCR, or latest." >&2
+              exit 1
+            fi
             TAG="$INPUT_TAG"
           elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            if [ -z "$HEAD_SHA" ]; then
+              echo "workflow_run.head_sha is empty. Refusing to deploy." >&2
+              exit 1
+            fi
+            MAIN_SHA="$(git ls-remote origin main | awk '$2 == "refs/heads/main" {print $1}')"
+            if [ -z "$MAIN_SHA" ]; then
+              echo "Could not read origin/main. Refusing to deploy." >&2
+              exit 1
+            fi
+            if [ "$HEAD_SHA" != "$MAIN_SHA" ]; then
+              echo "Skipping deploy. workflow_run.head_sha ${HEAD_SHA} is not origin/main ${MAIN_SHA}." >&2
+              echo "deploy=skip" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             TAG="$HEAD_SHA"
           else
-            TAG="$SHA"
+            echo "Refusing event: $EVENT_NAME" >&2
+            exit 1
           fi
           if ! [[ "$TAG" =~ ^(latest|[0-9a-f]{7,40})$ ]]; then
             echo "Refusing image tag: $TAG" >&2
             exit 1
           fi
+          echo "deploy=yes" >> "$GITHUB_OUTPUT"
           echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Copy compose and deploy
+        if: steps.tag.outputs.deploy == 'yes'
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
           VM_USER: ${{ secrets.VM_USER }}

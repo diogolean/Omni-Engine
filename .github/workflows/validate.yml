@@ -23,7 +23,9 @@ jobs:
           cache-dependency-path: requirements-ci.txt
 
       - name: Install ffmpeg
-        timeout-minutes: 8
+        # Three attempts: 90s update + 120s install, plus 5s and 10s sleeps.
+        # Worst case is about 10.75 min. 12 stays above that.
+        timeout-minutes: 12
         run: bash .github/scripts/install-ffmpeg.sh
 
       - name: Install validation dependencies
@@ -77,7 +79,9 @@ jobs:
           cache-dependency-path: requirements-ci.txt
 
       - name: Install ffmpeg
-        timeout-minutes: 8
+        # Three attempts: 90s update + 120s install, plus 5s and 10s sleeps.
+        # Worst case is about 10.75 min. 12 stays above that.
+        timeout-minutes: 12
         run: bash .github/scripts/install-ffmpeg.sh
 
       - name: Install validation dependencies
