@@ -36,6 +36,7 @@ _ALLOWED_ROOT = {
     "config",
     "config.py",
     "core",
+    "deploy",
     "distribution",
     "docker",
     "docker-compose.yml",

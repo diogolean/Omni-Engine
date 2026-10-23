@@ -3,7 +3,7 @@
 """
 Standalone live test suite for remote ComfyUI / RunPod workflows.
 
-Exercises each template under ``infra/runpod/workflows/`` independently and
+Exercises each template under ``deploy/runpod/workflows/`` independently and
 saves outputs under ``outputs/remote_gpu_tests/``.
 
 Examples

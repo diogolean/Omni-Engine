@@ -13,10 +13,14 @@ Tracked at the repository root:
 | Identity | `README.md`, `AGENTS.md`, `CONTRIBUTING.md` |
 | Entry points | `main.py`, `config.py`, `channel_loader.py`. `run_main_noupload.py` is an allowed entry point when it is added. Do not rename it. |
 | Project config | `pyproject.toml`, `requirements.txt`, `requirements-ci.txt`, `requirements-docker.txt`, `.env.example`, `.pre-commit-config.yaml`, `.gitleaksignore` |
-| Containers and CI | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.github/` |
+| Containers and CI | `.dockerignore`, `.github/` |
+| Deploy | `deploy/` |
 | Packages | `accounts/`, `agents/`, `animation/`, `channels_config/`, `config/`, `core/`, `distribution/`, `engine/`, `models_avatar/`, `modules/`, `portfolio_showcase/`, `production/`, `products/`, `quality/`, `shared/`, `utils/` |
-| Support trees | `assets/`, `docker/`, `docs/`, `Fonts/`, `infra/`, `scripts/`, `tests/`, `tools/` |
+| Support trees | `assets/`, `docs/`, `Fonts/`, `scripts/`, `tests/`, `tools/` |
+| Shims until M14 | `Dockerfile`, `docker-compose.yml`, `docker/`, `infra/` |
 | Agent rules | `.cursor/rules/` |
+
+`deploy/` holds the engine Dockerfile (`deploy/docker/Dockerfile`), the supermemory image (`deploy/docker/supermemory/`), compose (`deploy/compose/docker-compose.yml`), the VM scripts (`deploy/vm/remote-deploy.sh`, `deploy/vm/backup_supermemory.sh`), and RunPod workflows (`deploy/runpod/workflows/`, plus `deploy/runpod/serverless/`). The engine image build context stays the repo root, so `.dockerignore` stays beside it. GitHub Actions copies the compose file to `/opt/omni-engine/docker-compose.yml` and the backup script to `/opt/omni-engine/scripts/backup_supermemory.sh`. Compose relatives stay project-root paths (`./outputs`, `./credentials`, `./.env`, `./channels_config`, `./state/ancient_knowledge/store`). There is no `deploy/k8s/` tree yet. Until M14 the root `Dockerfile`, `docker-compose.yml`, `docker/supermemory`, `infra/runpod`, `infra/serverless`, `scripts/backup_supermemory.sh`, and `.github/scripts/remote-deploy.sh` are symlinks to those files.
 
 `Fonts/` stays at the root because page configs address fonts as `Fonts/<family>/...` from the repo root. Critic profiles live only in `production/qa/judges/profiles/`. `visual_critic.py` loads `profiles/<name>.json` from that folder. `quality/VisualQA_Agent/` is a shim.
 
@@ -43,7 +47,7 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Committed artefact photos | `channels_config/<channel>/artefact_cache/<entity>/` | Photographs shipped with the repo. The runtime cache under `store/artefact_cache/` stays gitignored. |
 | Channel operator env | `channels_config/<id>/.env.<id>` on the host, seen in the container as `channels_env/<id>/.env.<id>` | The compose file mounts `./channels_config` at `/opt/omni-engine/channels_env`. Do not change that mount. |
 | Pinterest account map | `config/pinterest_accounts.yaml`, `config/pinterest_image_map.yaml` | Do not rename. Article cache for Ancient Knowledge is `outputs/ancient_knowledge/article_cache/` and is gitignored with the rest of `outputs/`. |
-| Worker entry | `python -m distribution.workers --role engine` and `--role scheduler` | The implementation is `distribution/workers/runtime.py`. Compose, the Dockerfile `CMD`, and the VM use that module. Flags stay `--role`, `--once`, `--dry-run`, `--account`, and `--pins`. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
+| Worker entry | `python -m distribution.workers --role engine` and `--role scheduler` | The implementation is `distribution/workers/runtime.py`. Compose, the `deploy/docker/Dockerfile` `CMD`, and the VM use that module. Flags stay `--role`, `--once`, `--dry-run`, `--account`, and `--pins`. Compose service names `engine` and `scheduler` (profile `scheduler`) and `supermemory` (profile `memory`) stay as they are. |
 | Scheduling | `distribution/scheduling/` | Pinterest drip, scheduler, pin ledger, inventory, library source, and the Facebook queue. Pin copy, photos, articles, and image generation live in `production/formats/pins/`. |
 | Account registry | `accounts/` | `brandings.py`, `tokens.py`, `pinterest.py`. Not `distribution/accounts/` and not a rename of `channels_config/`. |
 | Pin production | `production/formats/pins/` | Copy, articles, photo-vs-graphic check, Flux stills, the card renderer, and the pin channel config module. `agents/posting/pinterest_engine/` keeps shims for those names. |

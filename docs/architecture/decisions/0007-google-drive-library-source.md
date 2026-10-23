@@ -23,7 +23,7 @@ Publishers read content from Google Drive first.
 - `LIBRARY_SOURCE=drive|b2|local` forces one source. When it is unset and the service-account file exists, the order is Drive, then the local tree (the PC `G:` path still wins when the file is already on disk), then B2.
 - Listings are cached with a TTL. File bytes are cached on the outputs volume. An image or video is downloaded when that one asset is published, not when the library is listed. `post_*.json` records are copied so the inventory can be built; images inside the listing are not.
 - Post Planner keeps a B2 public URL. If the asset exists only on Drive, that single file is uploaded through the budgeted B2 client (Class A `put`) and left in the bucket. This change does not edit `agents/media/b2_budget.py`.
-- `.github/scripts/remote-deploy.sh` is unchanged. Deploy still starts the engine only. The scheduler stays behind its Compose profile.
+- Deploy still starts the engine only. The scheduler stays behind its Compose profile. M12 moved the script to `deploy/vm/remote-deploy.sh`; `.github/scripts/remote-deploy.sh` is a symlink until M14.
 
 ## Consequences
 

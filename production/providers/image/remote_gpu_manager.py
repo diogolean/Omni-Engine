@@ -2,7 +2,7 @@
 """
 Remote GPU workflow manager — ComfyUI / RunPod adapter layer.
 
-Loads API-format JSON templates from ``infra/runpod/workflows/`` and exposes
+Loads API-format JSON templates from ``deploy/runpod/workflows/`` and exposes
 simple ``generate_image`` / ``generate_audio`` / ``generate_video`` wrappers.
 
 Activation is gated by ``ENABLE_REMOTE_GPU_WORKFLOWS`` (see ``config.py``).
@@ -428,7 +428,9 @@ def normalize_comfy_base_url(url: str) -> str:
 
 def workflows_dir() -> Path:
     root = Path(str(_cfg("ENGINE_ROOT", Path(__file__).resolve().parents[3])))
-    new = (root / "infra" / "runpod" / "workflows").resolve()
+    canonical = (root / "deploy" / "runpod" / "workflows").resolve()
+    # infra/runpod is a symlink to deploy/runpod until M14.
+    legacy = (root / "infra" / "runpod" / "workflows").resolve()
     old = (root / "remote_GPU_workflows").resolve()
     configured = _cfg("REMOTE_GPU_WORKFLOWS_DIR", None)
     if configured:
@@ -438,8 +440,10 @@ def workflows_dir() -> Path:
         p = p.resolve()
         if p.is_dir():
             return p
-    if new.is_dir():
-        return new
+    if canonical.is_dir():
+        return canonical
+    if legacy.is_dir():
+        return legacy
     return old
 
 

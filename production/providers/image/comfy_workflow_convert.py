@@ -2,7 +2,7 @@
 """
 Convert ComfyUI UI-format workflow JSON → API ``/prompt`` format.
 
-The files in ``infra/runpod/workflows/`` are often saved from the web UI
+The files in ``deploy/runpod/workflows/`` are often saved from the web UI
 (``nodes`` / ``links`` / ``widgets_values``), including subgraph wrappers.
 The ``/prompt`` endpoint requires the flat API dict::
 
