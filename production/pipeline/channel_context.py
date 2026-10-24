@@ -15,18 +15,9 @@ Each channel lives in an isolated directory and carries its own:
 
 Supported channels
 ---------------
-  anna_protocol   Holistic Legacy — ancestral wellness, natural remedies, avatar ON
-  master_mei      SUPER channel — Stoic financial freedom / wealth mindset (US), avatar ON
-  wonder_feed     Emotional intelligence, attachment science, avatar OFF (default)
-  down_dirty      Matrix escape, financial sovereignty, raw mindset, avatar OFF (default)
-  ancient_knowledge  Ancient history, conspiracies, mysteries, photorealistic style, avatar OFF
-  momma_circle    Parenting / PARENTAL_CONTENTS — reference-clip reels, warm lullaby audio, avatar OFF
-  principles_of_wealth_finance_economics
-                  Educational / Financial Curation — library ingest of the
-                  Principles of Wealth production drive (wealth_main.py)
-  endless_summer_paradise
-                  1950s surreal architecture library ingest — local source/
-                  + factory_settings.json (esp_main.py; duration > 40s)
+  Whatever ``discover_channel_ids()`` returns: one id per
+  ``channels_config/<id>/master_dna.json``. ``aiwake`` and ``shared`` are
+  skipped. Adding a channel is adding that folder. There is no hand list.
 
 Usage
 -----
@@ -123,16 +114,19 @@ def _extract_style_anchor_via_gemini_vision(image_paths: "list[Path]", page_id: 
 # Constants
 # ---------------------------------------------------------------------------
 
-VALID_PAGES: tuple[str, ...] = (
-    "anna_protocol",
-    "master_mei",
-    "wonder_feed",
-    "down_dirty",
-    "ancient_knowledge",
-    "momma_circle",
-    "principles_of_wealth_finance_economics",
-    "endless_summer_paradise",
-)
+def discover_channel_ids(root: Path | None = None) -> tuple[str, ...]:
+    """Channel ids that have ``master_dna.json``.
+
+    Same walk as ``production.writers.persona.channel_profile_rows``:
+    skip ``aiwake``, ``shared``, and hidden or test folders. The result is
+    sorted by folder name. A new channel is a new folder.
+    """
+    from production.writers.persona import channel_profile_rows
+
+    return tuple(row["channel"] for row in channel_profile_rows(root))
+
+
+VALID_PAGES: tuple[str, ...] = discover_channel_ids()
 
 VALID_AVATAR_MODES: tuple[str, ...] = ("ON", "OFF")
 
@@ -1672,7 +1666,7 @@ def load_page_context(
     Parameters
     ----------
     page_id:
-        One of: anna_protocol, master_mei, wonder_feed, down_dirty.
+        A channel folder id from ``discover_channel_ids()``.
     avatar_mode:
         'ON' or 'OFF'.
     post_format:
