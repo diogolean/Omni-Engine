@@ -2,7 +2,7 @@
 """
 Remote GPU workflow manager — ComfyUI / RunPod adapter layer.
 
-Loads API-format JSON templates from ``infra/runpod/workflows/`` and exposes
+Loads API-format JSON templates from ``deploy/runpod/workflows/`` and exposes
 simple ``generate_image`` / ``generate_audio`` / ``generate_video`` wrappers.
 
 Activation is gated by ``ENABLE_REMOTE_GPU_WORKFLOWS`` (see ``config.py``).
@@ -426,20 +426,43 @@ def normalize_comfy_base_url(url: str) -> str:
     return cleaned if cleaned.endswith("/") else cleaned + "/"
 
 
+_LEGACY_WORKFLOWS = "infra/runpod/workflows"
+
+
+def _workflows_path(root: Path, raw: str) -> Path:
+    """Map the pre-M12 workflow directory onto ``deploy/runpod/workflows``.
+
+    ``REMOTE_GPU_WORKFLOWS_DIR=infra/runpod/workflows`` stays valid until M14.
+    There is no symlink: a Windows checkout with ``core.symlinks=false``
+    would leave the JSON unreachable.
+    """
+    text = str(raw).strip().replace("\\", "/").rstrip("/")
+    canonical = (root / "deploy" / "runpod" / "workflows").resolve()
+    if text == _LEGACY_WORKFLOWS:
+        return canonical
+    path = Path(str(raw)).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    try:
+        relative = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return path.resolve()
+    if relative.as_posix() == _LEGACY_WORKFLOWS:
+        return canonical
+    return path.resolve()
+
+
 def workflows_dir() -> Path:
     root = Path(str(_cfg("ENGINE_ROOT", Path(__file__).resolve().parents[3])))
-    new = (root / "infra" / "runpod" / "workflows").resolve()
+    canonical = (root / "deploy" / "runpod" / "workflows").resolve()
     old = (root / "remote_GPU_workflows").resolve()
     configured = _cfg("REMOTE_GPU_WORKFLOWS_DIR", None)
     if configured:
-        p = Path(str(configured)).expanduser()
-        if not p.is_absolute():
-            p = root / p
-        p = p.resolve()
-        if p.is_dir():
-            return p
-    if new.is_dir():
-        return new
+        found = _workflows_path(root, str(configured))
+        if found.is_dir():
+            return found
+    if canonical.is_dir():
+        return canonical
     return old
 
 

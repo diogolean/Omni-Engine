@@ -2,7 +2,7 @@
 
 Target: Oracle Cloud VM, Ubuntu 24.04, aarch64, checkout `/opt/omni-engine`. The image is `linux/arm64` at `ghcr.io/diogolean/omni-engine`, tagged with the git SHA and `latest`. How the pieces fit: [architecture/overview.md](architecture/overview.md).
 
-A push to `main` runs `.github/workflows/deploy.yml`. It builds the image, pushes it, copies `docker-compose.yml` to the VM, sets `OMNI_IMAGE_TAG`, and starts the **engine** service only:
+A push to `main` runs `.github/workflows/deploy.yml`. It builds `deploy/docker/Dockerfile` with the repo root as the build context, pushes the image, copies `deploy/compose/docker-compose.yml` to `/opt/omni-engine/docker-compose.yml`, copies `deploy/vm/backup_supermemory.sh` to `/opt/omni-engine/scripts/backup_supermemory.sh`, sets `OMNI_IMAGE_TAG`, and starts the **engine** service only. The remote step is `deploy/vm/remote-deploy.sh`:
 
 ```bash
 cd /opt/omni-engine && docker compose pull engine && docker compose up -d engine
@@ -12,7 +12,7 @@ The job name on pull requests stays `lint and tests` (`.github/workflows/validat
 
 ## What compose mounts
 
-`docker-compose.yml` is unchanged by the docs cleanup. The engine and scheduler mount:
+`deploy/compose/docker-compose.yml` is the file the workflow copies onto the VM. The engine and scheduler mount:
 
 - `./outputs` and `./credentials`
 - `./.env` read-write, so a token refresh persists
@@ -25,15 +25,18 @@ The scheduler is Compose profile `scheduler`. Deploy does not start it unless `S
 
 ## Local image
 
+Compose v2 resolves the build context, `env_file`, and the bind mounts against the project directory. Pass the repo root. The engine `dockerfile` is `deploy/docker/Dockerfile` and the supermemory context is `deploy/docker/supermemory`, so a checkout that does not follow symlinks still builds.
+
 ```bash
-docker compose up -d --build engine
-docker compose exec engine python main.py --channel wonder_feed --post-type ECONOMIC_REEL --quantity 1
+docker compose --project-directory . -f deploy/compose/docker-compose.yml up -d --build engine
+docker compose --project-directory . -f deploy/compose/docker-compose.yml exec engine python main.py --channel wonder_feed --post-type ECONOMIC_REEL --quantity 1
 ```
 
 Dry-run one Pinterest wake. No Pinterest call, no ledger write:
 
 ```bash
-docker compose --profile scheduler run --rm --no-deps scheduler \
+docker compose --project-directory . -f deploy/compose/docker-compose.yml \
+  --profile scheduler run --rm --no-deps scheduler \
   python -m distribution.workers --role scheduler --once --dry-run
 ```
 
