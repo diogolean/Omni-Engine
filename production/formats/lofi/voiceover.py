@@ -20,7 +20,8 @@ def _slow_audio_to_effective_speed(
     if not path.is_file() or path.stat().st_size < 512:
         return  # tiny unit-test fixture, not production audio
     import shutil
-    import subprocess
+
+    from shared.ffmpeg import run_ffmpeg
 
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -34,7 +35,7 @@ def _slow_audio_to_effective_speed(
             ) from exc
     tempo = float(effective_speed) / float(api_speed)
     temp_path = path.with_name(f"{path.stem}.effective_speed.tmp{path.suffix}")
-    result = subprocess.run(
+    result = run_ffmpeg(
         [
             ffmpeg,
             "-y",
@@ -48,9 +49,8 @@ def _slow_audio_to_effective_speed(
             "2",
             str(temp_path),
         ],
-        capture_output=True,
         text=True,
-        check=False,
+        timeout=120,
     )
     if result.returncode != 0 or not temp_path.is_file():
         temp_path.unlink(missing_ok=True)

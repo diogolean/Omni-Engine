@@ -14,6 +14,7 @@ from typing import Any, Callable
 from PIL import Image
 
 from production.qa.config import frame_samples, min_duration_s, min_mean_volume_db
+from shared.ffmpeg import run_ffmpeg
 from production.qa.relevance import verdict_passed
 
 _LOG = logging.getLogger(__name__)
@@ -87,12 +88,10 @@ def _duration_from_banner(blob: str) -> float:
 
 def _loudness(ffmpeg: str, video: Path) -> tuple[float | None, float | None, str]:
     try:
-        loud = subprocess.run(
+        loud = run_ffmpeg(
             [ffmpeg, "-i", str(video), "-af", "volumedetect", "-f", "null", "-"],
-            capture_output=True,
             text=True,
             timeout=60,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, None, f"loudness_unavailable:{type(exc).__name__}"
@@ -191,7 +190,7 @@ def _empty_probe(error: str) -> dict[str, Any]:
 def _probe_ffprobe(binary: str, video: Path) -> dict[str, Any] | None:
     """JSON probe. ``None`` means the caller should try the ffmpeg banner."""
     try:
-        probe = subprocess.run(
+        probe = run_ffmpeg(
             [
                 binary,
                 "-v", "error",
@@ -199,10 +198,8 @@ def _probe_ffprobe(binary: str, video: Path) -> dict[str, Any] | None:
                 "-of", "json",
                 str(video),
             ],
-            capture_output=True,
             text=True,
             timeout=30,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -236,12 +233,10 @@ def _probe_ffprobe(binary: str, video: Path) -> dict[str, Any] | None:
 def _probe_ffmpeg_banner(binary: str, video: Path) -> dict[str, Any] | None:
     """Parse ``ffmpeg -i`` stderr. imageio-ffmpeg builds often have no ffprobe."""
     try:
-        proc = subprocess.run(
+        proc = run_ffmpeg(
             [binary, "-hide_banner", "-i", str(video)],
-            capture_output=True,
             text=True,
             timeout=30,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -291,7 +286,7 @@ def extract_frame(video: Path, at_s: float, dest: Path) -> Path | None:
     if not ffmpeg:
         return None
     try:
-        proc = subprocess.run(
+        proc = run_ffmpeg(
             [
                 ffmpeg, "-y",
                 "-ss", f"{max(0.0, float(at_s)):.3f}",
@@ -299,10 +294,8 @@ def extract_frame(video: Path, at_s: float, dest: Path) -> Path | None:
                 "-frames:v", "1",
                 str(dest),
             ],
-            capture_output=True,
             text=True,
             timeout=30,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

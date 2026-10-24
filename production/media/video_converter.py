@@ -32,7 +32,6 @@ DURATION_SECONDS : int    — default loop duration (7 seconds per spec)
 from __future__ import annotations
 
 import logging
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -216,11 +215,9 @@ def _render_with_ffmpeg(
     social media upload (yuv420p pixel format).
     """
     try:
-        probe = subprocess.run(
-            ["ffmpeg", "-version"],
-            capture_output=True,
-            timeout=5,
-        )
+        from shared.ffmpeg import run_ffmpeg
+
+        probe = run_ffmpeg(["ffmpeg", "-version"], timeout=5)
         if probe.returncode != 0:
             raise _FfmpegNotFoundError("ffmpeg returned non-zero on --version")
     except FileNotFoundError as exc:
@@ -253,7 +250,9 @@ def _render_with_ffmpeg(
         str(output_path),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, timeout=120)
+    from shared.ffmpeg import run_ffmpeg
+
+    result = run_ffmpeg(cmd, timeout=120)
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"ffmpeg exited {result.returncode}: {stderr}")

@@ -133,20 +133,18 @@ def attempt_ffmpeg(render):
 
 def media_duration_s(path: Path) -> float:
     """Duration from ffprobe, so the ffmpeg path does not import MoviePy."""
+    from shared.ffmpeg import run_ffmpeg
+
     exe = ffprobe_exe()
-    proc = subprocess.run(
+    proc = run_ffmpeg(
         [
             exe, "-v", "error",
             "-show_entries", "format=duration",
             "-of", "csv=p=0",
             str(path),
         ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         text=True,
         timeout=20,
-        check=False,
     )
     if proc.returncode != 0 or not (proc.stdout or "").strip():
         raise RuntimeError((proc.stderr or "ffprobe failed").strip()[-200:])
@@ -159,15 +157,13 @@ def ffmpeg_has_libass() -> bool:
         exe = ffmpeg_exe()
     except RuntimeError:
         return False
+    from shared.ffmpeg import run_ffmpeg
+
     try:
-        proc = subprocess.run(
+        proc = run_ffmpeg(
             [exe, "-hide_banner", "-filters"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             text=True,
             timeout=15,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -370,16 +366,11 @@ def _run(cmd: list[str]) -> None:
     # capture_output leaves stdin as a pipe. ffmpeg reads that pipe and waits.
     # This build's flag is `-stdin` (a boolean), not `-nostdin`, so the pipe
     # is closed here instead of passing a flag the binary rejects.
+    # The timeout kills the process tree. An unbounded mix must not outlive it.
+    from shared.ffmpeg import run_ffmpeg
+
     try:
-        proc = subprocess.run(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-            timeout=_ffmpeg_timeout_s(),
-        )
+        proc = run_ffmpeg(cmd, text=True, timeout=_ffmpeg_timeout_s())
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"ffmpeg timed out after {exc.timeout:.0f}s") from exc
     if proc.returncode != 0:
@@ -466,17 +457,24 @@ def _audio_filter(
     *,
     duck_until: float,
     duck_ratio: float,
+    duration: float,
 ) -> str:
     """Mix named audio inputs. The silent video is never one of them.
 
     Each stem is ``{"index", "role", "volume"}``. ``index`` is the ffmpeg
     ``-i`` position assigned by the muxer, so a new stem cannot reuse ``[0:a]``.
     ``bed`` and ``sfx`` duck under the voice. ``boom`` and ``impact`` do not.
+
+    ``apad`` with no end, and ``amix=duration=longest``, never finish when a
+    bed is looped. Every stem is trimmed and padded to ``duration`` seconds,
+    then mixed with ``duration=first``.
     """
     parts: list[str] = []
     labels: list[str] = []
     until = f"{max(0.0, float(duck_until)):.3f}"
     ratio = max(0.0, min(1.0, float(duck_ratio)))
+    whole = f"{max(0.05, float(duration)):.3f}"
+    bound = f"atrim=end={whole},apad=whole_dur={whole}"
     for order, stem in enumerate(stems):
         index = int(stem["index"])
         role = str(stem.get("role") or "bed")
@@ -488,10 +486,10 @@ def _audio_filter(
             vol = (
                 f"volume='if(lt(t,{until}),{ducked},{open_bed})':eval=frame"
             )
-            parts.append(f"[{index}:a]aresample=48000,{vol},apad[{label}]")
+            parts.append(f"[{index}:a]aresample=48000,{vol},{bound}[{label}]")
         else:
             parts.append(
-                f"[{index}:a]volume={volume:.3f},aresample=48000,apad[{label}]"
+                f"[{index}:a]volume={volume:.3f},aresample=48000,{bound}[{label}]"
             )
         labels.append(f"[{label}]")
     if not labels:
@@ -500,7 +498,7 @@ def _audio_filter(
         mix = f"{labels[0]}loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[a]"
     else:
         mix = (
-            f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:"
+            f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:"
             f"dropout_transition=0:normalize=0,loudnorm=I=-16:TP=-1.5:LRA=11,"
             f"aresample=48000[a]"
         )
@@ -573,25 +571,26 @@ def _boom_wav(path: Path, duration: float, cuts: list[float]) -> None:
 
 def output_has_audio(path: Path) -> bool | None:
     """True when ffprobe sees an audio stream. None when ffprobe is missing."""
+    from shared.ffmpeg import run_ffmpeg
+
     try:
         exe = ffprobe_exe()
     except RuntimeError:
         return None
-    proc = subprocess.run(
-        [
-            exe, "-v", "error",
-            "-select_streams", "a",
-            "-show_entries", "stream=codec_type",
-            "-of", "csv=p=0",
-            str(path),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=20,
-        check=False,
-    )
+    try:
+        proc = run_ffmpeg(
+            [
+                exe, "-v", "error",
+                "-select_streams", "a",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0",
+                str(path),
+            ],
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     if proc.returncode != 0:
         return None
     return "audio" in (proc.stdout or "")
@@ -769,6 +768,7 @@ def compile_ffmpeg_reel(
             stems,
             duck_until=float(ambient_duck_until_s or 0.0) or (total if voice else 0.0),
             duck_ratio=float(ambient_duck_ratio or 0.70),
+            duration=total,
         )
         if not graph or (voice is not None and "[1:a]" not in graph and stems[0]["index"] == 1):
             raise RuntimeError("audio graph did not include the voice input")
@@ -777,7 +777,8 @@ def compile_ffmpeg_reel(
             "-map", "0:v", "-map", "[a]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
-            # apad and a looped bed never end. -t stops the mux at the picture.
+            # The filter graph is already cut to the picture. -t is the backstop
+            # if a looped input still refuses to end.
             "-shortest",
             "-t", f"{total:.3f}",
             str(out),
