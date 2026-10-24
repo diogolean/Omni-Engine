@@ -105,7 +105,7 @@ Cron on the VM host, not installed by deploy. 03:15 UTC is a quiet hour; pick an
 
 The shell script archives the volume to `outputs/backups/supermemory/YYYY-MM-DD.tgz`. If the container was running it stops it for the tar and starts it again. If it was stopped, it stays stopped. The engine container then uploads `backups/supermemory/YYYY-MM-DD.tgz`. An object that already exists for that day is left as it is. Nothing in B2 is deleted. The upload shares the daily B2 budget; when the budget is spent the local archive stays and the script exits 2. Seven local archives are kept.
 
-Deploy copies `scripts/backup_supermemory.sh` onto the host and does not run it. The engine image contains `scripts/backup_supermemory.py`, which performs the upload.
+Deploy copies `deploy/vm/backup_supermemory.sh` to `/opt/omni-engine/scripts/backup_supermemory.sh` and does not run it. The engine image contains `scripts/backup_supermemory.py`, which performs the upload.
 
 ## Restore
 

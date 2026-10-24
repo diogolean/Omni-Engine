@@ -7,7 +7,7 @@ alwaysApply: true
 
 Follow `docs/architecture/REPO_LAYOUT.md` and `AGENTS.md`.
 
-The repository root holds entry points, config, containers, CI, docs, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, `engine/`, `agents/`, `accounts/`, `animation/`, `distribution/`, `production/`, `products/`, `channels_config/`, `config/`, `core/`, `shared/`, `utils/`, `tests/`, `docs/`).
+The repository root holds entry points, config, containers, CI, docs, and top-level packages only (`main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `deploy/`, `engine/`, `agents/`, `accounts/`, `animation/`, `distribution/`, `production/`, `products/`, `channels_config/`, `config/`, `core/`, `infra/`, `shared/`, `utils/`, `tests/`, `docs/`). `deploy/` holds the Dockerfiles, compose file, VM scripts, and RunPod workflows. Do not add git symlinks. `infra.runpod` and `infra.serverless` re-export `deploy.runpod` until M14.
 
 - Write temp files with `temp_path(channel, *parts)` from `shared/paths.py` (`utils/pipeline_paths.py` is the same module). That resolves to `outputs/<channel>/_tmp/`.
 - Write preview and review dumps with `review_path(channel, *parts)`. That resolves to `outputs/<channel>/_review/`.

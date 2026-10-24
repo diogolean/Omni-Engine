@@ -433,7 +433,9 @@ def test_worker_dry_run_one_account_does_not_start_the_scheduler(
 
 
 def test_compose_sets_docker_output_path() -> None:
-    text = Path(__file__).resolve().parents[1].joinpath("docker-compose.yml").read_text(
+    text = Path(__file__).resolve().parents[1].joinpath(
+        "deploy", "compose", "docker-compose.yml"
+    ).read_text(
         encoding="utf-8"
     )
     assert text.count("OUTPUT_PATH: /opt/omni-engine/outputs") >= 2

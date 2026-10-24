@@ -34,19 +34,25 @@ def _executable_lines(path: Path) -> str:
 
 
 def test_image_pin_is_0_0_9_with_checksum() -> None:
-    text = (_ROOT / "docker" / "supermemory" / "Dockerfile").read_text(encoding="utf-8")
+    text = (_ROOT / "deploy" / "docker" / "supermemory" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
     assert "ARG SUPERMEMORY_VERSION=0.0.9" in text
     assert _SHA in text
     assert "sha256sum -c" in text
     assert "linux/arm64" in text
     assert "0.0.8 and older" in text
-    entry = (_ROOT / "docker" / "supermemory" / "entrypoint.sh").read_text(encoding="utf-8")
+    entry = (_ROOT / "deploy" / "docker" / "supermemory" / "entrypoint.sh").read_text(
+        encoding="utf-8"
+    )
     assert "GEMINI_API_KEY=$GOOGLE_API_KEY" in entry
     assert "echo" not in entry
 
 
 def test_compose_service_is_opt_in_and_unpublished() -> None:
-    doc = yaml.safe_load((_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    doc = yaml.safe_load(
+        (_ROOT / "deploy" / "compose" / "docker-compose.yml").read_text(encoding="utf-8")
+    )
     service = doc["services"]["supermemory"]
     assert service["profiles"] == ["memory"]
     assert "ports" not in service
@@ -66,19 +72,21 @@ def test_compose_service_is_opt_in_and_unpublished() -> None:
 
 
 def test_deploy_does_not_start_memory_or_force_the_scheduler() -> None:
-    script = _executable_lines(_ROOT / ".github" / "scripts" / "remote-deploy.sh")
+    script = _executable_lines(_ROOT / "deploy" / "vm" / "remote-deploy.sh")
     assert "--profile memory" not in script
     assert "up -d supermemory" not in script
     assert "up -d engine" in script
     workflow = (_ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
-    assert "docker/supermemory/Dockerfile" in workflow
+    assert "file: deploy/docker/supermemory/Dockerfile" in workflow
+    assert "context: deploy/docker/supermemory" in workflow
+    assert "file: deploy/docker/Dockerfile" in workflow
     assert "platforms: linux/arm64" in workflow
     assert "needs: build\n" in workflow
     assert "needs: [build, supermemory-image]" not in workflow
 
 
 def test_host_backup_restarts_only_when_it_was_running() -> None:
-    shell = (_ROOT / "scripts" / "backup_supermemory.sh").read_text(encoding="utf-8")
+    shell = (_ROOT / "deploy" / "vm" / "backup_supermemory.sh").read_text(encoding="utf-8")
     assert 'if [ -n "$running" ]' in shell
     assert "docker compose --profile memory stop supermemory" in shell
     assert "docker compose --profile memory up -d supermemory" in shell

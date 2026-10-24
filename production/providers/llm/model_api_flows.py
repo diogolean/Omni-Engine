@@ -5,13 +5,13 @@ Runtime-selectable **model API flow presets** (provider / infra per media type).
 Terminology (keep distinct — never interchangeable):
   - *flow preset* / ``model_api_flows`` — which provider handles image / audio / video
     (Together vs remote GPU vs ElevenLabs vs F5-TTS, etc.).
-  - *comfy_workflow* / workflow JSON — ``.json`` graphs under ``infra/runpod/workflows/``,
+  - *comfy_workflow* / workflow JSON — ``.json`` graphs under ``deploy/runpod/workflows/``,
     used only when the ``remote_gpu`` provider is selected for that media type.
 
 Architecture rule (keep it this way):
   Presets reference workflow files **by name** via ``WORKFLOW_*`` constants in
   ``remote_gpu_manager`` — they do **not** duplicate or auto-list the contents of
-  ``infra/runpod/workflows/``. Adding a new ``.json`` under that folder does **not**
+  ``deploy/runpod/workflows/``. Adding a new ``.json`` under that folder does **not**
   require touching this module. Update a preset only when exposing a new named,
   selectable production combination. Do not build auto-sync / auto-listing of
   every workflow file as a preset.
@@ -551,7 +551,7 @@ def validate_comfy_workflows_exist(
 ) -> None:
     """
     Fail fast if any referenced comfy_workflow JSON is missing from
-    ``infra/runpod/workflows/``.
+    ``deploy/runpod/workflows/``.
     """
     root = Path(directory) if directory else workflows_dir()
     missing: list[str] = []
