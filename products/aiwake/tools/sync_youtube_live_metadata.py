@@ -6,7 +6,7 @@ rewrites YouTube descriptions as hook + dialogue + dialectics CTA + hashtags,
 then calls ``youtube.videos().update(part="snippet")`` for every row that
 already has a ``video_id``. Media files are never re-uploaded.
 
-    python -m channels_config.aiwake.tools.sync_youtube_live_metadata --dry-run
+    python -m products.aiwake.tools.sync_youtube_live_metadata --dry-run
     python scripts/sync_youtube_live_metadata.py
 """
 from __future__ import annotations

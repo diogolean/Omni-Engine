@@ -12,8 +12,8 @@ Prefer the generic entry point for other channels:
 
 Does not modify videos, transcripts, ``contracts.py``, or memory stores.
 
-    python -m channels_config.aiwake.tools.backfill_metadata
-    python -m channels_config.aiwake.tools.backfill_metadata --dry-run
+    python -m products.aiwake.tools.backfill_metadata
+    python -m products.aiwake.tools.backfill_metadata --dry-run
 """
 from __future__ import annotations
 from shared.layer_bridge import Symbol

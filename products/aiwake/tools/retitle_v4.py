@@ -15,8 +15,8 @@ Any other video on that day moves to the next free day, in publish order.
 No new videos are uploaded. ``--apply`` only calls ``videos.update`` and never
 sets a video public.
 
-    python -m channels_config.aiwake.tools.retitle_v4 plan
-    python -m channels_config.aiwake.tools.retitle_v4 apply --plan PATH
+    python -m products.aiwake.tools.retitle_v4 plan
+    python -m products.aiwake.tools.retitle_v4 apply --plan PATH
 """
 from __future__ import annotations
 

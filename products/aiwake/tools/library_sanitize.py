@@ -5,8 +5,8 @@ Public YouTube descriptions are rebuilt as:
 
     Hook + unscripted dialogue + dialectics CTA + clean hashtags
 
-    python -m channels_config.aiwake.tools.library_sanitize
-    python -m channels_config.aiwake.tools.library_sanitize --dry-run
+    python -m products.aiwake.tools.library_sanitize
+    python -m products.aiwake.tools.library_sanitize --dry-run
 """
 from __future__ import annotations
 from shared.layer_bridge import Symbol

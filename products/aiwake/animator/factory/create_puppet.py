@@ -1,7 +1,7 @@
 """End-to-end prompt/image-to-puppet command-line utility.
 
 Usage:
-    python -m core.animator.factory.create_puppet \
+    python -m products.aiwake.animator.factory.create_puppet \
         --character-id example --prompt "robot bust" --facing left
 """
 from __future__ import annotations

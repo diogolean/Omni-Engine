@@ -88,7 +88,7 @@ On the VM, after the key is in `.env` and the engine has been restarted:
 
 ```bash
 docker compose exec -T engine \
-  python -m channels_config.aiwake.tools.seed_supermemory
+  python -m products.aiwake.tools.seed_supermemory
 ```
 
 That reads approved sessions and writes `aiwake_production_history` plus `aiwake_system_rules`. It is sequential, which suits a 2-core VM. Run it again any time; a session already present is skipped.

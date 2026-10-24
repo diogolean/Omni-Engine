@@ -7,8 +7,8 @@ refuses to run unless that JSON was produced from the same library bytes.
 ``videos().update`` is called with ``part="snippet"`` only. Privacy and
 ``publishAt`` are never sent.
 
-    python -m channels_config.aiwake.tools.update_youtube_scheduled
-    python -m channels_config.aiwake.tools.update_youtube_scheduled --apply --dry-run-json PATH
+    python -m products.aiwake.tools.update_youtube_scheduled
+    python -m products.aiwake.tools.update_youtube_scheduled --apply --dry-run-json PATH
 """
 from __future__ import annotations
 

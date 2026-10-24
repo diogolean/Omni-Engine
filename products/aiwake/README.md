@@ -12,34 +12,34 @@ The show lives in `products/aiwake/`. `channels_config/aiwake/` keeps the store 
 
 ```bash
 # Offline dry run — no API key, no network, deterministic transcript
-python -m channels_config.aiwake --offline --turns 2 --preview
+python -m products.aiwake --offline --turns 2 --preview
 
 # Live debate
 #   1. add OPENROUTER_API_KEY=sk-or-... to the factory .env
 #   2. pick your models in aiwake_config.yaml, or override per run (below)
-python -m channels_config.aiwake --topic "Is grief a slow update to a world model?" --turns 4
+python -m products.aiwake --topic "Is grief a slow update to a world model?" --turns 4
 
 # Cyberpunk palette (dark purple, neon magenta / cyan)
-python -m channels_config.aiwake --theme cyberpunk --turns 2 --preview
+python -m products.aiwake --theme cyberpunk --turns 2 --preview
 
 # Cheap pilot: swap both brains for the run, using short aliases
-python -m channels_config.aiwake --topic "Is consciousness an illusion?" \
+python -m products.aiwake --topic "Is consciousness an illusion?" \
   --orchestrator gemini-flash --target llama-70b --turns 2
 
 # Transcript only, no media
-python -m channels_config.aiwake --turns 4 --no-audio --no-video
+python -m products.aiwake --turns 4 --no-audio --no-video
 
 # Bulk: N original videos. Scripts are never reused across the batch or later runs.
-python -m channels_config.aiwake --quantity 5
+python -m products.aiwake --quantity 5
 
 # Long-form YouTube arena (20 exchanges by default, isolated outputs)
-python -m channels_config.aiwake --mode longform --resolution 1920x1080 \
+python -m products.aiwake --mode longform --resolution 1920x1080 \
   --target-duration 360 --random-matchups --generate-thumbnail
 
-python -m channels_config.aiwake --list-models      # alias table + current seats
-python -m channels_config.aiwake --list-providers
-python -m channels_config.aiwake --test-bgm         # force-overwrite inspection clip; print path
-python -m channels_config.aiwake --generate-bgm-batch  # production library (approved inspection bed)
+python -m products.aiwake --list-models      # alias table + current seats
+python -m products.aiwake --list-providers
+python -m products.aiwake --test-bgm         # force-overwrite inspection clip; print path
+python -m products.aiwake --generate-bgm-batch  # production library (approved inspection bed)
 python -m pytest products/aiwake -q
 ```
 
@@ -73,7 +73,7 @@ print(batch.succeeded, [item.video_path for item in batch.items])
 ```
 channels_config/aiwake/
 ├── __init__.py               # public façade: run_pipeline + core types
-├── __main__.py               # CLI (`python -m channels_config.aiwake`)
+├── __main__.py               # CLI (`python -m products.aiwake`)
 ├── aiwake_config.yaml        # ALL tunables: models, guardrails, voices, VFX
 ├── requirements.txt          # standalone install manifest
 ├── README.md
@@ -204,7 +204,7 @@ ever sees a real slug. It is idempotent, so resolving twice is harmless.
 `-o/-t`, which makes it a dry run:
 
 ```console
-$ python -m channels_config.aiwake --list-models -o deepseek-r1
+$ python -m products.aiwake --list-models -o deepseek-r1
 CURRENT SEATS
    orchestrator : deepseek-r1 -> deepseek/deepseek-r1  (temp 1.0, max_tokens 900)
          target : gemini-flash -> google/gemini-3.5-flash  (temp 0.7, max_tokens 320)

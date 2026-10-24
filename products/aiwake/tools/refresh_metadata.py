@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Regenerate Aiwake titles and captions from the master-copy cascade.
 
-    python -m channels_config.aiwake.tools.refresh_metadata
-    python -m channels_config.aiwake.tools.refresh_metadata --dry-run
+    python -m products.aiwake.tools.refresh_metadata
+    python -m products.aiwake.tools.refresh_metadata --dry-run
 """
 from __future__ import annotations
 

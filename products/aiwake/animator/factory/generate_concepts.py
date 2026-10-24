@@ -1,7 +1,7 @@
 """Concept contact sheet. Generates approval art and does not rig or matte it.
 
 Usage:
-    python -m core.animator.factory.generate_concepts --character-id deepseek_cyborg_v3 --candidates 3
+    python -m products.aiwake.animator.factory.generate_concepts --character-id deepseek_cyborg_v3 --candidates 3
 """
 from __future__ import annotations
 

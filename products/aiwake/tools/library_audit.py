@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Triage Aiwake sessions: keep unique top-tier rows, move rejects to reproved/.
 
-    python -m channels_config.aiwake.tools.library_audit
-    python -m channels_config.aiwake.tools.library_audit --dry-run
+    python -m products.aiwake.tools.library_audit
+    python -m products.aiwake.tools.library_audit --dry-run
 """
 from __future__ import annotations
 

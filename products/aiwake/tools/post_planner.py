@@ -13,8 +13,8 @@ bulk-upload workbook used by the other video channels:
 Primary file: ``{OUTPUT_PATH}/aiwake/automated_bulk_posts_import.xlsx``
 Snapshot:     ``{OUTPUT_PATH}/aiwake/postplanner/postplan_aiwake.xlsx``
 
-    python -m channels_config.aiwake.tools.post_planner
-    python -m channels_config.aiwake.tools.post_planner --dry-run
+    python -m products.aiwake.tools.post_planner
+    python -m products.aiwake.tools.post_planner --dry-run
 """
 from __future__ import annotations
 from shared.layer_bridge import Symbol

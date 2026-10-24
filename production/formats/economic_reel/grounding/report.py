@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Print the object resolved for each spoken beat. No image calls.
 
-    python -m modules.reel_grounding.report "Lost OOPArts" "script text"
+    python -m production.formats.economic_reel.grounding.report "Lost OOPArts" "script text"
 """
 from __future__ import annotations
 

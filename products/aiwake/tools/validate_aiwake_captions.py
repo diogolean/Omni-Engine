@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Hard checks for Aiwake captions v3.
 
-    python -m channels_config.aiwake.tools.validate_aiwake_captions [library.json]
+    python -m products.aiwake.tools.validate_aiwake_captions [library.json]
     python tools/validate_aiwake_captions.py [library.json] [--ids scope.json]
 
 Ready rows are checked. ``needs_review`` is reported and is not a failure.

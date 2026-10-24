@@ -2,7 +2,7 @@
 """Replay pipeline.py's per-scene QA retry loop on one locked-script beat.
 
 Usage (from factory root):
-  python -m core.economic_reel_lofi._tools.probe_scene \\
+  python -m tools.lofi.probes.probe_scene \\
     --script outputs/wonder_feed/clips/lofi_stills_attachment_20260821_v02.json \\
     --scene 3 --trials 3
 """

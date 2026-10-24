@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Render one artefact still for inspection.
 
-    python -m modules.reel_artefact.preview quimbaya
-    python -m modules.reel_artefact.preview quimbaya --ref
+    python -m production.formats.economic_reel.artefact.preview quimbaya
+    python -m production.formats.economic_reel.artefact.preview quimbaya --ref
 """
 from __future__ import annotations
 
