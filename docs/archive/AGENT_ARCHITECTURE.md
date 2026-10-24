@@ -1,3 +1,7 @@
+# Agent architecture (historical)
+
+Superseded by the [root README](../../README.md), [architecture/diagrams.md](../architecture/diagrams.md), and [architecture/main-module-map.md](../architecture/main-module-map.md). The folders named below (`agents/`, `core/`, `quality/VisualQA_Agent/`) are the pre-move layout. Those import paths still resolve as deprecated shims until M14. Use the current homes in the README.
+
 # Agent Architecture
 
 This document describes the orchestrator (`main.py`) and the individual

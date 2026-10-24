@@ -1,6 +1,6 @@
 # Architecture
 
-Where Omni-Engine runs, how a piece of content moves, and which decisions are already settled. Diagrams are in [diagrams.md](diagrams.md). Decision records are in [decisions/](decisions/). `main.py` is the CLI entry. The steps it used to hold live in `engine/`. The map is [main-module-map.md](main-module-map.md). The root allowlist is [REPO_LAYOUT.md](REPO_LAYOUT.md).
+Where Omni-Engine runs, how a piece of content moves, and which decisions are already settled. Diagrams are in [diagrams.md](diagrams.md). Decision records are in [decisions/](decisions/). `main.py` is the CLI entry. The steps live in `production/pipeline/`. The map is [main-module-map.md](main-module-map.md). The root allowlist is [REPO_LAYOUT.md](REPO_LAYOUT.md).
 
 Older showcase notes that used to live in this folder now live under `portfolio_showcase/`. See [DEPRECATED.md](DEPRECATED.md).
 
@@ -34,13 +34,13 @@ Publishers read the channel library from Google Drive first (`drive.readonly`), 
 
 B2 remains the publish ledger and the public URL store for Post Planner, which cannot fetch a Drive link. Nothing in the bucket is deleted. See [0001](decisions/0001-b2-on-demand.md) and [0003](decisions/0003-shared-b2-ledger-and-board-dedupe.md). A Drive-only Post Planner asset is uploaded once through the budgeted B2 client (Class A) and left in the bucket.
 
-Every B2 read, list, download, and upload goes through `agents/media/b2_client.py`, which charges `agents/media/b2_budget.py` first. Uploads are Class A and are not counted. The head or list before an upload is Class B or Class C and is counted. The free daily allowance is 1 GB of download, 2,500 Class B, and 2,500 Class C. `B2_DAILY_DOWNLOAD_MB`, `B2_DAILY_CLASS_B`, and `B2_DAILY_CLASS_C` are clamped to that allowance and cannot raise it. A call that would pass a cap raises `B2DailyCapError` and stops the run.
+Every B2 read, list, download, and upload goes through `shared/storage/b2_client.py`, which charges `shared/storage/b2_budget.py` first. `agents/media/b2_client.py` is a deprecated shim for that client. Uploads are Class A and are not counted. The head or list before an upload is Class B or Class C and is counted. The free daily allowance is 1 GB of download, 2,500 Class B, and 2,500 Class C. `B2_DAILY_DOWNLOAD_MB`, `B2_DAILY_CLASS_B`, and `B2_DAILY_CLASS_C` are clamped to that allowance and cannot raise it. A call that would pass a cap raises `B2DailyCapError` and stops the run.
 
-The engine, the scheduler, and scripts on one machine share a file-locked counter at `outputs/b2/usage.json` (override with `B2_USAGE_PATH`). Counters reset at 00:00 UTC. The PC and the Oracle VM do not share a disk, so each keeps its own counter. Defaults stay near half the free allowance (500 MB, 1,500 Class B, 1,500 Class C) so the two hosts together stay inside it. A CI test rejects any non-test module outside `agents/media/` that constructs a boto3 S3 client or a b2sdk API for B2.
+The engine, the scheduler, and scripts on one machine share a file-locked counter at `outputs/b2/usage.json` (override with `B2_USAGE_PATH`). Counters reset at 00:00 UTC. The PC and the Oracle VM do not share a disk, so each keeps its own counter. Defaults stay near half the free allowance (500 MB, 1,500 Class B, 1,500 Class C) so the two hosts together stay inside it. A CI test rejects any non-test module other than `shared/storage/b2_client.py` and its deprecated shim `agents/media/b2_client.py` that constructs a boto3 S3 client or a b2sdk API for B2.
 
 ### PC runner
 
-GPU and Windows-only work stays on the PC: Aiwake animated episodes (`channels_config/aiwake/` plus the `core/animator/` harness; the parametric engine is `animation/parametric/`) and Master Mei batches that need the local factory tree. `utils/pipeline_paths.py` still resolves `WINDOWS_FACTORY_ROOT` when the matching env path is unset, so those machines keep their Drive layout.
+GPU and Windows-only work stays on the PC: Aiwake animated episodes (`products/aiwake/` on `animation/parametric/`, with the store still in `channels_config/aiwake/`) and Master Mei batches that need the local factory tree. `shared.paths` resolves `WINDOWS_FACTORY_ROOT` when the matching env path is unset, so those machines keep their Drive layout. `utils/pipeline_paths.py` and `core/animator/` are deprecated shims.
 
 The runner switch is `local`, `docker`, or `both`. See [0002](decisions/0002-runner-switch-local-docker-both.md).
 
