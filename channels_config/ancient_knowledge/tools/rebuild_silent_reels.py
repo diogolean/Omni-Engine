@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -213,9 +212,11 @@ def _write_ass(
 
 
 def _run_ffmpeg(args: list[str]) -> None:
+    from shared.ffmpeg import run_ffmpeg
+
     exe = str(FFMPEG if FFMPEG.is_file() else shutil.which("ffmpeg") or "ffmpeg")
     cmd = [exe, "-y", *args]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = run_ffmpeg(cmd, text=True, timeout=600)
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "")[-2000:]
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {err}")
@@ -424,11 +425,13 @@ def remux_one(variant: int, reel_name: str, stem: str, captions: dict[int, str],
 
 
 def verify(path: Path) -> None:
+    from shared.ffmpeg import run_ffmpeg
+
     exe = str(FFMPEG if FFMPEG.is_file() else "ffmpeg")
-    proc = subprocess.run(
+    proc = run_ffmpeg(
         [exe, "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
-        capture_output=True,
         text=True,
+        timeout=120,
     )
     blob = (proc.stderr or "") + (proc.stdout or "")
     mean = re.search(r"mean_volume:\s*([-\d.]+)", blob)

@@ -69,6 +69,8 @@ def test_compose_service_is_opt_in_and_unpublished() -> None:
     assert "sk-" not in rendered
     engine = doc["services"]["engine"]["environment"]
     assert engine["SUPERMEMORY_BASE_URL"] == "http://supermemory:6767"
+    assert doc["services"]["engine"]["init"] is True
+    assert doc["services"]["scheduler"]["init"] is True
 
 
 def test_deploy_does_not_start_memory_or_force_the_scheduler() -> None:

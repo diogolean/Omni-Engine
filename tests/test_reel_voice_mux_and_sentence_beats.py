@@ -371,6 +371,7 @@ def test_baghdad_search_includes_the_site_queries() -> None:
     assert "Baghdad Battery" in " ".join(bag["commons_categories"])
 
 
+@pytest.mark.timeout(300)
 @pytest.mark.skipif(
     not __import__("core.reel_ffmpeg_render", fromlist=["ffmpeg_has_libass"]).ffmpeg_has_libass(),
     reason="ffmpeg libass missing",
@@ -403,6 +404,7 @@ def test_ffmpeg_reel_keeps_the_voice(tmp_path: Path) -> None:
     assert voice_energy > 20.0
 
 
+@pytest.mark.timeout(300)
 @pytest.mark.skipif(
     not __import__("core.reel_ffmpeg_render", fromlist=["ffmpeg_has_libass"]).ffmpeg_has_libass(),
     reason="ffmpeg libass missing",
@@ -438,6 +440,37 @@ def test_voice_drone_and_boom_mux_matches_the_video(
     assert abs(_media_duration(out) - picture_s) < 0.35
 
 
+@pytest.mark.timeout(300)
+@pytest.mark.skipif(
+    not __import__("core.reel_ffmpeg_render", fromlist=["ffmpeg_has_libass"]).ffmpeg_has_libass(),
+    reason="ffmpeg libass missing",
+)
+def test_a_longer_voice_is_not_cut_to_the_acts(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The picture holds when the narration runs past the planned acts."""
+    _require_ffmpeg()
+    from core.reel_ffmpeg_render import compile_ffmpeg_reel
+
+    voice = tmp_path / "voice.wav"
+    _tone(voice, 440.0, 1.0)
+    out = tmp_path / "reel.mp4"
+    with caplog.at_level("WARNING", logger="production.media.reel_ffmpeg_render"):
+        compile_ffmpeg_reel(
+            image_paths=_stills(tmp_path),
+            act_durations=[0.35, 0.35],
+            output_path=out,
+            voice_audio=voice,
+            require_voice=True,
+            synthesize_drone=False,
+            transition_booms=False,
+            workers=1,
+        )
+    assert "do not cover the voice" in caplog.text
+    assert abs(_media_duration(out) - 1.0) < 0.35
+
+
+@pytest.mark.timeout(300)
 @pytest.mark.skipif(
     not __import__("core.reel_ffmpeg_render", fromlist=["ffmpeg_has_libass"]).ffmpeg_has_libass(),
     reason="ffmpeg libass missing",
@@ -501,6 +534,7 @@ def test_offline_reel_compiles_with_voice_and_no_adjacent_dupes(tmp_path: Path) 
     assert _pix_fmt(out) == "yuv420p"
 
 
+@pytest.mark.timeout(300)
 def test_moviepy_fallback_keeps_the_voice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

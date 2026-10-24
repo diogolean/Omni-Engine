@@ -813,6 +813,7 @@ def _floor_frame_time(fps: float, t: float) -> float:
     return math.floor(t * fps) / fps
 
 
+@pytest.mark.timeout(300)
 def test_label_never_brighter_than_body_in_real_rendered_video(tmp_path):
     import pytest
     pytest.importorskip("moviepy")
@@ -1019,6 +1020,7 @@ def test_top_mask_start_offset_moves_body_top_up():
 #     decode-the-real-.mp4-frame-by-frame method used to catch the Round-13
 #     regression in the first place.
 # --------------------------------------------------------------------------- #
+@pytest.mark.timeout(300)
 def test_send_transition_moves_gradually_across_consecutive_native_frames_at_production_fps(tmp_path):
     import pytest
     pytest.importorskip("moviepy")

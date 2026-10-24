@@ -34,7 +34,6 @@ import json
 import logging
 import re
 import shutil
-import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -262,7 +261,9 @@ def _ffprobe_duration(path: Path) -> float | None:
     if not binary:
         return None
     try:
-        completed = subprocess.run(  # noqa: S603 — fixed binary, no shell
+        from shared.ffmpeg import run_ffmpeg
+
+        completed = run_ffmpeg(
             [
                 binary,
                 "-v",
@@ -273,7 +274,6 @@ def _ffprobe_duration(path: Path) -> float | None:
                 "json",
                 str(path),
             ],
-            capture_output=True,
             text=True,
             timeout=30,
             check=True,
@@ -1222,9 +1222,10 @@ def _ffmpeg_to_wav(source: Path, destination: Path) -> bool:
     if not binary:
         return False
     try:
-        subprocess.run(  # noqa: S603 — fixed binary, no shell
+        from shared.ffmpeg import run_ffmpeg
+
+        run_ffmpeg(
             [binary, "-y", "-i", str(source), str(destination)],
-            capture_output=True,
             timeout=90,
             check=True,
         )

@@ -441,9 +441,9 @@ def build_search_tags(
 
 def probe_duration_s(video: Path) -> float | None:
     try:
-        import subprocess
+        from shared.ffmpeg import run_ffmpeg
 
-        proc = subprocess.run(
+        proc = run_ffmpeg(
             [
                 "ffprobe",
                 "-v",
@@ -454,9 +454,7 @@ def probe_duration_s(video: Path) -> float | None:
                 "default=noprint_wrappers=1:nokey=1",
                 str(video),
             ],
-            capture_output=True,
             text=True,
-            check=False,
             timeout=30,
         )
         if proc.returncode == 0 and proc.stdout.strip():

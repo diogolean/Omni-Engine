@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("cv2")
+pytestmark = pytest.mark.timeout(300)
 
 import numpy as np
 

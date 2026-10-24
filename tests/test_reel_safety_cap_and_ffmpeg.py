@@ -396,6 +396,7 @@ def test_ffmpeg_is_the_default_and_an_error_falls_back(monkeypatch: pytest.Monke
     assert "&H0000E6FF" in script
 
 
+@pytest.mark.timeout(300)
 @pytest.mark.skipif(
     not __import__("core.reel_ffmpeg_render", fromlist=["ffmpeg_has_libass"]).ffmpeg_has_libass(),
     reason="ffmpeg libass missing",
