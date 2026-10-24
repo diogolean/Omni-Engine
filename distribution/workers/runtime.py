@@ -4,8 +4,13 @@ One wake publishes ``PINTEREST_PINS_PER_RUN`` image pins (default 1) for
 every active row in ``config/pinterest_accounts.yaml``, and never more
 than ``PINTEREST_PINS_PER_DAY`` (default 4) once pins already recorded
 that calendar day are counted. The day is ``PINTEREST_DAY_TZ`` (default
-``America/Sao_Paulo``). Rows with ``seeded=True`` are board history and
-do not count, and they do not move the resume point. Media comes from B2
+``America/Sao_Paulo``). An open reservation (``reserved=True``, empty
+``pin_id``) counts toward that cap and toward the newest ``published_utc``.
+It skips catch-up when that stamp is inside the 5-minute margin before the
+saved wake. A reservation still open after one hour is logged and kept.
+Rows with ``seeded=True`` are board history and
+do not count, and they do not move the resume point. Facebook notes
+(``pin_recorded`` false) do not count toward the daily cap. Media comes from B2
 one object at a time. Video files are skipped. Before the first publish
 the process sleeps until the newest real PinLedger ``published_utc`` plus
 one cadence draw (``MIN_INTERVAL_HOURS`` to ``MAX_INTERVAL_HOURS``,
@@ -149,9 +154,11 @@ def newest_pin_published(
     """Newest real ``published_utc`` across active accounts.
 
     Rows with ``seeded=True`` are ignored, including older duplicates of the
-    same pin id. ``None`` when every ledger is empty, when the only stamps
-    are seeded, or when any ledger is unreachable. A partial read is not a
-    safe resume point: the missing account may hold the newest pin.
+    same pin id. An open reservation is not seeded, so its ``published_utc``
+    is a real stamp and can cover a saved wake. ``None`` when every ledger
+    is empty, when the only stamps are seeded, or when any ledger is
+    unreachable. A partial read is not a safe resume point: the missing
+    account may hold the newest pin.
     """
     rows_of = read_rows or _read_account_ledger
     chosen = list(accounts) if accounts is not None else active_pinterest_accounts()
@@ -503,6 +510,12 @@ def _day_timezone() -> ZoneInfo:
 
 
 def _pins_recorded_on(rows: Sequence[object], day, tz: ZoneInfo) -> int:
+    """Pins already recorded on ``day``, including an open reservation.
+
+    ``pin_recorded`` false and ``seeded`` rows are excluded. An empty
+    ``pin_id`` does not exclude a row: reserving before the API call
+    consumes the daily cap for that calendar day.
+    """
     count = 0
     for row in rows:
         if not isinstance(row, dict) or row.get("pin_recorded") is False or _is_seeded(row):

@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT = _ROOT / ".github" / "scripts" / "remote-deploy.sh"
+_SCRIPT = _ROOT / "deploy" / "vm" / "remote-deploy.sh"
 _WORKFLOW = _ROOT / ".github" / "workflows" / "deploy.yml"
 _SHA = "a" * 40
 

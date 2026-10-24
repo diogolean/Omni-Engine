@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +61,7 @@ class PinLedger:
         if text is None:
             text = self._read_cache()
         self.rows = _parse_jsonl(text or "")
+        self._note_stale_reservations()
         return self.rows
 
     def read_rows(self) -> tuple[list[dict], bool]:
@@ -77,17 +78,20 @@ class PinLedger:
         )
         if status == "ok":
             self.rows = _parse_jsonl(text or "")
+            self._note_stale_reservations()
             return self.rows, True
         if status == "missing":
             cached, present = self._cache_payload()
             if present:
                 self.rows = _parse_jsonl(cached)
+                self._note_stale_reservations()
                 return self.rows, True
             self.rows = []
             return [], True
         cached, present = self._cache_payload()
         if present:
             self.rows = _parse_jsonl(cached)
+            self._note_stale_reservations()
             return self.rows, True
         return [], False
 
@@ -149,6 +153,13 @@ class PinLedger:
         invisible to ``seen()``. A kill after the Pinterest call still finds
         this row, so the next run does not publish a second pin. A second
         reserve for the same post does not add another row.
+
+        The row counts toward ``PINTEREST_PINS_PER_DAY`` on its
+        ``published_utc`` calendar day, the same way a finished pin does.
+        ``newest_pin_published`` also reads that stamp, so the reservation
+        covers a saved wake and skips catch-up when it falls inside the
+        5-minute margin. A reservation still open after one hour is logged
+        and left in place.
         """
         wanted = str(post_id or "").strip()
         wanted_hash = str(source_hash or "").strip()
@@ -226,6 +237,9 @@ class PinLedger:
             return
         self.rows = kept
         self._write()
+
+    def _note_stale_reservations(self) -> None:
+        warn_stale_reservations(self.rows, account_id=self.account_id)
 
     def note_facebook_export(self, *, post_id: str, article: str = "") -> None:
         """Remember a Facebook row without treating the pin as already published.
@@ -356,6 +370,68 @@ class PinLedger:
             return self.cache_path.read_text(encoding="utf-8"), True
         except OSError:
             return "", False
+
+
+_STALE_RESERVATION = timedelta(hours=1)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _row_published_utc(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def warn_stale_reservations(
+    rows: list[dict],
+    *,
+    account_id: str,
+    now: datetime | None = None,
+) -> int:
+    """Warn once per open reservation older than one hour with no pin id.
+
+    Facebook notes (``pin_recorded`` false) and seeded board rows are not
+    open reservations. Rows that already have a ``pin_id`` are finished.
+    Nothing here deletes or releases a row.
+    """
+    moment = now or _utc_now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    warned = 0
+    for row in rows:
+        if not isinstance(row, dict) or row.get("reserved") is not True:
+            continue
+        if str(row.get("pin_id") or "").strip():
+            continue
+        if row.get("pin_recorded") is False or row.get("seeded") is True:
+            continue
+        stamp = _row_published_utc(row.get("published_utc"))
+        if stamp is None or moment - stamp <= _STALE_RESERVATION:
+            continue
+        post_id = str(row.get("post_id") or "").strip() or str(row.get("source_hash") or "").strip()
+        log.warning(
+            "Pinterest ledger %s reserved post_id=%s more than 1h ago and still has no pin_id (published_utc=%s)",
+            account_id,
+            post_id or "<blank>",
+            stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        warned += 1
+    return warned
 
 
 def _open_reservation(row: dict, *, post_id: str, source_hash: str) -> bool:
