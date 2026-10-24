@@ -1,5 +1,6 @@
-# Pull-request validation only. The media stack stays in requirements.txt.
+# Pull-request and local test runner. The media stack stays in requirements.txt.
 pytest>=8.0.0
+# Dev dependency. pytest.ini_options timeout=300 stops a stuck ffmpeg.
 pytest-timeout>=2.3.1
 PyYAML>=6.0
 # v3 API. The 5.x SDK speaks /ns/{namespace} and does not work with server 0.0.8.

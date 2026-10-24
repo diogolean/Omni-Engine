@@ -3454,7 +3454,8 @@ def _normalize_sequence_audio_48k(
 ) -> None:
     """Re-mux MP4 audio through loudnorm + 48 kHz + master gain (video copy)."""
     import shutil
-    import subprocess
+
+    from shared.ffmpeg import run_ffmpeg
 
     path = Path(mp4_path)
     if not path.is_file():
@@ -3466,7 +3467,7 @@ def _normalize_sequence_audio_48k(
     af = f"loudnorm=I=-16:TP=-1.5:LRA=11,volume={gain:.3f}"
     tmp = path.with_suffix(".loudnorm48k_tmp.mp4")
     try:
-        subprocess.run(
+        run_ffmpeg(
             [
                 ffmpeg, "-y",
                 "-i", str(path),
@@ -3477,7 +3478,6 @@ def _normalize_sequence_audio_48k(
                 str(tmp),
             ],
             check=True,
-            capture_output=True,
             timeout=600,
         )
         tmp.replace(path)
