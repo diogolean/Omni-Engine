@@ -670,12 +670,13 @@ def extract_video_still(video_path: Path, dest: Path) -> str:
         return str(dest.resolve())
 
     try:
-        import subprocess  # noqa: PLC0415
+        from shared.ffmpeg import run_ffmpeg
+
         cmd = [
             "ffmpeg", "-y", "-ss", "2", "-i", str(video_path),
             "-frames:v", "1", "-q:v", "3", str(dest),
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        proc = run_ffmpeg(cmd, text=True, timeout=30)
         if proc.returncode == 0 and dest.is_file():
             return str(dest.resolve())
     except Exception as exc:  # noqa: BLE001

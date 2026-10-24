@@ -74,14 +74,15 @@ def _nvenc_available(ffmpeg_path: str) -> bool:
         return _NVENC_PROBE_CACHE[ffmpeg_path]
     available = False
     try:
-        listed = subprocess.run(
+        from shared.ffmpeg import run_ffmpeg
+
+        listed = run_ffmpeg(
             [ffmpeg_path, "-hide_banner", "-encoders"],
-            capture_output=True,
             text=True,
             timeout=15,
         )
         if "h264_nvenc" in (listed.stdout or ""):
-            probe = subprocess.run(
+            probe = run_ffmpeg(
                 [
                     ffmpeg_path,
                     "-hide_banner",
@@ -99,7 +100,6 @@ def _nvenc_available(ffmpeg_path: str) -> bool:
                     "null",
                     "-",
                 ],
-                capture_output=True,
                 timeout=15,
             )
             available = probe.returncode == 0
@@ -307,7 +307,9 @@ class AnimationRenderer:
         self, cmd: list[str], frame_iter: Iterable[np.ndarray], output_path: Path
     ) -> tuple[int, float]:
         start = time.perf_counter()
-        proc = subprocess.Popen(
+        from shared.ffmpeg import popen_ffmpeg
+
+        proc = popen_ffmpeg(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -399,7 +401,12 @@ def _finish_ffmpeg_pipe(proc: subprocess.Popen, timeout: float) -> bytes:
     )
     stdout_reader.start()
     stderr_reader.start()
-    proc.wait(timeout=timeout)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        from shared.ffmpeg import kill_process_tree
+
+        kill_process_tree(proc)
     stdout_reader.join(timeout)
     stderr_reader.join(timeout)
     return b"".join(stderr_parts)

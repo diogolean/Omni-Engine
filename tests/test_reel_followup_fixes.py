@@ -95,7 +95,7 @@ def test_ffmpeg_banner_probe_reads_duration_and_audio(tmp_path: Path, monkeypatc
             ),
         )
 
-    monkeypatch.setattr("modules.reel_qa.mp4_gate.subprocess.run", _run)
+    monkeypatch.setattr("modules.reel_qa.mp4_gate.run_ffmpeg", _run)
     info = probe_media(video)
     assert info["error"] == ""
     assert info["duration_s"] == 87.6

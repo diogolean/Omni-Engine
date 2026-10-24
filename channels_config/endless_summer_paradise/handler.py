@@ -149,9 +149,9 @@ def get_duration(video_path: str | Path) -> float:
     except Exception:
         pass
     try:
-        import subprocess
+        from shared.ffmpeg import run_ffmpeg
 
-        proc = subprocess.run(
+        proc = run_ffmpeg(
             [
                 "ffprobe",
                 "-v",
@@ -162,9 +162,7 @@ def get_duration(video_path: str | Path) -> float:
                 "default=noprint_wrappers=1:nokey=1",
                 path,
             ],
-            capture_output=True,
             text=True,
-            check=False,
             timeout=60,
         )
         if proc.returncode == 0 and proc.stdout.strip():
