@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from utils.pipeline_paths import outputs_root
+from shared.paths import outputs_root
 
 from .create_puppet import generate_character_image
 from animation.parametric.factory.rigger import birefnet_cutout

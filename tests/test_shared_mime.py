@@ -1,7 +1,8 @@
 """One image MIME helper for the vision payloads."""
 from __future__ import annotations
 
-from agents.media import style_reader, vision_agent
+from production.media import style_reader
+from production.providers.vision import vision_agent
 from shared.mime import image_mime_for
 
 

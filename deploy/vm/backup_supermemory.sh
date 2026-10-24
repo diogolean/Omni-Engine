@@ -37,5 +37,5 @@ if [ "$status" -ne 0 ]; then
 fi
 
 docker compose exec -T engine \
-  python scripts/backup_supermemory.py --upload-only --day "$day" \
+  python tools/backup_supermemory.py --upload-only --day "$day" \
   --backup-dir "/opt/omni-engine/${backup_dir}"

@@ -64,7 +64,7 @@ def get_active_ledger() -> _RunLedger | None:
 def ledger_file_path(engine_root: Path) -> tuple[Path, str]:
     """Return ``(absolute_log_path, timestamp_token)`` for ``outputs/logs/run_<ts>.log``."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    from utils.pipeline_paths import pipeline_logs_dir
+    from shared.paths import pipeline_logs_dir
 
     path = pipeline_logs_dir() / f"run_{ts}.log"
     return path.resolve(), ts

@@ -12,13 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-from core.economic_reel_lofi.visual_identity import (  # noqa: E402
-    apply_v2_prompts_to_lines_dev,
-)
+from production.formats.lofi.visual_identity import apply_v2_prompts_to_lines_dev
 
 PACK = page_outputs_dir("wonder_feed") / "clips" / "script_pack_20260825"
 PACK_FILES = (

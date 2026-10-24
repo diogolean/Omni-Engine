@@ -54,7 +54,7 @@ from products.aiwake.tools.caption_generator import (
     seat_names,
 )
 from products.aiwake.tools.metadata_generator import is_portuguese
-from utils.pipeline_paths import review_path, temp_path
+from shared.paths import review_path, temp_path
 
 _LOG = logging.getLogger("aiwake.retitle_v4")
 

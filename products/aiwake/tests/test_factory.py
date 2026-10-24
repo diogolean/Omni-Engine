@@ -21,21 +21,18 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.animator.asset_generator import DEFAULT_PUPPETS_DIR  # noqa: E402
-from core.animator.factory import auto_rig_character  # noqa: E402
-from core.animator.factory.create_environment import create_environment  # noqa: E402
-from core.animator.factory.create_puppet import create_puppet  # noqa: E402
-from core.animator.factory.layer_slicer import slice_character_layers  # noqa: E402
-from core.animator.factory.puppet_matrix import PUPPET_MATRIX  # noqa: E402
-from core.animator.factory.rigger import (  # noqa: E402
-    chroma_key_cutout,
-    solidify_character_alpha,
-)
-from core.animator.compositor import _HeroCamera  # noqa: E402
-from core.animator.puppet import PuppetSkin  # noqa: E402
-from core.animator.puppet import PuppetRig  # noqa: E402
-from core.animator.animator_types import SpeakerStyle  # noqa: E402
-from core.animator.animator_types import VISEMES  # noqa: E402
+from products.aiwake.animator.asset_generator import DEFAULT_PUPPETS_DIR  # noqa: E402
+from animation.parametric.factory import auto_rig_character  # noqa: E402
+from products.aiwake.animator.factory.create_environment import create_environment  # noqa: E402
+from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: E402
+from animation.parametric.factory.layer_slicer import slice_character_layers  # noqa: E402
+from animation.parametric.factory.puppet_matrix import PUPPET_MATRIX  # noqa: E402
+from animation.parametric.factory.rigger import chroma_key_cutout, solidify_character_alpha
+from animation.parametric.compositor import _HeroCamera  # noqa: E402
+from animation.parametric.puppet import PuppetSkin  # noqa: E402
+from animation.parametric.puppet import PuppetRig  # noqa: E402
+from animation.parametric.animator_types import SpeakerStyle  # noqa: E402
+from animation.parametric.animator_types import VISEMES  # noqa: E402
 
 
 def _digest(path: Path) -> str:

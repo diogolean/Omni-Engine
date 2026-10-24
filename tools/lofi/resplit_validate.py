@@ -15,12 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.economic_reel_lofi import config as lofi_cfg
-from agents.writer.script_agent import (
-    _narrative_gate_reasons,
-    apply_monologue_split,
-    split_monologue_to_captions,
-)
+from production.formats.lofi import config as lofi_cfg
+from production.writers.script_agent import _narrative_gate_reasons, apply_monologue_split, split_monologue_to_captions
 
 src = lofi_cfg.STORE_DIR / "prose_writer_validate.json"
 rows = json.loads(src.read_text(encoding="utf-8"))

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
@@ -19,14 +19,10 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from agents.writer.script_agent import (  # noqa: E402
-    assess_story_quality,
-    generate_script,
-    repair_script_captions,
-)
-from core.economic_reel_lofi import lofi_collections as rag  # noqa: E402
-from core.economic_reel_lofi.validator_agent import validate_script  # noqa: E402
-from core.economic_reel_lofi.visual_identity import preferred_concrete_noun  # noqa: E402
+from production.writers.script_agent import assess_story_quality, generate_script, repair_script_captions
+from production.formats.lofi import lofi_collections as rag  # noqa: E402
+from production.formats.lofi.validator_agent import validate_script  # noqa: E402
+from production.formats.lofi.visual_identity import preferred_concrete_noun  # noqa: E402
 
 OUT = page_outputs_dir("wonder_feed") / "clips" / "script_drafts_20260825"
 MODULE = "relationship"

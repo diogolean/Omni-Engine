@@ -17,11 +17,8 @@ from production.formats.economic_reel.artefact.logbook import note_accepted
 from production.formats.economic_reel.artefact.reuse import note_beat_key, remember_approved, reuse_key_for
 from production.formats.economic_reel.artefact.role import beat_kind, is_event
 from production.formats.economic_reel.artefact.route import acquire_photo
-from modules.reel_qa.models import StillGateResult
-from modules.reel_qa.relevance import (
-    evaluate_chunk_relevance,
-    evaluate_with_technical_retry,
-)
+from production.qa.models import StillGateResult
+from production.qa.relevance import evaluate_chunk_relevance, evaluate_with_technical_retry
 from production.formats.economic_reel.shot_planner.entities import Entity, entity_for_line, load_entities
 
 logger = logging.getLogger(__name__)
@@ -520,7 +517,7 @@ def _llm_allowed() -> bool:
     if disabled:
         return False
     try:
-        from core.cheap_llm import available
+        from production.providers.llm.cheap_llm import available
 
         if available("text"):
             return True
@@ -548,7 +545,7 @@ def _gemini_reprompt(narration: str, prompt: str, rejection: str) -> str | None:
     if (os.getenv("REEL_LADDER_LLM") or "").strip().lower() in {"0", "off", "false", "no"}:
         return None
     try:
-        from core.cheap_llm import CheapLLMUnavailable, complete
+        from production.providers.llm.cheap_llm import CheapLLMUnavailable, complete
 
         try:
             result = complete(
@@ -568,10 +565,7 @@ def _gemini_reprompt(narration: str, prompt: str, rejection: str) -> str | None:
     if not key:
         return None
     try:
-        from core.google_guardrail import (
-            guarded_generate_content,
-            make_guarded_gemini_client,
-        )
+        from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client
 
         client = make_guarded_gemini_client(key)
         response = guarded_generate_content(

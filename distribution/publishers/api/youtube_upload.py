@@ -23,6 +23,7 @@ gitignored and must NEVER be committed.
 """
 
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import importlib
 import json
@@ -38,13 +39,7 @@ from typing import Any, Optional
 _LOG = logging.getLogger(__name__)
 
 
-class YouTubeQuotaExceededError(RuntimeError):
-    """Raised when YouTube's ~20 videos/day channel upload cap (or a related
-    quota/rate error) is hit mid-upload. Callers should catch this distinctly
-    from other upload failures: queue the remaining videos via
-    ``queue_pending_upload`` / ``queue_pending_upload_from_envelope`` and let
-    the pipeline complete gracefully instead of crashing."""
-
+from shared.youtube_errors import YouTubeQuotaExceededError
 
 class YouTubeChannelMismatchError(RuntimeError):
     """Raised when the OAuth token is authorized for the wrong Brand Account."""
@@ -1524,7 +1519,7 @@ def resolve_upload_video(video_path: str | Path, page_name: str) -> Path:
     path = Path(video_path)
     if path.is_file():
         return path
-    from agents.media.content_source import materialize_publish_file  # noqa: PLC0415
+    materialize_publish_file = Symbol('production.library.content_source', 'materialize_publish_file')  # noqa: PLC0415
 
     found = materialize_publish_file(path, channel=_sanitize_page_name(page_name))
     if found is not None and found.is_file():

@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     import numpy as np
-from utils.pipeline_paths import moviepy_temp_audio_dir
+from shared.paths import moviepy_temp_audio_dir
 
 logger = logging.getLogger(__name__)
 

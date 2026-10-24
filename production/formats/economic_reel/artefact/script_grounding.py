@@ -142,7 +142,7 @@ def hook_names_topic(script: str, topic: str) -> bool:
 
 def terrain_conflicts(script: str, geography: str) -> str:
     """A non-desert place cannot be told as sand. Empty when the line fits."""
-    from modules.reel_qa.relevance import dune_conflict
+    from production.qa.relevance import dune_conflict
 
     if dune_conflict(script or "", geography or ""):
         return "sand_dunes"

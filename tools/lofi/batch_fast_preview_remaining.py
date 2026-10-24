@@ -12,23 +12,16 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.assembler import measure_vo_speech_duration  # noqa: E402
-from core.economic_reel_lofi.pipeline import (  # noqa: E402
-    _render_one_voiceover,
-    _sanitize_caption_typos,
-)
-from core.economic_reel_lofi.regen import (  # noqa: E402
-    assemble_video_from_episode,
-    load_episode_json,
-    save_episode_json,
-)
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.assembler import measure_vo_speech_duration  # noqa: E402
+from production.formats.lofi.pipeline import _render_one_voiceover, _sanitize_caption_typos
+from production.formats.lofi.regen import assemble_video_from_episode, load_episode_json, save_episode_json
 
 PACKS: tuple[tuple[str, str, str], ...] = (
     (
@@ -177,7 +170,7 @@ def main() -> None:
             print(f"[batch-preview] assemble {name} timeout={cap:.0f}s -> {out_mp4.name}")
             from concurrent.futures import ThreadPoolExecutor
             from concurrent.futures import TimeoutError as FutTimeout
-            from core.economic_reel_lofi.assembler import kill_descendant_ffmpeg
+            from production.formats.lofi.assembler import kill_descendant_ffmpeg
 
             def _call():
                 return assemble_video_from_episode(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from utils.process_tools import kill_descendant_ffmpeg
+from shared.ffmpeg import kill_descendant_ffmpeg
 
 
 def test_posix_skips_powershell_when_psutil_is_missing(monkeypatch) -> None:

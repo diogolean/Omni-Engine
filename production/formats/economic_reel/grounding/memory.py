@@ -45,7 +45,7 @@ def ledger_path(channel: str, root: Path | None = None) -> Path:
         path = Path(root) / "visual_memory.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
-    from utils.pipeline_paths import review_path
+    from shared.paths import review_path
 
     return review_path(channel or "ancient_knowledge", "visual_memory.jsonl")
 
@@ -143,7 +143,7 @@ def _norm_angle(text: str) -> str:
 
 
 def _topic_slug(topic: str) -> str:
-    from agents.media.text_utils import subject_slug
+    from production.media.text_utils import subject_slug
 
     return subject_slug(topic or "")
 

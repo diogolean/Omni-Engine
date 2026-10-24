@@ -21,7 +21,7 @@ _FACTORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_FACTORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_FACTORY_ROOT))
 
-from utils.pipeline_paths import outputs_root, safe_rmtree  # noqa: E402
+from shared.paths import outputs_root, safe_rmtree  # noqa: E402
 
 _REWRITE_SUFFIXES = {".json", ".txt", ".csv", ".md"}
 _XLSX_SUFFIXES = {".xlsx", ".xlsm"}

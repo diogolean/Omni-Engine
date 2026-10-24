@@ -21,7 +21,7 @@ from production.formats.economic_reel.artefact.budget import (
     try_spend,
 )
 from production.formats.economic_reel.artefact.pricing import FLUX_USD, NANOBANANA_MODELS, price_for_model
-from modules.reel_qa.relevance import verdict_passed
+from production.qa.relevance import verdict_passed
 
 logger = logging.getLogger(__name__)
 

@@ -12,12 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from modules.reel_qa.mp4_gate import (
-    SubtitleCue,
-    cta_tail_cues,
-    cues_from_word_timings,
-    gate_final_mp4,
-)
+from production.qa.mp4_gate import SubtitleCue, cta_tail_cues, cues_from_word_timings, gate_final_mp4
 
 CTA = "Follow Ancient Knowledge for more hidden mysteries."
 NARRATION = (

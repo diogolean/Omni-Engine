@@ -2,12 +2,7 @@
 """s23b B: a site photograph only when its line names the site."""
 from __future__ import annotations
 
-from modules.reel_artefact.asset_pool import (
-    PoolAsset,
-    _unused_asset,
-    assign_shots,
-    reset_claims,
-)
+from production.formats.economic_reel.artefact.asset_pool import PoolAsset, _unused_asset, assign_shots, reset_claims
 
 
 def _pool() -> list[PoolAsset]:

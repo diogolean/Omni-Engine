@@ -115,7 +115,7 @@ def bind_active_page(page: str) -> str:
         Path(layout["PAGE_OUTPUTS_DIR"]) / "clips",
     )
     try:
-        from core.google_guardrail import bind_run_channel
+        from production.cost.google_guardrail import bind_run_channel
 
         bind_run_channel(str(layout["ACTIVE_PAGE"]))
     except Exception:

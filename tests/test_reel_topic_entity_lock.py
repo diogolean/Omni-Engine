@@ -16,13 +16,13 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from modules.reel_artefact.budget import still_uses
-from modules.reel_artefact.motion import motion_sidecar_path, profile_for
-from modules.reel_artefact.orchestrate import make_climb_job, run_reel_stills
-from modules.reel_artefact.reuse import reuse_key_for
-from modules.shot_planner.build import build_shot_list
-from modules.shot_planner.plan import plan_for_reel
-from modules.shot_planner.schema import Shot
+from production.formats.economic_reel.artefact.budget import still_uses
+from production.formats.economic_reel.artefact.motion import motion_sidecar_path, profile_for
+from production.formats.economic_reel.artefact.orchestrate import make_climb_job, run_reel_stills
+from production.formats.economic_reel.artefact.reuse import reuse_key_for
+from production.formats.economic_reel.shot_planner.build import build_shot_list
+from production.formats.economic_reel.shot_planner.plan import plan_for_reel
+from production.formats.economic_reel.shot_planner.schema import Shot
 
 
 _ANTIKYTHERA = "The Antikythera Mechanism"
@@ -83,7 +83,7 @@ def test_topic_entity_locks_planner_and_resolver(tmp_path: Path, monkeypatch) ->
         _noisy(dest, 7)
         return dest
 
-    import modules.reel_artefact.climb as climb
+    import production.formats.economic_reel.artefact.climb as climb
 
     monkeypatch.setattr(climb, "acquire_photo", _photo)
     _install_judge(lambda text: True)
@@ -233,7 +233,7 @@ def test_first_pass_is_one_flux_and_a_landscape_finishes_the_reel(
 
 def _foreign_plan(prompt: str) -> str:
     del prompt
-    from modules.shot_planner.build import split_sentences
+    from production.formats.economic_reel.shot_planner.build import split_sentences
 
     sentences = split_sentences(_FOREIGN)
     foreign_ids = (
@@ -295,15 +295,15 @@ def _install_judge(passes) -> None:
                 model_id="models/gemini-2.5-flash",
             )
 
-    import modules.reel_qa.relevance as relevance
+    import production.qa.relevance as relevance
 
     relevance._provider = lambda name: _Provider()  # type: ignore[assignment]
 
 
 def _reset() -> None:
-    from modules.reel_artefact.budget import reset_nano_budget, reset_spend, reset_uses
-    from modules.reel_artefact.diversity import reset_diversity
-    from modules.reel_artefact.reuse import reset_approved
+    from production.formats.economic_reel.artefact.budget import reset_nano_budget, reset_spend, reset_uses
+    from production.formats.economic_reel.artefact.diversity import reset_diversity
+    from production.formats.economic_reel.artefact.reuse import reset_approved
 
     reset_spend()
     reset_nano_budget()

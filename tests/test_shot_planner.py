@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import re
 
-from modules.shot_planner.build import build_shot_list
-from modules.shot_planner.entities import is_era_generic, load_entities
-from modules.shot_planner.normalize import normalize_shots
-from modules.shot_planner.render import render_shot
-from modules.shot_planner.report import render_report
-from modules.shot_planner.schema import Shot, validate_shot_list
+from production.formats.economic_reel.shot_planner.build import build_shot_list
+from production.formats.economic_reel.shot_planner.entities import is_era_generic, load_entities
+from production.formats.economic_reel.shot_planner.normalize import normalize_shots
+from production.formats.economic_reel.shot_planner.render import render_shot
+from production.formats.economic_reel.shot_planner.report import render_report
+from production.formats.economic_reel.shot_planner.schema import Shot, validate_shot_list
 
 _BCE = (
     "The Antikythera Mechanism came out of a shipwreck. "

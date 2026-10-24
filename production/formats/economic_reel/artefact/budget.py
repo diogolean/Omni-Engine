@@ -65,7 +65,7 @@ def reel_budget_usd() -> float:
 
 def _llm_spent() -> float:
     try:
-        from core.spend_ledger import llm_spent
+        from production.cost.spend_ledger import llm_spent
 
         return float(llm_spent())
     except Exception:  # noqa: BLE001
@@ -157,7 +157,7 @@ def reset_spend() -> None:
         _FLUX_USED = 0
         _REPLAN_USED = 0
     try:
-        from core.spend_ledger import reset_reel
+        from production.cost.spend_ledger import reset_reel
 
         reset_reel()
     except Exception:  # noqa: BLE001

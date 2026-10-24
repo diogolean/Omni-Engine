@@ -112,7 +112,7 @@ def run_page_audio_test(page_id: str = "master_mei"):
     # 1. Modular Paths Setup
     page_config_dir = os.path.join(base_factory_dir, "channels_config", page_id)
     
-    from utils.pipeline_paths import page_outputs_dir
+    from shared.paths import page_outputs_dir
 
     page_out = page_outputs_dir(page_id)
     test_output_dir = str(page_out / "audio_tests")

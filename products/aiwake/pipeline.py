@@ -12,6 +12,7 @@ is produced) are made here, so ``room.py`` and ``orchestrator.py`` stay free of
 side-effect policy.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import logging
 import random
@@ -72,12 +73,10 @@ except ImportError:  # pragma: no cover — standalone extraction
     from orchestrator import Provocateur  # type: ignore[no-redef]
     from room import DebateRoom, RoomEvent  # type: ignore[no-redef]
     from settings import AiwakeSettings, load_settings, resolve_outputs_dir  # type: ignore[no-redef]
-    from utils.event_bus import (  # type: ignore[no-redef]
-        ON_PIPELINE_FINISH,
-        ON_PIPELINE_START,
-        attach_optional_plugins,
-        emit,
-    )
+    ON_PIPELINE_FINISH = Symbol('utils.event_bus', 'ON_PIPELINE_FINISH')
+    ON_PIPELINE_START = Symbol('utils.event_bus', 'ON_PIPELINE_START')
+    attach_optional_plugins = Symbol('utils.event_bus', 'attach_optional_plugins')
+    emit = Symbol('utils.event_bus', 'emit')
 
 _LOG = logging.getLogger("aiwake.pipeline")
 
@@ -461,7 +460,7 @@ def run_pipeline(
         _LOG.info("memory reset")
 
     room = DebateRoom(cfg, topic=topic)
-    from utils.pipeline_paths import coerce_outputs_path  # noqa: PLC0415
+    from shared.paths import coerce_outputs_path  # noqa: PLC0415
 
     channel_dir = resolve_outputs_dir(cfg)
     if duration_override is not None:

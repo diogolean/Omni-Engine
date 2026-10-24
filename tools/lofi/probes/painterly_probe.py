@@ -15,13 +15,13 @@ _REORG_ROOT = _ReorgPath(__file__).resolve().parents[3]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi.image_gen import LOFI_IMAGE_MODEL, LOFI_IMAGE_STEPS
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi.image_gen import LOFI_IMAGE_MODEL, LOFI_IMAGE_STEPS
 
 PAINTERLY_STYLE = (
     "painterly gouache illustration, visible brushstrokes, soft color blends, "
@@ -73,7 +73,7 @@ def _engine_root() -> Path:
 
 
 def run_painterly_probe(page_id: str = "wonder_feed") -> Path:
-    from agents.media.providers.together_image import TogetherImageGenerator
+    from production.providers.image.together_image import TogetherImageGenerator
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     out_dir = (

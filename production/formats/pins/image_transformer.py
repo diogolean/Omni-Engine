@@ -22,7 +22,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
-from utils.pipeline_paths import windows_fonts_dir
+from shared.paths import windows_fonts_dir
 
 log = logging.getLogger(__name__)
 
@@ -524,7 +524,7 @@ class PinTransformer:
 
         if video_path and Path(video_path).is_file():
             try:
-                from agents.posting.pinterest_engine.inventory import extract_video_still  # noqa: PLC0415
+                from shared.video_still import extract_video_still  # noqa: PLC0415
                 still = extract_video_still(
                     Path(video_path),
                     self.pins_dir / "video_stills" / f"{Path(video_path).stem}.jpg",

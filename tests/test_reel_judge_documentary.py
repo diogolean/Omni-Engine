@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from modules.reel_qa.documentary import documentary_failures
-from modules.reel_qa.relevance import evaluate_chunk_relevance
+from production.qa.documentary import documentary_failures
+from production.qa.relevance import evaluate_chunk_relevance
 
 # Independent review of the two reels the lenient judge scored 1.00 and 0.95.
 _FAILURES = (

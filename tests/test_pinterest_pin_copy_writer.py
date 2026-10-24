@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agents.mcp.text_model import TextResult
+from production.providers.llm.text_model import TextResult
 from distribution.scheduling.inventory import (
     MasterInventory,
     build_caption_regex,
@@ -41,8 +41,8 @@ def _library(tmp_path: Path) -> None:
 
 
 def test_writer_primary_calls_deepinfra_not_claude(monkeypatch: pytest.MonkeyPatch) -> None:
-    from agents.mcp import text_model
-    from core.cheap_llm import CheapResult
+    from production.providers.llm import text_model
+    from production.providers.llm.cheap_llm import CheapResult
 
     _clear_opt_in(monkeypatch)
     seen: dict = {}

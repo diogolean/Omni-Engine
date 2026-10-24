@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agents.writer.claude_compose import compose_lines, format_compose_user
+from production.writers.claude_compose import compose_lines, format_compose_user
 
 LIB = (
     Path(__file__).resolve().parents[2] / "scripts" / "data" / "structure_library_v2.json"

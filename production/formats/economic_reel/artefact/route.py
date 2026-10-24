@@ -550,8 +550,8 @@ def _write_edit_sidecar(
     )
     if not credit:
         return
-    from agents.media.free_images.attribution import credit_line, write_sidecar
-    from agents.media.free_images.models import Attribution
+    from production.providers.image.free.attribution import credit_line, write_sidecar
+    from production.providers.image.free.models import Attribution
 
     line = credit or credit_line(
         title=title,
@@ -619,8 +619,8 @@ def _stamp(
     provider: str,
     model_id: str,
 ) -> None:
-    from agents.media.free_images.attribution import write_sidecar
-    from agents.media.free_images.models import Attribution
+    from production.providers.image.free.attribution import write_sidecar
+    from production.providers.image.free.models import Attribution
 
     write_sidecar(
         dest,

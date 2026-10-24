@@ -217,7 +217,7 @@ def _stage_caption_brand_01(state: VariantState) -> None:
         _stage_compile_reel_04(state)
         _stage_compile_reel_05(state)
     if state._is_economic_reel:
-        from modules.reel_qa.pipeline import seal_compiled_reel
+        from production.qa.pipeline import seal_compiled_reel
         state.seal_compiled_reel = seal_compiled_reel
         state._qa_beats = list(state._beat_qa_rows)
         if not state._qa_beats:

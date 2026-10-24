@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from utils.pipeline_paths import assets_root, outputs_path, outputs_root, windows_fonts_dir
+from shared.paths import assets_root, outputs_path, outputs_root, windows_fonts_dir
 
 from .render.facial_rig import (
     export_pilot_facial_sheet,

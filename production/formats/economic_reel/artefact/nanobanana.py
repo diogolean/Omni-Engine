@@ -76,10 +76,7 @@ def generate_artefact_image(
         raise RuntimeError("GEMINI_API_KEY missing")
     from google.genai import types  # noqa: PLC0415
 
-    from core.google_guardrail import (  # noqa: PLC0415
-        guarded_generate_content,
-        make_guarded_gemini_client,
-    )
+    from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client
 
     client = make_guarded_gemini_client(key)
     dest.parent.mkdir(parents=True, exist_ok=True)

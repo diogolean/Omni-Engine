@@ -34,7 +34,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from shared.ffmpeg import resolve_ffmpeg, resolve_ffprobe
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
     from dotenv import load_dotenv

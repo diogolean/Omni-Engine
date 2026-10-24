@@ -26,11 +26,8 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.regen import (  # noqa: E402
-    assemble_video_from_episode,
-    load_episode_json,
-)
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.regen import assemble_video_from_episode, load_episode_json
 
 DEFAULT_SIDECAR = ROOT / (
     "outputs/wonder_feed/clips/"
@@ -157,7 +154,7 @@ def _run_one(
     from concurrent.futures import ThreadPoolExecutor
     from concurrent.futures import TimeoutError as FutTimeout
 
-    from core.economic_reel_lofi.assembler import kill_descendant_ffmpeg
+    from production.formats.lofi.assembler import kill_descendant_ffmpeg
 
     fx = lofi_cfg.resolve_render_effects(
         effects,

@@ -19,25 +19,12 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from agents.writer.freeform_writer import split_long_line  # noqa: E402
-from agents.writer.judge_gate import judge_draft  # noqa: E402
-from agents.writer.spoken_budget import (  # noqa: E402
-    apply_draft_to_script,
-    assess_lines,
-    count_words,
-    must_keep_from_rows,
-    rewrite_single_line,
-    script_to_draft,
-    tighten_script_dict,
-)
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.review_gates import write_approval_artifact  # noqa: E402
-from core.economic_reel_lofi.visual_identity import (  # noqa: E402
-    assign_distinct_hook_varieties,
-    hook_silhouette_dissolve_scene,
-    pick_hook_dissolve,
-    pick_hook_memory_overlay,
-)
+from production.writers.freeform_writer import split_long_line  # noqa: E402
+from production.qa.judges.judge_gate import judge_draft  # noqa: E402
+from production.writers.spoken_budget import apply_draft_to_script, assess_lines, count_words, must_keep_from_rows, rewrite_single_line, script_to_draft, tighten_script_dict
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.review_gates import write_approval_artifact  # noqa: E402
+from production.formats.lofi.visual_identity import assign_distinct_hook_varieties, hook_silhouette_dissolve_scene, pick_hook_dissolve, pick_hook_memory_overlay
 
 CLIPS = ROOT / "outputs/wonder_feed/clips"
 OUT_DIR = CLIPS / "freeform_drafts"
@@ -140,13 +127,9 @@ def _proposed_hook(script: dict, variety: dict, stills_row: dict) -> dict:
 
 
 def _tts_verify(draft, keep: dict[int, list[str]], theme: str, subtheme: str) -> tuple[list[dict], str | None]:
-    from agents.media.audio_engine import generate_voiceover_with_timestamps
-    from core.economic_reel_lofi.assembler import measure_vo_speech_duration
-    from core.economic_reel_lofi.pipeline import (
-        _sanitize_caption_typos,
-        _tts_breath_commas,
-        _tts_text_with_breaks,
-    )
+    from production.providers.tts.audio_engine import generate_voiceover_with_timestamps
+    from production.formats.lofi.assembler import measure_vo_speech_duration
+    from production.formats.lofi.pipeline import _sanitize_caption_typos, _tts_breath_commas, _tts_text_with_breaks
 
     work_dir = Path(tempfile.gettempdir()) / "lofi_tighten_tts" / theme
     work_dir.mkdir(parents=True, exist_ok=True)

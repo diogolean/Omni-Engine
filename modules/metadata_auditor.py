@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.asset_library import register_generated_asset
+from production.library.asset_library import register_generated_asset
 from shared.contracts import (
     TITLE_MAX_CHARS,
     BaseMetadata,
@@ -31,8 +31,8 @@ from shared.contracts import (
     posting_status_from_map,
     upsert_distribution_row,
 )
+from shared.paths import channel_store_dir, discover_channel_ids, page_outputs_dir
 from shared.store import restore_channel_state
-from utils.pipeline_paths import channel_store_dir, discover_channel_ids, page_outputs_dir
 
 _LOG = logging.getLogger("metadata_auditor")
 

@@ -177,7 +177,7 @@ class VisualDirectorAgent(BaseAgent):
         cached = getattr(self._thread_adapter, "adapter", None)
         if cached is not None:
             return cached
-        from agents.media.providers.image_provider import get_image_adapter
+        from production.providers.image.image_provider import get_image_adapter
 
         cached = get_image_adapter(page_cost_tier="nano", tier="cheap")
         self._thread_adapter.adapter = cached

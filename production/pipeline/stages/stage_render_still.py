@@ -143,7 +143,7 @@ def _stage_render_still_02(state: VariantState) -> None:
         state.image_prompt = state._mm_image_prompt_override
         _LOG.info('master_mei IMAGE PROMPT LOCK | hard-override applied: %s', state.image_prompt[:180])
     if state.post_type in ('LONG_CAPTION_IMAGE', 'CAROUSEL') and (not state._mm_image_prompt_override):
-        from agents.media.scene_prompt_generator import apply_topic_visual_lock as _tvl
+        from production.providers.image.scene_prompt_generator import apply_topic_visual_lock as _tvl
         state._tvl = _tvl
         state._topic_lock = state._tvl(state.image_prompt, topic=state.resolved_subject or '', caption=f'{state.visual_subject or ''} {state.caption or state.overlay_text or ''}', style=state.effective_atmosphere or '')
         state.image_prompt = str(state._topic_lock.get('image_generation_prompt') or state.image_prompt)
@@ -155,7 +155,7 @@ def _stage_render_still_02(state: VariantState) -> None:
     if state.page_ctx is not None and state.page_ctx.image_model_override:
         state._override = state.page_ctx.image_model_override
     try:
-        from agents.mcp.model_api_flows import get_active_flow as _get_flow, is_flow_explicitly_set as _flow_set, resolved_together_image_model as _flow_img_model
+        from production.providers.llm.model_api_flows import get_active_flow as _get_flow, is_flow_explicitly_set as _flow_set, resolved_together_image_model as _flow_img_model
         state._get_flow = _get_flow
         state._flow_set = _flow_set
         state._flow_img_model = _flow_img_model
@@ -178,7 +178,7 @@ def _stage_render_still_02(state: VariantState) -> None:
                     state._override = state._flow_model
     except Exception:
         pass
-    from agents.media.providers.model_router import image_model as _route_image
+    from production.providers.llm.model_router import image_model as _route_image
     state._route_image = _route_image
     state._img_route = state._route_image(task='image', page_cost_tier=state._page_cost, model_override=state._override, preferred=app_config.GEMINI_ECONOMIC_IMAGE_MODEL if state.economic else app_config.GEMINI_IMAGE_MODEL, use_premium=True if (state._page_cost or '').lower() == 'premium' else None, log=True)
     state.img_model_id = app_config.normalize_image_model_id(state._img_route.model_id)
@@ -186,7 +186,7 @@ def _stage_render_still_02(state: VariantState) -> None:
         _LOG.info('COST-FIRST LOCK | variant=%s | tier=%s | image_model=%s | text_brain=%s', state.variant + 1, state._img_route.tier, state.img_model_id, app_config.GEMINI_ECONOMIC_BRAIN_MODEL)
     import os as _os
     state._os = _os
-    from utils.pipeline_paths import WINDOWS_FACTORY_ROOT as _WINDOWS_FACTORY_ROOT
+    from shared.paths import WINDOWS_FACTORY_ROOT as _WINDOWS_FACTORY_ROOT
     state._WINDOWS_FACTORY_ROOT = _WINDOWS_FACTORY_ROOT
     state._wf_style_name = 'Screenshot 2026-06-01 183244.png'
     state._wf_style_env = (state._os.getenv('WONDER_FEED_STYLE_REFERENCE') or '').strip().strip('"').strip("'")
@@ -233,7 +233,7 @@ def _stage_render_still_02(state: VariantState) -> None:
         print('=' * 60 + '\n')
         state.adapter = get_image_adapter(model_id=state.img_model_id, page_cost_tier=state._page_cost, tier=state._img_route.tier)
         if state.page_ctx is not None:
-            from agents.media.free_images.integrate import wrap_image_generate
+            from production.providers.image.free.integrate import wrap_image_generate
             state.wrap_image_generate = wrap_image_generate
             state._free_producer = 'reel_image' if state.post_type in ('ECONOMIC_REEL', 'WAN_REEL') else 'facebook_card'
             state.adapter.generate = state.wrap_image_generate(state.adapter.generate, channel=state.page_ctx.page_id, page_cfg=state.page_ctx.page_cfg, query=state.resolved_subject or state.visual_subject or '', producer=state._free_producer)
@@ -247,7 +247,7 @@ def _stage_render_still_02(state: VariantState) -> None:
         state._act1_role = None
         state._act1_neg = None
         if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'master_mei':
-            from agents.media.visual_roles import ROLE_A_NEGATIVE, ROLE_MASTER
+            from production.media.visual_roles import ROLE_A_NEGATIVE, ROLE_MASTER
             state.ROLE_A_NEGATIVE = ROLE_A_NEGATIVE
             state.ROLE_MASTER = ROLE_MASTER
             state._act1_role = state.ROLE_MASTER
@@ -268,7 +268,7 @@ def _stage_render_still_02(state: VariantState) -> None:
                 state._still_neg = f'{state._act1_neg}, {state._topic_lock['negative_prompt']}' if state._act1_neg else str(state._topic_lock['negative_prompt'])
             state._gen_kwargs = {'reference_image_path': state._gen_ref, 'style_reference_path': state._style_ref_path, 'style_reference_paths': state._style_ref_paths or None, 'style_reference_weight': state._style_ref_weight, 'output_directory': state.subject_assets, 'avatar_mode': state.image_avatar_mode, 'reference_image_weight': state._gen_weight, 'visual_role': state._act1_role, 'negative_prompt': state._still_neg}
             if state.post_type in ('LONG_CAPTION_IMAGE', 'CAROUSEL'):
-                from modules.reel_visual_qa import generate_and_gate as _still_gate
+                from production.qa.reel_visual_qa import generate_and_gate as _still_gate
                 state._still_gate = _still_gate
                 state.img_path_display, state._topic_gate_extra = state._still_gate(state.adapter.generate, prompt=state.image_prompt, chunk_text=state.resolved_subject or state.visual_subject or '', output_stem=state.stem, output_directory=state.subject_assets, channel=state.page_ctx.page_id if state.page_ctx else 'ancient_knowledge', search_dirs=[state.subject_assets] if state.subject_assets else [], generate_kwargs=state._gen_kwargs, banned_subjects=list(state._topic_lock.get('banned_subjects') or []) if state._topic_lock else None, domain_anchors=str((state._topic_lock or {}).get('domain_anchors') or ''), prefer_stem=state.stem)
             else:

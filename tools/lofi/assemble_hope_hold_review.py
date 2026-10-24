@@ -22,18 +22,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
-from agents.media.audio_engine import generate_voiceover_with_timestamps  # noqa: E402
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.assembler import (  # noqa: E402
-    assemble_lofi_reel,
-    measure_vo_speech_duration,
-)
-from core.economic_reel_lofi.pipeline import (  # noqa: E402
-    _tts_breath_commas,
-    _tts_text_with_breaks,
-)
+from production.providers.tts.audio_engine import generate_voiceover_with_timestamps  # noqa: E402
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.assembler import assemble_lofi_reel, measure_vo_speech_duration
+from production.formats.lofi.pipeline import _tts_breath_commas, _tts_text_with_breaks
 
 HOLD = page_outputs_dir("wonder_feed") / "clips" / "lofi_hold_hope_20260824_194933_v01.json"
 OUT = page_outputs_dir("wonder_feed") / "clips" / "lofi_reel_hope_20260824_194933_v01_review.mp4"

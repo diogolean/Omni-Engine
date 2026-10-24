@@ -16,17 +16,11 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
-from agents.media.audio_engine import (  # noqa: E402
-    generate_voiceover_with_timestamps,
-    _audio_file_duration_s,
-)
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.pipeline import (  # noqa: E402
-    _tts_breath_commas,
-    _tts_text_with_breaks,
-)
+from production.providers.tts.audio_engine import generate_voiceover_with_timestamps, _audio_file_duration_s
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.pipeline import _tts_breath_commas, _tts_text_with_breaks
 import imageio_ffmpeg  # noqa: E402
 import subprocess  # noqa: E402
 

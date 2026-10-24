@@ -6,14 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from modules.reel_grounding.memory import recall, remember
-from modules.reel_grounding.prompt import assemble_beat, ground_image_prompt
-from modules.reel_grounding.still_cache import (
-    cache_matches_spoken,
-    write_spoken_sidecar,
-)
-from modules.reel_qa.metrics import first_pass_summary
-from modules.reel_qa.prompts import extract_site, refine_prompt
+from production.formats.economic_reel.grounding.memory import recall, remember
+from production.formats.economic_reel.grounding.prompt import assemble_beat, ground_image_prompt
+from production.formats.economic_reel.grounding.still_cache import cache_matches_spoken, write_spoken_sidecar
+from production.qa.metrics import first_pass_summary
+from production.qa.prompts import extract_site, refine_prompt
 
 _SCRIPT = (
     "An iron hammer with a wooden handle was found encased in rock near "
@@ -160,7 +157,7 @@ def test_first_pass_hit_rate_ignores_unscored_beats() -> None:
 
 
 def test_reel_free_images_default_off(monkeypatch, tmp_path: Path) -> None:
-    from agents.media.free_images.integrate import wrap_image_generate
+    from production.providers.image.free.integrate import wrap_image_generate
 
     monkeypatch.delenv("REEL_FREE_IMAGES", raising=False)
     monkeypatch.delenv("REEL_IMAGE_SOURCE", raising=False)
@@ -181,7 +178,7 @@ def test_reel_free_images_default_off(monkeypatch, tmp_path: Path) -> None:
     def _boom(**_kwargs):
         raise AssertionError("reel search must stay off unless REEL_FREE_IMAGES=1")
 
-    import agents.media.free_images.integrate as integrate
+    import production.providers.image.free.integrate as integrate
 
     previous = integrate.resolve_image_source
     integrate.resolve_image_source = _boom
@@ -201,7 +198,7 @@ def test_reel_free_images_default_off(monkeypatch, tmp_path: Path) -> None:
 def test_technical_judge_failure_retries_without_a_new_image(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modules.reel_qa.retry import generate_and_gate
+    from production.qa.retry import generate_and_gate
 
     # The default is one retry now; this test drives two.
     monkeypatch.setenv("REEL_QA_JUDGE_RETRIES", "2")
@@ -257,7 +254,7 @@ def test_technical_judge_failure_retries_without_a_new_image(
 
 
 def test_grounding_is_scoped_to_ancient_knowledge(monkeypatch) -> None:
-    from modules.reel_grounding.config import grounding_enabled_for
+    from production.formats.economic_reel.grounding.config import grounding_enabled_for
 
     monkeypatch.delenv("REEL_VISUAL_GROUNDING", raising=False)
     monkeypatch.delenv("REEL_VISUAL_GROUNDING_CHANNELS", raising=False)

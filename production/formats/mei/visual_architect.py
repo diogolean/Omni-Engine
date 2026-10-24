@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 VisualArchitect -- cinematic image-prompt builder for the Unified Multi-Page Factory.
 
@@ -30,14 +30,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import config as app_config
-from agents.media.persona_dna import (
-    ANNA_ACTIONS,
-    CAMERA_ANGLES,
-    ENVIRONMENTS,
-    LEGACY_RULE,
-    TIMES_OF_DAY,
-    visual_style_block,
-)
+from production.writers.persona_dna import ANNA_ACTIONS, CAMERA_ANGLES, ENVIRONMENTS, LEGACY_RULE, TIMES_OF_DAY, visual_style_block
 
 
 _QUALITY_SUFFIX = (
@@ -183,7 +176,7 @@ def build_carousel_slide_prompt(
         f"Photoreal photograph only. Never render words or UI."
     )
     try:
-        from agents.media.scene_prompt_generator import apply_topic_visual_lock
+        from production.providers.image.scene_prompt_generator import apply_topic_visual_lock
 
         locked = apply_topic_visual_lock(
             raw, topic=topic, caption=f"{grounded} {facet}", style=style,

@@ -49,7 +49,7 @@ def _download(item: _Item, folder: Path) -> Path:
 
 
 def test_the_pool_keeps_real_photos_and_skips_openverse(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import build_asset_pool
+    from production.formats.economic_reel.artefact.asset_pool import build_asset_pool
 
     items = [_Item(f"site{i}", f"limestone enclosure site {i}") for i in range(6)]
     items += [_Item(f"jar{i}", f"clay jar from the museum {i}", "object") for i in range(3)]
@@ -96,7 +96,7 @@ def test_the_pool_keeps_real_photos_and_skips_openverse(tmp_path: Path) -> None:
 
 
 def test_openverse_and_nano_fill_a_short_pool(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import build_asset_pool
+    from production.formats.economic_reel.artefact.asset_pool import build_asset_pool
 
     opened = {"n": 0}
     nanos = {"n": 0}
@@ -137,7 +137,7 @@ def test_openverse_and_nano_fill_a_short_pool(tmp_path: Path) -> None:
 
 
 def test_nano_is_not_called_when_object_photos_exist(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import build_asset_pool
+    from production.formats.economic_reel.artefact.asset_pool import build_asset_pool
 
     items = [_Item(f"jar{i}", f"clay jar {i}", "object") for i in range(3)]
     items += [_Item(f"site{i}", f"enclosure {i}", "site") for i in range(6)]
@@ -162,7 +162,7 @@ def test_nano_is_not_called_when_object_photos_exist(tmp_path: Path) -> None:
 
 
 def test_flux_is_only_the_sky_and_crops_do_not_repeat(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, assign_shots
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, assign_shots
 
     assets = [
         PoolAsset(str(tmp_path / "jar.jpg"), "clay jar", "object", "commons", "jar"),
@@ -195,7 +195,7 @@ def test_flux_is_only_the_sky_and_crops_do_not_repeat(tmp_path: Path) -> None:
 
 
 def test_a_failed_sky_falls_back_to_a_relevant_crop(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, ShotAssignment, place_assignment
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, ShotAssignment, place_assignment
 
     source = _jpeg(tmp_path / "jar.jpg", (180, 40, 30))
     wide = Image.new("RGB", (400, 120), (20, 20, 20))
@@ -228,7 +228,7 @@ def test_a_failed_sky_falls_back_to_a_relevant_crop(tmp_path: Path) -> None:
 
 
 def test_the_script_prompt_lists_the_photographs() -> None:
-    from core.reel_sequence_engine import build_sequence_script_prompt
+    from production.media.reel_sequence_engine import build_sequence_script_prompt
 
     prompt = build_sequence_script_prompt(
         "Göbekli Tepe",
@@ -241,8 +241,8 @@ def test_the_script_prompt_lists_the_photographs() -> None:
 
 
 def test_topic_search_walks_subcategories(monkeypatch) -> None:
-    from agents.media.free_images.models import Candidate
-    from modules.reel_artefact import fetch
+    from production.providers.image.free.models import Candidate
+    from production.formats.economic_reel.artefact import fetch
 
     def cand(title: str) -> Candidate:
         return Candidate(
@@ -281,8 +281,8 @@ def test_topic_search_walks_subcategories(monkeypatch) -> None:
 
 
 def test_openverse_runs_when_commons_is_short(monkeypatch) -> None:
-    from agents.media.free_images.models import Candidate
-    from modules.reel_artefact import fetch
+    from production.providers.image.free.models import Candidate
+    from production.formats.economic_reel.artefact import fetch
 
     hit = Candidate(
         provider="openverse",
@@ -299,7 +299,7 @@ def test_openverse_runs_when_commons_is_short(monkeypatch) -> None:
 
 
 def test_subcategory_titles_come_from_the_category(monkeypatch) -> None:
-    from modules.reel_artefact.fetch import commons_subcategories
+    from production.formats.economic_reel.artefact.fetch import commons_subcategories
 
     class _Resp:
         ok = True
@@ -318,8 +318,8 @@ def test_subcategory_titles_come_from_the_category(monkeypatch) -> None:
 
 
 def test_military_titles_never_enter_the_pool(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import build_asset_pool
-    from modules.reel_artefact.fetch import ancient_title_reject
+    from production.formats.economic_reel.artefact.asset_pool import build_asset_pool
+    from production.formats.economic_reel.artefact.fetch import ancient_title_reject
 
     assert ancient_title_reject("Rocket Attack in Babil, Baghdad, Iraq") == "rocket attack"
     assert ancient_title_reject("Abraham Lincoln", "Category:Portrait photographs")
@@ -350,7 +350,7 @@ def test_military_titles_never_enter_the_pool(tmp_path: Path) -> None:
 
 
 def test_a_labeled_museum_jar_stays_in_the_pool(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import build_asset_pool
+    from production.formats.economic_reel.artefact.asset_pool import build_asset_pool
 
     item = _Item("jar", "PartherJar InnerSystem", "object")
 
@@ -383,7 +383,7 @@ def test_a_labeled_museum_jar_stays_in_the_pool(tmp_path: Path) -> None:
 
 
 def test_cache_seed_counts_and_a_short_pool_aborts(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import PoolTooSmall, build_asset_pool
+    from production.formats.economic_reel.artefact.asset_pool import PoolTooSmall, build_asset_pool
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -434,7 +434,7 @@ def test_cache_seed_counts_and_a_short_pool_aborts(tmp_path: Path) -> None:
 
 
 def test_a_source_is_used_once_per_reel() -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, fit_pool_beats
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, fit_pool_beats
 
     assets = [
         PoolAsset("a.jpg", "limestone enclosure", "site", "commons", "a"),
@@ -460,8 +460,8 @@ def test_a_source_is_used_once_per_reel() -> None:
 
 
 def test_pool_photos_are_billed_as_their_source(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, ShotAssignment, place_assignment
-    from modules.reel_artefact.pricing import generation_bill
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, ShotAssignment, place_assignment
+    from production.formats.economic_reel.artefact.pricing import generation_bill
 
     source = _jpeg(tmp_path / "jar.jpg", (40, 80, 30))
     pool = [PoolAsset(str(source), "clay jar", "object", "commons", "jar")]
@@ -476,7 +476,7 @@ def test_pool_photos_are_billed_as_their_source(tmp_path: Path) -> None:
 
 
 def test_object_beats_do_not_show_a_landscape() -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, assign_shots
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, assign_shots
 
     assets = [
         PoolAsset("land.jpg", "open farmland", "site", "commons", "land"),
@@ -492,7 +492,7 @@ def test_object_beats_do_not_show_a_landscape() -> None:
 
 
 def _pool_from(tmp_path: Path, item: _Item, judge) -> list:
-    from modules.reel_artefact.asset_pool import build_asset_pool
+    from production.formats.economic_reel.artefact.asset_pool import build_asset_pool
 
     return build_asset_pool(
         queries=["battery"],
@@ -556,8 +556,8 @@ def test_a_low_score_museum_jar_stays_and_a_diagram_does_not(tmp_path: Path) -> 
 
 
 def test_label_bands_are_cropped_off_an_object_photo(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import build_asset_pool
-    from modules.reel_artefact.crop import crop_label_bands
+    from production.formats.economic_reel.artefact.asset_pool import build_asset_pool
+    from production.formats.economic_reel.artefact.crop import crop_label_bands
 
     image = Image.new("RGB", (200, 400), (180, 40, 40))
     image.paste(Image.new("RGB", (200, 56), (255, 255, 255)), (0, 344))
@@ -603,10 +603,7 @@ def test_label_bands_are_cropped_off_an_object_photo(tmp_path: Path) -> None:
 
 
 def test_commons_jar_titles_are_objects_and_a_museum_label_stays() -> None:
-    from modules.reel_artefact.asset_pool import (
-        accept_verdict,
-        classify_kind,
-    )
+    from production.formats.economic_reel.artefact.asset_pool import accept_verdict, classify_kind
 
     assert classify_kind("PartherJar InnerSystem") == "object"
     assert classify_kind("Parther Cu-Fe-Elektroden") == "object"
@@ -659,8 +656,8 @@ def test_commons_jar_titles_are_objects_and_a_museum_label_stays() -> None:
 def test_committed_baghdad_cache_names_the_licence(tmp_path: Path) -> None:
     import json
 
-    from modules.reel_artefact.asset_pool import _credit_blurbs, build_asset_pool
-    from modules.reel_artefact.fetch import committed_cache_dir
+    from production.formats.economic_reel.artefact.asset_pool import _credit_blurbs, build_asset_pool
+    from production.formats.economic_reel.artefact.fetch import committed_cache_dir
 
     folder = committed_cache_dir("ancient_knowledge", "baghdad_battery")
     credits = json.loads((folder / "credits.json").read_text(encoding="utf-8"))
@@ -700,7 +697,7 @@ def test_committed_baghdad_cache_names_the_licence(tmp_path: Path) -> None:
 
 
 def test_the_hook_uses_the_jar_photo_and_a_gallery_loses_a_site_line() -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, assign_shots
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, assign_shots
 
     assets = [
         PoolAsset(
@@ -767,7 +764,7 @@ def _sketch(path: Path) -> Path:
 
 
 def test_still_guard_sees_repeats_panels_and_sketches(tmp_path: Path) -> None:
-    from modules.reel_artefact import still_guard
+    from production.formats.economic_reel.artefact import still_guard
 
     still_guard.reset_cache()
     first = _photo(tmp_path / "a.jpg", "a")
@@ -787,8 +784,8 @@ def test_still_guard_sees_repeats_panels_and_sketches(tmp_path: Path) -> None:
 
 
 def test_unique_stills_replaces_a_repeat_and_a_sketch_cover(tmp_path: Path) -> None:
-    from modules.reel_artefact import still_guard
-    from modules.reel_artefact.asset_pool import PoolAsset, unique_stills
+    from production.formats.economic_reel.artefact import still_guard
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, unique_stills
 
     still_guard.reset_cache()
     sketch = _sketch(tmp_path / "s0.jpg")
@@ -812,7 +809,7 @@ def test_unique_stills_replaces_a_repeat_and_a_sketch_cover(tmp_path: Path) -> N
 
 
 def test_the_cta_tail_does_not_reuse_the_cover(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, fit_pool_beats
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, fit_pool_beats
 
     assets = [
         PoolAsset(str(tmp_path / f"p{i}.jpg"), f"limestone pillar {i}", "site", "commons", f"p{i}")
@@ -828,7 +825,7 @@ def test_the_cta_tail_does_not_reuse_the_cover(tmp_path: Path) -> None:
 
 
 def test_an_artefact_story_skips_unnamed_site_shots(tmp_path: Path) -> None:
-    from modules.reel_artefact.asset_pool import PoolAsset, assign_shots
+    from production.formats.economic_reel.artefact.asset_pool import PoolAsset, assign_shots
 
     assets = [
         PoolAsset(str(tmp_path / f"j{i}.jpg"), f"parthian clay jar {i}", "object", "cache", f"j{i}")

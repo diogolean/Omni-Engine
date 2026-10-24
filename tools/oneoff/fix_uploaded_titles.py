@@ -45,7 +45,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parents[2]
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
     from dotenv import load_dotenv
@@ -153,11 +153,11 @@ def _upload_to_b2(video_path: Path, dry_run: bool) -> str:
     Returns an empty string if the upload fails or dry_run is True.
     """
     if dry_run:
-        from agents.media.b2_client import B2VideoUploader
+        from shared.storage.b2_client import B2VideoUploader
         return B2VideoUploader.public_url(video_path.name)
 
     try:
-        from agents.media.b2_client import B2VideoUploader
+        from shared.storage.b2_client import B2VideoUploader
         uploader = B2VideoUploader()
         url = uploader.upload(video_path)
         _LOG.info("B2 OK  %s -> %s", video_path.name, url)

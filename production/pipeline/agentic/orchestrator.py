@@ -99,7 +99,7 @@ class PipelineOrchestrator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.theme_curator = ThemeCuratorAgent(used_themes=self._used_themes)
-        from agents.writer.copywriter import CopywriterAgent
+        from production.writers.copywriter import CopywriterAgent
 
         self.copywriter = CopywriterAgent(caption_engine=caption_engine)
         self.visual_director = VisualDirectorAgent(
@@ -384,7 +384,7 @@ class PipelineOrchestrator:
             or "ancient_mystery"
         )
         try:
-            from agents.media.text_utils import subject_slug
+            from production.media.text_utils import subject_slug
             import config as app_config
 
             dest_dir = Path(app_config.ASSETS_DIR) / subject_slug(title)

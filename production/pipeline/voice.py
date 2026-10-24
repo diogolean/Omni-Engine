@@ -66,7 +66,7 @@ def _filter_audio_tag_timings(
     Years and quantities stay. Only a duration fragment such as ``1.5s``
     (leaked from a break tag) is removed.
     """
-    from modules.reel_qa.timings import filter_spoken_timings
+    from production.qa.timings import filter_spoken_timings
 
     return filter_spoken_timings(word_timings)
 def _stitch_audio_sequential(
@@ -169,7 +169,7 @@ def _synthesize_sequence_voice_track(
     gap between narration and CTA is fixed at 1.0 s (matches
     ``_stitch_audio_sequential`` default).
     """
-    from agents.media.audio_engine import _audio_file_duration_s
+    from production.providers.tts.audio_engine import _audio_file_duration_s
 
     page_id = (page_ctx.page_id if page_ctx else "").lower()
     is_ak = page_id == "ancient_knowledge"
@@ -190,11 +190,11 @@ def _synthesize_sequence_voice_track(
     model_id = page_ctx.elevenlabs_model if page_ctx else "eleven_multilingual_v2"
     cta_text = (page_ctx.reel_cta_text if page_ctx else "") or ""
     if is_mei:
-        from agents.media.mei_narrative import approved_cta_text
+        from production.writers.mei_narrative import approved_cta_text
         cta_text = approved_cta_text()
     if page_ctx is None or page_ctx.strip_audio_tags_before_tts:
         cta_text = _strip_audio_behavior_tags(cta_text)
-    from agents.media.mei_narrative import fix_cta_typos
+    from production.writers.mei_narrative import fix_cta_typos
     cta_text = fix_cta_typos(cta_text or "")
 
     _cta_silence_s: float = 1.0
@@ -360,7 +360,7 @@ def _synthesize_sequence_voice_track(
     )
 def _reel_audio_is_f5() -> bool:
     try:
-        from core.remote_gpu_manager import is_remote_gpu_enabled
+        from production.providers.image.remote_gpu_manager import is_remote_gpu_enabled
 
         return bool(is_remote_gpu_enabled("audio"))
     except Exception:

@@ -7,7 +7,7 @@ _REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
-from utils.pipeline_paths import coerce_outputs_path
+from shared.paths import coerce_outputs_path
 
 import json
 from pathlib import Path

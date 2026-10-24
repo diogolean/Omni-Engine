@@ -25,7 +25,7 @@ _HERE = Path(__file__).resolve().parents[2]
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 _LOG = logging.getLogger("rebuild_ak")
 
@@ -305,7 +305,7 @@ def _expand_narration(script: str, params: ProductionParams, cta_text: str) -> s
         return trimmed
 
     import config as app_config
-    from agents.media.providers.gemini_utils import generate_text_with_client_chain
+    from production.providers.llm.gemini_utils import generate_text_with_client_chain
 
     best = cleaned
     for attempt in range(1, 4):
@@ -349,8 +349,8 @@ def _expand_narration(script: str, params: ProductionParams, cta_text: str) -> s
             best = expanded
 
     try:
-        from agents.writer.caption_engine import CaptionEngine
-        from core.interfaces.factory import ChannelFactory
+        from production.writers.caption_engine import CaptionEngine
+        from production.pipeline.interfaces.factory import ChannelFactory
 
         ce = CaptionEngine(channel=ChannelFactory.from_env())
         vo = ce.generate_sequence_voiceover(
@@ -449,7 +449,7 @@ def _resolve_beds(
         return music, sfx
     if regen_music:
         _LOG.info("Regenerating music_v2 bed (dark mystery template) for %s", stem)
-    from agents.media.audio_engine import generate_ambient_track, generate_master_mei_soundscape
+    from production.providers.tts.audio_engine import generate_ambient_track, generate_master_mei_soundscape
     if not _path_is_file(music) and getattr(page_ctx, "use_music_v2_bed", False):
         music, _imp = generate_master_mei_soundscape(
             clips_dir, stem=stem, duration_seconds=float(duration_s),
@@ -469,9 +469,7 @@ def _resolve_beds(
 
 
 def _render_tts(script: str, stem: str, reel_dir: Path, page_ctx) -> tuple[Path, list, float, float]:
-    from agents.media.audio_engine import (
-        _audio_file_duration_s, approximate_word_timings, generate_voiceover_with_timestamps,
-    )
+    from production.providers.tts.audio_engine import _audio_file_duration_s, approximate_word_timings, generate_voiceover_with_timestamps
     from main import _filter_audio_tag_timings, _stitch_audio_sequential
 
     voice_id = page_ctx.elevenlabs_voice_id if page_ctx else None
@@ -568,7 +566,7 @@ def rebuild_one(
     )
     logo = _resolve_logo(page_ctx)
 
-    from core.reel_sequence_engine import compile_sequence_reel
+    from production.media.reel_sequence_engine import compile_sequence_reel
     LOCAL_RENDER_DIR.mkdir(parents=True, exist_ok=True)
     local_out = LOCAL_RENDER_DIR / output_path.name
     _LOG.info(
@@ -676,7 +674,7 @@ def main() -> int:
     )
 
     import config as app_config
-    from channel_loader import load_page_context
+    from production.pipeline.channel_context import load_page_context
     if not getattr(app_config, "ELEVENLABS_API_KEY", None):
         _LOG.error("ELEVENLABS_API_KEY missing.")
         return 1

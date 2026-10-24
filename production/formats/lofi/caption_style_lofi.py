@@ -20,7 +20,7 @@ from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFilter, ImageFont
 
 from production.formats.lofi import config as lofi_cfg
-from utils.pipeline_paths import windows_fonts_dir
+from shared.paths import windows_fonts_dir
 
 # ── Shared layout (do not share ECONOMIC_REEL yellow outline style) ──────────
 CAPTION_COLOR: tuple[int, int, int, int] = (255, 255, 255, 255)

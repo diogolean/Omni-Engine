@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 reel_sequence_engine — 4-image 80-second sequence reel compiler.
 
@@ -56,7 +56,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
-from utils.pipeline_paths import moviepy_temp_audio_dir
+from shared.paths import moviepy_temp_audio_dir
 
 logger = logging.getLogger(__name__)
 
@@ -871,7 +871,7 @@ def segment_script_into_act_snippets(script: str, n_acts: int) -> list[str]:
 
 def _page_clips_dir(page_id: str | None = None) -> Path:
     """Return ``{OUTPUT_PATH}/{page}/clips`` and ensure it exists."""
-    from utils.pipeline_paths import page_clips_dir
+    from shared.paths import page_clips_dir
 
     page = (page_id or "").strip()
     if not page:

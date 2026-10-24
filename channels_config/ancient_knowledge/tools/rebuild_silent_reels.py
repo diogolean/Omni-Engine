@@ -6,6 +6,7 @@ and atmosphere SFX, and generates ElevenLabs narration + burnt-in subtitles.
 Does not call image or music APIs.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import os
 import re
@@ -23,13 +24,11 @@ load_dotenv(ROOT / ".env", override=False, encoding="utf-8-sig")
 os.environ["ACTIVE_PAGE"] = "ancient_knowledge"
 os.environ.setdefault("ALLOW_GOOGLE_API", "false")
 
-from agents.media.audio_engine import (  # noqa: E402
-    _audio_file_duration_s,
-    assert_voice_and_subtitles_ready,
-    generate_voiceover_with_timestamps,
-)
+_audio_file_duration_s = Symbol('production.providers.tts.audio_engine', '_audio_file_duration_s')
+assert_voice_and_subtitles_ready = Symbol('production.providers.tts.audio_engine', 'assert_voice_and_subtitles_ready')
+generate_voiceover_with_timestamps = Symbol('production.providers.tts.audio_engine', 'generate_voiceover_with_timestamps')
 from main import _stitch_audio_sequential  # noqa: E402
-from utils.pipeline_paths import outputs_path, windows_fonts_dir  # noqa: E402
+from shared.paths import outputs_path, windows_fonts_dir  # noqa: E402
 
 CLIPS = outputs_path("ancient_knowledge", "clips")
 ASSETS = CLIPS.parent / "assets"
@@ -356,7 +355,7 @@ def _compile_from_stills(
     timings: list,
     out: Path,
 ) -> Path:
-    from core.reel_sequence_engine import compile_sequence_reel
+    compile_sequence_reel = Symbol('production.media.reel_sequence_engine', 'compile_sequence_reel')
 
     logo = ROOT / "channels_config" / "ancient_knowledge" / "logo" / "logo.png"
     compile_sequence_reel(

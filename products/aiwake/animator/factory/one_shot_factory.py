@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from utils.pipeline_paths import assets_root, outputs_root
+from shared.paths import assets_root, outputs_root
 
 from .create_puppet import (
     DEEPSEEK_MASTER_PROMPT,

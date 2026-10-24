@@ -191,7 +191,7 @@ def _stage_setup_01(state: VariantState) -> None:
                             state.hooks_cache_path.parent.mkdir(parents=True, exist_ok=True)
                             state.hooks_cache_path.write_text(state._jw.dumps(state._to_save, ensure_ascii=False, indent=2), encoding='utf-8')
                             try:
-                                from modules.durable_store import sync_state_file
+                                from shared.store import sync_state_file
                                 state.sync_state_file = sync_state_file
                                 state.sync_state_file(state.hooks_cache_path)
                             except Exception:
@@ -289,7 +289,7 @@ def _stage_setup_02(state: VariantState) -> None:
         import re as _re_mm
         state._re_mm = _re_mm
         try:
-            from agents.media.visual_roles import compose_scene_01_prompt as _mei_s1, pick_mei_meditation_environment as _mei_pick_env
+            from production.media.visual_roles import compose_scene_01_prompt as _mei_s1, pick_mei_meditation_environment as _mei_pick_env
             state._mei_s1 = _mei_s1
             state._mei_pick_env = _mei_pick_env
             state._hook_env = state._mei_pick_env(episode_seed=state.resolved_subject or '', spoken_beat=state.caption if state.caption and state.caption != '(skipped)' else '')
@@ -338,14 +338,14 @@ def _stage_setup_02(state: VariantState) -> None:
             state._slide_prompt = build_carousel_slide_prompt(topic=state.resolved_subject, visual_subject=state.visual_subject or '', facet=state._facet, slide_num=state._slide_num, total=state._carousel_quantity, page_id=state._pid, atmosphere_style=state.effective_atmosphere or state.atmosphere_style or '')
             state._slide_lock = None
             try:
-                from agents.media.scene_prompt_generator import apply_topic_visual_lock as _slide_tvl
+                from production.providers.image.scene_prompt_generator import apply_topic_visual_lock as _slide_tvl
                 state._slide_tvl = _slide_tvl
                 state._slide_lock = state._slide_tvl(state._slide_prompt, topic=state.resolved_subject or '', caption=f'{state.visual_subject or ''} {state._facet}', style=state.effective_atmosphere or '')
                 state._slide_prompt = str(state._slide_lock.get('image_generation_prompt') or state._slide_prompt)
             except Exception:
                 state._slide_lock = None
             try:
-                from modules.reel_visual_qa import generate_and_gate as _slide_gate
+                from production.qa.reel_visual_qa import generate_and_gate as _slide_gate
                 state._slide_gate = _slide_gate
                 state._slide_img, state._slide_extra = state._slide_gate(state.adapter.generate, prompt=state._slide_prompt, chunk_text=f'{state.resolved_subject} {state._facet}', output_stem=f'{state.stem}_slide_{state._slide_num:02d}', output_directory=state.subject_assets, channel=state._pid or 'ancient_knowledge', search_dirs=[state.subject_assets] if state.subject_assets else [], generate_kwargs={'reference_image_path': state.effective_ref_path if state.image_avatar_mode == 'ON' else None, 'avatar_mode': state.image_avatar_mode, 'negative_prompt': str(state._slide_lock.get('negative_prompt') or '') if state._slide_lock else None}, banned_subjects=list(state._slide_lock.get('banned_subjects') or []) if state._slide_lock else None, domain_anchors=str((state._slide_lock or {}).get('domain_anchors') or ''), prefer_stem=state.stem)
                 state._carousel_image_paths.append(str(state._slide_img))

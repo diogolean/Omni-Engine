@@ -16,16 +16,7 @@ import re
 from pathlib import Path
 from typing import Sequence
 
-from agents.media.visual_compiler import (
-    ILLUSTRATION_STYLE_GOLDEN,
-    MASTER_STYLE_ANCHOR_DEFAULT,
-    SAFETY_STAMP,
-    THEME_KEYWORDS,
-    VISUAL_MATRIX,
-    compile_flux_prompt,
-    compile_theme_prompt,
-    shot_type_for_act,
-)
+from production.providers.image.visual_compiler import ILLUSTRATION_STYLE_GOLDEN, MASTER_STYLE_ANCHOR_DEFAULT, SAFETY_STAMP, THEME_KEYWORDS, VISUAL_MATRIX, compile_flux_prompt, compile_theme_prompt, shot_type_for_act
 
 _LOG = logging.getLogger(__name__)
 
@@ -381,7 +372,7 @@ def compute_mei_appearance_slots(
     Delegates to ``assign_visual_roles`` so disciples/slaves never receive
     Master Mei injection. Cap ~30% of scenes.
     """
-    from agents.media.visual_roles import assign_visual_roles, mei_slots_from_roles
+    from production.media.visual_roles import assign_visual_roles, mei_slots_from_roles
 
     roles = assign_visual_roles(n_acts, themes=themes)
     return mei_slots_from_roles(roles)
@@ -456,7 +447,7 @@ def _mei_act_needs_avatar(theme: str) -> bool:
 
 def _phase_for_act(act_index: int, n_acts: int) -> str:
     """Return story phase: trap | forge | liberation (legacy aliases mapped)."""
-    from agents.media.mei_narrative import story_phase_for_act
+    from production.writers.mei_narrative import story_phase_for_act
 
     return story_phase_for_act(act_index, n_acts)
 
@@ -576,8 +567,8 @@ def assemble_modular_prompt(
     """
     _ = (dynamic_subject, include_mei_supervision, scene_first)
     if use_vision_style and reference_folder:
-        from agents.media.style_reader import generate_reference_driven_prompt
-        from agents.media.visual_compiler import VISUAL_MATRIX
+        from production.media.style_reader import generate_reference_driven_prompt
+        from production.providers.image.visual_compiler import VISUAL_MATRIX
 
         shot = shot_type_for_act(
             act_index, module_key, prefer_module_default=prefer_module_shot,
@@ -664,7 +655,7 @@ def _mei_pose_for_slot(
 ) -> str:
     del slots
     if act_index == 0:
-        from agents.media.visual_roles import _mei_hash_pick
+        from production.media.visual_roles import _mei_hash_pick
 
         return _mei_hash_pick(_MEI_FIRST_POSES, episode_seed or "frame1", "first_pose")
     if act_index == n_acts - 1:
@@ -699,14 +690,7 @@ def build_master_mei_script_act_prompts(
     """
     del reference_folder, use_vision_style, base_style, master_style_anchor
 
-    from agents.media.visual_roles import (
-        ROLE_MASTER,
-        assign_frame_beats,
-        assign_visual_roles,
-        build_role_prompt,
-        mei_slots_from_roles,
-        plan_matrix_shots,
-    )
+    from production.media.visual_roles import ROLE_MASTER, assign_frame_beats, assign_visual_roles, build_role_prompt, mei_slots_from_roles, plan_matrix_shots
 
     if segment_fn is None:
         def segment_fn(text: str, n: int) -> list[str]:  # type: ignore[misc]
@@ -766,7 +750,7 @@ def build_master_mei_script_act_prompts(
         )
         # Visual QA gate — Scene 1 / Scene 3 / penultimate + firearm ban
         try:
-            from agents.media.visual_roles import validate_mei_visual_prompt
+            from production.media.visual_roles import validate_mei_visual_prompt
 
             _ok, _violations, _repaired = validate_mei_visual_prompt(
                 pos, act_index=i, n_acts=n_acts, beat=beat,

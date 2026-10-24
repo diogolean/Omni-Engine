@@ -19,10 +19,10 @@ from openpyxl import load_workbook
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 load_dotenv(_ROOT / ".env", override=False)
 
-from agents.media.b2_client import B2VideoUploader  # noqa: E402
+from shared.storage.b2_client import B2VideoUploader  # noqa: E402
 
 _PAGE = "master_mei"
 _PP = page_outputs_dir(_PAGE) / "postplanner" / "postplan_20260803_061313.xlsx"

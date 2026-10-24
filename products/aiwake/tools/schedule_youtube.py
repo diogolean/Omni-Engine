@@ -52,7 +52,7 @@ from shared.contracts import (
     validate_queue_ready,
 )
 from shared.store import restore_channel_state
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 _LOG = logging.getLogger("aiwake.youtube")
 

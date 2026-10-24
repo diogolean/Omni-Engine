@@ -17,26 +17,11 @@ os.environ.setdefault("LOFI_SKIP_COHERENCE_LLM", "1")
 os.environ.setdefault("LOFI_DEEPSEEK_TEMPERATURE", "1.15")
 os.environ.setdefault("LOFI_DEEPSEEK_CANDIDATES", "3")
 
-from core.economic_reel_lofi import lofi_collections as rag
-from core.economic_reel_lofi.lofi_collections import normalize_caption_text
-from agents.writer.claude_polish import (
-    polish_scripts_batch,
-    summarize_cost_log,
-)
-from agents.writer.script_agent import (
-    _call_llm,
-    _extract_json_object,
-    _line_word_count,
-    _narrative_gate_reasons,
-    _rhetoric_prompt_block,
-    _sanitize_caption_typos,
-)
-from core.economic_reel_lofi.setting_archetypes import (
-    classify_composition_type,
-    classify_setting_archetype,
-    score_composition_types,
-    score_setting_archetypes,
-)
+from production.formats.lofi import lofi_collections as rag
+from production.formats.lofi.lofi_collections import normalize_caption_text
+from production.writers.claude_polish import polish_scripts_batch, summarize_cost_log
+from production.writers.script_agent import _call_llm, _extract_json_object, _line_word_count, _narrative_gate_reasons, _rhetoric_prompt_block, _sanitize_caption_typos
+from production.formats.lofi.setting_archetypes import classify_composition_type, classify_setting_archetype, score_composition_types, score_setting_archetypes
 
 STORE = Path("production/formats/lofi/store")
 PACK = (

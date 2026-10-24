@@ -11,14 +11,9 @@ import json
 import os
 from pathlib import Path
 
-from core.economic_reel_lofi import lofi_collections as rag
-from agents.writer.script_agent import _narrative_gate_reasons
-from core.economic_reel_lofi.setting_archetypes import (
-    classify_composition_type,
-    classify_setting_archetype,
-    score_composition_types,
-    score_setting_archetypes,
-)
+from production.formats.lofi import lofi_collections as rag
+from production.writers.script_agent import _narrative_gate_reasons
+from production.formats.lofi.setting_archetypes import classify_composition_type, classify_setting_archetype, score_composition_types, score_setting_archetypes
 
 os.environ.setdefault("LOFI_SKIP_COHERENCE_LLM", "1")
 

@@ -7,10 +7,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageEnhance
 
-from modules.reel_artefact.flux_policy import object_line_strength
-from modules.reel_artefact.ladder import RungContext, rungs_for, run_ladder
-from modules.reel_artefact.script_date import ensure_topic_date, states_date
-from modules.shot_planner.build import build_shot_list
+from production.formats.economic_reel.artefact.flux_policy import object_line_strength
+from production.formats.economic_reel.artefact.ladder import RungContext, rungs_for, run_ladder
+from production.formats.economic_reel.artefact.script_date import ensure_topic_date, states_date
+from production.formats.economic_reel.shot_planner.build import build_shot_list
 
 _QUIMBAYA = "The Quimbaya golden ornaments, 600-1000 AD"
 _ANTIKYTHERA = "The Antikythera mechanism, 2nd century BC"
@@ -109,7 +109,7 @@ def test_feature_lines_are_object_beats() -> None:
 
 def test_a_moved_approved_frame_skips_the_spoken_line(tmp_path: Path) -> None:
     """Ken Burns of the approved still passes. A different picture is judged."""
-    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+    from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
 
     still = _picture(tmp_path / "still.jpg")
     moved = _moved(still, tmp_path / "frame.jpg")
@@ -186,7 +186,7 @@ def test_a_moved_approved_frame_skips_the_spoken_line(tmp_path: Path) -> None:
 
 def test_pass_one_retry_does_not_call_flux_again(tmp_path: Path) -> None:
     """A failed Flux beat, retried inside the first pass, does not generate again."""
-    from modules.reel_artefact.climb import set_share
+    from production.formats.economic_reel.artefact.climb import set_share
 
     assert rungs_for("scene") == ["flux", "reuse"]
     calls: list[int] = []
@@ -246,12 +246,7 @@ def test_pass_one_retry_does_not_call_flux_again(tmp_path: Path) -> None:
 
 def test_encode_stays_under_60mb_at_reel_size() -> None:
     """1080×1920, CRF 22, veryfast or faster, and an 80s reel under 60 MB."""
-    from core.reel_sequence_engine import (
-        _REEL_HEIGHT,
-        _REEL_WIDTH,
-        ken_burns_window,
-        sequence_encode_params,
-    )
+    from production.media.reel_sequence_engine import _REEL_HEIGHT, _REEL_WIDTH, ken_burns_window, sequence_encode_params
 
     slow = sequence_encode_params(80.0, "medium")
     assert slow["preset"] == "veryfast"
@@ -276,7 +271,7 @@ def test_encode_stays_under_60mb_at_reel_size() -> None:
 
 def test_the_topic_date_is_in_the_opening() -> None:
     """A date buried later in the script moves into the first two sentences."""
-    from core.reel_sequence_engine import build_sequence_script_prompt
+    from production.media.reel_sequence_engine import build_sequence_script_prompt
 
     quimbaya = ensure_topic_date(_QUIMBAYA_SCRIPT, _QUIMBAYA)
     anti = ensure_topic_date(_ANTIKYTHERA_SCRIPT, _ANTIKYTHERA)

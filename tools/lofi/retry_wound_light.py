@@ -15,19 +15,11 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from agents.writer.freeform_writer import ScriptDraft, split_long_line  # noqa: E402
-from agents.writer.judge_gate import judge_draft  # noqa: E402
-from agents.writer.spoken_budget import (  # noqa: E402
-    apply_draft_to_script,
-    assess_lines,
-    count_words,
-    enforce_spoken_budget,
-    missing_keep_terms,
-    rewrite_single_line,
-    script_to_draft,
-)
-from agents.writer.writer_brief import WriterBrief  # noqa: E402
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
+from production.writers.freeform_writer import ScriptDraft, split_long_line  # noqa: E402
+from production.qa.judges.judge_gate import judge_draft  # noqa: E402
+from production.writers.spoken_budget import apply_draft_to_script, assess_lines, count_words, enforce_spoken_budget, missing_keep_terms, rewrite_single_line, script_to_draft
+from production.writers.writer_brief import WriterBrief  # noqa: E402
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
 
 LOCKED = ROOT / "outputs/wonder_feed/clips/freeform_drafts/locked_freeform_05_The_wound_is_the_place_w.json"
 OUT = ROOT / "outputs/wonder_feed/clips/freeform_drafts/tightened_locked_05_wound_light_retry.json"
@@ -121,13 +113,9 @@ def main() -> int:
         return 3
 
     # TTS vs 4.0s slots
-    from agents.media.audio_engine import generate_voiceover_with_timestamps
-    from core.economic_reel_lofi.assembler import measure_vo_speech_duration
-    from core.economic_reel_lofi.pipeline import (
-        _sanitize_caption_typos,
-        _tts_breath_commas,
-        _tts_text_with_breaks,
-    )
+    from production.providers.tts.audio_engine import generate_voiceover_with_timestamps
+    from production.formats.lofi.assembler import measure_vo_speech_duration
+    from production.formats.lofi.pipeline import _sanitize_caption_typos, _tts_breath_commas, _tts_text_with_breaks
     import tempfile
 
     work = Path(tempfile.gettempdir()) / "lofi_wound_retry_tts"

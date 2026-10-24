@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """One-off: 15 Juggernaut + 5 FLUX.2-dev Master Mei reels, then YouTube schedule."""
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import json
 import subprocess
@@ -70,18 +71,16 @@ def _upload_new_rows(new_rows: list[dict]) -> None:
         return
 
     sys.path.insert(0, str(ROOT))
-    from agents.posting.youtube_publisher import (
-        YouTubeQuotaExceededError,
-        advance_slot,
-        build_credentials,
-        build_youtube_client,
-        get_next_publish_slot,
-        queue_pending_upload,
-        upload_short,
-        verify_authorized_channel,
-        _default_tags_for_page,
-        _get_channel_id,
-    )
+    from shared.youtube_errors import YouTubeQuotaExceededError
+    advance_slot = Symbol('distribution.publishers.api.youtube_upload', 'advance_slot')
+    build_credentials = Symbol('distribution.publishers.api.youtube_upload', 'build_credentials')
+    build_youtube_client = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client')
+    get_next_publish_slot = Symbol('distribution.publishers.api.youtube_upload', 'get_next_publish_slot')
+    queue_pending_upload = Symbol('distribution.publishers.api.youtube_upload', 'queue_pending_upload')
+    upload_short = Symbol('distribution.publishers.api.youtube_upload', 'upload_short')
+    verify_authorized_channel = Symbol('distribution.publishers.api.youtube_upload', 'verify_authorized_channel')
+    _default_tags_for_page = Symbol('distribution.publishers.api.youtube_upload', '_default_tags_for_page')
+    _get_channel_id = Symbol('distribution.publishers.api.youtube_upload', '_get_channel_id')
 
     creds = build_credentials(PAGE)
     yt = build_youtube_client(creds)

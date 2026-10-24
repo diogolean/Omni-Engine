@@ -201,7 +201,7 @@ def resolve_channel_outputs_dir(channel_id: str) -> Path:
        their own library tree (preserves anna_protocol root ledger)
     5. Fresh isolated ``outputs/<channel_id>/``
     """
-    from utils.pipeline_paths import coerce_outputs_path, outputs_root, page_outputs_dir
+    from shared.paths import coerce_outputs_path, outputs_root, page_outputs_dir
 
     cid = _safe_channel_id(channel_id)
     pack, _ = load_channel_content_pack(cid)
@@ -403,13 +403,13 @@ def _apply_paths(outputs_dir: Path | None = None) -> None:
     global CHANNEL_CONFIG_DIR, CHANNEL_HOME_DIR
 
     if outputs_dir is not None:
-        from utils.pipeline_paths import coerce_outputs_path
+        from shared.paths import coerce_outputs_path
 
         OUTPUTS_DIR = coerce_outputs_path(outputs_dir)
     elif CHANNEL_ID:
         OUTPUTS_DIR = resolve_channel_outputs_dir(CHANNEL_ID)
     else:
-        from utils.pipeline_paths import outputs_root
+        from shared.paths import outputs_root
 
         OUTPUTS_DIR = outputs_root()
 

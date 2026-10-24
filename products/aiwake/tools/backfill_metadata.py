@@ -16,6 +16,7 @@ Does not modify videos, transcripts, ``contracts.py``, or memory stores.
     python -m channels_config.aiwake.tools.backfill_metadata --dry-run
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import argparse
 import json
@@ -32,7 +33,8 @@ if __package__ in (None, ""):  # pragma: no cover — loose-script invocation
     if str(_FACTORY) not in sys.path:
         sys.path.insert(0, str(_FACTORY))
 
-from production.library.asset_library import extract_asset_tags, register_generated_asset
+extract_asset_tags = Symbol('production.library.asset_library', 'extract_asset_tags')
+register_generated_asset = Symbol('production.library.asset_library', 'register_generated_asset')
 from shared.contracts import (
     DEFAULT_HASHTAGS,
     DISTRIBUTION_PLATFORMS,
@@ -63,7 +65,7 @@ try:
 except ImportError:  # pragma: no cover — standalone extraction
     from seo_research import extract_debate_models, research_seo  # type: ignore[no-redef]
 from shared.store import restore_channel_state
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
     from products.aiwake.settings import (

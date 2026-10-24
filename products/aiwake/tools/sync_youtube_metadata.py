@@ -35,7 +35,7 @@ from shared.contracts import (
     load_distribution_library,
 )
 from shared.store import restore_channel_state
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
     from products.aiwake.settings import (

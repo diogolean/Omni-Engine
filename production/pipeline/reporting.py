@@ -54,8 +54,8 @@ def _format_cost_block(
     try:
         if not isinstance(breakdown, dict):
             return fallback
-        from core.cost_tracker import CostTracker as _CT
-        from core.cost_tracker import image_cost_lines
+        from production.cost.cost_tracker import CostTracker as _CT
+        from production.cost.cost_tracker import image_cost_lines
 
         tmp = _CT(page_id=str(breakdown.get("page_id") or "summary"))
         cats = tmp.category_totals(breakdown.get("breakdown") or [])
@@ -93,8 +93,8 @@ def _format_cost_block(
         n = max(1, int(n_reels or 1))
         _fmt = (post_format or "").upper()
         _pt = (post_type or str(breakdown.get("post_type") or "")).upper().strip()
-        from core.cost_tracker import is_static_image_post as _is_static
-        from core.cost_tracker import slot_unit_label as _slot_unit
+        from production.cost.cost_tracker import is_static_image_post as _is_static
+        from production.cost.cost_tracker import slot_unit_label as _slot_unit
 
         if _is_static(_pt):
             _is_reel = False
@@ -136,7 +136,7 @@ def _format_cost_block(
 
         _audio_engine = "F5TTS"
         try:
-            from core.remote_gpu_manager import is_remote_gpu_enabled as _rgpu_audio
+            from production.providers.image.remote_gpu_manager import is_remote_gpu_enabled as _rgpu_audio
 
             if not _rgpu_audio("audio"):
                 _audio_engine = "ElevenLabs"
@@ -326,8 +326,8 @@ def _snapshot_verified_models(
     page_ctx: PageContext | None = None,
 ) -> PlannedModels:
     """Determine first-hop model IDs via cost-first Model Router."""
-    from agents.media.providers.model_router import image_model, text_model
-    from agents.media.providers.together_image import FLUX_SCHNELL_MODEL
+    from production.providers.llm.model_router import image_model, text_model
+    from production.providers.image.together_image import FLUX_SCHNELL_MODEL
 
     gem_key = app_config.GEMINI_API_KEY
     text_route = text_model(
@@ -369,7 +369,7 @@ def _snapshot_verified_models(
             humanizer_summary=humanizer,
         )
 
-    from agents.media.providers.gemini_utils import make_gemini_client_with_fallback
+    from production.providers.llm.gemini_utils import make_gemini_client_with_fallback
 
     client = make_gemini_client_with_fallback(gem_key)
     research_chain = build_model_chain(
@@ -515,7 +515,7 @@ def _print_video_cost_summary(
     reel_stills: int | None = None,
 ) -> None:
     """Print this-reel cost, then running batch total (never mix the two)."""
-    from core.cost_tracker import image_cost_lines, print_cost_summary
+    from production.cost.cost_tracker import image_cost_lines, print_cost_summary
 
     cats = cost_tracker.category_totals() if cost_tracker is not None else {}
     img_cost = float(cats.get("image_cost") or 0.0)

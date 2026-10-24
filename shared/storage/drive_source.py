@@ -69,7 +69,7 @@ def cache_root() -> Path:
     override = (os.getenv("DRIVE_CACHE_DIR") or "").strip()
     if override:
         return Path(override).expanduser()
-    from utils.pipeline_paths import outputs_root  # noqa: PLC0415
+    from shared.paths import outputs_root  # noqa: PLC0415
 
     return outputs_root() / "drive" / "cache"
 

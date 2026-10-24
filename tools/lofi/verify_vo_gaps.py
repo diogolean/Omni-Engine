@@ -17,16 +17,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 from moviepy import concatenate_audioclips  # type: ignore  # noqa: E402
 
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.assembler import (  # noqa: E402
-    _audio_clip_from_samples,
-    _silence_audio_clip,
-    normalize_vo_pcm,
-)
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.assembler import _audio_clip_from_samples, _silence_audio_clip, normalize_vo_pcm
 
 RUN = page_outputs_dir("wonder_feed") / "assets" / "lofi_run_20260824_175130_01"
 OUT = page_outputs_dir("wonder_feed") / "clips" / "vo_pace_probe" / "hope_concat_fixed_300ms.wav"

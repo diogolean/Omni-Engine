@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 CostTracker — per-run financial tracking for the Unified Multi-Page Factory.
 
@@ -761,7 +761,7 @@ class CostTracker:
             dest = Path(library_dir).expanduser().resolve()
         except Exception as exc:  # noqa: BLE001
             logger.warning("CostTracker | invalid library_dir=%r (%s)", library_dir, exc)
-            from utils.pipeline_paths import outputs_root
+            from shared.paths import outputs_root
 
             dest = outputs_root() / "cost_telemetry"
         try:

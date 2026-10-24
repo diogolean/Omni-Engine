@@ -32,7 +32,7 @@ class LegacyChannelAdapter(BaseChannelConfig):
 
     @property
     def display_name(self) -> str:
-        from agents.media.persona_dna import ANNA_DISPLAY_NAME
+        from production.writers.persona_dna import ANNA_DISPLAY_NAME
 
         return str(
             self._page_cfg.get("PAGE_DISPLAY_NAME")
@@ -41,12 +41,12 @@ class LegacyChannelAdapter(BaseChannelConfig):
         )
 
     def get_system_prompt(self) -> str:
-        from agents.media.persona_dna import persona_context_block
+        from production.writers.persona_dna import persona_context_block
 
         return persona_context_block()
 
     def get_visual_rules(self) -> dict[str, Any]:
-        from agents.media.persona_dna import ENVIRONMENTS
+        from production.writers.persona_dna import ENVIRONMENTS
 
         envs: list[str] = []
         for item in ENVIRONMENTS or []:
@@ -77,7 +77,7 @@ class LegacyChannelAdapter(BaseChannelConfig):
         return dict(rules)
 
     def get_ctas(self) -> list[str]:
-        from agents.media.persona_dna import CTA_KEYWORDS
+        from production.writers.persona_dna import CTA_KEYWORDS
 
         keywords = [str(k) for k in (CTA_KEYWORDS or []) if str(k).strip()]
         reel_cta = str(self._page_cfg.get("REEL_CTA_TEXT") or "").strip()
@@ -86,7 +86,7 @@ class LegacyChannelAdapter(BaseChannelConfig):
         return keywords or ["follow"]
 
     def get_narrative_angles(self, mode: str = "") -> list[str]:
-        from agents.media.persona_dna import NARRATIVE_ANGLES
+        from production.writers.persona_dna import NARRATIVE_ANGLES
 
         del mode
         out: list[str] = []
@@ -106,10 +106,7 @@ class LegacyChannelAdapter(BaseChannelConfig):
         blocks = [f"TOPIC: {(topic or '').strip() or '(none)'}"]
         try:
             import config as app_config
-            from agents.rag.pdf_loader import (
-                corpus_to_prompt_context,
-                load_digital_product_corpus,
-            )
+            from production.writers.rag.pdf_loader import corpus_to_prompt_context, load_digital_product_corpus
 
             pdf_dir = Path(getattr(app_config, "DIGITAL_PRODUCTS_PATH", "") or "")
             chunk = int(getattr(app_config, "PDF_CHUNK_CHAR_LIMIT", 80_000) or 80_000)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from utils.pipeline_paths import outputs_path
+from shared.paths import outputs_path
 
 
 def _raw(name: str) -> str:

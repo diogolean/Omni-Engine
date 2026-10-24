@@ -319,7 +319,7 @@ def _run_probe(name: str, probe: Callable[[], str]) -> tuple[bool, str]:
 
 def _probe_gemini() -> str:
     import config as app_config
-    from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
+    from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client
 
     key = (
         os.getenv("GEMINI_API_KEY")

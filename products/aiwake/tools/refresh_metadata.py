@@ -104,7 +104,7 @@ def write_planner_exports(rows: list[dict], *, outputs_dir: Path | None = None) 
         (reels_json_path(outputs_dir=outputs_dir), compact_reels_export(entries)),
         (linkedin_json_path(outputs_dir=outputs_dir), compact_linkedin_export(entries)),
     ]
-    from utils.pipeline_paths import channel_store_dir
+    from shared.paths import channel_store_dir
 
     store = channel_store_dir("aiwake")
     targets.extend(

@@ -8,28 +8,17 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from agents.media.free_images.http import HttpResponse
-from modules.reel_artefact.budget import (
-    reset_spend,
-    reset_uses,
-    safety_uses,
-    scene_regen_allowed,
-    take_replan_slot,
-)
-from modules.reel_artefact.diversity import reset_diversity
-from modules.reel_artefact.fetch import list_candidates
-from modules.reel_artefact.flux_policy import fields_for_scene, object_line_strength
-from modules.reel_artefact.pixels import image_defect
-from modules.reel_artefact.reuse import (
-    note_beat_key,
-    remember_approved,
-    rescue_place,
-    reset_approved,
-)
-from modules.reel_artefact.script_length import fit_word_target
-from modules.reel_artefact.source import write_source_sidecar
-from modules.reel_qa.relevance import _verdict_from_payload, arid_water_conflict
-from modules.shot_planner.entities import Entity, load_entities
+from production.providers.image.free.http import HttpResponse
+from production.formats.economic_reel.artefact.budget import reset_spend, reset_uses, safety_uses, scene_regen_allowed, take_replan_slot
+from production.formats.economic_reel.artefact.diversity import reset_diversity
+from production.formats.economic_reel.artefact.fetch import list_candidates
+from production.formats.economic_reel.artefact.flux_policy import fields_for_scene, object_line_strength
+from production.formats.economic_reel.artefact.pixels import image_defect
+from production.formats.economic_reel.artefact.reuse import note_beat_key, remember_approved, rescue_place, reset_approved
+from production.formats.economic_reel.artefact.script_length import fit_word_target
+from production.formats.economic_reel.artefact.source import write_source_sidecar
+from production.qa.relevance import _verdict_from_payload, arid_water_conflict
+from production.formats.economic_reel.shot_planner.entities import Entity, load_entities
 
 
 def _reset() -> None:
@@ -312,7 +301,7 @@ def test_commons_runs_before_openverse_and_openverse_is_only_a_fallback() -> Non
 
 
 def test_a_long_script_keeps_whole_sentences_under_the_soft_ceiling() -> None:
-    from modules.reel_artefact.script_length import soft_ceiling, soft_word_ceiling
+    from production.formats.economic_reel.artefact.script_length import soft_ceiling, soft_word_ceiling
 
     opening = "In 1936 archaeologists found a clay jar near Baghdad."
     sentence = "The jar held a copper tube and an iron rod."
@@ -336,7 +325,7 @@ def test_a_long_script_keeps_whole_sentences_under_the_soft_ceiling() -> None:
 def test_the_reel_planner_skips_the_second_gemini_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modules.shot_planner.plan import plan_for_reel
+    from production.formats.economic_reel.shot_planner.plan import plan_for_reel
     from tests.test_shot_planner_llm import _BCE, _bad_model_json
 
     monkeypatch.setenv("REEL_SHOT_PLANNER", "1")
@@ -359,13 +348,7 @@ def test_the_reel_planner_skips_the_second_gemini_call(
 
 
 def test_ffmpeg_is_the_default_and_an_error_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.reel_ffmpeg_render import (
-        ass_document,
-        attempt_ffmpeg,
-        ken_burns_filter,
-        phrase_cues,
-        sequence_renderer,
-    )
+    from production.media.reel_ffmpeg_render import ass_document, attempt_ffmpeg, ken_burns_filter, phrase_cues, sequence_renderer
 
     monkeypatch.delenv("REEL_RENDERER", raising=False)
     assert sequence_renderer() == "ffmpeg"
@@ -402,7 +385,7 @@ def test_ffmpeg_is_the_default_and_an_error_falls_back(monkeypatch: pytest.Monke
     reason="ffmpeg libass missing",
 )
 def test_a_short_ffmpeg_reel_writes_a_file(tmp_path: Path) -> None:
-    from core.reel_ffmpeg_render import compile_ffmpeg_reel
+    from production.media.reel_ffmpeg_render import compile_ffmpeg_reel
 
     frames = []
     for index, color in enumerate(((120, 80, 40), (40, 90, 140))):

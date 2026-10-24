@@ -30,13 +30,10 @@ from main import (  # noqa: E402
     _GEO_ANCHORS,  # unused directly, sanity-import to fail fast if broken
     _extract_topic_visual_entities,
 )
-from agents.media.prompt_alignment import (  # noqa: E402
-    build_aligned_visual_block,
-    plan_episode_visual_sequence,
-)
+from production.providers.image.prompt_alignment import build_aligned_visual_block, plan_episode_visual_sequence
 
 try:
-    from agents.rag.channel_rag import get_image_guidance  # noqa: E402
+    from production.writers.rag.channel_rag import get_image_guidance  # noqa: E402
     _RAG_IMG_BLOCK_AVAIL = True
 except Exception:  # noqa: BLE001
     get_image_guidance = None  # type: ignore

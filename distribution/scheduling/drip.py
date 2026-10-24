@@ -14,12 +14,12 @@ from typing import Any
 
 from accounts.pinterest import account_blockers
 from accounts.tokens import pinterest_account_env
-from agents.posting.pinterest_engine.articles import (
-    fetch_wordpress_catalog,
-    match_article_slug,
-)
-from agents.posting.pinterest_engine.photos import is_text_graphic
 from distribution.publishers.base import Account
+from shared.layer_bridge import Port, Symbol
+
+fetch_wordpress_catalog = Symbol('production.formats.pins.articles', 'fetch_wordpress_catalog')
+match_article_slug = Symbol('production.formats.pins.articles', 'match_article_slug')
+is_text_graphic = Symbol('production.formats.pins.photos', 'is_text_graphic')
 
 log = logging.getLogger("omni.pinterest_drip")
 
@@ -90,7 +90,7 @@ def publish_account(
         stats["skipped_reason"] = ",".join(blockers)
         return stats
 
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
     from distribution.scheduling.scheduler import PinterestScheduler  # noqa: PLC0415
 
     cfg.configure(channel_id=account.branding)

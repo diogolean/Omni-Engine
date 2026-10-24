@@ -468,7 +468,7 @@ def workflows_dir() -> Path:
 
 def default_output_dir(kind: str = "misc") -> Path:
     """Return ``{OUTPUT_PATH}/<page>/remote_gpu/<kind>/``."""
-    from utils.pipeline_paths import default_page_dir, outputs_root
+    from shared.paths import default_page_dir, outputs_root
 
     page = _cfg("ACTIVE_PAGE", None) or _cfg("PAGE_OUTPUTS_DIR", None)
     if page and not isinstance(page, Path) and "/" not in str(page) and "\\" not in str(page):

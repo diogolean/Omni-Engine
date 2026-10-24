@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import coerce_outputs_path
+from shared.paths import coerce_outputs_path
 os.chdir(ROOT)
 
 from dotenv import load_dotenv
@@ -51,8 +51,8 @@ def main() -> int:
     os.environ["REMOTE_GPU_MODE"] = "runpod"
     os.environ["REMOTE_GPU_TIMEOUT_S"] = "1800"
 
-    from agents.mcp.model_api_flows import apply_production_flow, resolve_production_flow
-    from core.remote_gpu_manager import get_manager, reset_manager
+    from production.providers.llm.model_api_flows import apply_production_flow, resolve_production_flow
+    from production.providers.image.remote_gpu_manager import get_manager, reset_manager
     from tools.oneoff.wan_motion_ab_test import _frame_motion_score
 
     flow = resolve_production_flow(preset_name="remote_gpu_serverless")

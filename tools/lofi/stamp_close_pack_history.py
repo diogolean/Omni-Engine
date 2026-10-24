@@ -10,8 +10,8 @@ if str(_REORG_ROOT) not in _reorg_sys.path:
 import json
 from pathlib import Path
 
-from core.economic_reel_lofi import lofi_collections as rag
-from core.economic_reel_lofi.setting_archetypes import classify_setting_archetype
+from production.formats.lofi import lofi_collections as rag
+from production.formats.lofi.setting_archetypes import classify_setting_archetype
 
 JOBS = (
     {

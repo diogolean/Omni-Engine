@@ -17,25 +17,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
-from core.economic_reel_lofi import lofi_collections as rag
-from agents.writer.script_agent import (
-    _CONTENT_STOP,
-    _PROP_ADJ,
-    _narrative_gate_reasons,
-    _thematic_from_lines,
-    assess_caption_still_alignment,
-)
-from core.economic_reel_lofi.setting_archetypes import classify_setting_archetype
-from core.economic_reel_lofi.theme_guard import assess_theme_drift
-from core.economic_reel_lofi.visual_identity import (
-    _object_stem,
-    _setting_stem,
-    restore_anchor_visual_fields,
-    score_episode_variety,
-    setting_object_pool,
-)
+from production.formats.lofi import lofi_collections as rag
+from production.writers.script_agent import _CONTENT_STOP, _PROP_ADJ, _narrative_gate_reasons, _thematic_from_lines, assess_caption_still_alignment
+from production.formats.lofi.setting_archetypes import classify_setting_archetype
+from production.formats.lofi.theme_guard import assess_theme_drift
+from production.formats.lofi.visual_identity import _object_stem, _setting_stem, restore_anchor_visual_fields, score_episode_variety, setting_object_pool
 
 CORPUS = (
     Path(__file__).resolve().parents[2] / "scripts" / "store" / "offdomain_drift_corpus.json"

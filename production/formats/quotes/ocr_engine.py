@@ -37,14 +37,9 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from shared.logging import setup_gemini_tool_logging
-from utils.gemini_usage import (
-    GeminiUsage,
-    extract_usage,
-    log_usage,
-    unwrap_json_object,
-)
+from production.cost.gemini_usage import GeminiUsage, extract_usage, log_usage, unwrap_json_object
 from production.formats.quotes.ocr_text import strip_wrapping_quotes
-from utils.pipeline_paths import assets_path, path_from_env
+from shared.paths import assets_path, path_from_env
 
 logger = logging.getLogger(__name__)
 

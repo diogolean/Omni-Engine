@@ -131,12 +131,8 @@ class VisualQAAgent(BaseAgent):
         self, path: Path, criteria: tuple[str, ...],
     ) -> QAVerdict | None:
         try:
-            from quality.VisualQA_Agent.channel_rag import (
-                get_channel_rules,
-                seed_default_channels,
-                set_channel_context,
-            )
-            from quality.VisualQA_Agent.visual_critic import evaluate_image
+            from production.qa.judges.visual_critic.channel_rag import get_channel_rules, seed_default_channels, set_channel_context
+            from production.qa.judges.visual_critic.visual_critic import evaluate_image
         except Exception as exc:  # noqa: BLE001
             _LOG.debug("VisualQA_Agent import skipped (%s) — direct vision.", exc)
             return None
@@ -220,17 +216,17 @@ Return JSON:
   fix_instructions (actionable camera/lighting rewrite for FLUX; empty if passed).
 """.strip()
 
-        from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
+        from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client
 
         client = make_guarded_gemini_client(key)
-        from quality.VisualQA_Agent import config as vqa_config
+        from production.qa.judges.visual_critic import config as vqa_config
 
         model_id = vqa_config.GEMINI_CRITIC_MODEL
         if not model_id.startswith("models/"):
             model_id = f"models/{model_id}"
         # Downscale + JPEG so the direct path matches the capped payload too.
         try:
-            from quality.VisualQA_Agent.visual_critic import _bytes_to_jpeg_part
+            from production.qa.judges.visual_critic.visual_critic import _bytes_to_jpeg_part
 
             part = _bytes_to_jpeg_part(path.read_bytes())
         except Exception:  # noqa: BLE001

@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from modules.reel_qa.beats import pack_sentences, refine_reel_beats
-from modules.reel_qa.mp4_gate import decide_mp4_gate
-from modules.reel_qa.pipeline import seal_compiled_reel
-from modules.reel_qa.publish import planner_row_allowed, row_publishable
-from modules.reel_qa.relevance import evaluate_chunk_relevance
-from modules.reel_visual_qa import generate_and_gate
+from production.qa.beats import pack_sentences, refine_reel_beats
+from production.qa.mp4_gate import decide_mp4_gate
+from production.qa.pipeline import seal_compiled_reel
+from production.qa.publish import planner_row_allowed, row_publishable
+from production.qa.relevance import evaluate_chunk_relevance
+from production.qa.reel_visual_qa import generate_and_gate
 
 
 def _png(path: Path) -> Path:
@@ -137,7 +137,7 @@ def test_a_flux_scene_that_shows_a_forbidden_object_fails(
 
 def _quiet_qa_env(monkeypatch) -> None:
     """Skip the local still gate and start from the default qwen-only chain."""
-    from modules.reel_artefact.provider_health import reset_providers
+    from production.formats.economic_reel.artefact.provider_health import reset_providers
 
     monkeypatch.setenv("REEL_LOCAL_GATE", "0")
     monkeypatch.delenv("REEL_QA_MODEL_CHAIN", raising=False)

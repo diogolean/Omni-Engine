@@ -17,10 +17,10 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from modules.reel_artefact.orchestrate import make_climb_job, run_reel_stills
-from modules.reel_artefact.role import is_event
-from modules.shot_planner.build import build_shot_list
-from modules.shot_planner.plan import plan_for_reel
+from production.formats.economic_reel.artefact.orchestrate import make_climb_job, run_reel_stills
+from production.formats.economic_reel.artefact.role import is_event
+from production.formats.economic_reel.shot_planner.build import build_shot_list
+from production.formats.economic_reel.shot_planner.plan import plan_for_reel
 
 
 _QUIMBAYA = "The Quimbaya golden ornaments, 600-1000 AD"
@@ -111,7 +111,7 @@ def test_reel_stills_through_the_main_entry(tmp_path: Path, monkeypatch) -> None
     climb_log = logging.getLogger("production.formats.economic_reel.artefact.climb")
     climb_log.addHandler(handler)
     climb_log.setLevel(logging.INFO)
-    import modules.reel_qa.relevance as relevance
+    import production.qa.relevance as relevance
 
     original_provider = relevance._provider
     try:
@@ -248,7 +248,7 @@ def _run_antikythera(folder: Path, monkeypatch, logs: list[str]) -> None:
         _noisy(dest, 90 + int(beat_index))
         ref = dest.with_name(dest.stem + "_ref.jpg")
         _noisy(ref, 3)
-        from modules.reel_artefact.source import write_source_sidecar
+        from production.formats.economic_reel.artefact.source import write_source_sidecar
 
         write_source_sidecar(dest, {
             "provider": "nanobanana",
@@ -318,7 +318,7 @@ def _run_antikythera(folder: Path, monkeypatch, logs: list[str]) -> None:
 
     # 3. A generated real-place prompt names the Aegean coast.
     # 5. The event frame keeps the boat, and the author is not doubled.
-    from modules.reel_artefact.source import source_meta
+    from production.formats.economic_reel.artefact.source import source_meta
 
     event = results[published_events[0]]
     assert event.path is not None
@@ -358,7 +358,7 @@ def _sea_model(prompt: str, system: str | None = None) -> str:
 
 class _EventClient:
     def get(self, url, params=None, headers=None):
-        from agents.media.free_images.http import HttpResponse
+        from production.providers.image.free.http import HttpResponse
 
         del headers
         params = params or {}
@@ -455,7 +455,7 @@ def _install_judge(shot_calls: dict[str, int], flux_count: int, prompts: list[st
                 model_id="models/gemini-2.5-flash",
             )
 
-    import modules.reel_qa.relevance as relevance
+    import production.qa.relevance as relevance
 
     relevance._provider = lambda name: _Provider()  # type: ignore[assignment]
 
@@ -466,9 +466,9 @@ def _set_flux_cap(monkeypatch, limit: int) -> None:
 
 
 def _reset() -> None:
-    from modules.reel_artefact.budget import reset_nano_budget, reset_spend, reset_uses
-    from modules.reel_artefact.diversity import reset_diversity
-    from modules.reel_artefact.reuse import reset_approved
+    from production.formats.economic_reel.artefact.budget import reset_nano_budget, reset_spend, reset_uses
+    from production.formats.economic_reel.artefact.diversity import reset_diversity
+    from production.formats.economic_reel.artefact.reuse import reset_approved
 
     reset_spend()
     reset_nano_budget()

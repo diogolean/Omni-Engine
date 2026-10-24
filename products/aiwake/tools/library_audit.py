@@ -43,7 +43,7 @@ from shared.contracts import (
     save_distribution_library,
 )
 from shared.store import restore_channel_state
-from utils.pipeline_paths import channel_store_dir, page_outputs_dir
+from shared.paths import channel_store_dir, page_outputs_dir
 
 _LOG = logging.getLogger("aiwake.audit")
 

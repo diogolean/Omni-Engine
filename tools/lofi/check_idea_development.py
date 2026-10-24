@@ -10,16 +10,7 @@ if str(_REORG_ROOT) not in _reorg_sys.path:
 import json
 from pathlib import Path
 
-from agents.writer.script_agent import (
-    _GOLD_CADENCE_BEATS,
-    _GOLD_CADENCE_BEATS_B,
-    _line_word_count,
-    assess_connective_development,
-    assess_insight_answers_hook,
-    assess_object_churn,
-    assess_recipe_pattern,
-    _narrative_gate_reasons,
-)
+from production.writers.script_agent import _GOLD_CADENCE_BEATS, _GOLD_CADENCE_BEATS_B, _line_word_count, assess_connective_development, assess_insight_answers_hook, assess_object_churn, assess_recipe_pattern, _narrative_gate_reasons
 
 
 def _report_beats(name: str, beats: list[str], insight_i: int) -> None:

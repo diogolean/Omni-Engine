@@ -27,6 +27,7 @@ Then add to .env:
   PINTEREST_APP_SECRET=<your secret from the app page>
 """
 from __future__ import annotations
+from shared.layer_bridge import Port
 
 import base64
 import json
@@ -45,7 +46,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_ROOT))
 
 from dotenv import load_dotenv
-from agents.posting.pinterest_engine import config as cfg
+cfg = Port('production.formats.pins.config')
 
 load_dotenv(_ROOT / ".env", override=True)
 

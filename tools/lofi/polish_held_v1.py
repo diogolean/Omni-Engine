@@ -15,19 +15,10 @@ from pathlib import Path
 
 os.environ.setdefault("LOFI_SKIP_COHERENCE_LLM", "1")
 
-from core.economic_reel_lofi import lofi_collections as rag
-from agents.writer.claude_polish import (
-    polish_scripts_batch,
-    summarize_cost_log,
-)
-from agents.writer.script_agent import (
-    _line_word_count,
-    _narrative_gate_reasons,
-)
-from core.economic_reel_lofi.setting_archetypes import (
-    classify_composition_type,
-    classify_setting_archetype,
-)
+from production.formats.lofi import lofi_collections as rag
+from production.writers.claude_polish import polish_scripts_batch, summarize_cost_log
+from production.writers.script_agent import _line_word_count, _narrative_gate_reasons
+from production.formats.lofi.setting_archetypes import classify_composition_type, classify_setting_archetype
 
 STORE = Path("production/formats/lofi/store")
 PACK = (

@@ -125,7 +125,7 @@ def generate_scene_image(
 
     Returns (output_path, resolved_mood_meta).
     """
-    from agents.media.providers.together_image import TogetherImageGenerator
+    from production.providers.image.together_image import TogetherImageGenerator
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,7 +207,7 @@ def generate_scene_image_gemini(
 ) -> tuple[Path, dict[str, Any]]:
     """Generate a LOFI still through Google's Flash Image-only model chain."""
     from PIL import Image, ImageOps
-    from agents.media.providers.image_provider import GeminiImageAdapter
+    from production.providers.image.image_provider import GeminiImageAdapter
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,7 +271,7 @@ def generate_scene_image_dev(
     Same contract as generate_scene_image so generate_and_qa_scene can swap.
     Does not call generate_scene_image or the Schnell DeepInfra branch.
     """
-    from agents.media.providers.together_image import TogetherImageGenerator
+    from production.providers.image.together_image import TogetherImageGenerator
 
     if bool(getattr(lofi_cfg, "uses_flux2_dev", lambda: False)()):
         model = str(

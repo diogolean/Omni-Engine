@@ -9,18 +9,10 @@ from pathlib import Path
 import pytest
 import requests
 
-from agents.posting.pinterest_engine.articles import (
-    Article,
-    attach_article_url,
-    fetch_wordpress_catalog,
-    match_catalog_article,
-)
-from agents.posting.pinterest_engine.image_transformer import PinTransformer, _hook_lines
-from agents.posting.pinterest_engine.inventory import (
-    _generate_ai,
-    reset_ai_circuit,
-)
-from agents.posting.pinterest_engine.publisher import _pin_link
+from production.formats.pins.articles import Article, attach_article_url, fetch_wordpress_catalog, match_catalog_article
+from production.formats.pins.image_transformer import PinTransformer, _hook_lines
+from distribution.scheduling.inventory import _generate_ai, reset_ai_circuit
+from distribution.publishers.api.pinterest import _pin_link
 from distribution.scheduling.drip import publish_account
 from tests.test_pinterest_vm import (
     FakeS3,
@@ -164,7 +156,7 @@ def test_catalog_paginates_and_caches_on_the_outputs_volume(
 
 
 def test_claude_reads_text_blocks_and_opens_the_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
-    from agents.posting.pinterest_engine import config as cfg
+    from production.formats.pins import config as cfg
 
     cfg.AI_SYSTEM_PROMPT = "Write a short pin."
     cfg.TARGET_URL = ""
@@ -215,7 +207,7 @@ def test_claude_reads_text_blocks_and_opens_the_circuit(monkeypatch: pytest.Monk
 
 
 def test_claude_model_is_opt_in_and_never_retired(monkeypatch: pytest.MonkeyPatch) -> None:
-    from agents.posting.pinterest_engine.config import get_best_claude_model
+    from production.formats.pins.config import get_best_claude_model
 
     class _Model:
         def __init__(self, mid: str) -> None:
@@ -367,7 +359,7 @@ def test_pin_without_an_article_is_skipped(
 def test_hook_stays_short_and_off_the_upper_focal_band(tmp_path: Path) -> None:
     from PIL import Image, ImageDraw
 
-    from agents.posting.pinterest_engine import config as cfg
+    from production.formats.pins import config as cfg
 
     cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)
     long_hook = "What the records leave out about Easter Island moai"

@@ -50,7 +50,7 @@ class PinLedger:
         self.bucket = bucket
         self.key = ledger_object_key(account_id)
         if cache_path is None:
-            from utils.pipeline_paths import outputs_root  # noqa: PLC0415
+            from shared.paths import outputs_root  # noqa: PLC0415
 
             cache_path = outputs_root() / "pinterest" / "ledger" / f"{self.key.split('/')[-1]}"
         self.cache_path = cache_path
@@ -71,7 +71,7 @@ class PinLedger:
         when the local cache can be read after B2 cannot. Unreachable when
         neither copy can be read.
         """
-        from agents.media.b2_client import read_object_outcome  # noqa: PLC0415
+        from shared.storage.b2_client import read_object_outcome  # noqa: PLC0415
 
         text, status = read_object_outcome(
             self.key, client=self.client, bucket=self.bucket
@@ -330,7 +330,7 @@ class PinLedger:
         tmp.write_text(payload, encoding="utf-8")
         tmp.replace(self.cache_path)
         try:
-            from agents.media.b2_client import upload_object  # noqa: PLC0415
+            from shared.storage.b2_client import upload_object  # noqa: PLC0415
 
             upload_object(
                 self.key,
@@ -340,7 +340,7 @@ class PinLedger:
                 content_type="application/x-ndjson",
             )
         except Exception as exc:  # noqa: BLE001
-            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+            from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
             if isinstance(exc, B2DailyCapError):
                 raise
@@ -348,11 +348,11 @@ class PinLedger:
 
     def _read_remote(self) -> str | None:
         try:
-            from agents.media.b2_client import read_object_text  # noqa: PLC0415
+            from shared.storage.b2_client import read_object_text  # noqa: PLC0415
 
             return read_object_text(self.key, client=self.client, bucket=self.bucket)
         except Exception as exc:  # noqa: BLE001
-            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+            from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
             if isinstance(exc, B2DailyCapError):
                 raise

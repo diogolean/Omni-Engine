@@ -58,10 +58,7 @@ def keyword_first_title(title: str, topic: str) -> str:
     The topic is not prepended when the title already names it. A title that
     would pass 100 characters ends on a word boundary.
     """
-    from agents.posting.pinterest_engine.inventory import (  # noqa: PLC0415
-        sanitize_pin_title,
-        title_case_phrase,
-    )
+    from shared.pin_text import sanitize_pin_title, title_case_phrase  # noqa: PLC0415
 
     cleaned = sanitize_pin_title(title)
     subject = sanitize_pin_title(title_case_phrase(topic))
@@ -85,7 +82,7 @@ _GENERIC_HOOK = re.compile(r"^what the records leave out about\b", re.IGNORECASE
 
 def short_hook(text: str, *, max_words: int = _HOOK_WORD_LIMIT) -> str:
     """At most ``max_words`` words. The card renderer also caps this at 3 lines."""
-    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
+    from shared.pin_text import normalize_pin_text  # noqa: PLC0415
 
     words = normalize_pin_text(text).split()
     return " ".join(words[:max_words])
@@ -93,7 +90,7 @@ def short_hook(text: str, *, max_words: int = _HOOK_WORD_LIMIT) -> str:
 
 def card_hook_text(record: dict) -> str:
     """Short topic hook. The AI visual_hook wins over a long generic template."""
-    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
+    from shared.pin_text import normalize_pin_text  # noqa: PLC0415
 
     topic = normalize_pin_text(str(record.get("topic") or record.get("pinterest_title") or ""))
     title = str(record.get("pinterest_title") or topic)
@@ -142,7 +139,7 @@ _DESCRIPTION_LIMIT = 220
 
 def pin_alt_text(record: dict) -> str:
     """Alt text from the article title, then the topic. Pinterest allows 500 characters."""
-    from agents.posting.pinterest_engine.inventory import polish_pin_text  # noqa: PLC0415
+    from shared.pin_text import polish_pin_text  # noqa: PLC0415
 
     title = polish_pin_text(str(record.get("pinterest_title") or ""))
     topic = polish_pin_text(str(record.get("topic") or ""))
@@ -152,7 +149,7 @@ def pin_alt_text(record: dict) -> str:
 def build_pin_description(record: dict) -> str:
     """About 220 characters, ending with the CTA line and the article URL."""
     from production.formats.pins.articles import resolve_pin_link  # noqa: PLC0415
-    from agents.posting.pinterest_engine.inventory import polish_pin_text  # noqa: PLC0415
+    from shared.pin_text import polish_pin_text  # noqa: PLC0415
 
     title = keyword_first_title(
         str(record.get("pinterest_title") or ""),

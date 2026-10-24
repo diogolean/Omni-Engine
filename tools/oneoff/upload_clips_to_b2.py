@@ -115,7 +115,7 @@ def upload_file_to_b2(
         print(f"  [DRY-RUN] Would upload: {key} → {url}")
         return url
 
-    from agents.media.b2_client import B2VideoUploader
+    from shared.storage.b2_client import B2VideoUploader
 
     size_mb = local_path.stat().st_size / (1024 * 1024)
     print(f"  [UPLOAD] {key} ({size_mb:.1f} MB) …")
@@ -201,7 +201,7 @@ def write_postplanner_xlsx(
         start_row = 2
 
     try:
-        from agents.posting.post_planner import extract_clean_caption
+        from distribution.publishers.export.post_planner import extract_clean_caption
     except Exception:  # noqa: BLE001
         extract_clean_caption = lambda v: str(v or "")  # noqa: E731
 
@@ -309,7 +309,7 @@ def main(argv: list[str] | None = None) -> None:
     bucket = (args.bucket or os.getenv("B2_BUCKET_NAME") or "MediaupscaleStorage").strip()
 
     # ── Upload loop ───────────────────────────────────────────────────────────
-    from agents.media.b2_budget import B2DailyCapError
+    from shared.storage.b2_budget import B2DailyCapError
 
     slots = _posting_slots(len(clips), args.interval)
     records: list[dict] = []

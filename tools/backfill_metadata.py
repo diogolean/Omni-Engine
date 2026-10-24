@@ -26,7 +26,7 @@ from modules.metadata_auditor import (  # noqa: E402
     run_all_channels_backfill,
     run_channel_backfill,
 )
-from utils.pipeline_paths import discover_channel_ids  # noqa: E402
+from shared.paths import discover_channel_ids  # noqa: E402
 
 
 def _install_aiwake_backfill() -> None:

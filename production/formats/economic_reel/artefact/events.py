@@ -10,10 +10,10 @@ from pathlib import Path
 
 from PIL import Image
 
-from agents.media.free_images.attribution import credit_line
-from agents.media.free_images.http import RequestsClient
-from agents.media.free_images.licenses import license_allowed
-from agents.media.free_images.models import Candidate
+from production.providers.image.free.attribution import credit_line
+from production.providers.image.free.http import RequestsClient
+from production.providers.image.free.licenses import license_allowed
+from production.providers.image.free.models import Candidate
 from production.formats.economic_reel.artefact.budget import claim_still, file_hash_key, release_still
 from production.formats.economic_reel.artefact.crop import prepare_event_frame
 from production.formats.economic_reel.artefact.fetch import (

@@ -29,6 +29,7 @@ Error handling:
     other -> logged, retried up to _MAX_RETRIES times, then returns None
 """
 from __future__ import annotations
+from shared.layer_bridge import Port, Symbol
 
 import base64
 import json
@@ -59,18 +60,18 @@ _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm"}
 
 def _pin_link(record: dict) -> str:
     """Article link. Ancient Knowledge never substitutes the sales URL."""
-    from agents.posting.pinterest_engine.articles import resolve_pin_link  # noqa: PLC0415
+    resolve_pin_link = Symbol('production.formats.pins.articles', 'resolve_pin_link')  # noqa: PLC0415
 
     return resolve_pin_link(record)
 
 
 def _hashtags() -> str:
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
     return cfg.HASHTAGS
 
 def _env_path() -> Path:
     """Resolve the active .env path from agents.posting.pinterest_engine.config (supports --env)."""
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
     return cfg.DOTENV_PATH
 
 
@@ -124,7 +125,7 @@ class PinterestPublisher:
         require_board: bool = True,
     ) -> None:
         # Ensure workspace-local .env is loaded (idempotent if already configured).
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
         if not cfg.DOTENV_LOADED_FROM_FILE:
             cfg.configure()
 
@@ -185,7 +186,7 @@ class PinterestPublisher:
             )
             record["pinterest_caption"] = caption
 
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
         title = (
             record.get("pinterest_title")
@@ -203,7 +204,7 @@ class PinterestPublisher:
                 log.warning("No pin image for %s — skipping.", record.get("post_id", "?"))
             return None
 
-        from agents.posting.pinterest_engine.pin_copy import pin_alt_text  # noqa: PLC0415
+        pin_alt_text = Symbol('production.formats.pins.pin_copy', 'pin_alt_text')  # noqa: PLC0415
 
         payload = {
             "board_id": self.board_id,
@@ -330,7 +331,7 @@ class PinterestPublisher:
                     log.info("Reusing existing board '%s' id=%s", name, self.board_id)
                     return self.board_id
 
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
         description = (
             f"{cfg.DISPLAY_NAME or self.board_name} — recycled investigations, "
             "megaliths, and hidden history."
@@ -378,7 +379,7 @@ class PinterestPublisher:
 
     def _build_description(self, record: dict) -> str:
         """Keyword sentence plus the article line from ``pin_theme``. Max 500 chars."""
-        from agents.posting.pinterest_engine.pin_copy import build_pin_description  # noqa: PLC0415
+        build_pin_description = Symbol('production.formats.pins.pin_copy', 'build_pin_description')  # noqa: PLC0415
 
         return build_pin_description(record)
 
@@ -558,7 +559,7 @@ class PinterestPublisher:
             log.warning("Video %s not ready after polling — aborting video pin.", video_path.name)
             return None
 
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
         title = (
             record.get("pinterest_title")
             or record.get("topic")
@@ -606,7 +607,7 @@ class PinterestAccountPublisher(Publisher):
     platform = "pinterest"
 
     def publish_once(self, content: Content, account: Account) -> PublishResult:
-        from agents.posting.pinterest_engine import config as cfg
+        cfg = Port('production.formats.pins.config')
         from distribution.scheduling.inventory import is_video_filename
 
         if _is_video_pin(content, is_video_filename):

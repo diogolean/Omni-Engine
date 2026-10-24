@@ -11,21 +11,13 @@ import json
 import os
 from pathlib import Path
 
-from core.economic_reel_lofi import lofi_collections as rag
-from agents.writer.script_agent import (
-    _line_word_count,
-    _narrative_gate_reasons,
-)
-from core.economic_reel_lofi.setting_archetypes import (
-    classify_composition_type,
-    classify_setting_archetype,
-    score_composition_types,
-    score_setting_archetypes,
-)
+from production.formats.lofi import lofi_collections as rag
+from production.writers.script_agent import _line_word_count, _narrative_gate_reasons
+from production.formats.lofi.setting_archetypes import classify_composition_type, classify_setting_archetype, score_composition_types, score_setting_archetypes
 
 os.environ.setdefault("LOFI_SKIP_COHERENCE_LLM", "1")
 
-from core.economic_reel_lofi import config as lofi_cfg
+from production.formats.lofi import config as lofi_cfg
 
 MAX_W = lofi_cfg.THEMATIC_MAX_CAPTION_WORDS
 MAX_C = lofi_cfg.THEMATIC_MAX_CAPTION_CHARS

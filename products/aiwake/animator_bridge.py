@@ -19,6 +19,7 @@ Responsibilities:
    ``video_path`` slot.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import hashlib
 import json
@@ -34,8 +35,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from core.animator.audio_analyzer import load_mono_waveform
-from core.animator.animator_types import DialogueTurn, SpeakerStyle
+from animation.parametric.audio_analyzer import load_mono_waveform
+from animation.parametric.animator_types import DialogueTurn, SpeakerStyle
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import, avoids a hard runtime dependency
     from .contracts import DebateTranscript
@@ -1015,7 +1016,7 @@ def render_debate_animation(
     :func:`channels_config.aiwake.pipeline.run_pipeline` are responsible for
     passing ``{OUTPUT_PATH}/aiwake/animation_clips/``.
     """
-    from core.animator import render_dynamic_animation  # noqa: PLC0415
+    render_dynamic_animation = Symbol('core.animator', 'render_dynamic_animation')  # noqa: PLC0415
     from products.aiwake.animator.asset_generator import (  # noqa: PLC0415
         DEFAULT_PUPPETS_DIR,
         archive_v1_retro_skins,
@@ -1138,7 +1139,7 @@ def render_debate_animation(
         stats.speedup_factor,
     )
     if generate_thumbnail:
-        from core.animator.thumbnail_generator import generate_vs_thumbnail  # noqa: PLC0415
+        from animation.parametric.thumbnail_generator import generate_vs_thumbnail  # noqa: PLC0415
 
         thumbnail_path = generate_vs_thumbnail(
             title=transcript.topic,
