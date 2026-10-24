@@ -1047,7 +1047,8 @@ def apply_voice_loudnorm(
     the final AAC mix. Returns ``audio_path`` unchanged on failure.
     """
     import shutil
-    import subprocess
+
+    from shared.ffmpeg import run_ffmpeg
 
     path = Path(audio_path)
     if not path.is_file():
@@ -1061,7 +1062,7 @@ def apply_voice_loudnorm(
     af = f"loudnorm=I={i}:TP={tp}:LRA={lra},aformat=sample_rates={sr}"
     tmp = path.with_suffix(".loudnorm_tmp.mp3")
     try:
-        subprocess.run(
+        run_ffmpeg(
             [
                 ffmpeg, "-y", "-i", str(path),
                 "-af", af,
@@ -1070,7 +1071,6 @@ def apply_voice_loudnorm(
                 str(tmp),
             ],
             check=True,
-            capture_output=True,
             timeout=180,
         )
         tmp.replace(path)
@@ -1098,7 +1098,8 @@ def resample_audio_48k(
     if apply_loudnorm:
         return apply_voice_loudnorm(audio_path, sample_rate=sample_rate)
     import shutil
-    import subprocess
+
+    from shared.ffmpeg import run_ffmpeg
 
     path = Path(audio_path)
     if not path.is_file():
@@ -1109,7 +1110,7 @@ def resample_audio_48k(
     sr = int(sample_rate) if sample_rate and int(sample_rate) > 0 else _TARGET_SAMPLE_RATE_HZ
     tmp = path.with_suffix(".resample_tmp.mp3")
     try:
-        subprocess.run(
+        run_ffmpeg(
             [
                 ffmpeg, "-y", "-i", str(path),
                 "-ar", str(sr),
@@ -1117,7 +1118,6 @@ def resample_audio_48k(
                 str(tmp),
             ],
             check=True,
-            capture_output=True,
             timeout=180,
         )
         tmp.replace(path)

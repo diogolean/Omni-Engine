@@ -724,7 +724,9 @@ class _SeqOverlayReader:
         self.close()
         self._stop.clear()
         self._q = queue.Queue(maxsize=6)
-        self.proc = subprocess.Popen(
+        from shared.ffmpeg import popen_ffmpeg
+
+        self.proc = popen_ffmpeg(
             self._cmd(),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -748,7 +750,9 @@ class _SeqOverlayReader:
         except Exception:  # noqa: BLE001
             pass
         try:
-            self.proc.kill()
+            from shared.ffmpeg import kill_process_tree
+
+            kill_process_tree(self.proc)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -821,7 +825,9 @@ def _probe_video_meta(path: Path) -> tuple[float, float, int, int]:
     probe = ffmpeg.with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
     exe = str(probe if probe.is_file() else ffmpeg)
     try:
-        raw = subprocess.check_output(
+        from shared.ffmpeg import run_ffmpeg
+
+        probed = run_ffmpeg(
             [
                 exe,
                 "-v",
@@ -839,6 +845,9 @@ def _probe_video_meta(path: Path) -> tuple[float, float, int, int]:
             timeout=30,
             stderr=subprocess.STDOUT,
         )
+        if probed.returncode != 0:
+            raise subprocess.CalledProcessError(probed.returncode, exe, probed.stdout)
+        raw = probed.stdout
         data = json.loads(raw.decode("utf-8", errors="replace") or "{}")
         stream = (data.get("streams") or [{}])[0]
         fmt = data.get("format") or {}
@@ -1421,8 +1430,10 @@ def _pcm_peak_envelope(path: Path, sr: int = _VO_EDGE_TRIM_SR) -> tuple[np.ndarr
 
         import imageio_ffmpeg
 
+        from shared.ffmpeg import run_ffmpeg
+
         exe = imageio_ffmpeg.get_ffmpeg_exe()
-        raw = subprocess.check_output(
+        decoded = run_ffmpeg(
             [
                 exe,
                 "-v",
@@ -1440,6 +1451,9 @@ def _pcm_peak_envelope(path: Path, sr: int = _VO_EDGE_TRIM_SR) -> tuple[np.ndarr
             stderr=subprocess.DEVNULL,
             timeout=_ffmpeg_subprocess_timeout_s(),
         )
+        if decoded.returncode != 0:
+            raise subprocess.CalledProcessError(decoded.returncode, exe, decoded.stdout)
+        raw = decoded.stdout
         env = np.abs(np.frombuffer(raw, dtype=np.float32))
         dur = float(len(env)) / float(sr) if sr else 0.0
         return env, dur

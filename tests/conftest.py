@@ -83,6 +83,18 @@ def _hermetic_machine(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _kill_leftover_ffmpeg():
+    """A timed-out render must not leave ffmpeg running for the next test."""
+    yield
+    try:
+        from shared.ffmpeg import kill_descendant_ffmpeg
+
+        kill_descendant_ffmpeg()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _legacy_reel_switches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REEL_NANOBANANA_MAX_PER_REEL", "4")
     monkeypatch.setenv("REEL_LOCAL_GATE", "0")

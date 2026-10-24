@@ -331,7 +331,9 @@ def _render(in_path: Path, out_path: Path, p: Preset, *, seconds: float, fps: in
         "-color_range", "tv",
         "-movflags", "+faststart", str(out_path),
     ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    from shared.ffmpeg import kill_process_tree, popen_ffmpeg
+
+    proc = popen_ffmpeg(cmd, stdin=subprocess.PIPE)
     try:
         for i in range(n):
             t = i / (n - 1)
@@ -358,8 +360,13 @@ def _render(in_path: Path, out_path: Path, p: Preset, *, seconds: float, fps: in
                 frame = frame.clip(0, 255).astype(np.uint8)
             proc.stdin.write(np.ascontiguousarray(frame).tobytes())
     finally:
-        proc.stdin.close()
-        proc.wait()
+        if proc.stdin is not None:
+            proc.stdin.close()
+        try:
+            proc.wait(timeout=max(60.0, float(seconds) * 20.0))
+        except subprocess.TimeoutExpired:
+            kill_process_tree(proc)
+            raise RuntimeError("ffmpeg parallax timed out") from None
     if proc.returncode:
         raise RuntimeError(f"ffmpeg exited {proc.returncode}")
     return {

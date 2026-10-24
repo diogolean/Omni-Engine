@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from shared.ffmpeg import resolve_ffmpeg as _resolve_ffmpeg
+from shared.ffmpeg import run_ffmpeg
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 SIGNED_SUFFIX = "_signed"
@@ -167,20 +168,20 @@ def apply_video_uniqueness(
     use_hwaccel = bool(opts.get("hwaccel", True))
 
     _LOG.info("Uniqueness pass | %s -> %s", src.name, dest)
-    result = subprocess.run(
+    result = run_ffmpeg(
         _build_cmd(ffmpeg, src, dest, opts, use_hwaccel=use_hwaccel),
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        timeout=600,
     )
     if result.returncode != 0 and use_hwaccel:
         _LOG.warning(
             "hwaccel uniqueness pass failed for %s — retrying software decode.",
             src.name,
         )
-        result = subprocess.run(
+        result = run_ffmpeg(
             _build_cmd(ffmpeg, src, dest, opts, use_hwaccel=False),
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            timeout=600,
         )
     if result.returncode != 0:
         err = (result.stderr or b"").decode("utf-8", errors="replace")[-800:]
