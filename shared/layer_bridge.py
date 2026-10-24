@@ -18,6 +18,27 @@ def port(module: str) -> Any:
     return layer_wiring.load(module)
 
 
+def _attr(module: str, name: str) -> Any:
+    """Look up ``name`` on ``module``.
+
+    A child module is not an attribute until something imports it.
+    ``from package import submodule`` loads that child; ``getattr`` does
+    not. Fall back to importing ``module.name`` so a Symbol or Port of a
+    package submodule behaves like that import.
+    """
+    loaded = port(module)
+    try:
+        return getattr(loaded, name)
+    except AttributeError:
+        pass
+    try:
+        return port(f"{module}.{name}")
+    except ModuleNotFoundError:
+        raise AttributeError(
+            f"module {module!r} has no attribute {name!r}"
+        ) from None
+
+
 class Port:
     """Attribute access loads ``module`` at use time, not at import time."""
 
@@ -25,17 +46,18 @@ class Port:
         object.__setattr__(self, "_module", module)
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(port(object.__getattribute__(self, "_module")), name)
+        return _attr(object.__getattribute__(self, "_module"), name)
 
     def __repr__(self) -> str:
         return f"Port({object.__getattribute__(self, '_module')!r})"
 
 
 class Symbol:
-    """A function, class, or constant looked up on each use.
+    """A function, class, constant, or child module looked up on each use.
 
-    Monkeypatches of the real module attribute stay visible. ``except``
-    clauses still need a real class; :class:`shared.youtube_errors.YouTubeQuotaExceededError`
+    Monkeypatches of the real module attribute stay visible. A child module
+    is imported when it is not already an attribute. ``except`` clauses
+    still need a real class; :class:`shared.youtube_errors.YouTubeQuotaExceededError`
     is that class.
     """
 
@@ -46,7 +68,7 @@ class Symbol:
     def _target(self) -> Any:
         module = object.__getattribute__(self, "_module")
         name = object.__getattribute__(self, "_name")
-        return getattr(port(module), name)
+        return _attr(module, name)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return self._target()(*args, **kwargs)
