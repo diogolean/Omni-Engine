@@ -196,7 +196,9 @@ def analyze_visemes(
                     ffmpeg = shutil.which("ffmpeg")
             if not ffmpeg:
                 raise FileNotFoundError("ffmpeg executable not found")
-            converted = subprocess.run(
+            from shared.ffmpeg import run_ffmpeg
+
+            converted = run_ffmpeg(
                 [
                     str(ffmpeg),
                     "-y",
@@ -210,7 +212,6 @@ def analyze_visemes(
                     "16000",
                     str(transcoded_path),
                 ],
-                capture_output=True,
                 text=True,
                 timeout=90,
             )

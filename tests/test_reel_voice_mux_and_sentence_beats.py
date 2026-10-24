@@ -163,11 +163,16 @@ def test_audio_filter_uses_the_real_input_indexes() -> None:
         ],
         duck_until=4.0,
         duck_ratio=0.7,
+        duration=4.0,
     )
     assert "[1:a]" in graph
     assert "[2:a]" in graph
     assert "[3:a]" in graph
     assert "[0:a]" not in graph
+    assert "apad=whole_dur=4.000" in graph
+    assert "atrim=end=4.000" in graph
+    assert "duration=first" in graph
+    assert "duration=longest" not in graph
 
 
 def test_a_reel_without_voice_is_refused(tmp_path: Path) -> None:
@@ -396,6 +401,41 @@ def test_ffmpeg_reel_keeps_the_voice(tmp_path: Path) -> None:
     bed_energy = _band_energy(out, 110.0)
     assert voice_energy > bed_energy
     assert voice_energy > 20.0
+
+
+@pytest.mark.skipif(
+    not __import__("core.reel_ffmpeg_render", fromlist=["ffmpeg_has_libass"]).ffmpeg_has_libass(),
+    reason="ffmpeg libass missing",
+)
+def test_voice_drone_and_boom_mux_matches_the_video(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A short voice plus a drone and booms used to pad forever.
+
+    The mix is voice.wav, drone.wav, and booms.wav. The output has to finish
+    and land on the picture length.
+    """
+    _require_ffmpeg()
+    monkeypatch.setenv("REEL_FFMPEG_TIMEOUT_S", "45")
+    from core.reel_ffmpeg_render import compile_ffmpeg_reel, output_has_audio
+
+    voice = tmp_path / "voice.wav"
+    _tone(voice, 440.0, 0.35)
+    out = tmp_path / "reel.mp4"
+    picture_s = 1.2
+    compile_ffmpeg_reel(
+        image_paths=_stills(tmp_path),
+        act_durations=[0.6, 0.6],
+        output_path=out,
+        voice_audio=voice,
+        require_voice=True,
+        synthesize_drone=True,
+        transition_booms=True,
+        workers=1,
+    )
+    assert out.is_file()
+    assert output_has_audio(out) is True
+    assert abs(_media_duration(out) - picture_s) < 0.35
 
 
 @pytest.mark.skipif(

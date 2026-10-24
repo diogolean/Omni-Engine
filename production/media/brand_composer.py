@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import logging
 import random
-import subprocess
 import sys
 import unicodedata
 from pathlib import Path
@@ -416,7 +415,9 @@ def burn_text_on_video(
             str(output_path),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, timeout=180)
+        from shared.ffmpeg import run_ffmpeg
+
+        result = run_ffmpeg(cmd, timeout=180)
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace")[:600]
             raise RuntimeError(f"ffmpeg exited {result.returncode}: {stderr}")
@@ -904,7 +905,9 @@ def _composite_logo(
 
 def _ffmpeg_available() -> bool:
     try:
-        probe = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        from shared.ffmpeg import run_ffmpeg
+
+        probe = run_ffmpeg(["ffmpeg", "-version"], timeout=5)
         return probe.returncode == 0
     except Exception:
         return False
