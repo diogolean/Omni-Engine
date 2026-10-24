@@ -16,7 +16,7 @@ python main.py "Castor Oil" --channel anna_protocol --post-type STANDARD_QUOTE
 | Flag | Meaning |
 |---|---|
 | `topic` | Optional positional subject. Omit it and the factory picks one |
-| `--channel`, `--page` | Channel id. Default `anna_protocol`. Choices: `anna_protocol`, `master_mei`, `wonder_feed`, `down_dirty`, `ancient_knowledge`, `momma_circle`, `principles_of_wealth_finance_economics`, `endless_summer_paradise` |
+| `--channel`, `--page` | Channel id. Default `anna_protocol`. Choices are the folders `discover_channel_ids()` sees at process start (each `channels_config/<id>/master_dna.json`). The README table is a snapshot of those folders |
 | `--post-type` | Default `STANDARD_QUOTE`. Also `SMART_BAIT`, `LONG_CAPTION_IMAGE`, `CTA_CAPTION_IMAGE`, `ECONOMIC_REEL`, `ECONOMIC_REEL_LOFI`, `WAN_REEL`, `CAROUSEL`, `REFERENCE_BASED_REELS` |
 | `--format` | `IMAGE_AVATAR`, `IMAGE_QUOTE`, `IMAGE_BACKGROUND`, `HYBRID_VIDEO`, `TEXT_QUOTE`, `DYNAMIC_REEL`, `SEQUENCE_REEL`, `REFERENCE_BASED_REELS` |
 | `--avatar ON\|OFF` | Likeness on or off. Default comes from the channel folder |

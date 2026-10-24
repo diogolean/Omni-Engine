@@ -4,7 +4,7 @@ Linked from the [root README](../../README.md). Boxes name the packages that exi
 
 ## Architecture
 
-`ContentItem` v1 (`shared.contracts`) is the record production writes and distribution reads. `accounts/` resolves tokens for the publishers. `channels_config/` is data.
+`ContentItem` v1 (`shared.contracts`) is the record production writes and distribution reads. `accounts/` resolves tokens for the publishers. `channels_config/` is data: one folder per channel, read by `channel_profile_rows()`. The scheduler walks `config/pinterest_accounts.yaml`. Neither list is a fixed count.
 
 ```mermaid
 flowchart LR

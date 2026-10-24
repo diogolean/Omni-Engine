@@ -65,7 +65,7 @@ Paths that moved (`engine/`, `agents/`, `core/`, `modules/`, `scripts/`, `qualit
 
 **products/aiwake** is one show on that engine. It publishes through the publisher protocol. Its runtime store stays in `channels_config/aiwake/store/`.
 
-**channels_config** is data. A new channel is a new folder with `master_dna.json`. `channel_profile_rows()` reads the folder. There is no second registry.
+**channels_config** is data. `channel_profile_rows()` and `discover_channel_ids()` read the folders. [Adding a channel](#adding-a-channel) is that folder plus account files. The engine source stays as it is.
 
 **shared** is the small base: env getters, paths, ffmpeg, B2 and Drive, retry, and `ContentItem`.
 
@@ -105,7 +105,7 @@ python main.py --channel wonder_feed --post-type ECONOMIC_REEL --quantity 1
 
 ## Channels
 
-Generated from `production.writers.persona.channel_profile_rows()`. The function walks `channels_config/`, requires `master_dna.json`, and reads the display name, default format, and avatar mode from each folder's `page_config.py`. Aiwake is a product, so it is not a row. The function does not assign a publisher.
+This table is a snapshot of the folders on this commit. `production.writers.persona.channel_profile_rows()` walks `channels_config/`, keeps every folder that has `master_dna.json`, and skips `aiwake` and `shared`. Eight folders match today. The same walk is the list at 10, 20, or 100 channels. Display name, default format, and avatar mode come from that folder's `page_config.py`. Aiwake is a product, so it is not a row. The function does not assign a publisher.
 
 | Channel | Display name | Default format | Avatar |
 |---|---|---|---|
@@ -118,7 +118,45 @@ Generated from `production.writers.persona.channel_profile_rows()`. The function
 | `principles_of_wealth_finance_economics` | Principles of Wealth — Finance & Economics | `REFERENCE_BASED_REELS` | OFF |
 | `wonder_feed` | Wonder Feed — Emotional Intelligence & Relationships | `IMAGE_AVATAR` | OFF |
 
-`python main.py --channel` accepts those eight ids. Aiwake runs from `products/aiwake/`.
+`python main.py --channel` accepts whatever `discover_channel_ids()` returns when the process starts (`production/pipeline/channel_context.py`). Aiwake runs from `products/aiwake/`.
+
+## Adding a channel
+
+Add a folder. Leave the engine source alone.
+
+```
+channels_config/<id>/
+  master_dna.json     required. The walker and the CLI key off this file
+  page_config.py      PAGE_DISPLAY_NAME, DEFAULT_FORMAT, DEFAULT_AVATAR_MODE, niche, fonts
+  persona_dna.py      this channel's prompt sentences, beside the JSON
+  tests/              pytest for this channel, collected with the factory suite
+  cli.py              optional. tools/channel_cli.py loads it
+  logo/logo.png       optional brand mark
+```
+
+`production.writers.persona.load_persona` reads `master_dna.json`. `persona_dna.py` is the channel's own prompt module. Momma Circle ships the JSON and `page_config.py` and has no `persona_dna.py`, and it still appears in the snapshot. A folder with `cli.py` owns `python tools/channel_cli.py --channel <id>`. A folder without one uses the Pinterest CLI. Set `IMAGE_SOURCE_POLICY` in `page_config.py` (`free_first`, `free_only`, or `ai_only`). A channel that omits it stays on `ai_only`.
+
+Account and scheduler registration is data:
+
+1. `config/brandings.yaml` — one branding key. Each platform (`pinterest`, `youtube`, `facebook`) has `active`. Token fields are env var names.
+2. `config/pinterest_accounts.yaml` — copy a block. `active: true`. A `site_url` or board that is still `TODO` is skipped. `runner` is `local`, `docker`, `both`, or `off`. The scheduler publishes every active row. No worker edit.
+3. `.env` names for that branding: `PINTEREST_ACCESS_TOKEN_<BRANDING>`, `PINTEREST_REFRESH_TOKEN_<BRANDING>`, `PINTEREST_BOARD_ID_<BRANDING>`, `PINTEREST_BOARD_NAME_<BRANDING>`, plus the app id and secret the yaml names. A per-channel file may live at `channels_config/<id>/.env.<id>` on the host (the container sees it under `channels_env/`). Values stay in `.env`.
+4. YouTube, when that platform is active: `credentials/tokens/youtube_token_<id>.json`. Uploads stay on `python main.py --publish-youtube`.
+5. Restart the scheduler process so it re-reads the yaml.
+
+Facebook `active` in the branding file is recorded. Publishing still goes through Playwright (`distribution/publishers/browser/facebook_scheduler/`) or the Post Planner xlsx. There is no Facebook Graph publisher module to register.
+
+## Scaling to N channels
+
+The snapshot above is eight factory channels. The path to 10, 20, or 100 is the same folder and the same yaml.
+
+**Cadence.** One scheduler process, one replica. Each wake visits every active row in `config/pinterest_accounts.yaml`, then sleeps one shared draw of `MIN_INTERVAL_HOURS` to `MAX_INTERVAL_HOURS` (default 3–6). The gap is for the process. It is not a separate clock per account. `outputs/scheduler/next_wake.json` stores that same next wake under each account id. A new row joins the next wake when the process restarts and re-reads the yaml.
+
+**Per account, per wake.** `PINTEREST_PINS_PER_RUN` (default 1) is how many pins that account may publish on the wake. `PINTEREST_PINS_PER_DAY` (default 4) is that account's cap on the `PINTEREST_DAY_TZ` calendar day (default `America/Sao_Paulo`). One hundred active accounts, each under its cap, means one hundred pins in a single wake, then the shared sleep.
+
+**Platform limits.** Pinterest HTTP 429 backs off and retries up to three times (`distribution/publishers/api/pinterest.py`). YouTube uploads are outside this loop. `YT_MAX_DAILY_UPLOADS` defaults to 20 per run, and `quotaExceeded` / `uploadLimitExceeded` stop the run. `YT_POST_INTERVAL_HOURS` defaults to 6. Each channel uses its own token file.
+
+**Ledger and the VM.** Idempotency is one file, `OUTPUT_PATH/_omni/publish_ledger.json` (`OMNI_LEDGER_PATH` overrides it). Every account appends to that file. The scheduler is a single replica because the file has no conditional write. A second replica waits on that store. The wake is serial: one account, then the next, one B2 object at a time. Wake duration grows with the number of active accounts. The Oracle VM stays one arm64 engine container plus this optional scheduler. Compose does not grow a service per channel.
 
 ## Configuration
 
