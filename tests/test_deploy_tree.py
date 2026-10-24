@@ -98,7 +98,8 @@ def test_workflow_changes_only_the_paths_the_vm_reads() -> None:
 
 def test_vm_scripts_still_run_from_opt_omni_engine() -> None:
     remote = (_ROOT / "deploy" / "vm" / "remote-deploy.sh").read_text(encoding="utf-8")
-    assert "cd /opt/omni-engine" in remote
+    assert "OMNI_DEPLOY_ROOT:-/opt/omni-engine" in remote
+    assert 'cd "$root"' in remote
     assert "docker compose pull engine" in remote
     assert "docker compose up -d engine" in remote
     assert "docker compose --profile scheduler stop scheduler" in remote

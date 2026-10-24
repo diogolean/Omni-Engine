@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +61,7 @@ class PinLedger:
         if text is None:
             text = self._read_cache()
         self.rows = _parse_jsonl(text or "")
+        self._note_stale_reservations()
         return self.rows
 
     def read_rows(self) -> tuple[list[dict], bool]:
@@ -77,17 +78,20 @@ class PinLedger:
         )
         if status == "ok":
             self.rows = _parse_jsonl(text or "")
+            self._note_stale_reservations()
             return self.rows, True
         if status == "missing":
             cached, present = self._cache_payload()
             if present:
                 self.rows = _parse_jsonl(cached)
+                self._note_stale_reservations()
                 return self.rows, True
             self.rows = []
             return [], True
         cached, present = self._cache_payload()
         if present:
             self.rows = _parse_jsonl(cached)
+            self._note_stale_reservations()
             return self.rows, True
         return [], False
 
@@ -133,6 +137,109 @@ class PinLedger:
         }
         self.rows.append(stored)
         self._write()
+
+    def reserve(
+        self,
+        *,
+        post_id: str = "",
+        title: str = "",
+        source_hash: str = "",
+        article: str = "",
+    ) -> None:
+        """Persist a row ``seen()`` treats as already published, before the API call.
+
+        The row has an empty ``pin_id`` and ``reserved=True``. It does not set
+        ``pin_recorded`` false, because that flag is how Facebook notes stay
+        invisible to ``seen()``. A kill after the Pinterest call still finds
+        this row, so the next run does not publish a second pin. A second
+        reserve for the same post does not add another row.
+
+        The row counts toward ``PINTEREST_PINS_PER_DAY`` on its
+        ``published_utc`` calendar day, the same way a finished pin does.
+        ``newest_pin_published`` also reads that stamp, so the reservation
+        covers a saved wake and skips catch-up when it falls inside the
+        5-minute margin. A reservation still open after one hour is logged
+        and left in place.
+        """
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        for row in self.rows:
+            if _open_reservation(row, post_id=wanted, source_hash=wanted_hash):
+                return
+        self.rows.append(
+            {
+                "account": self.account_id,
+                "post_id": wanted,
+                "title": str(title or ""),
+                "pin_id": "",
+                "source_hash": wanted_hash,
+                "article": str(article or ""),
+                "seeded": False,
+                "facebook_exported": False,
+                "reserved": True,
+                "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+        self._write()
+
+    def complete(
+        self,
+        *,
+        post_id: str,
+        pin_id: str,
+        facebook_exported: bool = False,
+        title: str = "",
+        source_hash: str = "",
+        article: str = "",
+    ) -> None:
+        """Store ``pin_id`` on the reserved row. Does not append a second row."""
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        for row in reversed(self.rows):
+            if not _open_reservation(row, post_id=wanted, source_hash=wanted_hash):
+                continue
+            row["pin_id"] = str(pin_id or "")
+            row["reserved"] = False
+            row["facebook_exported"] = bool(facebook_exported)
+            if title:
+                row["title"] = str(title)
+            if article:
+                row["article"] = str(article)
+            if wanted_hash and not str(row.get("source_hash") or "").strip():
+                row["source_hash"] = wanted_hash
+            self._write()
+            return
+        self.append(
+            {
+                "post_id": wanted,
+                "title": title,
+                "pin_id": pin_id,
+                "source_hash": source_hash,
+                "article": article,
+                "facebook_exported": facebook_exported,
+            }
+        )
+
+    def release(self, *, post_id: str = "", source_hash: str = "") -> None:
+        """Drop an unsent reservation so a failed call can be retried.
+
+        Facebook notes (``pin_recorded`` false) and seeded board rows stay.
+        A row that already has a ``pin_id`` stays too.
+        """
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        kept = [
+            row
+            for row in self.rows
+            if not _open_reservation(row, post_id=wanted, source_hash=wanted_hash)
+        ]
+        if len(kept) == len(self.rows):
+            return
+        self.rows = kept
+        self._write()
+
+    def _note_stale_reservations(self) -> None:
+        warn_stale_reservations(self.rows, account_id=self.account_id)
 
     def note_facebook_export(self, *, post_id: str, article: str = "") -> None:
         """Remember a Facebook row without treating the pin as already published.
@@ -263,6 +370,82 @@ class PinLedger:
             return self.cache_path.read_text(encoding="utf-8"), True
         except OSError:
             return "", False
+
+
+_STALE_RESERVATION = timedelta(hours=1)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _row_published_utc(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def warn_stale_reservations(
+    rows: list[dict],
+    *,
+    account_id: str,
+    now: datetime | None = None,
+) -> int:
+    """Warn once per open reservation older than one hour with no pin id.
+
+    Facebook notes (``pin_recorded`` false) and seeded board rows are not
+    open reservations. Rows that already have a ``pin_id`` are finished.
+    Nothing here deletes or releases a row.
+    """
+    moment = now or _utc_now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    warned = 0
+    for row in rows:
+        if not isinstance(row, dict) or row.get("reserved") is not True:
+            continue
+        if str(row.get("pin_id") or "").strip():
+            continue
+        if row.get("pin_recorded") is False or row.get("seeded") is True:
+            continue
+        stamp = _row_published_utc(row.get("published_utc"))
+        if stamp is None or moment - stamp <= _STALE_RESERVATION:
+            continue
+        post_id = str(row.get("post_id") or "").strip() or str(row.get("source_hash") or "").strip()
+        log.warning(
+            "Pinterest ledger %s reserved post_id=%s more than 1h ago and still has no pin_id (published_utc=%s)",
+            account_id,
+            post_id or "<blank>",
+            stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        warned += 1
+    return warned
+
+
+def _open_reservation(row: dict, *, post_id: str, source_hash: str) -> bool:
+    """True for a row reserved before Pinterest accepted the pin."""
+    if row.get("reserved") is not True:
+        return False
+    if str(row.get("pin_id") or "").strip():
+        return False
+    if row.get("pin_recorded") is False or row.get("seeded") is True:
+        return False
+    if post_id and str(row.get("post_id") or "") == post_id:
+        return True
+    row_hash = str(row.get("source_hash") or "").strip()
+    return bool(source_hash) and bool(row_hash) and row_hash == source_hash and not post_id
 
 
 def _parse_jsonl(text: str) -> list[dict]:

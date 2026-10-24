@@ -10,7 +10,9 @@ Two stores stay separate, and both keep the keys they had before the move:
 from __future__ import annotations
 
 import json
+import logging
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -29,7 +31,18 @@ from distribution.publishers.base import (
     Publisher,
     default_ledger_path,
 )
-from distribution.scheduling.ledger import PinLedger, ledger_object_key, normalize_title
+from distribution.scheduling.ledger import (
+    PinLedger,
+    ledger_object_key,
+    normalize_title,
+    warn_stale_reservations,
+)
+from distribution.workers.runtime import (
+    newest_pin_published,
+    resolve_startup_delay,
+    save_channel_wake,
+    wake_pin_allowance,
+)
 
 
 def test_old_and_new_pinterest_modules_are_one_object() -> None:
@@ -156,6 +169,90 @@ def test_pin_ledger_dedup_keys_are_unchanged(tmp_path: Path) -> None:
     assert ledger.seen(source_hash="abc123") is False
 
 
+def test_reservation_blocks_a_second_pin_until_it_is_released(tmp_path: Path) -> None:
+    """A row written before the API call is visible to seen(), with no pin id yet."""
+    ledger = PinLedger("ancient_knowledge", cache_path=tmp_path / "ancient_knowledge.jsonl")
+    ledger.rows = [
+        {
+            "post_id": "facebook-note",
+            "title": "Stone Circle",
+            "source_hash": "note-hash",
+            "pin_recorded": False,
+            "facebook_exported": True,
+            "seeded": False,
+        },
+        {
+            "post_id": "",
+            "title": "Board history",
+            "pin_id": "pin-seed",
+            "source_hash": "seed-hash",
+            "seeded": True,
+        },
+    ]
+    ledger.reserve(
+        post_id="ancient_knowledge:post-9",
+        title="New Stone",
+        source_hash="img-9",
+        article="https://example.test/new",
+    )
+    stored = [
+        json.loads(line)
+        for line in (tmp_path / "ancient_knowledge.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(stored) == 3
+    reserved = stored[-1]
+    assert reserved["pin_id"] == ""
+    assert reserved["reserved"] is True
+    assert reserved.get("pin_recorded") is not False
+    assert ledger.seen(post_id="ancient_knowledge:post-9") is True
+    assert ledger.seen(title="New Stone") is True
+    assert ledger.seen(source_hash="img-9") is True
+
+    ledger.reserve(
+        post_id="ancient_knowledge:post-9",
+        title="New Stone",
+        source_hash="img-9",
+    )
+    assert len(ledger.rows) == 3
+
+    ledger.release(post_id="ancient_knowledge:post-9", source_hash="img-9")
+    assert ledger.seen(post_id="ancient_knowledge:post-9") is False
+    assert ledger.seen(title="New Stone") is False
+    assert ledger.seen(source_hash="img-9") is False
+    assert any(row.get("pin_recorded") is False for row in ledger.rows)
+    assert any(row.get("seeded") is True and row.get("pin_id") == "pin-seed" for row in ledger.rows)
+    assert len(ledger.rows) == 2
+
+
+def test_complete_fills_the_reserved_row_without_a_second_append(tmp_path: Path) -> None:
+    ledger = PinLedger("ancient_knowledge", cache_path=tmp_path / "ancient_knowledge.jsonl")
+    ledger.reserve(
+        post_id="ancient_knowledge:post-9",
+        title="New Stone",
+        source_hash="img-9",
+        article="https://example.test/new",
+    )
+    stamp = ledger.rows[0]["published_utc"]
+    ledger.complete(
+        post_id="ancient_knowledge:post-9",
+        pin_id="pin-live",
+        title="New Stone",
+        source_hash="img-9",
+        article="https://example.test/new",
+        facebook_exported=True,
+    )
+    assert len(ledger.rows) == 1
+    row = ledger.rows[0]
+    assert row["pin_id"] == "pin-live"
+    assert row["reserved"] is False
+    assert row["facebook_exported"] is True
+    assert row["published_utc"] == stamp
+    assert ledger.seen(post_id="ancient_knowledge:post-9") is True
+    ledger.release(post_id="ancient_knowledge:post-9", source_hash="img-9")
+    assert len(ledger.rows) == 1
+    assert ledger.rows[0]["pin_id"] == "pin-live"
+
+
 def test_already_posted_record_does_not_call_pinterest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -207,3 +304,118 @@ def test_worker_cli_keeps_role_once_dry_run_account_and_pins() -> None:
         check=False,
     )
     assert missing.returncode != 0
+
+
+def test_stale_reservation_warns_and_a_fresh_one_does_not(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A reservation older than one hour with no pin_id is logged and kept."""
+    now = datetime(2026, 10, 20, 15, 0, tzinfo=timezone.utc)
+    stale = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fresh = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = [
+        {"post_id": "stale-post", "pin_id": "", "reserved": True, "published_utc": stale},
+        {"post_id": "fresh-post", "pin_id": "", "reserved": True, "published_utc": fresh},
+        {
+            "post_id": "facebook-note",
+            "pin_id": "",
+            "reserved": True,
+            "pin_recorded": False,
+            "published_utc": stale,
+        },
+        {"post_id": "seeded-row", "pin_id": "", "reserved": True, "seeded": True, "published_utc": stale},
+        {"post_id": "finished", "pin_id": "pin-1", "reserved": False, "published_utc": stale},
+    ]
+    text = "".join(json.dumps(row) + "\n" for row in rows)
+    monkeypatch.setattr(
+        "agents.media.b2_client.read_object_outcome",
+        lambda *_args, **_kwargs: (text, "ok"),
+    )
+    monkeypatch.setattr(pin_ledger, "_utc_now", lambda: now)
+    ledger = PinLedger("ancient_knowledge", cache_path=tmp_path / "ancient_knowledge.jsonl")
+    with caplog.at_level(logging.WARNING, logger="distribution.scheduling.ledger"):
+        loaded, reachable = ledger.read_rows()
+    assert reachable is True
+    assert len(loaded) == 5
+    warnings = [record.getMessage() for record in caplog.records]
+    assert len(warnings) == 1
+    assert "stale-post" in warnings[0]
+    assert "more than 1h ago" in warnings[0]
+    assert "fresh-post" not in warnings[0]
+    assert "facebook-note" not in warnings[0]
+    assert "seeded-row" not in warnings[0]
+    assert warn_stale_reservations(rows, account_id="ancient_knowledge", now=now) == 1
+
+
+def test_open_reservation_counts_toward_the_daily_cap_and_catchup_skip(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An empty pin_id still consumes today's cap and can cover a missed wake.
+
+    A reservation inside the 5-minute margin before the saved wake skips
+    catch-up. One older than that margin does not. Seeded rows and Facebook
+    notes do not consume the daily cap.
+    """
+    monkeypatch.setattr(
+        "distribution.workers.runtime.scheduler_state_path",
+        lambda: tmp_path / "next_wake.json",
+    )
+    monkeypatch.setattr(
+        "distribution.workers.runtime._scheduler_channel_ids",
+        lambda: ["ancient_knowledge"],
+    )
+    monkeypatch.setenv("PINTEREST_PINS_PER_DAY", "1")
+    monkeypatch.setenv("PINTEREST_PINS_PER_RUN", "1")
+    monkeypatch.setenv("PINTEREST_DAY_TZ", "UTC")
+    monkeypatch.setenv("MIN_INTERVAL_HOURS", "4")
+    monkeypatch.setenv("MAX_INTERVAL_HOURS", "4")
+
+    now = datetime(2026, 10, 20, 15, 0, tzinfo=timezone.utc)
+    wake = now - timedelta(minutes=10)
+    reserved_at = wake - timedelta(minutes=4)
+    reservation = {
+        "post_id": "ancient_knowledge:post-9",
+        "pin_id": "",
+        "reserved": True,
+        "seeded": False,
+        "published_utc": reserved_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    account = Account(
+        branding="ancient_knowledge",
+        platform="pinterest",
+        account_id="ancient_knowledge",
+    )
+
+    def reserved_rows(_account: Account) -> tuple[list[dict], bool]:
+        return [reservation], True
+
+    assert wake_pin_allowance(account, now=now, read_rows=reserved_rows) == 0
+
+    def ignored_rows(_account: Account) -> tuple[list[dict], bool]:
+        stamp = reservation["published_utc"]
+        return [
+            {"pin_id": "", "seeded": True, "published_utc": stamp},
+            {"pin_id": "", "pin_recorded": False, "published_utc": stamp},
+        ], True
+
+    assert wake_pin_allowance(account, now=now, read_rows=ignored_rows) == 1
+
+    stamp = newest_pin_published([account], read_rows=reserved_rows)
+    assert stamp == reserved_at
+    save_channel_wake("ancient_knowledge", wake)
+    delay, reason = resolve_startup_delay(stamp, now=now, reader=None)
+    assert reason == "draw"
+    assert delay > 0
+
+    older = {
+        **reservation,
+        "published_utc": (wake - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    old_stamp = newest_pin_published([account], read_rows=lambda _account: ([older], True))
+    save_channel_wake("ancient_knowledge", wake)
+    delay_old, reason_old = resolve_startup_delay(old_stamp, now=now, reader=None)
+    assert reason_old == "missed"
+    assert delay_old == 0.0

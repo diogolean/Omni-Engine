@@ -4,8 +4,13 @@ One wake publishes ``PINTEREST_PINS_PER_RUN`` image pins (default 1) for
 every active row in ``config/pinterest_accounts.yaml``, and never more
 than ``PINTEREST_PINS_PER_DAY`` (default 4) once pins already recorded
 that calendar day are counted. The day is ``PINTEREST_DAY_TZ`` (default
-``America/Sao_Paulo``). Rows with ``seeded=True`` are board history and
-do not count, and they do not move the resume point. Media comes from B2
+``America/Sao_Paulo``). An open reservation (``reserved=True``, empty
+``pin_id``) counts toward that cap and toward the newest ``published_utc``.
+It skips catch-up when that stamp is inside the 5-minute margin before the
+saved wake. A reservation still open after one hour is logged and kept.
+Rows with ``seeded=True`` are board history and
+do not count, and they do not move the resume point. Facebook notes
+(``pin_recorded`` false) do not count toward the daily cap. Media comes from B2
 one object at a time. Video files are skipped. Before the first publish
 the process sleeps until the newest real PinLedger ``published_utc`` plus
 one cadence draw (``MIN_INTERVAL_HOURS`` to ``MAX_INTERVAL_HOURS``,
@@ -37,7 +42,6 @@ has a process to attach to. It does not generate content by itself.
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import logging
 import os
@@ -150,9 +154,11 @@ def newest_pin_published(
     """Newest real ``published_utc`` across active accounts.
 
     Rows with ``seeded=True`` are ignored, including older duplicates of the
-    same pin id. ``None`` when every ledger is empty, when the only stamps
-    are seeded, or when any ledger is unreachable. A partial read is not a
-    safe resume point: the missing account may hold the newest pin.
+    same pin id. An open reservation is not seeded, so its ``published_utc``
+    is a real stamp and can cover a saved wake. ``None`` when every ledger
+    is empty, when the only stamps are seeded, or when any ledger is
+    unreachable. A partial read is not a safe resume point: the missing
+    account may hold the newest pin.
     """
     rows_of = read_rows or _read_account_ledger
     chosen = list(accounts) if accounts is not None else active_pinterest_accounts()
@@ -175,6 +181,30 @@ def newest_pin_published(
             if stamp is not None and (newest is None or stamp > newest):
                 newest = stamp
     return newest
+
+
+_ORIGINAL_NEWEST = newest_pin_published
+# Tests inject a per-channel reader here. None means the startup stamp stands
+# in, unless this process is still using the real ``newest_pin_published``.
+_channel_ledger_reader: Callable[[Sequence[Account]], datetime | None] | None = None
+
+
+def _production_channel_reader(accounts: Sequence[Account]) -> datetime | None:
+    """Read one channel from the pin ledger. Bound to the real reader."""
+    return _ORIGINAL_NEWEST(accounts)
+
+
+def _active_channel_reader() -> Callable[[Sequence[Account]], datetime | None] | None:
+    """The injected per-channel reader, or the production ledger read.
+
+    A test that replaces ``newest_pin_published`` with a stamp keeps that
+    stamp for every channel until it injects ``_channel_ledger_reader``.
+    """
+    if _channel_ledger_reader is not None:
+        return _channel_ledger_reader
+    if newest_pin_published is _ORIGINAL_NEWEST:
+        return _production_channel_reader
+    return None
 
 
 def startup_delay_seconds(
@@ -289,40 +319,25 @@ def remember_next_wake(when: datetime) -> None:
     _save_wake_updates(_load_wake_state(), {channel: when for channel in channels})
 
 
-def _reader_accepts_accounts(reader: Callable) -> bool:
-    """False for the zero-argument ledger stubs the scheduler tests install."""
-    try:
-        parameters = inspect.signature(reader).parameters
-    except (TypeError, ValueError):
-        return False
-    if any(item.kind == inspect.Parameter.VAR_POSITIONAL for item in parameters.values()):
-        return True
-    positional = [
-        item
-        for item in parameters.values()
-        if item.kind
-        in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-    ]
-    return len(positional) >= 1
-
-
 def _as_utc(moment: datetime) -> datetime:
     if moment.tzinfo is None:
         return moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc)
 
 
-def _published_for_channel(channel: str, published_at: datetime | None) -> datetime | None:
+def _published_for_channel(
+    channel: str,
+    published_at: datetime | None,
+    *,
+    reader: Callable[[Sequence[Account]], datetime | None] | None,
+) -> datetime | None:
     """Newest real pin for one channel.
 
-    ``published_at`` is the stamp startup already read. It stands in when
-    this channel has no account row, or when the ledger reader cannot take
-    an account list.
+    ``reader`` is injected by the caller. ``published_at`` is the stamp
+    startup already read. It stands in when no reader was injected, when
+    this channel has no account row, or when the account file cannot be read.
     """
-    if not _reader_accepts_accounts(newest_pin_published):
+    if reader is None:
         return published_at
     try:
         accounts = [
@@ -335,16 +350,18 @@ def _published_for_channel(channel: str, published_at: datetime | None) -> datet
         return published_at
     if not accounts:
         return published_at
-    return newest_pin_published(accounts)
+    return reader(accounts)
 
 
 def _pin_covers_saved_wake(
     channel: str,
     saved: datetime,
     published_at: datetime | None,
+    *,
+    reader: Callable[[Sequence[Account]], datetime | None] | None,
 ) -> datetime | None:
     """Ledger stamp when this channel already published the saved slot."""
-    stamp = _published_for_channel(channel, published_at)
+    stamp = _published_for_channel(channel, published_at, reader=reader)
     if stamp is None:
         return None
     stamp = _as_utc(stamp)
@@ -358,6 +375,7 @@ def resolve_startup_delay(
     *,
     now: datetime | None = None,
     rng: random.Random | None = None,
+    reader: Callable[[Sequence[Account]], datetime | None] | None = None,
 ) -> tuple[float, str]:
     """Seconds to sleep before the first publish, and why.
 
@@ -406,7 +424,9 @@ def resolve_startup_delay(
         for channel in missed:
             saved = _parse_published_utc(state.get(channel))
             stamp = (
-                _pin_covers_saved_wake(channel, saved, published_at) if saved is not None else None
+                _pin_covers_saved_wake(channel, saved, published_at, reader=reader)
+                if saved is not None
+                else None
             )
             if stamp is None:
                 pending.append(channel)
@@ -490,6 +510,12 @@ def _day_timezone() -> ZoneInfo:
 
 
 def _pins_recorded_on(rows: Sequence[object], day, tz: ZoneInfo) -> int:
+    """Pins already recorded on ``day``, including an open reservation.
+
+    ``pin_recorded`` false and ``seeded`` rows are excluded. An empty
+    ``pin_id`` does not exclude a row: reserving before the API call
+    consumes the daily cap for that calendar day.
+    """
     count = 0
     for row in rows:
         if not isinstance(row, dict) or row.get("pin_recorded") is False or _is_seeded(row):
@@ -673,7 +699,10 @@ def _run_scheduler(
     # pin, or a random gap when the ledger is empty or unreachable.
     if not once and not dry_run:
         published_at = newest_pin_published()
-        pause, reason = resolve_startup_delay(published_at)
+        pause, reason = resolve_startup_delay(
+            published_at,
+            reader=_active_channel_reader(),
+        )
         if reason == "reuse":
             log.info("Reusing saved wake; initial delay %.0f minutes", pause / 60.0)
         elif reason == "missed":
