@@ -16,7 +16,7 @@ Tracked at the repository root:
 | Containers and CI | `.dockerignore`, `.github/` |
 | Deploy | `deploy/` |
 | Packages | `accounts/`, `agents/`, `animation/`, `channels_config/`, `config/`, `core/`, `distribution/`, `engine/`, `models_avatar/`, `modules/`, `portfolio_showcase/`, `production/`, `products/`, `quality/`, `shared/`, `utils/` |
-| Support trees | `assets/`, `docs/`, `Fonts/`, `scripts/`, `tests/`, `tools/` |
+| Support trees | `assets/`, `docs/`, `Fonts/`, `scripts/` (shims until M14), `tests/`, `tools/` |
 | Shims until M14 | `infra/` (`infra.runpod` and `infra.serverless` re-export `deploy.runpod`) |
 | Agent rules | `.cursor/rules/` |
 
@@ -60,6 +60,8 @@ These already have a home. Do not invent a second one, and do not add empty plac
 | Library | `production/library/` | `content_library`, `durable_library`, `content_source`, `asset_library`. The old `agents.media` and `modules.asset_library` paths are shims. |
 | Formats | `production/formats/` | `pins/`, `economic_reel/` (artefact, grounding, hook, shot planner), `lofi/`, `wealth/` (including `fingerprint_engine`), `reference/`, `quotes/`, `mei/`. Old packages are shims. |
 
+Operator scripts live in `tools/`. `tools/backup_supermemory.py` is the Supermemory upload. It is not scheduled. No cron on the VM calls it. Until scheduling is decided, run `/opt/omni-engine/scripts/backup_supermemory.sh` by hand. Deploy copies that file from `deploy/vm/backup_supermemory.sh` and does not run it. One-offs are `tools/oneoff/` (checks under `tools/oneoff/checks/`). Lofi experiments are `tools/lofi/`. `scripts/` is a shim tree until M14, including `scripts/backup_supermemory.py`, which the container still runs. `scripts/build_post_planner.py` and `scripts/sync_youtube_live_metadata.py` already call `products/aiwake/tools/`. `portfolio_showcase/` stays at the repository root.
+
 `python tools/channel_cli.py --channel <id>` is the operator CLI. A channel folder's `cli.py` owns that channel's commands. Folders without one use the Pinterest CLI (`tools/pinterest_cli.py`). `agents/posting/pinterest_main.py`, `channels_config/endless_summer_paradise/esp_main.py`, and `channels_config/principles_of_wealth_finance_economics/wealth_main.py` are shims until M14.
 
 `shared/` is the home for env getters, paths, logging, ffmpeg, image MIME, network retry, the durable channel store, the content contract, and the memory client (ADR 0008 M2 and M3). `utils/pipeline_paths.py` is `shared.paths`. `utils/process_tools.py` is `shared.ffmpeg`. `modules/reel_artefact/net_retry.py` is `shared.retry`. `modules/durable_store.py` is `shared.store`. `modules/distribution_contract.py` is `shared.contracts`. `modules/memory/` is `shared.memory`. New code imports `shared`. The old modules stay as shims so existing imports and monkeypatches keep one object.
@@ -84,7 +86,7 @@ These already have a home. Do not invent a second one, and do not add empty plac
 - Channel tests: `channels_config/<channel>/tests/`
 - Aiwake tests: `products/aiwake/tests/`. The channel slot `channels_config/aiwake/` keeps `store/` (tracked `store/portfolio/`, gitignored runtime state) and does not keep a second copy of the tests.
 - A channel keeps its own `page_config.py`, prompts, and tests beside each other. Aiwake prompts live in `products/aiwake/prompts/`.
-- Pytest collects `test_*.py` from those trees. Probe scripts live in `scripts/`, not in `tests/`.
+- Pytest collects `test_*.py` from those trees. Probe scripts live in `tools/lofi/` and `tools/oneoff/`, not in `tests/`. `scripts/` keeps a shim for each of those files until M14. `portfolio_showcase/` stays at the root: it is the recruiter showcase (data, assets, and the Next.js blueprint), not an operator CLI, so it does not move under `tools/portfolio/` and it is not retired.
 - Test helpers imported only by tests (`caption_fixtures.py`, `cv_ground_truth.py`) stay next to the tests that use them.
 
 ## Pipeline code extracted from `main.py`

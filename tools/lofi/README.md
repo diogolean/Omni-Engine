@@ -1,6 +1,6 @@
 # Lofi operator scripts
 
-Run from the repo root. These are tools, not library modules. Filenames keep their leading underscores: no doc points at a renamed path.
+Run from the repo root as `python tools/lofi/<file>.py`. `python scripts/lofi/<file>.py` is a shim until M14. These are tools, not library modules. Filenames keep their leading underscores.
 
 ## Run and assemble
 
@@ -13,7 +13,7 @@ Run from the repo root. These are tools, not library modules. Filenames keep the
 | `assemble_render_effects.py` | Assembles one episode. Flags turn individual render effects off. |
 | `_reassemble_fix.py` | Rebuilds an MP4 from an existing meta JSON. No new stills or voice. |
 | `_reassemble_kb.py` | Same rebuild, with Ken Burns on. |
-| `_extract_frame.py` | Saves one frame at a timestamp: `python scripts/lofi/_extract_frame.py <mp4> <seconds> <out>`. |
+| `_extract_frame.py` | Saves one frame at a timestamp: `python tools/lofi/_extract_frame.py <mp4> <seconds> <out>`. |
 
 ## Checks and audits
 
@@ -49,12 +49,12 @@ Run from the repo root. These are tools, not library modules. Filenames keep the
 | `probes/vo_pace_probe.py` | One spoken line, to hear the pace. No video. |
 | `probes/vo_pause_probe.py` | About ten seconds of breath commas plus the inter-line silence. No video. |
 
-Sibling scripts at `scripts/`:
+Sibling scripts at `tools/oneoff/`:
 
 | Script | What it does |
 |---|---|
-| `scripts/inspect_chroma_db.py` | Dumps the VisualQA Chroma store, or the JSON fallback, for Ancient Knowledge. |
-| `scripts/_repair_postplanner_b2.py` | Rewrites the 2026-06-08 Post Planner workbook so B2 URLs sit in the media column. |
+| `tools/oneoff/inspect_chroma_db.py` | Dumps the VisualQA Chroma store, or the JSON fallback, for Ancient Knowledge. |
+| `tools/oneoff/_repair_postplanner_b2.py` | Rewrites the 2026-06-08 Post Planner workbook so B2 URLs sit in the media column. |
 
 ## Session scripts
 

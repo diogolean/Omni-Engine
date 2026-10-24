@@ -97,15 +97,15 @@ That reads approved sessions and writes `aiwake_production_history` plus `aiwake
 
 ## Backup
 
-Cron on the VM host, not installed by deploy. 03:15 UTC is a quiet hour; pick another if that collides with a publish.
+The backup is not scheduled. No cron on the VM calls `backup_supermemory.sh`. Deploy copies `deploy/vm/backup_supermemory.sh` to `/opt/omni-engine/scripts/backup_supermemory.sh` and does not run it. Until scheduling is decided, run it by hand on the VM host:
 
 ```bash
-15 3 * * * /opt/omni-engine/scripts/backup_supermemory.sh >> /opt/omni-engine/outputs/logs/supermemory-backup.log 2>&1
+/opt/omni-engine/scripts/backup_supermemory.sh
 ```
 
 The shell script archives the volume to `outputs/backups/supermemory/YYYY-MM-DD.tgz`. If the container was running it stops it for the tar and starts it again. If it was stopped, it stays stopped. The engine container then uploads `backups/supermemory/YYYY-MM-DD.tgz`. An object that already exists for that day is left as it is. Nothing in B2 is deleted. The upload shares the daily B2 budget; when the budget is spent the local archive stays and the script exits 2. Seven local archives are kept.
 
-Deploy copies `deploy/vm/backup_supermemory.sh` to `/opt/omni-engine/scripts/backup_supermemory.sh` and does not run it. The engine image contains `scripts/backup_supermemory.py`, which performs the upload.
+The upload module is `tools/backup_supermemory.py`. The shell script still runs `python scripts/backup_supermemory.py`, which is a shim until M14.
 
 ## Restore
 

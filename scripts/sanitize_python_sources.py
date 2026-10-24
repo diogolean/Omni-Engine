@@ -1,36 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Remove NUL (\\x00) bytes from project Python sources; re-save unchanged bytes otherwise.
-
-Google Drive occasionally injects NULs into UTF-8 text files. Run from project root:
-    python sanitize_python_sources.py
-"""
-
+"""Shim until M14. Implementation: tools/oneoff/sanitize_python_sources.py."""
 from __future__ import annotations
 
-from pathlib import Path as _ReorgPath
-import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[1]
-if str(_REORG_ROOT) not in _reorg_sys.path:
-    _reorg_sys.path.insert(0, str(_REORG_ROOT))
-
+import sys
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-def main() -> None:
-    root = Path(__file__).resolve().parents[1]
-    fixed: list[Path] = []
-    for p in root.rglob("*.py"):
-        if "__pycache__" in p.parts:
-            continue
-        raw = p.read_bytes()
-        if b"\x00" not in raw:
-            continue
-        p.write_bytes(raw.replace(b"\x00", b""))
-        fixed.append(p)
-    print(f"Stripped NUL from {len(fixed)} file(s).")
-    for f in sorted(fixed, key=lambda x: str(x).lower()):
-        print(" ", f.relative_to(root))
-
+_TARGET = _ROOT / "tools/oneoff/sanitize_python_sources.py"
 
 if __name__ == "__main__":
-    main()
+    import runpy
+
+    runpy.run_path(str(_TARGET), run_name="__main__")
+else:
+    import importlib
+
+    sys.modules[__name__] = importlib.import_module("tools.oneoff.sanitize_python_sources")
