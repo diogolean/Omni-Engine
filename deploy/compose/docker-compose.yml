@@ -57,6 +57,8 @@ services:
       - ./state/ancient_knowledge/store:/opt/omni-engine/channels_config/ancient_knowledge/store
     working_dir: /opt/omni-engine
     command: ["python", "-m", "distribution.workers", "--role", "engine"]
+    # PID 1 reaps ffmpeg if a render is killed. Without it the orphan stays up.
+    init: true
     restart: unless-stopped
 
   scheduler:
@@ -88,6 +90,7 @@ services:
       - ./state/ancient_knowledge/store:/opt/omni-engine/channels_config/ancient_knowledge/store
     working_dir: /opt/omni-engine
     command: ["python", "-m", "distribution.workers", "--role", "scheduler"]
+    init: true
     restart: unless-stopped
     profiles:
       - scheduler

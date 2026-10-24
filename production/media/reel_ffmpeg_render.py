@@ -353,6 +353,29 @@ def _encode(duration_s: float, preset: str) -> list[str]:
     ]
 
 
+def _cover_voice(durations: list[float], voice: Path) -> tuple[float, list[float]]:
+    """Hold the last picture when the narration is longer than the acts.
+
+    The mux trims every stem to the picture. A longer voice would be cut.
+    """
+    total = float(sum(durations))
+    try:
+        voice_s = media_duration_s(voice)
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
+        return total, durations
+    if voice_s <= total + 0.25:
+        return total, durations
+    logger.warning(
+        "act durations %.2fs do not cover the voice %.2fs — "
+        "holding the last picture so the narration is not cut",
+        total,
+        voice_s,
+    )
+    covered = list(durations)
+    covered[-1] = covered[-1] + (voice_s - total)
+    return float(sum(covered)), covered
+
+
 def _ffmpeg_timeout_s() -> float:
     try:
         return max(30.0, float(os.environ.get("REEL_FFMPEG_TIMEOUT_S", "600")))
@@ -645,6 +668,8 @@ def compile_ffmpeg_reel(
         pad = durations[-1] if durations else 4.0
         durations = (durations + [pad] * len(image_paths))[:len(image_paths)]
     total = float(sum(durations))
+    if voice_file is not None and voice_file.is_file():
+        total, durations = _cover_voice(durations, voice_file)
     videos = list(act_video_paths or [])
     hook_until = durations[0] if enable_hook_text and hook_text else 0.0
     cues = phrase_cues(

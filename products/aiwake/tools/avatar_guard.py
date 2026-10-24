@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 import wave
 from pathlib import Path
@@ -234,10 +233,11 @@ def _scan_frames(video: Path, session_id: str, templates: dict[str, np.ndarray])
     folder.mkdir(parents=True, exist_ok=True)
     stamp = int(time.time())
     pattern = folder / f"s{stamp}_%02d.jpg"
-    subprocess.run(
+    from shared.ffmpeg import run_ffmpeg
+
+    run_ffmpeg(
         [FFMPEG, "-y", "-ss", "1", "-i", str(video), "-vf", "fps=1/2", "-frames:v", "24", str(pattern)],
-        check=False,
-        capture_output=True,
+        timeout=120,
     )
     samples = []
     for index, path in enumerate(sorted(folder.glob(f"s{stamp}_*.jpg"))):
@@ -257,10 +257,11 @@ def _scan_frames(video: Path, session_id: str, templates: dict[str, np.ndarray])
 
 def _frame_at(video: Path, seconds: float, destination: Path) -> Image.Image | None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    from shared.ffmpeg import run_ffmpeg
+
+    run_ffmpeg(
         [FFMPEG, "-y", "-ss", f"{max(0.2, seconds):.2f}", "-i", str(video), "-frames:v", "1", str(destination)],
-        check=False,
-        capture_output=True,
+        timeout=60,
     )
     if not destination.is_file() or destination.stat().st_size < 1000:
         return None

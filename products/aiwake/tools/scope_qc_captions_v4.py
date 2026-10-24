@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -159,7 +158,9 @@ def _probe(video: Path) -> dict[str, Any]:
     cmd = [FFMPEG, "-i", str(video)]
     if not os.environ.get("AIWAKE_SKIP_SILENCE"):
         cmd += ["-af", "silencedetect=noise=-35dB:d=1.5", "-f", "null", "-"]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    from shared.ffmpeg import run_ffmpeg
+
+    proc = run_ffmpeg(cmd, text=True, timeout=300)
     text = proc.stderr or ""
     duration = 0.0
     match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
