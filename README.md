@@ -150,13 +150,15 @@ Facebook `active` in the branding file is recorded. Publishing still goes throug
 
 The snapshot above is eight factory channels. The path to 10, 20, or 100 is the same folder and the same yaml.
 
-**Cadence.** One scheduler process, one replica. Each wake visits every active row in `config/pinterest_accounts.yaml`, then sleeps one shared draw of `MIN_INTERVAL_HOURS` to `MAX_INTERVAL_HOURS` (default 3–6). The gap is for the process. It is not a separate clock per account. `outputs/scheduler/next_wake.json` stores that same next wake under each account id. A new row joins the next wake when the process restarts and re-reads the yaml.
+**Cadence.** One scheduler process, one replica. Each wake visits every active row in `config/pinterest_accounts.yaml`, then sleeps one shared draw of `MIN_INTERVAL_HOURS` to `MAX_INTERVAL_HOURS`. Those are 7 and 9 (since #68). The gap is for the process. It is not a separate clock per account. The process keeps the pair it started with. A channel `.env` does not replace it. `outputs/scheduler/next_wake.json` stores that same next wake under each account id. A new row joins the next wake when the process restarts and re-reads the yaml.
 
 **Per account, per wake.** `PINTEREST_PINS_PER_RUN` (default 1) is how many pins that account may publish on the wake. `PINTEREST_PINS_PER_DAY` (default 4) is that account's cap on the `PINTEREST_DAY_TZ` calendar day (default `America/Sao_Paulo`). One hundred active accounts, each under its cap, means one hundred pins in a single wake, then the shared sleep.
 
 **Platform limits.** Pinterest HTTP 429 backs off and retries up to three times (`distribution/publishers/api/pinterest.py`). YouTube uploads are outside this loop. `YT_MAX_DAILY_UPLOADS` defaults to 20 per run, and `quotaExceeded` / `uploadLimitExceeded` stop the run. `YT_POST_INTERVAL_HOURS` defaults to 6. Each channel uses its own token file.
 
 **Ledger and the VM.** Idempotency is one file, `OUTPUT_PATH/_omni/publish_ledger.json` (`OMNI_LEDGER_PATH` overrides it). Every account appends to that file. The scheduler is a single replica because the file has no conditional write. A second replica waits on that store. The wake is serial: one account, then the next, one B2 object at a time. Wake duration grows with the number of active accounts. The Oracle VM stays one arm64 engine container plus this optional scheduler. Compose does not grow a service per channel.
+
+Hard-coded channel branches that still special-case a folder are listed under [Known debt](docs/architecture/decisions/0008-target-architecture.md#known-debt-hard-coded-channels).
 
 ## Configuration
 

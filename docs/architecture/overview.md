@@ -26,7 +26,7 @@ The always-on process is the `engine` service in `deploy/compose/docker-compose.
 
 That script pins `OMNI_IMAGE_TAG` and starts **engine only**. The scheduler is a Compose profile. Deploy does not start it unless `SCHEDULER_ENABLED` is set. See [0004](decisions/0004-scheduler-not-started-by-deploy.md).
 
-`python -m distribution.workers --role engine` stays up so an operator can `docker compose exec engine python main.py ...`. It does not generate content by itself. `--role scheduler` publishes Pinterest image pins on a random 3–6 hour gap. The same flags (`--role`, `--once`, `--dry-run`, `--account`, `--pins`) are what the `deploy/docker/Dockerfile` `CMD` and both compose services pass.
+`python -m distribution.workers --role engine` stays up so an operator can `docker compose exec engine python main.py ...`. It does not generate content by itself. `--role scheduler` publishes Pinterest image pins on a random 7–9 hour gap (`MIN_INTERVAL_HOURS=7`, `MAX_INTERVAL_HOURS=9` since #68). The same flags (`--role`, `--once`, `--dry-run`, `--account`, `--pins`) are what the `deploy/docker/Dockerfile` `CMD` and both compose services pass.
 
 ### Libraries and Backblaze B2
 

@@ -109,4 +109,6 @@ Operator scripts live in `tools/`. `tools/backup_supermemory.py` is the Supermem
 
 `from main import produce` and the other names scripts already import keep working. `python main.py` is unchanged. `import engine.cli` still loads the same module object as `production.pipeline.cli`.
 
+Hard-coded channel branches (a folder id in an `if`, a format gate, or a deploy path) are recorded in [0008 — Known debt](decisions/0008-target-architecture.md#known-debt-hard-coded-channels). A new channel is still a folder. Those branches are the leftovers.
+
 Reel QA lives in `production/qa/` (`modules/reel_qa/` is a shim). Publishers live in `distribution/publishers/`. Scheduling lives in `distribution/scheduling/`. The account registry lives in `accounts/`. Formats, the pipeline, the content library, providers, cost, media, and writers live under `production/`. The parametric animation engine lives in `animation/parametric/` (`animation/api.py` is the facade). B2, Drive, and imgbb live in `shared/storage/`. `omni/` is gone. Old import paths stay as shims until M14. Do not add a second copy under `engine/`, `core/`, or `modules/`.

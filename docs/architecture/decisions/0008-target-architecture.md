@@ -313,7 +313,7 @@ Every PR follows the same rules: `git mv` plus a `sys.modules` shim at the old p
 |---|---|---|
 | M0 | This ADR | — |
 | M1 | import-linter contracts in CI, in report-only mode | makes the target measurable before moving anything |
-| M1b | **High priority (performance).** The scheduler resumes from the last publish in the ledger (for Pinterest, the newest `published_utc` in the B2 `PinLedger`; `next = last + cadence`) instead of the random 3–6h startup delay (`omni/worker.py` `_DEFAULT_MIN_HOURS=3.0`, `_DEFAULT_MAX_HOURS=6.0`) | Every deploy restarts the scheduler and resets that delay. Until M1b ships, merge in batches per deploy window. |
+| M1b | **High priority (performance).** The scheduler resumes from the last publish in the ledger (for Pinterest, the newest `published_utc` in the B2 `PinLedger`; `next = last + cadence`) instead of drawing a fresh startup gap. The operator cadence since #68 is `MIN_INTERVAL_HOURS=7` / `MAX_INTERVAL_HOURS=9`. The process keeps that pair. A channel `.env` does not replace it. | Every deploy restarts the scheduler and resets that delay. Until M1b ships, merge in batches per deploy window. |
 | M2 | `shared/` with env, paths, logging, ffmpeg, mime, retry; re-target the content of #35/#37/#38/#41/#42 | old `utils.*` become shims |
 | M3 | `shared/store`, `shared/contracts` (**`ContentItem` v1**, see below), `shared/memory` | Exit gate: production writes `ContentItem` v1 and distribution reads it without importing production; old readers still work through adapters. M4 does not start before this passes. |
 | M4 | `distribution/publishers` (base, registry, api, browser, export) — the only home of the `Publisher` protocol | Exit gate: import-linter shows no `distribution → production` import; publisher tests green. |
@@ -426,3 +426,34 @@ M15 writes these docs. It does not land in M12. The set is the README, an archit
 - Production and distribution can scale and deploy independently: render workers can later run on GPU nodes, while the scheduler stays a single replica until the ledger gains conditional writes.
 - The animation engine can be extracted as its own package or repo without touching any channel.
 - Cost: about 15 small PRs, each needing review and a dry-run. Shims add one indirection until M14.
+
+## Known debt: hard-coded channels
+
+`discover_channel_ids()` and `config/pinterest_accounts.yaml` already accept a new folder. The spots below still name a channel. A new channel uses the generic path until one of these is generalized. Line numbers are from the tree that recorded this list. They drift.
+
+| What is locked | Where |
+|---|---|
+| Lofi only allows two pages | `production/formats/lofi/config.py:456-460`, check at `:1298` |
+| Wan reel is Ancient Knowledge only | `production/providers/image/wan_reel_production.py:22`, `:53`, `:247` |
+| Help text for those two formats | `production/pipeline/cli_parser.py:241`, `:252` |
+| Narrative mode inferred for two ids; Master Mei avatar path | `production/pipeline/channel_context.py:1154`, `:1156`, `:1381` |
+| Wonder Feed and Master Mei topic lock | `production/pipeline/stages/batch.py:314`, `:320` |
+| Still-render branches | `production/pipeline/stages/stage_render_still.py:121`, `:205`, `:226`, `:242`, `:249` |
+| Setup branches | `production/pipeline/stages/stage_setup.py:132`, `:151`, `:218`, `:251`, `:264`, `:288` |
+| Sequence-plan branches | `production/pipeline/stages/stage_sequence_plan.py:160`, `:203`, `:215`, `:219`, `:384` |
+| Compile branches | `production/pipeline/stages/stage_compile_reel.py:109`, `:274`, `:296`, `:320`, `:339`, `:417`, `:503` |
+| Voice branches | `production/pipeline/voice.py:175-176` |
+| Publish, debug stills, act descriptors, bootstrap summary | `production/pipeline/stages/stage_publish.py:107`, `:204`; `production/pipeline/stages/debug_images.py:129`; `production/pipeline/acts.py:202`; `production/pipeline/reporting.py:346` |
+| Documentary role skips Master Mei | `production/pipeline/stages/stage_sequence_render.py:356` |
+| YouTube playlist rules for Master Mei | `distribution/publishers/api/youtube_upload.py:1008`, `:1041`, `:1084`, `:1298`, `:1584`, `:1611`, `:2402` |
+| Ancient Knowledge pin target URL | `distribution/scheduling/inventory.py:1270` |
+| Anna's legacy shared pin ledger | `production/formats/pins/config.py:218` |
+| Image-policy defaults. An unlisted channel stays `ai_only`. `IMAGE_SOURCE_POLICY` in `page_config.py` wins | `production/providers/image/free/policy.py:20-29`, `:56` |
+| Accent colours. A missing id uses the generic palette | `production/media/brand_composer.py:96-116`, `:118` |
+| Isolation set. A `channel_adapter.py` also isolates | `production/pipeline/interfaces/factory.py:21`, `:51-53` |
+| Default channel when `--channel` is omitted | `production/pipeline/bootstrap.py:95`, `production/pipeline/cli_parser.py:135` |
+| Deploy creates two named channel directories | `.github/workflows/deploy.yml:237`, `deploy/vm/remote-deploy.sh:22-24` |
+| Compose bind-mounts only the Ancient Knowledge store | `deploy/compose/docker-compose.yml:57`, `:90` |
+| Per-channel entry points, deprecated until M14 | `agents/posting/pinterest_main.py`, `channels_config/endless_summer_paradise/esp_main.py`, `channels_config/principles_of_wealth_finance_economics/wealth_main.py` |
+
+The scheduler, `tools/channel_cli.py`, and Validate have no channel matrix.

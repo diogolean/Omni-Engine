@@ -109,7 +109,7 @@ flowchart LR
 flowchart TD
   entry["python -m distribution.workers"] --> role{--role}
   role -->|engine| idle["idle parent for docker compose exec engine python main.py"]
-  role -->|scheduler| wake[drip wake on a 3 to 6 hour gap]
+  role -->|scheduler| wake[drip wake on a 7 to 9 hour gap]
   wake --> ledger[publish ledger]
   wake --> pubs[publishers]
   pubs --> yt[api.youtube]

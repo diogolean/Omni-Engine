@@ -1,7 +1,8 @@
 # N brandings × N platforms.
 #
 # A publish runs only where `active` is true. The scheduler container drips
-# Pinterest for every active Pinterest row (one wake every 3–6 hours).
+# Pinterest for every active Pinterest row (one wake every 7–9 hours:
+# MIN_INTERVAL_HOURS=7, MAX_INTERVAL_HOURS=9 since #68).
 # YouTube uploads still go through `main.py --publish-youtube`; the active
 # flag gates `YouTubeAccountPublisher.publish`, not that existing CLI.
 # Facebook stays on Playwright / Post Planner until an API publisher exists.
