@@ -48,6 +48,19 @@ def test_script_shims_are_real_files_and_the_old_paths_still_run() -> None:
     assert "upload-only" in help_text.stdout
 
 
+def test_supermemory_backup_is_manual_until_scheduling_is_decided() -> None:
+    readme = (_ROOT / "scripts" / "README.md").read_text(encoding="utf-8")
+    module = (_ROOT / "tools" / "backup_supermemory.py").read_text(encoding="utf-8")
+    oneoff = (_ROOT / "tools" / "oneoff" / "README.md").read_text(encoding="utf-8")
+    runbook = (_ROOT / "docs" / "runbooks" / "supermemory.md").read_text(encoding="utf-8")
+    for text in (readme, module, oneoff, runbook):
+        assert "not scheduled" in text.lower()
+        assert "VM cron" not in text
+        assert "15 3 * * *" not in text
+    assert "by hand" in readme
+    assert "by hand" in module
+
+
 def test_oneoff_parent_index_still_finds_the_repo_root() -> None:
     text = (_ROOT / "tools" / "oneoff" / "inspect_chroma_db.py").read_text(encoding="utf-8")
     assert ".parents[2]" in text

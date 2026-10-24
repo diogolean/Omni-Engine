@@ -1,6 +1,6 @@
 # One-off scripts
 
-Operator entry points under `tools/oneoff/`. They are not imported by the factory. `scripts/` keeps a shim for each file until M14.
+Operator entry points under `tools/oneoff/`. They are not imported by the factory. `scripts/` keeps a shim for each file until M14. The Supermemory backup is `tools/backup_supermemory.py`, not a script in this folder. It is not scheduled. Until scheduling is decided, run `/opt/omni-engine/scripts/backup_supermemory.sh` by hand on the VM.
 
 | Path | What it does |
 |---|---|

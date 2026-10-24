@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Nightly archive of the Supermemory volume, uploaded to Backblaze B2.
+"""Archive of the Supermemory volume, uploaded to Backblaze B2.
+
+Not scheduled. No cron on the VM calls this backup. Until scheduling is
+decided, run ``/opt/omni-engine/scripts/backup_supermemory.sh`` by hand.
+Deploy copies that script from ``deploy/vm/backup_supermemory.sh`` and
+does not run it. The shell script calls this module.
 
 One object per UTC day: ``backups/supermemory/YYYY-MM-DD.tgz``.
 An object that is already in B2 is left untouched. This script never

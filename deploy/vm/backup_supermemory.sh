@@ -1,5 +1,6 @@
 #!/bin/bash
-# Nightly Supermemory backup on the VM host.
+# Manual Supermemory backup on the VM host.
+# Not scheduled. No cron calls this script. Run it by hand until scheduling is decided.
 # Stops the container only when it is already running, then starts it again.
 # Does not start it when it was stopped. Does not delete anything in B2.
 # The upload runs in the engine container so it shares the daily B2 budget.
