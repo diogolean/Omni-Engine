@@ -1,44 +1,21 @@
 # -*- coding: utf-8 -*-
+"""Shim until M14. Implementation: tools/lofi/make_loss_assemble.py."""
 from __future__ import annotations
 
-from pathlib import Path as _ReorgPath
-import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
-if str(_REORG_ROOT) not in _reorg_sys.path:
-    _reorg_sys.path.insert(0, str(_REORG_ROOT))
-
-from utils.pipeline_paths import coerce_outputs_path
-
-import json
+import sys
 from pathlib import Path
 
-STILLS = coerce_outputs_path("outputs/wonder_feed/clips/lofi_stills_loss_20260823_061347_v01.json")
-WORK = "outputs/wonder_feed/assets/lofi_run_20260823_061347_01"
-OUT = Path("production/formats/lofi/store/locked_script_loss_v1_assemble.json")
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-
-def main() -> None:
-    stills = json.loads(STILLS.read_text(encoding="utf-8"))
-    script = stills["script"]
-    images = [f"{WORK}/scene_{i:02d}.png" for i in range(1, 10)]
-    OUT.write_text(
-        json.dumps(
-            {
-                "manual_accept_scenes": [],
-                "work_dir": WORK,
-                "scene_images": images,
-                "script": script,
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    print(f"wrote {OUT}")
-    for i, p in enumerate(images, 1):
-        print(f"  {i} REUSE {p}")
-
+_TARGET = _ROOT / "tools/lofi/make_loss_assemble.py"
 
 if __name__ == "__main__":
-    main()
+    import runpy
+
+    runpy.run_path(str(_TARGET), run_name="__main__")
+else:
+    import importlib
+
+    sys.modules[__name__] = importlib.import_module("tools.lofi.make_loss_assemble")

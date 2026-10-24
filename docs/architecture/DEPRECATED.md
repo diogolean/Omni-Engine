@@ -13,3 +13,5 @@ Operational architecture (system map, diagrams, decision records) lives beside t
 | `portfolio_log.py` | `portfolio_showcase/core/portfolio_log.py` |
 
 See `portfolio_showcase/FRONTEND_BLUEPRINT.md` for the multi-project Next.js contract.
+
+M13 keeps `portfolio_showcase/` at the repository root. It is the home of these posters. It is not moved under `tools/` and it is not retired.

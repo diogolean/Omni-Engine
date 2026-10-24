@@ -1,6 +1,6 @@
 # Portfolio Showcase
 
-This module is completely decoupled from every factory engine. It listens to optional core events (Aiwake EventBus) and holds **all** recruiter-facing architecture artifacts. It can be safely removed without affecting generation, TTS, or publishing.
+This module is completely decoupled from every factory engine. It listens to optional core events (Aiwake EventBus) and holds **all** recruiter-facing architecture artifacts. It can be safely removed without affecting generation, TTS, or publishing. M13 keeps it at the repository root: it is not an operator CLI, so it does not move under `tools/portfolio/`.
 
 ## Layout
 
