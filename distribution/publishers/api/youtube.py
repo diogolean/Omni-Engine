@@ -1,4 +1,4 @@
-"""YouTube adapter over ``agents.posting.youtube_publisher``.
+"""YouTube adapter over ``distribution.publishers.api.youtube_upload``.
 
 ``publish_envelope`` is a straight forwarder used by ``main.py`` so the
 existing ``--publish-youtube`` path keeps its arguments and return value.
