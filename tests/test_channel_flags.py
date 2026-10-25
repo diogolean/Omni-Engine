@@ -2,6 +2,7 @@
 """Channel behaviour comes from page_config flags, not channel-name branches."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from production.formats.lofi.config import (
@@ -85,12 +86,31 @@ def test_brand_gradients_match_the_old_palettes() -> None:
     assert _brand_gradient("") == ((10, 10, 10), (28, 28, 28))
 
 
+_CHANNEL_PATH_RE = r"^(channels_config|state)/[a-z0-9_]+(/store)?$"
+
+
+def _assert_channel_dir_guards(workflow: str, remote: str) -> None:
+    deploy = workflow.split("\n  deploy:\n", 1)[1]
+    setup = deploy.index("uses: actions/setup-python@v5")
+    pinned = deploy.index('python-version: "3.12"')
+    compute = deploy.index("python -m production.pipeline.channel_flags --vm-mkdir")
+    empty = deploy.index("Refusing deploy. CHANNEL_DIRS is empty.")
+    pattern = deploy.index(_CHANNEL_PATH_RE)
+    assert setup < pinned < compute < empty < pattern
+    assert "exit 1" in deploy[empty:pattern]
+    assert remote.index(_CHANNEL_PATH_RE) < remote.index('mkdir -p "$rel"')
+    assert "mkdir -p ${CHANNEL_DIRS}" not in remote
+
+
 def test_vm_paths_and_compose_mounts_follow_the_flags() -> None:
-    assert vm_mkdir_relpaths() == (
+    paths = vm_mkdir_relpaths()
+    assert paths == (
         "channels_config/anna_protocol",
         "channels_config/ancient_knowledge",
         "state/ancient_knowledge/store",
     )
+    allowed = re.compile(_CHANNEL_PATH_RE)
+    assert all(allowed.fullmatch(rel) for rel in paths)
     mounts = compose_store_mounts()
     assert mounts == (
         "./state/ancient_knowledge/store:"
@@ -110,6 +130,7 @@ def test_vm_paths_and_compose_mounts_follow_the_flags() -> None:
     assert "channels_config/ancient_knowledge" not in remote
     assert "compose -f" not in remote
     assert "--file" not in remote
+    _assert_channel_dir_guards(workflow, remote)
 
 
 def test_lofi_tables_come_from_the_channel_folders() -> None:
