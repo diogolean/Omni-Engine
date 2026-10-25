@@ -2,6 +2,8 @@
 """Topic, batch angle, sketch lock, and horror override."""
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.stages.state import VariantState
 from production.pipeline.runtime import (
     Any,
@@ -129,7 +131,7 @@ def _stage_setup_01(state: VariantState) -> None:
             state.subject_assets = app_config.ASSETS_DIR / state.slug
             state.subject_assets.mkdir(parents=True, exist_ok=True)
             _LOG.info('Variant %d | per-variant topic override → %r', state.variant + 1, state.resolved_subject)
-    if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge':
+    if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
         from production.formats.economic_reel.artefact.provider_health import preflight_text as _preflight_text
         state._preflight_text = _preflight_text
         state._preflight_text('ancient_knowledge')
@@ -148,7 +150,7 @@ def _stage_setup_01(state: VariantState) -> None:
     if state.post_type in ('SMART_BAIT', 'ECONOMIC_REEL', 'WAN_REEL', 'CAROUSEL') and (not state.skip_caption):
         assert state.caption_engine is not None
         try:
-            state._bait_examples = _load_engagement_bait_examples(state.page_ctx) if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'wonder_feed' else ''
+            state._bait_examples = _load_engagement_bait_examples(state.page_ctx) if state.page_ctx and _channel_enabled(state.page_ctx, 'GRAPHITE_STYLE_LOCK') else ''
             state._hooks_snapshot = list(state.generated_hooks_cache or [])
             state._reject_note = ''
             for _uniq_attempt in range(1, MAX_UNIQUENESS_RETRIES + 1):
@@ -215,7 +217,7 @@ def _stage_setup_01(state: VariantState) -> None:
             raise
         if not state.caption:
             _LOG.warning("Long caption generation yielded no content for variant %s of '%s'.", state.variant + 1, state.resolved_subject)
-    state._is_master_mei_page = bool(state.page_ctx and (state.page_ctx.page_id or '').lower() == 'master_mei')
+    state._is_master_mei_page = bool(state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE'))
     state._graphite_locked = not state._is_master_mei_page and state.post_type in ('SMART_BAIT', 'LONG_CAPTION_IMAGE', 'ECONOMIC_REEL', 'WAN_REEL', 'CAROUSEL') and (bool(state.page_ctx and (state.page_ctx.base_graphite_prompt or state.page_ctx.sketch_style_prompt)) or state.image_style == 'SKETCH')
     if state._graphite_locked:
         _LOG.debug('%s | Graphite style lock active (image_style=%s). Pipeline: BASE_GRAPHITE_PROMPT → build_smart_bait_image_prompt().', state.post_type, state.image_style)
@@ -248,7 +250,7 @@ def _stage_setup_01(state: VariantState) -> None:
     elif state.post_type in ('LONG_CAPTION_IMAGE', 'CTA_CAPTION_IMAGE', 'CAROUSEL'):
         state._cli_av = str((state.page_ctx.page_cfg.get('AVATAR_CLI') if state.page_ctx else None) or '').upper().strip()
         state.image_avatar_mode = state._cli_av if state._cli_av in ('ON', 'OFF') else 'OFF'
-    elif state.post_type in ('ECONOMIC_REEL', 'WAN_REEL') and state.page_ctx and ((state.page_ctx.page_id or '').lower() == 'master_mei') and (not state.page_ctx.sequence_force_avatar_off):
+    elif state.post_type in ('ECONOMIC_REEL', 'WAN_REEL') and state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE') and (not state.page_ctx.sequence_force_avatar_off):
         state.image_avatar_mode = 'ON'
     elif state.post_type in ('ECONOMIC_REEL', 'WAN_REEL'):
         state.image_avatar_mode = 'OFF'
@@ -261,7 +263,7 @@ def _stage_setup_01(state: VariantState) -> None:
 
 def _stage_setup_02(state: VariantState) -> None:
     """Variant worker stage. Original lines 526-3266."""
-    if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'wonder_feed':
+    if state.page_ctx and _channel_enabled(state.page_ctx, 'GRAPHITE_STYLE_LOCK'):
         state._il = state.page_ctx.illustration_style.rstrip(' .') if state.page_ctx.use_style_reference and state.page_ctx.illustration_style else 'Highly detailed pencil sketch style illustration, but restricted to only 3 colors: dark azure blue, black, and white. Dramatic lighting, expressive. Clean, minimalist, no messy details.'
         state._chr = state.page_ctx.style_characters.rstrip(' .') if state.page_ctx.use_style_reference and state.page_ctx.style_characters else 'A realistic man and a woman in an intense, dramatic relationship dynamic. They are the consistent recurring personas.'
         state._WF_SOFT_HORROR_VARIANTS = [f'{state._il}. {state._chr}. The man wears a completely plain, expressionless white porcelain-like mask over his face, while the woman exhibits an intense, raw, anxious expression. Full-bleed, edge-to-edge canvas portrait, no borders, no bookshelves, no desks, no notebooks.', f'{state._il}. {state._chr}. The woman is tethered by a dark, fragmented shadow to a looming, faceless male silhouette fading into subtle ash particles. Full-bleed, full-screen canvas portrait, no ambient furniture, no clutter.', f'{state._il}. {state._chr}. The man stands with an eerie, featureless white mask in a heavy vignette shadow, while the woman stares blankly at a shattered mirror pool on the floor reflecting her anxiety. Edge-to-edge full bleed, zero margins, no generic room elements.', f"{state._il}. {state._chr}. The man's silhouette is partially dissolving into fine charcoal dust at the edges while the woman reaches toward him with trembling hands. Full-screen portrait, deep vignette shadows, no domestic objects or interior framing.", f"{state._il}. {state._chr}. Both figures are in close emotional proximity but the man's face is hidden behind a smooth white porcelain half-mask; the woman's expression is raw and unguarded. Full-bleed graphite canvas, no borders, no furniture."]
@@ -285,7 +287,7 @@ def _stage_setup_02(state: VariantState) -> None:
         _LOG.info('wonder_feed PROMPT LOCK | use_style_ref=%s | compiled: %s', state.page_ctx.use_style_reference, state.effective_atmosphere[:160])
     state._mm_image_prompt_override = ''
     state._isolated_channel = ChannelFactory.is_isolated((state.page_ctx.page_id or '').lower() if state.page_ctx else '')
-    if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'master_mei' and (not state._isolated_channel):
+    if state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE') and (not state._isolated_channel):
         import re as _re_mm
         state._re_mm = _re_mm
         try:

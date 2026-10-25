@@ -2,6 +2,8 @@
 """Narration, beats, and the asset pool for a sequence reel."""
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.stages.state import VariantState
 from production.pipeline.runtime import (
     Any,
@@ -99,7 +101,7 @@ from production.pipeline.stages.stage_sequence_render import _stage_sequence_ren
 def _stage_sequence_plan_01(state: VariantState) -> None:
     """Variant worker stage. Original lines 1271-1598."""
     state._ak_base_style = state.page_ctx.illustration_style.rstrip(' .') if state.page_ctx.illustration_style else state.page_ctx.atmosphere_style.rstrip(' .')
-    state._is_mm = (state.page_ctx.page_id or '').lower() == 'master_mei'
+    state._is_mm = _channel_enabled(state.page_ctx, 'MEI_PIPELINE')
     state._seq_words = state.page_ctx.reel_narration_words if state.page_ctx else app_config.words_for_duration(80.0)
     state._seq_min = state.page_ctx.reel_narration_min_words if state.page_ctx else app_config.words_for_duration(80.0)
     state._planned_scene_durs = None
@@ -157,7 +159,7 @@ def _stage_sequence_plan_01(state: VariantState) -> None:
     _LOG.info('Sequence reel | acts=%d | video_length=%.0fs (window %.0f–%.0fs) | pacing=%s | episode=%s | work=%s', state._seq_n, state.page_ctx.reel_duration, state.page_ctx.reel_duration_target_min, state.page_ctx.reel_duration_target_max, state._pace_label, state._episode_id, state._reel_img_dir)
     if state.caption_engine is not None:
         try:
-            if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge':
+            if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
                 from production.formats.economic_reel.artefact.policy import artefact_images_enabled as _pool_flag
                 state._pool_flag = _pool_flag
                 if state._pool_flag():
@@ -200,7 +202,7 @@ def _stage_sequence_plan_01(state: VariantState) -> None:
                     state.uniqueness_guard.register(state._opening)
                     break
             if state._early_seq_script:
-                if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge':
+                if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
                     from production.formats.economic_reel.artefact.script_length import AK_NARRATION_S, soft_ceiling
                     state.AK_NARRATION_S = AK_NARRATION_S
                     state.soft_ceiling = soft_ceiling
@@ -212,11 +214,11 @@ def _stage_sequence_plan_01(state: VariantState) -> None:
                 _LOG.info('SEQUENCE_REEL | early script ready for act-image sync (%d words, %d acts)', len(state._early_seq_script.split()), state._seq_n)
         except Exception as _early_exc:
             state._early_exc = _early_exc
-            if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge':
+            if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
                 raise
             _LOG.warning('SEQUENCE_REEL early script failed (%s) — falling back to topic.', state._early_exc)
             state._early_seq_script = ''
-    state._ak_page = bool(state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge')
+    state._ak_page = bool(state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'))
 
 def _stage_sequence_plan_02(state: VariantState) -> None:
     """Variant worker stage. Original lines 1599-1957."""
@@ -381,7 +383,7 @@ def _stage_sequence_plan_02(state: VariantState) -> None:
 
 def _stage_sequence_plan_03(state: VariantState) -> None:
     """Variant worker stage. Original lines 1958-3264."""
-    if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge' and state._spoken_snippets and state._ak_act_durs:
+    if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE') and state._spoken_snippets and state._ak_act_durs:
         state._cta_line = (state.page_ctx.reel_cta_text or '').strip()
         if state._sentence_starts and float(state._timeline_audio or 0.0) > 0.5:
             from production.qa.beats import seal_sentence_timeline as _seal_tl

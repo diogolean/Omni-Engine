@@ -436,6 +436,21 @@ def burn_text_on_video(
 # Public API — TEXT_QUOTE background generator
 # ---------------------------------------------------------------------------
 
+def _brand_gradient(page_id: str | None) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """``BRAND_GRADIENT`` from the channel folder, else the neutral default."""
+    from production.pipeline.channel_flags import value
+
+    default = ((10, 10, 10), (28, 28, 28))
+    raw = value(str(page_id or ""), "BRAND_GRADIENT", None)
+    if (
+        isinstance(raw, (list, tuple))
+        and len(raw) == 2
+        and all(isinstance(color, (list, tuple)) and len(color) == 3 for color in raw)
+    ):
+        return tuple(tuple(int(channel) for channel in color) for color in raw)  # type: ignore[return-value]
+    return default
+
+
 def generate_text_quote_background(
     size: tuple[int, int] = (1080, 1350),
     *,
@@ -459,19 +474,13 @@ def generate_text_quote_background(
     -------
     Path to the saved background PNG.
     """
-    # Page-brand gradient palettes (dark base → slightly lighter top edge)
-    _BRAND_BG: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {
-        "wonder_feed":    ((10, 18, 35),   (22, 38, 62)),   # deep navy
-        "anna_protocol":  ((14, 10, 6),    (30, 22, 12)),   # dark earth-gold
-        "down_dirty":     ((8, 18, 6),     (18, 34, 12)),   # deep forest
-    }
     try:
         import config as _cfg
         _pid = page_id or _cfg.ACTIVE_PAGE
     except Exception:  # noqa: BLE001
         _pid = page_id or ""
 
-    top_color, bottom_color = _BRAND_BG.get(_pid, ((10, 10, 10), (28, 28, 28)))
+    top_color, bottom_color = _brand_gradient(_pid)
 
     try:
         from PIL import Image  # type: ignore

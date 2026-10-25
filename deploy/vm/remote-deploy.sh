@@ -18,10 +18,13 @@ if [[ ! "${IMAGE_TAG:-}" =~ ^(latest|[0-9a-f]{40})$ ]]; then
   exit 1
 fi
 
-mkdir -p credentials outputs \
-  channels_config/ancient_knowledge \
-  channels_config/anna_protocol \
-  state/ancient_knowledge/store
+mkdir -p credentials outputs
+# CHANNEL_DIRS is computed on the runner from VM_ENSURE_CHANNEL_DIR and
+# VM_STATE_MOUNT. The VM does not import the app to discover them.
+if [[ -n "${CHANNEL_DIRS:-}" ]]; then
+  # shellcheck disable=SC2086
+  mkdir -p ${CHANNEL_DIRS}
+fi
 
 # Deploy starts the engine only. The scheduler publishes pins, so it stays
 # stopped unless SCHEDULER_ENABLED is exactly 1/true/yes/on in .env.

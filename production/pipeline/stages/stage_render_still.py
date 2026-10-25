@@ -2,6 +2,8 @@
 """Still-image render for a text quote."""
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.stages.state import VariantState
 from production.pipeline.runtime import (
     Any,
@@ -118,7 +120,7 @@ def _stage_render_still_02(state: VariantState) -> None:
     """Variant worker stage. Original lines 697-1080."""
     state.architect = VisualArchitect(channel=ChannelFactory.from_env())
     state.image_prompt = state.architect.build_prompt(state.resolved_subject, variation_index=state.variation_index, total_variants=state.qty, avatar_mode=state.image_avatar_mode, atmosphere_style=state.effective_atmosphere, aspect_ratio=state.page_aspect_ratio or None, style=state.image_style)
-    if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'wonder_feed' and state.page_ctx.use_style_reference:
+    if state.page_ctx and _channel_enabled(state.page_ctx, 'GRAPHITE_STYLE_LOCK') and state.page_ctx.use_style_reference:
         state._wf_il = state.page_ctx.illustration_style.rstrip(' .') if state.page_ctx.illustration_style else 'Highly detailed pencil sketch style illustration, but restricted to only 3 colors: dark azure blue, black, and white. Dramatic lighting, expressive. Clean, minimalist, no messy details.'
         state._wf_ch = state.page_ctx.style_characters.rstrip(' .') if state.page_ctx.style_characters else 'A realistic man and a woman in an intense, dramatic relationship dynamic. They are the consistent recurring personas.'
         state._scene_desc = (state.visual_subject or state.resolved_subject).strip(' .')
@@ -202,7 +204,7 @@ def _stage_render_still_02(state: VariantState) -> None:
     state._style_ref_path = None
     state._style_ref_paths = []
     state._style_ref_weight = 0.72
-    if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'wonder_feed':
+    if state.page_ctx and _channel_enabled(state.page_ctx, 'GRAPHITE_STYLE_LOCK'):
         print(f'[DEBUG_STYLE_ENGINE] Target image reference assigned: {state._WF_STYLE_REF_STR}')
         if state._os.path.exists(state._WF_STYLE_REF_STR):
             state._style_ref_path = state._WF_STYLE_REF
@@ -223,7 +225,7 @@ def _stage_render_still_02(state: VariantState) -> None:
         print('\n' + '=' * 60)
         print('[DEBUG] IMAGE PIPELINE INITIALIZATION')
         print(f'[DEBUG] Model            : {state.img_model_id or state.bm.image_primary_id}')
-        if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'wonder_feed':
+        if state.page_ctx and _channel_enabled(state.page_ctx, 'GRAPHITE_STYLE_LOCK'):
             state._dbg_ref = state._WF_STYLE_REF_STR
             print(f'[DEBUG] Style Ref Path   : {state._dbg_ref}')
             print(f'[DEBUG] Ref File Exists  : {state._img_os.path.exists(state._dbg_ref)}')
@@ -239,14 +241,14 @@ def _stage_render_still_02(state: VariantState) -> None:
             state.adapter.generate = state.wrap_image_generate(state.adapter.generate, channel=state.page_ctx.page_id, page_cfg=state.page_ctx.page_cfg, query=state.resolved_subject or state.visual_subject or '', producer=state._free_producer)
         state._gen_ref = state.effective_ref_path if state.image_avatar_mode == 'ON' else None
         state._gen_weight = None
-        if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'master_mei' and (state.image_avatar_mode == 'ON'):
+        if state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE') and (state.image_avatar_mode == 'ON'):
             state._forced = state.page_ctx.forced_avatar_reference_path
             if state._forced is not None and state._forced.is_file():
                 state._gen_ref = state._forced
             state._gen_weight = state.page_ctx.avatar_image_weight
         state._act1_role = None
         state._act1_neg = None
-        if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'master_mei':
+        if state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE'):
             from production.media.visual_roles import ROLE_A_NEGATIVE, ROLE_MASTER
             state.ROLE_A_NEGATIVE = ROLE_A_NEGATIVE
             state.ROLE_MASTER = ROLE_MASTER

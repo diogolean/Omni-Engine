@@ -233,8 +233,14 @@ jobs:
           printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/vm_key
           chmod 600 ~/.ssh/vm_key
           known=(-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes)
+          # Channel dirs come from VM_ENSURE_CHANNEL_DIR / VM_STATE_MOUNT.
+          CHANNEL_DIRS="$(python -m production.pipeline.channel_flags --vm-mkdir)"
+          channel_abs=""
+          for rel in $CHANNEL_DIRS; do
+            channel_abs+=" /opt/omni-engine/${rel}"
+          done
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
-            "mkdir -p /opt/omni-engine/credentials /opt/omni-engine/outputs/logs /opt/omni-engine/scripts /opt/omni-engine/channels_config/ancient_knowledge /opt/omni-engine/channels_config/anna_protocol"
+            "mkdir -p /opt/omni-engine/credentials /opt/omni-engine/outputs/logs /opt/omni-engine/scripts${channel_abs}"
           scp -i ~/.ssh/vm_key "${known[@]}" \
             deploy/compose/docker-compose.yml "$VM_USER@$VM_HOST:/opt/omni-engine/docker-compose.yml"
           scp -i ~/.ssh/vm_key "${known[@]}" \
@@ -242,4 +248,4 @@ jobs:
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
             "chmod 755 /opt/omni-engine/scripts/backup_supermemory.sh"
           ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
-            "IMAGE_TAG='$IMAGE_TAG' bash -s" < deploy/vm/remote-deploy.sh
+            "IMAGE_TAG='$IMAGE_TAG' CHANNEL_DIRS='$CHANNEL_DIRS' bash -s" < deploy/vm/remote-deploy.sh

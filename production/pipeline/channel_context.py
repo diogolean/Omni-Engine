@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from production.pipeline.channel_flags import discover_pages
+
 _LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -123,16 +125,7 @@ def _extract_style_anchor_via_gemini_vision(image_paths: "list[Path]", page_id: 
 # Constants
 # ---------------------------------------------------------------------------
 
-VALID_PAGES: tuple[str, ...] = (
-    "anna_protocol",
-    "master_mei",
-    "wonder_feed",
-    "down_dirty",
-    "ancient_knowledge",
-    "momma_circle",
-    "principles_of_wealth_finance_economics",
-    "endless_summer_paradise",
-)
+VALID_PAGES: tuple[str, ...] = discover_pages()
 
 VALID_AVATAR_MODES: tuple[str, ...] = ("ON", "OFF")
 
@@ -449,11 +442,7 @@ class PageContext:
     @property
     def elevenlabs_model(self) -> str:
         """ElevenLabs TTS model for ECONOMIC_REEL voiceover generation."""
-        default = (
-            "eleven_v3"
-            if (self.page_id or "").lower() == "master_mei"
-            else "eleven_multilingual_v2"
-        )
+        default = "eleven_multilingual_v2"
         return str(self.page_cfg.get("ELEVENLABS_MODEL", default)).strip() or default
 
     @property
@@ -461,7 +450,7 @@ class PageContext:
         """Prefer expressive eleven_v3 delivery when True (Master Mei default)."""
         raw = self.page_cfg.get("TTS_EXPRESSIVE_MODE", None)
         if raw is None:
-            return (self.page_id or "").lower() == "master_mei"
+            return False
         return bool(raw)
 
     @property
@@ -1153,15 +1142,7 @@ class PageContext:
         Known values: 'investigative' | 'warrior_discipline' | 'psychology' (default).
         """
         raw = str(self.page_cfg.get("NARRATIVE_MODE", "")).strip().lower()
-        if raw:
-            return raw
-        # Infer from known page IDs when unset
-        pid = (self.page_id or "").lower()
-        if pid == "ancient_knowledge":
-            return "investigative"
-        if pid == "master_mei":
-            return "warrior_discipline"
-        return "psychology"
+        return raw or "psychology"
 
     @property
     def reel_cta_text(self) -> str:
@@ -1188,10 +1169,9 @@ class PageContext:
         """
         try:
             val = float(self.page_cfg.get("AMBIENT_VOLUME", 0.32))
-            if (self.page_id or "").lower() == "master_mei":
-                # Absolute BGM mix (default 0.24) — under voice for narration clarity (−20% from 0.30)
-                return max(0.10, min(0.55, val))
-            return max(0.08, min(1.0, val))
+            lo = float(self.page_cfg.get("AMBIENT_VOLUME_MIN", 0.08))
+            hi = float(self.page_cfg.get("AMBIENT_VOLUME_MAX", 1.0))
+            return max(lo, min(hi, val))
         except (TypeError, ValueError):
             return 0.32
 
@@ -1209,20 +1189,14 @@ class PageContext:
         """When True, prefer Eleven Music v2 composition over local ambient pad."""
         raw = self.page_cfg.get("USE_MUSIC_V2_BED", None)
         if raw is None:
-            return (self.page_id or "").lower() == "master_mei"
+            return False
         return bool(raw)
 
     @property
     def ambient_music_style(self) -> str:
         """``warrior`` (mei) or ``mystery`` (ancient_knowledge) music_prompt profile."""
         raw = str(self.page_cfg.get("AMBIENT_MUSIC_STYLE", "") or "").strip().lower()
-        if raw:
-            return raw
-        return (
-            "warrior"
-            if (self.page_id or "").lower() == "master_mei"
-            else "mystery"
-        )
+        return raw or "mystery"
 
     @property
     def music_prompt_directive_path(self) -> "Path | None":
@@ -1380,23 +1354,14 @@ class PageContext:
         """
         Absolute path to the page's mandatory avatar.png.
 
-        For master_mei: ALWAYS resolves to
-        channels_config/master_mei/avatar_reference/avatar.png (zero-hallucination lock).
+        A channel that sets ``AVATAR_REFERENCE_PATH`` always resolves that file.
         """
-        page_id = (self.page_id or "").lower()
-        if page_id == "master_mei":
-            try:
-                from production.formats.mei.mei_visual import resolve_master_mei_avatar_path
-                p = resolve_master_mei_avatar_path(_ENGINE_ROOT)
-                return p
-            except Exception:
-                pass
         rel = str(self.page_cfg.get("AVATAR_REFERENCE_PATH", "")).strip()
         if rel:
             p = Path(rel)
             if not p.is_absolute():
                 p = _ENGINE_ROOT / rel
-            return p
+            return p.resolve()
         if self.avatar_reference_png.is_file():
             return self.avatar_reference_png
         return None
@@ -1487,7 +1452,7 @@ class PageContext:
         """Enable ElevenLabs SSML parsing (``<break time="…" />``) when True."""
         if "TTS_ENABLE_SSML" in self.page_cfg:
             return bool(self.page_cfg.get("TTS_ENABLE_SSML"))
-        return (self.page_id or "").lower() == "master_mei"
+        return False
 
     @property
     def reel_tail_pad_s(self) -> float:

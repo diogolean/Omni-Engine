@@ -85,7 +85,7 @@ Operator scripts live in `tools/`. `tools/backup_supermemory.py` is the Supermem
 - Factory tests: `tests/`
 - Channel tests: `channels_config/<channel>/tests/`
 - Aiwake tests: `products/aiwake/tests/`. The channel slot `channels_config/aiwake/` keeps `store/` (tracked `store/portfolio/`, gitignored runtime state) and does not keep a second copy of the tests.
-- A channel keeps its own `page_config.py`, prompts, and tests beside each other. Aiwake prompts live in `products/aiwake/prompts/`.
+- A channel keeps its own `page_config.py`, prompts, and tests beside each other. The engine reads behaviour flags from that file (`production/pipeline/channel_flags.py`) and does not branch on the channel name. Aiwake prompts live in `products/aiwake/prompts/`.
 - Pytest collects `test_*.py` from those trees. Probe scripts live in `tools/lofi/` and `tools/oneoff/`, not in `tests/`. `scripts/` keeps a shim for each of those files until the scheduler cycles. `portfolio_showcase/` stays at the root: it is the recruiter showcase (data, assets, and the Next.js blueprint), not an operator CLI, so it does not move under `tools/portfolio/` and it is not retired.
 - Test helpers imported only by tests (`caption_fixtures.py`, `cv_ground_truth.py`) stay next to the tests that use them.
 

@@ -51,9 +51,10 @@ services:
       # Host channels_config/<id>/.env* (operator files). Mounted beside the
       # image package so a refresh persists and channel Python is not hidden.
       - ./channels_config:/opt/omni-engine/channels_env
-      # Ancient Knowledge store only. The image keeps channels_config; this
-      # subdirectory survives a new image. Aiwake's committed store stays in
-      # the image.
+      # Store bind for each channel that sets VM_STATE_MOUNT. This line must
+      # stay equal to production.pipeline.channel_flags.compose_store_mounts().
+      # The image keeps channels_config; this subdirectory survives a new image.
+      # Aiwake's committed store stays in the image.
       - ./state/ancient_knowledge/store:/opt/omni-engine/channels_config/ancient_knowledge/store
     working_dir: /opt/omni-engine
     command: ["python", "-m", "distribution.workers", "--role", "engine"]
@@ -85,7 +86,7 @@ services:
       # Host channels_config/<id>/.env* (operator files). Mounted beside the
       # image package so a refresh persists and channel Python is not hidden.
       - ./channels_config:/opt/omni-engine/channels_env
-      # Same Ancient Knowledge store as the engine. Not the whole package,
+      # Same VM_STATE_MOUNT store as the engine. Not the whole package,
       # and not aiwake.
       - ./state/ancient_knowledge/store:/opt/omni-engine/channels_config/ancient_knowledge/store
     working_dir: /opt/omni-engine

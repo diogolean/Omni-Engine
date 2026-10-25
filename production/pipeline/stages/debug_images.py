@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.runtime import (
     Any,
     BatchAngle,
@@ -126,7 +128,7 @@ def run_test_images_debug_mode(
     n = max(1, int(n))
     page_ctx = load_page_context(page_id, avatar_mode=avatar_mode, post_format=post_format)
     resolved_subject = (topic or "").strip() or page_ctx.display_name or page_id
-    is_mm = (page_ctx.page_id or "").lower() == "master_mei"
+    is_mm = _channel_enabled(page_ctx, 'MEI_PIPELINE')
     base_style = (
         page_ctx.illustration_style.rstrip(" .")
         if page_ctx.illustration_style

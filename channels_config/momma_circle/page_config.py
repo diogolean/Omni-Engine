@@ -153,3 +153,24 @@ NICHE_DISCLAIMER: str = (
     "and daily protocols — but never as a hard sales pitch. "
     "Avoid: preachy tone, unattainable perfection, shaming, medical advice, harsh discipline content."
 )
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+REFERENCE_REEL_LOCK: bool = True
+LOFI_ENABLED: bool = True
+LOFI_MODULES: tuple = ("relationship", "parenting")
+LOFI_ASSEMBLY: dict = {
+    "logo_candidates": [
+        "channels_config/momma_circle/logo/logo.png",
+        "assets/logos/momma_circle.png",
+        "assets/logos/momma_circle_watermark.png",
+    ],
+    "watermark_handle": "@Momma Circle",
+    "logo_position": "bottom_center",
+    "logo_opacity": 0.90,
+    "logo_scale": 0.18,
+    "logo_size_multiplier": 0.337,
+    "logo_bottom_px": 252,
+    "trim_logo_transparent_padding": True,
+    "caption_color": (255, 255, 255),
+    "use_text_watermark": False,
+}

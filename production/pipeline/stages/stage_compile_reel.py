@@ -2,6 +2,8 @@
 """Scene export, reel compile, and the QA seal. unique_stills runs before export."""
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.stages.state import VariantState
 from production.pipeline.runtime import (
     Any,
@@ -106,7 +108,7 @@ def _stage_compile_reel_01(state: VariantState) -> None:
         state._sub_fill = state.page_ctx.subtitle_fill if state.page_ctx else (255, 230, 0)
         state._sub_sw = state.page_ctx.subtitle_stroke_width if state.page_ctx else 0
         state._sub_sf = state.page_ctx.subtitle_stroke_fill if state.page_ctx else None
-        state._voice_gain = float(state.page_ctx.voice_volume_gain) if state.page_ctx and state.page_ctx.voice_volume_gain is not None else 1.15 if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'master_mei' else 1.0
+        state._voice_gain = float(state.page_ctx.voice_volume_gain) if state.page_ctx and state.page_ctx.voice_volume_gain is not None else 1.15 if state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE') else 1.0
         state._amb_mul = state.page_ctx.ambient_sfx_gain_mul if state.page_ctx and state.page_ctx.ambient_sfx_gain_mul is not None else 1.0
         state._paced_act_durs = None
         if state.page_ctx and (not state._is_mei) and state._sequence_image_paths:
@@ -140,7 +142,7 @@ def _stage_compile_reel_01(state: VariantState) -> None:
             elif state.page_ctx.reel_use_hook_body_pacing:
                 state._paced_act_durs = _build_hook_body_act_durations(state._n_imgs, state._timeline_s, hook_hold_s=state.page_ctx.reel_hook_hold_s, body_hold_s=state.page_ctx.reel_body_hold_s)
                 _LOG.info('ECONOMIC_REEL legacy hook/body act_durs | %s', _describe_scene_plan(state._paced_act_durs))
-        state._compile_act_durs = list(getattr(state, '_ak_act_durs', None) or []) if state.page_ctx and str(getattr(state.page_ctx, 'page_id', '')).lower() == 'ancient_knowledge' and getattr(state, '_ak_act_durs', None) else state._paced_act_durs
+        state._compile_act_durs = list(getattr(state, '_ak_act_durs', None) or []) if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE') and getattr(state, '_ak_act_durs', None) else state._paced_act_durs
         state._act_video_paths = None
         if state._is_wan_reel:
             from production.providers.image.wan_reel_production import generate_wan_act_videos as _gen_wan_acts
@@ -165,9 +167,9 @@ def _stage_compile_reel_01(state: VariantState) -> None:
             print(f'[WAN_REEL] Video gen {state._wan_stage_times['wan_video_s']:.1f}s | wan={state._n_wan} ken_burns_fallback={state._n_fb}')
             _LOG.info('WAN_REEL video gen | wall=%.1fs | wan=%d fallback=%d', state._wan_stage_times['wan_video_s'], state._n_wan, state._n_fb)
             state._compile_t0 = time.monotonic()
-        if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge':
+        if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
             assert_voice_and_subtitles_ready(voice_audio=state._voice_path, word_timings=state._word_timings, page_id='ancient_knowledge')
-        state.reel_path = _core_compile_sequence_reel(state._sequence_image_paths, state.overlay_text, voice_audio=state._voice_path, ambient_audio=state._ambient_path, output_path=state._reel_target, target_duration=state._reel_dur, act_duration_s=state.page_ctx.reel_act_duration if state.page_ctx else None, act_durations=state._compile_act_durs, strict_act_durations=bool(state.page_ctx and str(getattr(state.page_ctx, 'page_id', '')).lower() == 'ancient_knowledge' and getattr(state, '_ak_act_durs', None)), word_timings=state._word_timings or None, font_path=state._font_path_abs or None, overlay_opacity=state.page_ctx.reel_overlay_opacity if state.page_ctx else 0.35, enable_hook_text=state.page_ctx.enable_top_hook_text if state.page_ctx else True, vignette_strength=state.page_ctx.vignette_strength if state.page_ctx else 0.0, grain_intensity=state.page_ctx.grain_intensity if state.page_ctx else 18.0, logo_image_path=state._logo_img_path, logo_width_px=state.page_ctx.logo_width_px if state.page_ctx else 200, logo_y_offset_px=state.page_ctx.logo_y_offset_px if state.page_ctx else 100, logo_opacity=state.page_ctx.logo_opacity if state.page_ctx else 0.85, logo_max_height_px=state.page_ctx.logo_max_height_px if state.page_ctx else None, subtitle_fontsize=state.page_ctx.subtitle_fontsize if state.page_ctx else 56, subtitle_y_position=state.page_ctx.subtitle_y_position if state.page_ctx else None, hook_y_frac=state.page_ctx.hook_y_frac if state.page_ctx else 0.5, page_id=state.page_ctx.page_id if state.page_ctx else '', words_per_phrase=state._wpp, subtitle_fill=state._sub_fill, subtitle_stroke_width=state._sub_sw, subtitle_stroke_fill=state._sub_sf, enable_flicker=state.page_ctx.enable_flicker if state.page_ctx else False, enable_light_rays=state.page_ctx.enable_light_rays if state.page_ctx else False, enable_dust_particles=state.page_ctx.enable_dust_particles if state.page_ctx else False, enable_light_refraction=state.page_ctx.enable_light_refraction if state.page_ctx else False, cta_text=_re.sub('\\[(?:cackles|chuckles|dry\\s*laugh)\\]\\s*', '', getattr(state, '_cta_text', '') or '', flags=_re.IGNORECASE).strip(), cta_start_s=float(getattr(state, '_narr_dur', -1.0)) + 0.3 if float(getattr(state, '_narr_dur', -1.0) or -1.0) > 0.5 else -1.0, cta_y_position=state.page_ctx.cta_subtitle_y_position if state.page_ctx else None, narration_duration_s=float(getattr(state, '_narr_dur', -1.0)) if float(getattr(state, '_narr_dur', -1.0) or -1.0) > 0.5 else None, cta_visual_gap_s=0.3, ambient_volume=state.page_ctx.ambient_volume if state.page_ctx else None, sfx_loop_audio=state._sfx_loop_path, sfx_loop_volume=state.page_ctx.atmosphere_sfx_volume if state.page_ctx else 0.35, sfx_fade_in_s=state.page_ctx.atmosphere_sfx_fade_in if state.page_ctx else 0.2, impact_sfx_audio=None if state._use_music_bed else state._impact_sfx_path, impact_sfx_volume=0.0 if state._use_music_bed else None, hook_max_s=float((getattr(state.page_ctx, 'page_cfg', None) or {}).get('REEL_HOOK_MAX_S', 8.0)) if state.page_ctx and state._is_mei else 0.0, voice_volume_gain=1.0 if state._is_mei else state._voice_gain, ambient_gain_mul=state._amb_mul, ambient_duck_ratio=state.page_ctx.ambient_duck_ratio if state.page_ctx else None, ambient_duck_until_s=getattr(state, '_narr_dur', None), master_audio_gain=state.page_ctx.master_audio_gain if state.page_ctx and state._use_music_bed else None, ambient_profile=state.page_ctx.ambient_music_style if state.page_ctx else 'warrior' if state._is_mei else 'mystery', bgm_start_s=state.page_ctx.bgm_start_time if state.page_ctx else 0.0, bgm_fade_in_s=state.page_ctx.bgm_fade_in_duration if state.page_ctx else 0.0, sfx_volume_gain_db=state.page_ctx.sfx_volume_gain_db if state.page_ctx else 0.0, tail_pad_s=state.page_ctx.reel_tail_pad_s if state.page_ctx else 1.0, force_exact_duration=state.page_ctx.reel_force_exact_duration if state.page_ctx else False, exact_duration_s=state.page_ctx.reel_duration if state.page_ctx else 80.0, ffmpeg_preset=state.page_ctx.encoding_preset if state.page_ctx else 'medium', pacing_sequence=state.page_ctx.pacing_sequence if state.page_ctx else None, scene_length=state.page_ctx.scene_length if state.page_ctx else None, target_duration_min=state.page_ctx.reel_duration_target_min if state.page_ctx else None, target_duration_max=state.page_ctx.reel_duration_target_max if state.page_ctx else None, enable_subtitle_padding=state.page_ctx.enable_subtitle_padding if state.page_ctx else True, act_video_paths=state._act_video_paths)
+        state.reel_path = _core_compile_sequence_reel(state._sequence_image_paths, state.overlay_text, voice_audio=state._voice_path, ambient_audio=state._ambient_path, output_path=state._reel_target, target_duration=state._reel_dur, act_duration_s=state.page_ctx.reel_act_duration if state.page_ctx else None, act_durations=state._compile_act_durs, strict_act_durations=bool(state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE') and getattr(state, '_ak_act_durs', None)), word_timings=state._word_timings or None, font_path=state._font_path_abs or None, overlay_opacity=state.page_ctx.reel_overlay_opacity if state.page_ctx else 0.35, enable_hook_text=state.page_ctx.enable_top_hook_text if state.page_ctx else True, vignette_strength=state.page_ctx.vignette_strength if state.page_ctx else 0.0, grain_intensity=state.page_ctx.grain_intensity if state.page_ctx else 18.0, logo_image_path=state._logo_img_path, logo_width_px=state.page_ctx.logo_width_px if state.page_ctx else 200, logo_y_offset_px=state.page_ctx.logo_y_offset_px if state.page_ctx else 100, logo_opacity=state.page_ctx.logo_opacity if state.page_ctx else 0.85, logo_max_height_px=state.page_ctx.logo_max_height_px if state.page_ctx else None, subtitle_fontsize=state.page_ctx.subtitle_fontsize if state.page_ctx else 56, subtitle_y_position=state.page_ctx.subtitle_y_position if state.page_ctx else None, hook_y_frac=state.page_ctx.hook_y_frac if state.page_ctx else 0.5, page_id=state.page_ctx.page_id if state.page_ctx else '', words_per_phrase=state._wpp, subtitle_fill=state._sub_fill, subtitle_stroke_width=state._sub_sw, subtitle_stroke_fill=state._sub_sf, enable_flicker=state.page_ctx.enable_flicker if state.page_ctx else False, enable_light_rays=state.page_ctx.enable_light_rays if state.page_ctx else False, enable_dust_particles=state.page_ctx.enable_dust_particles if state.page_ctx else False, enable_light_refraction=state.page_ctx.enable_light_refraction if state.page_ctx else False, cta_text=_re.sub('\\[(?:cackles|chuckles|dry\\s*laugh)\\]\\s*', '', getattr(state, '_cta_text', '') or '', flags=_re.IGNORECASE).strip(), cta_start_s=float(getattr(state, '_narr_dur', -1.0)) + 0.3 if float(getattr(state, '_narr_dur', -1.0) or -1.0) > 0.5 else -1.0, cta_y_position=state.page_ctx.cta_subtitle_y_position if state.page_ctx else None, narration_duration_s=float(getattr(state, '_narr_dur', -1.0)) if float(getattr(state, '_narr_dur', -1.0) or -1.0) > 0.5 else None, cta_visual_gap_s=0.3, ambient_volume=state.page_ctx.ambient_volume if state.page_ctx else None, sfx_loop_audio=state._sfx_loop_path, sfx_loop_volume=state.page_ctx.atmosphere_sfx_volume if state.page_ctx else 0.35, sfx_fade_in_s=state.page_ctx.atmosphere_sfx_fade_in if state.page_ctx else 0.2, impact_sfx_audio=None if state._use_music_bed else state._impact_sfx_path, impact_sfx_volume=0.0 if state._use_music_bed else None, hook_max_s=float((getattr(state.page_ctx, 'page_cfg', None) or {}).get('REEL_HOOK_MAX_S', 8.0)) if state.page_ctx and state._is_mei else 0.0, voice_volume_gain=1.0 if state._is_mei else state._voice_gain, ambient_gain_mul=state._amb_mul, ambient_duck_ratio=state.page_ctx.ambient_duck_ratio if state.page_ctx else None, ambient_duck_until_s=getattr(state, '_narr_dur', None), master_audio_gain=state.page_ctx.master_audio_gain if state.page_ctx and state._use_music_bed else None, ambient_profile=state.page_ctx.ambient_music_style if state.page_ctx else 'warrior' if state._is_mei else 'mystery', bgm_start_s=state.page_ctx.bgm_start_time if state.page_ctx else 0.0, bgm_fade_in_s=state.page_ctx.bgm_fade_in_duration if state.page_ctx else 0.0, sfx_volume_gain_db=state.page_ctx.sfx_volume_gain_db if state.page_ctx else 0.0, tail_pad_s=state.page_ctx.reel_tail_pad_s if state.page_ctx else 1.0, force_exact_duration=state.page_ctx.reel_force_exact_duration if state.page_ctx else False, exact_duration_s=state.page_ctx.reel_duration if state.page_ctx else 80.0, ffmpeg_preset=state.page_ctx.encoding_preset if state.page_ctx else 'medium', pacing_sequence=state.page_ctx.pacing_sequence if state.page_ctx else None, scene_length=state.page_ctx.scene_length if state.page_ctx else None, target_duration_min=state.page_ctx.reel_duration_target_min if state.page_ctx else None, target_duration_max=state.page_ctx.reel_duration_target_max if state.page_ctx else None, enable_subtitle_padding=state.page_ctx.enable_subtitle_padding if state.page_ctx else True, act_video_paths=state._act_video_paths)
         if state._is_wan_reel and hasattr(state, '_compile_t0'):
             state._wan_stage_times['compile_s'] = round(time.monotonic() - float(state._compile_t0), 2)
     else:
@@ -271,7 +273,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
                 _LOG.info("SEQUENCE_REEL | generating long-form voiceover script for '%s' (voice pref: %s)", state.resolved_subject, state.page_ctx.tts_voice_preference or 'default')
                 state._words_tgt = state.page_ctx.reel_narration_words
                 state._n_for_script = max(2, len(state._sequence_image_paths) if state._sequence_image_paths else state.page_ctx.reel_image_count)
-                state._seq_script = state.caption_engine.generate_sequence_voiceover(state.resolved_subject, page_niche=state.page_ctx.content_niche, persona_voice=state.page_ctx.tts_voice_preference or ('calm, deep, highly wise, authoritative ancient master' if (state.page_ctx.page_id or '').lower() == 'master_mei' else 'investigative, neutral, immersive'), n_acts=state._n_for_script, duration_s=state.page_ctx.reel_duration, total_words_target=state._words_tgt, economic=state.economic, niche_disclaimer=state.page_ctx.niche_disclaimer, cta_line='', narrative_mode=state.page_ctx.narrative_mode, batch_angle_block=state._batch_angle_block, previously_generated_hooks=list(state.generated_hooks_cache or []))
+                state._seq_script = state.caption_engine.generate_sequence_voiceover(state.resolved_subject, page_niche=state.page_ctx.content_niche, persona_voice=state.page_ctx.tts_voice_preference or ('calm, deep, highly wise, authoritative ancient master' if _channel_enabled(state.page_ctx, 'MEI_PIPELINE') else 'investigative, neutral, immersive'), n_acts=state._n_for_script, duration_s=state.page_ctx.reel_duration, total_words_target=state._words_tgt, economic=state.economic, niche_disclaimer=state.page_ctx.niche_disclaimer, cta_line='', narrative_mode=state.page_ctx.narrative_mode, batch_angle_block=state._batch_angle_block, previously_generated_hooks=list(state.generated_hooks_cache or []))
                 if state.cost_tracker is not None and state._seq_script:
                     state.cost_tracker.track_text(char_count=len(state._seq_script))
                 if state._seq_script and len(state._seq_script.split()) >= 40:
@@ -296,7 +298,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
         if state.page_ctx and (state.page_ctx.page_id or '').lower() in ('master_mei', 'ancient_knowledge'):
             state._max_words = int(state.page_ctx.reel_narration_max_words)
         state._voiceover_script = _trim_script_to_word_limit(state._voiceover_script, max_words=state._max_words)
-        state._is_mei_page = (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei'
+        state._is_mei_page = _channel_enabled(state.page_ctx, 'MEI_PIPELINE')
         state._tts_ssml = bool(state.page_ctx.tts_enable_ssml) if state.page_ctx else False
         if state._is_mei_page:
             from production.writers.mei_narrative import prepare_mei_tts_text, strip_inline_follow_cta
@@ -317,9 +319,9 @@ def _stage_compile_reel_04(state: VariantState) -> None:
         state._voice_id = state.page_ctx.elevenlabs_voice_id if state.page_ctx else None
         state._tts_speed = state.page_ctx.tts_narration_speed if state.page_ctx else None
         state._tts_vs = state.page_ctx.elevenlabs_voice_settings if state.page_ctx else None
-        state._tts_expressive = state.page_ctx.tts_expressive_mode if state.page_ctx and hasattr(state.page_ctx, 'tts_expressive_mode') else (state.page_ctx.page_id or '').lower() == 'master_mei' if state.page_ctx else False
+        state._tts_expressive = state.page_ctx.tts_expressive_mode if state.page_ctx and hasattr(state.page_ctx, 'tts_expressive_mode') else _channel_enabled(state.page_ctx, 'MEI_PIPELINE') if state.page_ctx else False
         state._tts_script = state._voiceover_script
-        if (state.page_ctx.page_id if state.page_ctx else '').lower() == 'ancient_knowledge':
+        if _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
             from production.formats.economic_reel.artefact.speech import spoken_numbers as _spoken_numbers
             state._spoken_numbers = _spoken_numbers
             state._tts_script = state._spoken_numbers(state._voiceover_script)
@@ -328,7 +330,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
             state._word_timings = _filter_audio_tag_timings(state._word_timings)
         except Exception as vaudio_exc:
             state.vaudio_exc = vaudio_exc
-            state._ak_must_speak = (state.page_ctx.page_id if state.page_ctx else '').lower() == 'ancient_knowledge'
+            state._ak_must_speak = _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE')
             if state._ak_must_speak:
                 raise RuntimeError(f'Voiceover generation failed (variant {state.variant + 1}): {state.vaudio_exc} — refusing silent ancient_knowledge compile.') from state.vaudio_exc
             _LOG.warning('Voiceover generation failed (variant %s): %s — reel will be silent.', state.variant + 1, state.vaudio_exc)
@@ -336,7 +338,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
         from production.writers.mei_narrative import approved_cta_text, fix_cta_typos
         state.approved_cta_text = approved_cta_text
         state.fix_cta_typos = fix_cta_typos
-        if (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei':
+        if _channel_enabled(state.page_ctx, 'MEI_PIPELINE'):
             state._cta_text = state.approved_cta_text()
         if state.page_ctx is None or state.page_ctx.strip_audio_tags_before_tts:
             state._cta_text = _strip_audio_behavior_tags(state._cta_text)
@@ -346,7 +348,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
         if state._cta_text and state._voice_path is not None:
             state._cta_out = state._reel_dir / f'{state.stem}_v{state.variant + 1:02d}_cta.mp3'
             try:
-                state._is_mei_cta = (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei'
+                state._is_mei_cta = _channel_enabled(state.page_ctx, 'MEI_PIPELINE')
                 if state._is_mei_cta:
                     from production.providers.tts.audio_engine import default_cta_cache_path, ensure_cached_cta_voiceover
                     state.default_cta_cache_path = default_cta_cache_path
@@ -414,7 +416,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
             _LOG.info('Subtitle coverage extended | narr=%.1fs + 1.0s + cta=%.1fs words (%d total tokens) | cta_overlay_start=%.1fs', state._narr_dur, state._cta_word_timings[-1][2] if state._cta_word_timings else 0.0, len(state._word_timings), state._cta_offset)
         elif state._voice_path is None:
             state._voice_path = None
-        if state._voice_path is not None and state.page_ctx and ((state.page_ctx.page_id or '').lower() == 'master_mei'):
+        if state._voice_path is not None and state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE'):
             try:
                 state._voice_path = apply_voice_loudnorm(state._voice_path)
             except Exception as _ln_exc:
@@ -422,7 +424,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
                 _LOG.debug('VO loudnorm skipped: %s', state._ln_exc)
     else:
         state._skip_why = 'ELEVENLABS_API_KEY not set' if not app_config.ELEVENLABS_API_KEY else 'no narration script'
-        if (state.page_ctx.page_id if state.page_ctx else '').lower() == 'ancient_knowledge':
+        if _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
             raise RuntimeError(f'ECONOMIC_REEL | Voiceover skipped — {state._skip_why} (refusing silent ancient_knowledge compile).')
         _LOG.warning('ECONOMIC_REEL | Voiceover skipped — %s', state._skip_why)
     if state.cost_tracker is not None and state._voiceover_script:
@@ -436,7 +438,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
     state._impact_sfx_path = None
     state._sfx_loop_path = None
     state._target_dur = state.page_ctx.reel_duration if state.page_ctx else 105.0
-    state._is_mei = bool(state.page_ctx and (state.page_ctx.page_id or '').lower() == 'master_mei')
+    state._is_mei = bool(state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE'))
     state._use_music_bed = bool(app_config.ELEVENLABS_API_KEY and state.page_ctx and getattr(state.page_ctx, 'use_music_v2_bed', False))
 
 def _stage_compile_reel_05(state: VariantState) -> None:
@@ -500,7 +502,7 @@ def _stage_compile_reel_05(state: VariantState) -> None:
             _LOG.info('%s | Using local ambient fallback: %s', (state.page_ctx.page_id or '').upper(), state._local_ambient.name)
         elif state._local_ambient is not None and state._local_ambient.is_file() and any((b in state._local_ambient.name.lower() for b in state._ban_rain)):
             _LOG.warning('%s | Ignoring rain/hiss ambient asset %s — using cinematic SFX/drone', (state.page_ctx.page_id or '').upper(), state._local_ambient.name)
-        elif (state.page_ctx.page_id or '').lower() == 'ancient_knowledge':
+        elif _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
             state._legacy_mystery = app_config.ENGINE_ROOT / 'assets' / 'audio' / 'ambient_mystery_loop.mp3'
             if state._legacy_mystery.is_file():
                 state._ambient_path = state._legacy_mystery

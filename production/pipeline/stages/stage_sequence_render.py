@@ -2,6 +2,8 @@
 """Master Mei and sequence still render, including QA gates."""
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.stages.state import VariantState
 from production.pipeline.runtime import (
     Any,
@@ -353,7 +355,7 @@ def _stage_sequence_render_03(state: VariantState) -> None:
         state._sr_act_meta[state._act_i]['is_cta'] = bool(state._cta_beat_index is not None and state._act_i == state._cta_beat_index)
         from production.qa.reel_visual_qa import generate_and_gate as _qwen_gate
         state._qwen_gate = _qwen_gate
-        state._doc_role = 'documentary' if (state.page_ctx.page_id or '').lower() != 'master_mei' else None
+        state._doc_role = 'documentary' if not _channel_enabled(state.page_ctx, 'MEI_PIPELINE') else None
         if state._asset_assignments and state._act_i < len(state._asset_assignments):
             from production.formats.economic_reel.artefact.asset_pool import make_pool_job as _make_pool_job
             state._make_pool_job = _make_pool_job

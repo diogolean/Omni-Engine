@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.runtime import (
     Any,
     BatchAngle,
@@ -311,13 +313,13 @@ def produce(
     # ancient_knowledge is handled above and never reads the PDF/wellness corpus.
     if (
         (not _isolated)
-        and _page_id_lower in ("wonder_feed", "master_mei")
+        and _channel_enabled(page_ctx, 'POOL_TOPIC_LOCK')
         and post_type in ("ECONOMIC_REEL", "SMART_BAIT")
         and page_ctx is not None
         and page_ctx.topic_pool
     ):
         resolved_subject = _rnd.choice(page_ctx.topic_pool)
-        if _page_id_lower == "master_mei":
+        if _channel_enabled(page_ctx, 'MEI_PIPELINE'):
             from production.writers.mei_narrative import episode_theme_meta
             _ep = episode_theme_meta(resolved_subject)
             _LOG.info(
@@ -576,7 +578,7 @@ def produce(
         # master_mei: hard-prefer forced avatar.png DNA over cycled avatars
         if (
             page_ctx
-            and (page_ctx.page_id or "").lower() == "master_mei"
+            and _channel_enabled(page_ctx, 'MEI_PIPELINE')
             and not page_ctx.sequence_force_avatar_off
         ):
             _forced_ref = page_ctx.forced_avatar_reference_path

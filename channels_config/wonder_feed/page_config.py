@@ -183,3 +183,23 @@ TOPIC_POOL: list = [
     "How high empathy becomes a vulnerability that attracts narcissists",
     "The moment self-respect becomes more important than being loved",
 ]
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+GRAPHITE_STYLE_LOCK: bool = True
+POOL_TOPIC_LOCK: bool = True
+LOFI_ENABLED: bool = True
+LOFI_MODULES: tuple = ("relationship", "parenting")
+LOFI_ASSEMBLY_FALLBACK: bool = True
+BRAND_GRADIENT: tuple = ((10, 18, 35), (22, 38, 62))
+LOFI_ASSEMBLY: dict = {
+    "logo_candidates": [
+        "channels_config/wonder_feed/logo/logo.png",
+    ],
+    "watermark_handle": "@Wonder Feed",
+    "logo_position": "bottom_center",
+    "logo_opacity": 0.95,
+    "logo_scale": 0.224,
+    "logo_bottom_px": 389,
+    "caption_color": (255, 255, 255),
+    "use_text_watermark": False,
+}
