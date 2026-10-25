@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import argparse
 import json
 import sys
@@ -24,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Require a reference-conditioned edit",
     )
-    parser.add_argument("--channel", default="ancient_knowledge")
+    parser.add_argument("--channel", default=sole_page("DOCUMENTARY_PIPELINE"))
     args = parser.parse_args(argv)
     from production.cost.google_guardrail import bind_run_channel
 

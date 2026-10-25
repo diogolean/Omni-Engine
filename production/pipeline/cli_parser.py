@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """CLI flags. Destinations and defaults are unchanged."""
 from __future__ import annotations
-from shared.channel_flags import default_page, pages_with, sole_page
+from shared.channel_flags import default_page, discover_channel_ids
 
 
 from production.pipeline.runtime import (
@@ -134,8 +134,9 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=list(VALID_PAGES),
         metavar="CHANNEL",
         help=(
-            f"Target channel (page persona). Options: {', '.join(VALID_PAGES)}. "
-            f"Default: {default_page()}."
+            "Target channel (page persona). "
+            f"Options: {', '.join(discover_channel_ids())}. "
+            f"Default: {discover_channel_ids()[0]}."
         ),
     )
     parser.add_argument(
@@ -182,7 +183,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Force the 4-tier agentic pipeline "
             "(ThemeCurator → Copywriter → VisualDirector ⇄ VisualQA). "
-            f"Auto-on for {sole_page('DOCUMENTARY_PIPELINE')} static image posts."
+            "Auto-on for static image posts on the documentary pipeline."
         ),
     )
     parser.add_argument(
@@ -236,7 +237,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
             "viral hook + sarcastic one-liner caption. Uses illustration_style for Gemini prompt. "
             "LONG_CAPTION_IMAGE: contextual illustration image with ONLY a logo overlay (no text/mask). "
             "Deep long-form storytelling caption about relationships/character. "
-            f"CTA_CAPTION_IMAGE: {sole_page('ALLOWS_CTA_CAPTION_IMAGE')} only. Same clean logo-only still as "
+            "CTA_CAPTION_IMAGE: channels that allow a CTA caption image. Same clean logo-only still as "
             "LONG_CAPTION_IMAGE, but the original Holistic Legacy caption: 60%% one "
             "paragraph (350-450 chars) / 40%% 3-4 short paragraphs (550-750 chars), "
             "ending with Comment KEYWORD (GINGER, SALT, DETOX, …). No copyright signature. "
@@ -247,14 +248,15 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
             "ink/graphic-novel stills, duotone grade, Ken Burns, channel watermark. "
             "Uses --duration (15–90, default 27) and --module (relationship|parenting). "
             "Does NOT share state with ECONOMIC_REEL. "
-            f"WAN_REEL: {sole_page('WAN_REEL')} only. Reuses ECONOMIC_REEL script/TTS/"
+            "WAN_REEL: channels that opt into WAN. Reuses ECONOMIC_REEL script/TTS/"
             "still pipeline, then Wan2.2 img2vid per act (bucket holds) with "
             "Ken Burns fallback. Smoke test: core.wan_reel_engine.run_wan_reel_test. "
             "CAROUSEL: generates visually cohesive images (slide_01..N) with distinct "
             "scene viewpoints for a multi-part visual narrative post. "
             "Images per carousel = --carousel_quantity (default 3); POSTS = --quantity."
             "REFERENCE_BASED_REELS: extract a raw-footage clip, overlay an LLM hook text, "
-            f"blend lullaby ambient audio — no image generation. Designed for {sole_page('REFERENCE_REEL_LOCK')}."
+            "blend lullaby ambient audio — no image generation. "
+            "Designed for channels with a reference-reel lock."
         ),
     )
     parser.add_argument(
@@ -277,7 +279,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="MODULE",
         help=(
             "ECONOMIC_REEL_LOFI only: RAG theme namespace. "
-            f"relationship (default) or parenting for {' + '.join(pages_with('LOFI_ENABLED'))}."
+            "relationship (default) or parenting for channels that enable lofi."
         ),
     )
     parser.add_argument(
@@ -540,7 +542,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
             "NATURAL (default): photorealistic cinematic image generation. "
             "CARTOON: Modern 2.5D flat illustration / vibrant stylized vector art. "
             "SKETCH: Forced graphite pencil illustration pipeline (auto-applied for "
-            f"SMART_BAIT / LONG_CAPTION_IMAGE / ECONOMIC_REEL on {sole_page('GRAPHITE_STYLE_LOCK')} — "
+            "SMART_BAIT / LONG_CAPTION_IMAGE / ECONOMIC_REEL on the graphite lock — "
             "this flag is ignored for those post types)."
         ),
     )
@@ -721,8 +723,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Target reel duration in seconds for the shared scene pacing engine "
             "(plan_scenes). Wins over channels_config REEL_DURATION. "
-            "Each channel/post_type supplies its own default when omitted "
-            f"(e.g. {sole_page('DOCUMENTARY_PIPELINE')} ~80)."
+            "Each channel supplies its own default when omitted."
         ),
     )
     parser.add_argument(

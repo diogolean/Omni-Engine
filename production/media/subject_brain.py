@@ -103,7 +103,7 @@ def generate_bulk_topics(
     Used for bulk runs (``--quantity > 1``) when no topic is supplied on the
     command line so each variant receives its own fresh, non-repeating subject.
 
-    For ``ancient_knowledge`` the prompt is specialised around alien intervention,
+    For the documentary pipeline the prompt is specialised around alien intervention,
     megalithic mysteries, OOPArts, and lost-civilisation conspiracy angles that
     maximise shares and comments.  For all other pages a generic niche-aware
     prompt is used.
@@ -120,7 +120,9 @@ def generate_bulk_topics(
 
     _page_lower = page_id.lower()
 
-    if _page_lower == "ancient_knowledge":
+    from shared.channel_flags import flag
+
+    if flag(_page_lower, "DOCUMENTARY_PIPELINE"):
         instruction = dedent(
             f"""
             You are the editorial director of the Ancient Knowledge channel — an investigative,
@@ -149,7 +151,7 @@ def generate_bulk_topics(
             2. Topic two here
             """
         ).strip()
-    elif _page_lower == "anna_protocol":
+    elif flag(_page_lower, "NATURAL_DRAW_LOCK"):
         instruction = dedent(
             f"""
             You are the editorial director of The Holistic Legacy — Anna's Protocol:
@@ -179,7 +181,7 @@ def generate_bulk_topics(
             2. Topic two here
             """
         ).strip()
-    elif _page_lower == "master_mei":
+    elif flag(_page_lower, "MEI_PIPELINE"):
         instruction = dedent(
             f"""
             You are the editorial director of Master Mei — Philosophical Engine for Liberation.

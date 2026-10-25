@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from shared.channel_flags import sole_page
 from shared.paths import outputs_root, page_outputs_dir, pipeline_logs_dir
 
 # ---------------------------------------------------------------------------
@@ -148,7 +149,7 @@ DRAFT_IMAGE_SIZE: tuple[int, int] = (768, 1344)
 PRODUCTION_IMAGE_SIZE: tuple[int, int] = (768, 1344)
 
 DEFAULT_STYLE_REFERENCE_FOLDER: Path = (
-    PAGES_CONFIG_ROOT / "master_mei" / "style_reference"
+    PAGES_CONFIG_ROOT / sole_page("MEI_PIPELINE") / "style_reference"
 ).resolve()
 
 MAX_PROMPT_WORDS: int = 180  # FLUX.1-schnell natural-language budget (120–180 words)
@@ -226,7 +227,7 @@ def judge_root(channel_name: str) -> Path:
 
 
 def style_folder_for_channel(channel_name: str) -> Path:
-    """``channels_config/{channel}/style_reference`` (fallback: master_mei)."""
+    """``channels_config/{channel}/style_reference`` (fallback: the warrior pipeline)."""
     candidate = channel_config_root(channel_name) / "style_reference"
     if candidate.is_dir():
         return candidate

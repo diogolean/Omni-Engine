@@ -7,8 +7,10 @@ without importing production. This module is the pipeline entry point
 """
 from shared.channel_flags import (
     channels_root,
+    coalesce_page,
     compose_store_mounts,
     default_page,
+    discover_channel_ids,
     discover_pages,
     enabled,
     flag,
@@ -21,8 +23,10 @@ from shared.channel_flags import (
 
 __all__ = [
     "channels_root",
+    "coalesce_page",
     "compose_store_mounts",
     "default_page",
+    "discover_channel_ids",
     "discover_pages",
     "enabled",
     "flag",

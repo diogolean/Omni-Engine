@@ -28,7 +28,7 @@ Accepted. Design only: no code moves in this PR. The draft refactor PRs #37–#4
 | M12 | Dockerfiles, compose, the VM scripts, and `infra/` live under `deploy/`. The engine image build context stays the repo root (`file: deploy/docker/Dockerfile`). Volume and `env_file` relatives stay project-root paths (`context: .`, `env_file: .env`, `./outputs`, `./credentials`, `./.env`, `./channels_config`, `./state/ancient_knowledge/store`). Compose `dockerfile` is `deploy/docker/Dockerfile` and the supermemory context is `deploy/docker/supermemory`. There are no git symlinks. Compose v2 resolves those against the project directory, so the same file works locally with `--project-directory <repo>` and on the VM after the workflow copies it to `/opt/omni-engine/docker-compose.yml`. `deploy.yml` copies `deploy/vm/backup_supermemory.sh` to `/opt/omni-engine/scripts/backup_supermemory.sh` and pipes `deploy/vm/remote-deploy.sh`. Service names, profiles, bind-mount targets, the image names, and the engine-only start are unchanged. `validate.yml` names none of these paths, so it was not edited. `infra.runpod` and `infra.serverless` are Python shims that re-export `deploy.runpod` until M14. `REMOTE_GPU_WORKFLOWS_DIR=infra/runpod/workflows` resolves to `deploy/runpod/workflows` in code. This agent cannot SSH the VM; both layouts were checked with `docker compose config` locally. |
 | M13 | `scripts/` moved to `tools/`. The Supermemory upload is `tools/backup_supermemory.py`. It is not scheduled. Until scheduling is decided, run the VM shell script by hand. One-offs are `tools/oneoff/` and lofi experiments are `tools/lofi/`. `scripts/` keeps a real module or wrapper for each file until the scheduler cycles in M14, including the container path that used to be `python scripts/backup_supermemory.py`. `scripts/build_post_planner.py` and `scripts/sync_youtube_live_metadata.py` already call `products/aiwake/tools/`. `portfolio_showcase/` stays at the repository root. It is the recruiter showcase, not an operator CLI, so it is not moved to `tools/portfolio/` and it is not retired. There are no git symlinks. |
 | M14 | Callers import the canonical modules. `shared.layer_bridge` is the seam between production and distribution; `layer_wiring.py` loads the module at use time and is not a layer. Import-linter is blocking. The compat shims (`scripts/`, `infra.runpod`, `infra.serverless`, `utils.*`, `agents/posting/*`, `engine/`, `core/`, `modules/`, `channels_config/aiwake`, and the other re-exports) stay until 1–2 clean scheduler cycles, then they are deleted. The VM still receives `deploy/vm/backup_supermemory.sh` at `/opt/omni-engine/scripts/backup_supermemory.sh`. That shell runs `python tools/backup_supermemory.py`. The backup is not scheduled. |
-| M16 | Production stages, YouTube playlist rules, lofi and Wan locks, brand colours, and the VM mkdir list read flags from each channel's `page_config.py` (`production/pipeline/channel_flags.py`). Adding a channel is adding its folder. The compose Ancient Knowledge store mount stays in `deploy/compose/docker-compose.yml` and must match `compose_store_mounts()`. Shims stay until the scheduler cycles. |
+| M16 | The production engine reads behaviour from each channel's `page_config.py` flags (`shared/channel_flags.py`, re-exported by `production/pipeline/channel_flags.py`). CLI help lists channels from `discover_channel_ids()`. The historical discovery order lives only in `shared/channel_flags.py`. One-channel format modules stay on an explicit allowlist: `production/formats/mei/`, `production/writers/mei_narrative.py`, and `production/providers/image/visual_compiler.py`. Adding a channel is adding its folder. The compose Ancient Knowledge store mount stays in `deploy/compose/docker-compose.yml` and must match `compose_store_mounts()`. Shims stay until the scheduler cycles. |
 
 M4 places the account loaders in the top-level `accounts/` package from the naming note above (`brandings`, `tokens`, `pinterest`), not under `distribution/accounts/`.
 
@@ -330,7 +330,7 @@ Every PR follows the same rules: `git mv` plus a `sys.modules` shim at the old p
 | M13 | Done. `scripts/` → `tools/` (`tools/oneoff/`, `tools/lofi/`, `tools/backup_supermemory.py`) with shims until M14. `portfolio_showcase/` stays at the root. | — |
 | M14 | Callers now use the canonical imports. Import-linter is blocking. The shim files stay until 1–2 clean scheduler cycles, checked again with `rg` before deletion. | — |
 | M15 | README rewrite (outline below). The docs must include the README, an architecture flowchart and a pipeline flowchart (mermaid), and an updated command list. | — |
-| M16 | Channel behaviour flags on `page_config.py`, read by `production/pipeline/channel_flags.py`. Engine name branches for stages, playlists, lofi, Wan, brand colours, and VM mkdir are gone. | — |
+| M16 | Done. The production engine reads `page_config.py` flags. `discover_channel_ids()` is the channel list. One-channel format modules are the allowlist in `tests/test_channel_flags.py`. | — |
 
 Governance: every step that changes a home updates `AGENTS.md` and `docs/architecture/REPO_LAYOUT.md` (and the root-layout test allowlist) in the same PR, not at M15.
 
@@ -391,21 +391,7 @@ M15 writes these docs. It does not land in M12. The set is the README, an archit
 1. **What it is** in 3 lines, plus the overview mermaid above.
 2. **Layers**: production · distribution (publishers / scheduling / workers) · animation · products/aiwake · channels · shared · deploy. One paragraph each, with the dependency-rules table.
 3. **Quickstart (keyless mock mode)**: `pip install -r requirements-ci.txt`; the reel pipeline tests on fakes (ffmpeg real); `OMNI_SKIP_DOTENV=1 OUTPUT_PATH=/tmp/demo python -m distribution.workers --role scheduler --once --dry-run`. A real `--mock` flag for `main.py` is a follow-up: today `main.py --test` still opens a Gemini client.
-4. **Channel → module map**:
-
-| Channel | Production format | Distribution |
-|---|---|---|
-| ancient_knowledge | `formats/economic_reel` | api.youtube, api.pinterest (drip), export.post_planner |
-| anna_protocol | `formats/quotes`, `formats/pins` | api.pinterest, export.post_planner |
-| wonder_feed | `formats/economic_reel`, `formats/lofi` | export.post_planner, browser.facebook_scheduler, api.youtube |
-| master_mei | `formats/mei` (avatar) | api.youtube, export.post_planner |
-| momma_circle | `formats/quotes` | api.facebook_graph |
-| principles_of_wealth_finance_economics | `formats/wealth` | api.youtube |
-| endless_summer_paradise | `formats/reference` | api.youtube |
-| down_dirty | `formats/quotes` | export.post_planner |
-| aiwake | `products/aiwake` on `animation` | api.youtube (via Publisher protocol) |
-
-(Draft distribution column, for the M15 README. M11's `production.writers.persona.channel_profile_rows()` builds channel id, display name, default format, and avatar mode from each channel folder's `page_config.py` and `master_dna.json`, so that list cannot drift. A new channel is a new folder.)
+4. **Channel list**: `discover_channel_ids()` (the same sequence as `discover_pages()`) is the only channel list. `production.writers.persona.channel_profile_rows()` builds channel id, display name, default format, and avatar mode from each folder's `page_config.py` and `master_dna.json`. A new channel is a new folder. Do not add a second hardcoded channel-to-module table here. Distribution publishers stay a separate layer; the M15 README can describe them from the code, not from a list copied into this ADR.
 
 5. **Environment variables** (names only; values live in `.env`):
 

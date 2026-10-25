@@ -7,6 +7,8 @@ does not use this module.
 """
 from __future__ import annotations
 
+from shared.channel_flags import flag
+
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -250,7 +252,7 @@ def preflight_text(
     and a dead Gemini stays dead for the rest of the run.
     """
     global _PREFLIGHT_OK
-    if (channel or "").strip().lower() != "ancient_knowledge":
+    if not flag((channel or "").strip().lower(), "DOCUMENTARY_PIPELINE"):
         return
     if _PREFLIGHT_OK:
         return

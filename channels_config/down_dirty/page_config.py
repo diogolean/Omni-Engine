@@ -41,3 +41,9 @@ LOGO_POSITION: str = "bottom_left"
 
 # Engine flags. The pipeline reads these; it does not test the channel name.
 BRAND_GRADIENT: tuple = ((8, 18, 6), (18, 34, 12))
+BRAND_ACCENT_COLORS: tuple = (
+    (210, 255, 210),
+    (255, 240, 180),
+    (200, 245, 230),
+    (240, 210, 150),
+)

@@ -2,17 +2,19 @@
 """ACTIVE_PAGE facade over :func:`production.writers.persona.load_persona`.
 
 Downstream modules keep importing these names. The values are bound once, from
-the DNA file of ``ACTIVE_PAGE`` (default ``anna_protocol``), the same way the
+the DNA file of ``ACTIVE_PAGE`` (default: the first discovered channel), the same way the
 previous loader bound them at import. Channel prompt copy is not stored here.
 """
 from __future__ import annotations
 
 import os
 
+from shared.channel_flags import default_page
+
 from production.writers.persona import ENGINE_ROOT as _ENGINE_ROOT
 from production.writers.persona import load_persona
 
-_ACTIVE_PAGE = os.environ.get("ACTIVE_PAGE", "anna_protocol")
+_ACTIVE_PAGE = os.environ.get("ACTIVE_PAGE", default_page())
 _persona = load_persona(_ACTIVE_PAGE)
 
 ANNA_DISPLAY_NAME: str = _persona.display_name

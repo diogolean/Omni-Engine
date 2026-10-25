@@ -14,6 +14,8 @@ Avatar / DNA injection: ROLE A frames only (1, 5–7, 10).
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import hashlib
 import re
 from pathlib import Path
@@ -90,7 +92,7 @@ _FRAME_LORE_10: tuple[tuple[str, str], ...] = (
 _PROMPTS_DIR: Path = (
     Path(__file__).resolve().parents[2]
     / "channels_config"
-    / "master_mei"
+    / sole_page("MEI_PIPELINE")
     / "prompts"
 )
 _PENULTIMATE_FILE: Path = _PROMPTS_DIR / "penultimate_frame.txt"

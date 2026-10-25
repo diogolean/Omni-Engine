@@ -10,13 +10,17 @@ from production.formats.lofi.config import (
     VALID_PAGES as LOFI_PAGES,
     channel_assembly_cfg,
 )
-from production.media.brand_composer import _brand_gradient
+from production.media.brand_composer import _brand_accents, _brand_gradient
 from production.pipeline.channel_context import VALID_PAGES
 from production.pipeline.channel_flags import (
+    coalesce_page,
     compose_store_mounts,
+    default_page,
+    discover_channel_ids,
     discover_pages,
     flag,
     pages_with,
+    sole_page,
     value,
     vm_mkdir_relpaths,
 )
@@ -194,11 +198,24 @@ def test_voice_pin_grounding_and_path_flags_stay_exclusive() -> None:
     assert pages_with("QUOTES_WORKBOOK") == ("wonder_feed",)
 
 
+# Format modules that belong to one channel. The guard does not scan these.
+_ENGINE_ALLOWLIST = (
+    Path("production/formats/mei"),
+    Path("production/writers/mei_narrative.py"),
+    Path("production/providers/image/visual_compiler.py"),
+)
+
+
+def _allowlisted(rel: Path) -> bool:
+    return any(rel == item or item in rel.parents for item in _ENGINE_ALLOWLIST)
+
+
 def test_engine_source_has_no_channel_id_literals() -> None:
-    """String and f-string tokens in the engine must not name a channel.
+    """String and f-string tokens in production/ must not name a channel.
 
     The historical order lives in ``shared/channel_flags.py``. Identifiers
-    such as ``generate_master_mei_soundscape`` are not literals.
+    such as ``generate_master_mei_soundscape`` are not literals. One-channel
+    format modules are the explicit allowlist above.
     """
     import io
     import re
@@ -206,30 +223,72 @@ def test_engine_source_has_no_channel_id_literals() -> None:
 
     names = "|".join(re.escape(name) for name in _HISTORICAL)
     word = re.compile(rf"\b(?:{names})\b")
-    files: list[Path] = []
-    files.extend((_ROOT / "production" / "pipeline").rglob("*.py"))
-    files.append(_ROOT / "production" / "writers" / "caption_engine.py")
-    files.extend((_ROOT / "production" / "formats" / "pins").rglob("*.py"))
-    files.extend(
-        (_ROOT / "production" / "formats" / "economic_reel" / "grounding").rglob(
-            "*.py"
-        )
-    )
-    files.append(_ROOT / "shared" / "paths.py")
-    files.append(_ROOT / "channels_config" / "shared" / "persona_bind.py")
     literal_types = {tokenize.STRING, tokenize.FSTRING_MIDDLE}
     hits: list[str] = []
+    files = list((_ROOT / "production").rglob("*.py"))
+    files.append(_ROOT / "shared" / "paths.py")
+    files.append(_ROOT / "channels_config" / "shared" / "persona_bind.py")
     for path in files:
+        rel = path.relative_to(_ROOT)
+        if _allowlisted(rel):
+            continue
         tokens = tokenize.tokenize(io.BytesIO(path.read_bytes()).readline)
         for tok in tokens:
             if tok.type not in literal_types or not word.search(tok.string):
                 continue
-            rel = path.relative_to(_ROOT)
             hits.append(f"{rel}:{tok.start[0]}: {tok.string[:120]}")
     assert hits == []
 
 
-def test_cli_help_still_names_the_flag_channels(capsys) -> None:
+def test_discover_channel_ids_matches_pages() -> None:
+    assert discover_channel_ids() == discover_pages()
+    assert discover_channel_ids()[0] == default_page()
+
+
+def test_coalesce_page_keeps_a_named_channel() -> None:
+    assert coalesce_page("", "DOCUMENTARY_PIPELINE") == "ancient_knowledge"
+    assert coalesce_page("  ", "DOCUMENTARY_PIPELINE") == "ancient_knowledge"
+    assert coalesce_page("wonder_feed", "DOCUMENTARY_PIPELINE") == "wonder_feed"
+    assert coalesce_page(None, "DOCUMENTARY_PIPELINE") == "ancient_knowledge"
+
+
+def test_brand_accents_match_the_old_palettes() -> None:
+    assert _brand_accents("wonder_feed") == [
+        (180, 210, 240),
+        (230, 180, 195),
+        (245, 230, 200),
+        (200, 220, 245),
+        (240, 200, 215),
+    ]
+    assert _brand_accents("anna_protocol") == [
+        (255, 220, 100),
+        (255, 235, 160),
+        (255, 200, 80),
+        (240, 215, 140),
+        (255, 230, 130),
+    ]
+    assert _brand_accents("down_dirty") == [
+        (210, 255, 210),
+        (255, 240, 180),
+        (200, 245, 230),
+        (240, 210, 150),
+    ]
+    assert _brand_accents("master_mei")[0] == (255, 220, 100)
+    assert _brand_accents("")[0] == (255, 220, 100)
+
+
+def test_lofi_assets_and_wealth_catalog_follow_flags() -> None:
+    from production.formats.lofi.config import BGM_DIR_REL, DUST_OVERLAY_REL
+    from production.formats.wealth.catalog import CHANNEL_ID
+
+    page = sole_page("LOFI_ASSEMBLY_FALLBACK")
+    assert DUST_OVERLAY_REL == value(page, "LOFI_DUST_OVERLAY")
+    assert BGM_DIR_REL == value(page, "LOFI_BGM_DIR")
+    assert CHANNEL_ID == sole_page("WEALTH_CATALOG")
+    assert CHANNEL_ID == "principles_of_wealth_finance_economics"
+
+
+def test_cli_help_derives_channels_from_discovery(capsys) -> None:
     from production.pipeline.cli_parser import parse_cli_args
 
     try:
@@ -237,16 +296,19 @@ def test_cli_help_still_names_the_flag_channels(capsys) -> None:
     except SystemExit as exc:
         assert exc.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    assert "Default: anna_protocol." in help_text
-    assert "Auto-on for ancient_knowledge static image posts." in help_text
-    assert "CTA_CAPTION_IMAGE: anna_protocol only." in help_text
-    assert "WAN_REEL: ancient_knowledge only." in help_text
-    assert "Designed for momma_circle." in help_text
-    assert "parenting for wonder_feed + momma_circle." in help_text
-    assert "ECONOMIC_REEL on wonder_feed" in help_text
-    assert "(e.g. ancient_knowledge ~80)." in help_text
+    ids = discover_channel_ids()
+    assert f"Options: {', '.join(ids)}." in help_text
+    assert f"Default: {ids[0]}." in help_text
+    assert "Auto-on for static image posts on the documentary pipeline." in help_text
+    assert "CTA_CAPTION_IMAGE: channels that allow a CTA caption image." in help_text
+    assert "WAN_REEL: channels that opt into WAN." in help_text
+    assert "Designed for channels with a reference-reel lock." in help_text
+    assert "parenting for channels that enable lofi." in help_text
+    assert "ECONOMIC_REEL on the graphite lock" in help_text
+    assert "Each channel supplies its own default when omitted." in help_text
     assert "DEFAULT_AVATAR_MODE" in help_text
-    from production.pipeline.channel_flags import sole_page
+    assert "ancient_knowledge only" not in help_text
+    assert "anna_protocol only" not in help_text
 
     page = sole_page("ALLOWS_CTA_CAPTION_IMAGE")
     assert (

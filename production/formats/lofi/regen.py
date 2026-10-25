@@ -99,7 +99,9 @@ def assemble_video_from_episode(
     scene_durations = episode.get("scene_durations")
     durs = [float(x) for x in scene_durations] if isinstance(scene_durations, list) else None
 
-    page_id = str(episode.get("page") or "wonder_feed")
+    from shared.channel_flags import sole_page
+
+    page_id = str(episode.get("page") or sole_page("LOFI_ASSEMBLY_FALLBACK"))
     src_video = Path(str(episode.get("video_path") or ""))
     if output_mp4 is None:
         if src_video.suffix.lower() == ".mp4" and src_video.parent.is_dir():

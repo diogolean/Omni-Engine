@@ -12,6 +12,8 @@ for Nano Banana and is not the published frame.
 """
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page
+
 import io
 import json
 import logging
@@ -193,7 +195,13 @@ def committed_cache_dir(channel: str, entity_id: str) -> Path:
     """Photographs shipped with the repo. The runtime store is gitignored."""
     slug = _entity_slug(entity_id)
     root = Path(__file__).resolve().parents[4]
-    return root / "channels_config" / (channel or "ancient_knowledge") / "artefact_cache" / slug
+    return (
+        root
+        / "channels_config"
+        / coalesce_page(channel, "DOCUMENTARY_PIPELINE")
+        / "artefact_cache"
+        / slug
+    )
 
 
 def cache_seed_dirs(channel: str, entity_id: str) -> list[Path]:
@@ -223,7 +231,9 @@ def artefact_cache_dir(channel: str, entity_id: str) -> Path:
         return folder
     from shared.paths import channel_store_dir
 
-    root = channel_store_dir(channel or "ancient_knowledge", create=True)
+    root = channel_store_dir(
+        coalesce_page(channel, "DOCUMENTARY_PIPELINE"), create=True
+    )
     return root / "artefact_cache" / (slug or "entity")
 
 

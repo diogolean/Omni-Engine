@@ -120,10 +120,21 @@ def default_page() -> str:
     return pages[0] if pages else ""
 
 
+def discover_channel_ids() -> tuple[str, ...]:
+    """Channel ids in discovery order. Same sequence as :func:`discover_pages`."""
+    return discover_pages()
+
+
 def sole_page(name: str) -> str:
     """First channel that sets ``name``. Empty when none do."""
     pages = pages_with(name)
     return pages[0] if pages else ""
+
+
+def coalesce_page(channel: str | None, flag_name: str) -> str:
+    """``channel`` when it is non-empty, otherwise the first page with ``flag_name``."""
+    slug = (channel or "").strip()
+    return slug or sole_page(flag_name)
 
 
 def vm_mkdir_relpaths() -> tuple[str, ...]:

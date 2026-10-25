@@ -486,17 +486,11 @@ def ensure_dust_overlay_asset(engine_root: Path) -> Path:
     Reference film-grain / dust overlay (black bg, light particles).
     Prefer the configured mp4; never procedurally generate when it exists.
     """
-    rel = str(
-        getattr(
-            lofi_cfg,
-            "DUST_OVERLAY_REL",
-            "channels_config/wonder_feed/overlays/overlay film grain.mp4",
-        )
-    )
+    rel = str(getattr(lofi_cfg, "DUST_OVERLAY_REL", "") or "")
     path = Path(rel) if Path(rel).is_absolute() else Path(engine_root) / rel
     if path.is_file() and path.stat().st_size > 10_000:
         return path
-    overlay_dir = Path(engine_root) / "channels_config" / "wonder_feed" / "overlays"
+    overlay_dir = path.parent
     for cand in sorted(overlay_dir.glob("overlay*grain*.mp4")):
         if cand.is_file() and cand.stat().st_size > 10_000:
             print(f"[LOFI assemble] grain_overlay fallback path={cand}")
@@ -1039,10 +1033,8 @@ def is_verified_instrumental_bgm(path: Path | str) -> bool:
 
 
 def list_library_bgm_tracks(engine_root: Path) -> list[Path]:
-    """Library BGM from wonder_feed/audio/bgm — instrumentals only."""
-    bgm_dir = Path(engine_root) / str(
-        getattr(lofi_cfg, "BGM_DIR_REL", "channels_config/wonder_feed/audio/bgm")
-    )
+    """Library BGM from the channel folder — instrumentals only."""
+    bgm_dir = Path(engine_root) / str(getattr(lofi_cfg, "BGM_DIR_REL", "") or "")
     if not bgm_dir.is_dir():
         return []
     out: list[Path] = []

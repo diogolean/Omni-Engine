@@ -10,10 +10,10 @@ Typical usage::
     from production.formats.quotes.quote_renderer import ImageTextsRenderEngine
 
     engine = ImageTextsRenderEngine()
-    paths = engine.generate_image_texts("momma_circle", limit=5)
+    paths = engine.generate_image_texts("<channel>", limit=5)
 
     # or:
-    # python utils/quote_renderer.py --channel wonder_feed --vault path/to/ocr_vault_original.json
+    # python utils/quote_renderer.py --channel <channel> --vault path/to/ocr_vault_original.json
 """
 from __future__ import annotations
 
@@ -61,13 +61,22 @@ IMAGE_EXTENSIONS: frozenset[str] = frozenset({
     ".tiff",
 })
 FONT_EXTENSIONS: frozenset[str] = frozenset({".ttf", ".otf"})
-_CHANNEL_FONTS: dict[str, str] = {
-    "momma_circle": "Fonts/MoreSugar/MoreSugar-Thin.ttf",
-    "wonder_feed": "Fonts/Covered_By_Your_Grace/CoveredByYourGrace-Regular.ttf",
-}
-_CHANNEL_FONTS_BIG: dict[str, str] = {
-    "wonder_feed": "Fonts/Caveat/Caveat-VariableFont_wght.ttf",
-}
+
+
+def _fonts_for(flag_name: str) -> dict[str, str]:
+    """Quote font paths declared on each channel folder."""
+    from shared.channel_flags import discover_channel_ids, value
+
+    fonts: dict[str, str] = {}
+    for pid in discover_channel_ids():
+        raw = value(pid, flag_name, None)
+        if isinstance(raw, str) and raw.strip():
+            fonts[pid] = raw.strip()
+    return fonts
+
+
+_CHANNEL_FONTS: dict[str, str] = _fonts_for("QUOTE_FONT")
+_CHANNEL_FONTS_BIG: dict[str, str] = _fonts_for("QUOTE_FONT_BIG")
 
 # Notebook safe-zone as fractions of canvas size. Leaves room for spiral
 # binding on the left and a bottom footer for the channel logo.
@@ -524,7 +533,7 @@ def _length_font_scale(text: str) -> float:
 def _discover_templates_dir(channel_dir: Path, image_texts_dir: Path) -> Path:
     """Resolve ``image_texts_templates/`` for a channel.
 
-    Preferred location (momma_circle and matching channels)::
+    Preferred location (the channel folder)::
         {channel}/image_texts_templates/
 
     Nested fallback::
@@ -1452,7 +1461,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Render IMAGE-TEXTS quote cards from ocr_vault.json",
     )
-    parser.add_argument("--channel", required=True, help="Channel slug (e.g. wonder_feed)")
+    parser.add_argument("--channel", required=True, help="Channel slug (folder name)")
     parser.add_argument(
         "--dataset",
         default=None,

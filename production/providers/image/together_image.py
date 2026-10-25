@@ -680,8 +680,10 @@ def flux_visual_role(channel: str | None, requested: str | None = None) -> str:
     role = (requested or "").strip().lower()
     if role in {"master", "disciple", "slave", "documentary"}:
         return role
+    from shared.channel_flags import flag
+
     page = (channel or "").strip().lower()
-    if page and page != "master_mei":
+    if page and not flag(page, "MEI_PIPELINE"):
         return "documentary"
     return ""
 

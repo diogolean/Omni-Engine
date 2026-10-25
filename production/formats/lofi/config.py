@@ -484,6 +484,15 @@ def _lofi_from_channel_flags() -> tuple[
     )
 
 
+def _lofi_asset(name: str) -> str:
+    """Asset path from the channel that owns the lofi assembly fallback."""
+    from production.pipeline.channel_flags import sole_page, value
+
+    page = sole_page("LOFI_ASSEMBLY_FALLBACK")
+    raw = value(page, name, "") if page else ""
+    return str(raw or "")
+
+
 VALID_MODULES: frozenset[str] = frozenset({"relationship", "parenting"})
 VALID_PAGES, MODULE_PAGE_GATES, CHANNEL_ASSEMBLY, _LOFI_ASSEMBLY_FALLBACK = (
     _lofi_from_channel_flags()
@@ -1079,7 +1088,7 @@ GRAIN_HALF_RES: bool = True
 CAPTION_FILM_MULTIPLY_OPACITY: float = 0.18
 # Reference film-grain overlay (Screen), below caption; loop/trim to video duration
 ENABLE_DUST_OVERLAY: bool = True
-DUST_OVERLAY_REL: str = "channels_config/wonder_feed/overlays/overlay film grain.mp4"
+DUST_OVERLAY_REL: str = _lofi_asset("LOFI_DUST_OVERLAY")
 DUST_OVERLAY_PREFER_NPZ: bool = False
 DUST_OVERLAY_OPACITY: float = 1.0  # single-pass screen
 DUST_OVERLAY_BLEND: str = "screen"
@@ -1096,7 +1105,7 @@ ENABLE_DUST_PARTICLES: bool = False
 DUST_PARTICLE_COUNT: int = 48
 DUST_PARTICLE_OPACITY: float = 0.12
 # Library BGM — random pick, trimmed to clip length (no generated beds)
-BGM_DIR_REL: str = "channels_config/wonder_feed/audio/bgm"
+BGM_DIR_REL: str = _lofi_asset("LOFI_BGM_DIR")
 BGM_QUARANTINE_DIRNAME: str = "_quarantine_vocals"
 # Dump-named reference rips (0816.MP3) and leftover beds stay out of the pool.
 BGM_DENY_NAME_RE: str = r"^\d{3,8}(\(\d+\))?$"

@@ -91,3 +91,10 @@ VM_ENSURE_CHANNEL_DIR: bool = True
 LEGACY_SHARED_LEDGER: bool = True
 LEGACY_MEDIA_DNA: bool = True
 BRAND_GRADIENT: tuple = ((14, 10, 6), (30, 22, 12))
+BRAND_ACCENT_COLORS: tuple = (
+    (255, 220, 100),
+    (255, 235, 160),
+    (255, 200, 80),
+    (240, 215, 140),
+    (255, 230, 130),
+)

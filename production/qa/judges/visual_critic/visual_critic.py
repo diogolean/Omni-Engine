@@ -9,6 +9,10 @@ HARD CAP: clean fitness / studio / commercial looks → score must be < 4.0.
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
+_DOC_PAGE = sole_page("DOCUMENTARY_PIPELINE")
+
 import json
 import logging
 import mimetypes
@@ -786,7 +790,7 @@ def _build_critic_instruction(
             close_variant=close_variant,
             licensed_objects=licensed_objects,
         )
-    if profile in ("ancient_mystery", "ancient_knowledge") or channel_name == "ancient_knowledge":
+    if profile in ("ancient_mystery", _DOC_PAGE) or channel_name == _DOC_PAGE:
         return _build_ancient_mystery_critic_instruction(
             channel_name, rules, quality_threshold, n_refs,
         )
@@ -968,8 +972,8 @@ def evaluate_image(
     profile = str(rules.get("critic_profile") or channel_name or "").strip().lower()
     is_lofi = profile == "lofi_economic" or channel_name == "lofi_economic"
     is_ancient = (
-        profile in ("ancient_mystery", "ancient_knowledge")
-        or channel_name == "ancient_knowledge"
+        profile in ("ancient_mystery", _DOC_PAGE)
+        or channel_name == _DOC_PAGE
     )
     if is_ancient and quality_threshold is None:
         threshold = ancient_mystery_quality_threshold()

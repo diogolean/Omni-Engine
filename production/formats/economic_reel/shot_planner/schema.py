@@ -116,8 +116,10 @@ def shot_list_from_dict(raw: dict[str, Any]) -> ShotList:
     rows = raw.get("shots") or []
     shots = [shot_from_dict(row) for row in rows if isinstance(row, dict)]
     source = raw.get("source") if isinstance(raw.get("source"), dict) else {}
+    from shared.channel_flags import sole_page
+
     return ShotList(
-        channel=_as_str(raw.get("channel")) or "ancient_knowledge",
+        channel=_as_str(raw.get("channel")) or sole_page("DOCUMENTARY_PIPELINE"),
         topic=_as_str(raw.get("topic")),
         narration=_as_str(raw.get("narration")),
         shots=shots,

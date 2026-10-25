@@ -88,34 +88,7 @@ _FONT_FALLBACK: list[str] = [
     "DejaVuSans-Bold.ttf", "ariblk.ttf", "LiberationSans-Bold.ttf",
 ]
 
-# ---------------------------------------------------------------------------
-# Page-aware brand colour palette
-# Maps active page_id → accent colour candidates.
-# Used for the 30 % chance text accent injection.
-# ---------------------------------------------------------------------------
-_PAGE_ACCENT_COLORS: dict[str, list[tuple[int, int, int]]] = {
-    "wonder_feed": [
-        (180, 210, 240),   # soft sky blue
-        (230, 180, 195),   # rose gold blush
-        (245, 230, 200),   # warm cream
-        (200, 220, 245),   # pale cornflower
-        (240, 200, 215),   # dusty rose
-    ],
-    "anna_protocol": [
-        (255, 220, 100),   # warm gold
-        (255, 235, 160),   # soft cream-gold
-        (255, 200,  80),   # amber
-        (240, 215, 140),   # parchment
-        (255, 230, 130),   # honey
-    ],
-    "down_dirty": [
-        (210, 255, 210),   # mint green
-        (255, 240, 180),   # warm straw
-        (200, 245, 230),   # sage
-        (240, 210, 150),   # terra cotta cream
-    ],
-}
-# Generic fallback palette when page_id not in map
+# Generic fallback palette when a channel sets no accent list.
 _DEFAULT_ACCENT_COLORS: list[tuple[int, int, int]] = [
     (255, 220, 100),
     (255, 235, 160),
@@ -435,6 +408,19 @@ def burn_text_on_video(
 # ---------------------------------------------------------------------------
 # Public API — TEXT_QUOTE background generator
 # ---------------------------------------------------------------------------
+
+def _brand_accents(page_id: str | None) -> list[tuple[int, int, int]]:
+    """``BRAND_ACCENT_COLORS`` from the channel folder, else the neutral list."""
+    from production.pipeline.channel_flags import value
+
+    raw = value(str(page_id or ""), "BRAND_ACCENT_COLORS", None)
+    colors: list[tuple[int, int, int]] = []
+    if isinstance(raw, (list, tuple)):
+        for color in raw:
+            if isinstance(color, (list, tuple)) and len(color) == 3:
+                colors.append(tuple(int(channel) for channel in color))
+    return colors or list(_DEFAULT_ACCENT_COLORS)
+
 
 def _brand_gradient(page_id: str | None) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """``BRAND_GRADIENT`` from the channel folder, else the neutral default."""

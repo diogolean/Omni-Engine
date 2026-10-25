@@ -2,6 +2,8 @@
 """Build a shot list from a script and the entity file. No model call."""
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import re
 
 from production.formats.economic_reel.shot_planner.entities import entities_in_text, is_abstract_close, load_entities
@@ -23,7 +25,7 @@ def build_shot_list(
     topic: str,
     script: str,
     *,
-    channel: str = "ancient_knowledge",
+    channel: str = sole_page("DOCUMENTARY_PIPELINE"),
 ) -> ShotList:
     """One shot per sentence. Entities come from the channel knowledge base.
 

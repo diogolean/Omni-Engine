@@ -2,6 +2,8 @@
 """Wrap the reel image call. A no-op while the hybrid flag is off."""
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page
+
 import logging
 import re
 from pathlib import Path
@@ -197,7 +199,7 @@ def _flux_or_photoreal(
 def _entity(channel: str, entity_id: str) -> Entity | None:
     if not entity_id:
         return None
-    for item in load_entities(channel or "ancient_knowledge"):
+    for item in load_entities(coalesce_page(channel, "DOCUMENTARY_PIPELINE")):
         if item.id == entity_id:
             return item
     return None

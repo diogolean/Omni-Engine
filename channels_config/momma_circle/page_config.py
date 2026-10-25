@@ -156,6 +156,7 @@ NICHE_DISCLAIMER: str = (
 
 # Engine flags. The pipeline reads these; it does not test the channel name.
 REFERENCE_REEL_LOCK: bool = True
+QUOTE_FONT: str = "Fonts/MoreSugar/MoreSugar-Thin.ttf"
 LOFI_ENABLED: bool = True
 LOFI_MODULES: tuple = ("relationship", "parenting")
 LOFI_ASSEMBLY: dict = {

@@ -280,7 +280,9 @@ def run_visual_qa_loop(
 
     prompt, concept = build_base_prompt(base_script_beat, rules)
     # Master Mei: enforce Scene 1/3/penultimate RAG + firearm ban before FLUX
-    if (channel_name or "").lower() == "master_mei":
+    from shared.channel_flags import flag
+
+    if flag((channel_name or "").lower(), "MEI_PIPELINE"):
         try:
             from production.media.visual_roles import validate_mei_visual_prompt
 

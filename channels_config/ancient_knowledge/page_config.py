@@ -355,6 +355,7 @@ ARTICLE_LINK_REQUIRED: bool = True
 TTS_SPEED_LOCK: float = 1.0
 TTS_NETWORK_RETRIES: int = 3
 USE_NARRATION_WORD_CAP: bool = True
+SEQUENCE_CAPTION_SCALE: float = 1.5
 VM_ENSURE_CHANNEL_DIR: bool = True
 VM_STATE_MOUNT: bool = True
 YOUTUBE_PLAYLIST_TITLE: str = "Ancient Mysteries & Forbidden History"

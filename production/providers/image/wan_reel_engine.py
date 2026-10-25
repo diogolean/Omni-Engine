@@ -8,6 +8,8 @@ ECONOMIC_REEL progressive image-pacing curve. Wan receives that value via
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import json
 import logging
 import re
@@ -206,7 +208,7 @@ def concatenate_wan_clips(
 def run_wan_reel_test(
     topic: str,
     *,
-    page_id: str = "ancient_knowledge",
+    page_id: str = sole_page("WAN_REEL"),
     video_length_s: float = 70.0,
     scene_duration: str = "fixed:7",
     out_dir: Path | None = None,

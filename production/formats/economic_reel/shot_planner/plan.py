@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """One structured LLM call that turns a script into a shot list.
 
-``REEL_SHOT_PLANNER`` defaults off. Only ``ancient_knowledge`` uses it.
+``REEL_SHOT_PLANNER`` defaults off. Only the documentary pipeline uses it.
 Invalid JSON is repaired once. A second failure returns None so the caller
 can keep the existing per-beat resolver.
 """
 from __future__ import annotations
+
+from shared.channel_flags import flag, sole_page
 
 import json
 import logging
@@ -50,7 +52,7 @@ _SYSTEM = (
 
 def planner_enabled(channel: str) -> bool:
     """True only for Ancient Knowledge when ``REEL_SHOT_PLANNER`` is on."""
-    if (channel or "").strip().lower() != "ancient_knowledge":
+    if not flag((channel or "").strip().lower(), "DOCUMENTARY_PIPELINE"):
         return False
     return os.environ.get("REEL_SHOT_PLANNER", "").strip().lower() in _ON
 
@@ -230,7 +232,7 @@ def plan_episode(
     topic: str,
     script: str,
     *,
-    channel: str = "ancient_knowledge",
+    channel: str = sole_page("DOCUMENTARY_PIPELINE"),
     complete: CompleteFn | None = None,
     tracker: Any | None = None,
 ) -> ShotList | None:
