@@ -6,7 +6,7 @@ Library-ingest channel: existing long-form episodes + Shorts live on the
 external production drive. The factory only needs read access to the source
 directory; processed (re-signed) files land in a Processed/ sibling folder.
 
-Entry point: ``python channels_config/principles_of_wealth_finance_economics/wealth_main.py``
+Entry point: ``python tools/channel_cli.py --channel principles_of_wealth_finance_economics``
 """
 from __future__ import annotations
 

@@ -12,7 +12,7 @@ Responsibilities
 5. Build tropical SEO title / description / tags packs for schedule-ready rows.
 
 Does not upload by itself — produces manifests consumed by the YouTube
-publisher / ``esp_main.py schedule`` path.
+publisher / ``python tools/channel_cli.py --channel endless_summer_paradise schedule`` path.
 """
 from __future__ import annotations
 from shared.layer_bridge import Symbol

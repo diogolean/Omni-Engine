@@ -9,13 +9,13 @@ files with runtime strictly greater than 40 seconds. Missing metadata →
 
 Typical first run
 -----------------
-    python channels_config/endless_summer_paradise/esp_main.py scan
-    python channels_config/endless_summer_paradise/esp_main.py scan --dry-report
-    python channels_config/endless_summer_paradise/esp_main.py schedule --dry-run
-    python channels_config/endless_summer_paradise/esp_main.py schedule --limit 1
-    python channels_config/endless_summer_paradise/esp_main.py schedule --interval 84h --limit 1
-    python channels_config/endless_summer_paradise/esp_main.py reschedule --dry-run
-    python channels_config/endless_summer_paradise/esp_main.py reschedule --interval 84h
+    python tools/channel_cli.py --channel endless_summer_paradise scan
+    python tools/channel_cli.py --channel endless_summer_paradise scan --dry-report
+    python tools/channel_cli.py --channel endless_summer_paradise schedule --dry-run
+    python tools/channel_cli.py --channel endless_summer_paradise schedule --limit 1
+    python tools/channel_cli.py --channel endless_summer_paradise schedule --interval 84h --limit 1
+    python tools/channel_cli.py --channel endless_summer_paradise reschedule --dry-run
+    python tools/channel_cli.py --channel endless_summer_paradise reschedule --interval 84h
 
 YouTube token:
     credentials/tokens/youtube_token_endless_summer_paradise.json
@@ -65,7 +65,7 @@ def _resolve_interval_arg(args: argparse.Namespace) -> str | float:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="esp_main.py",
+        prog="tools/channel_cli.py --channel endless_summer_paradise",
         description=(
             "Endless Summer Paradise — scan production masters (duration > 40s), "
             "map global_video_library metadata, stage needs_metadata, schedule YouTube."

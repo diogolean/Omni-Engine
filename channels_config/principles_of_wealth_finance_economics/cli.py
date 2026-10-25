@@ -7,17 +7,17 @@ files are written to a Processed/ sibling folder. YouTube tokens:
 
 Typical first run
 -----------------
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py scan
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py process --dry-run
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py process
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py publish --mode longs --episodes 1-10 --dry-run
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py publish --mode longs --episodes 1-10
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py publish --mode shorts --dry-run
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py publish --mode shorts --episodes 1
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py metadata --dry-run
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py metadata --apply
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py cleanup --from-episode 2 --longs-only --dry-run
-    python channels_config/principles_of_wealth_finance_economics/wealth_main.py cleanup --from-episode 2 --longs-only
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics scan
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics process --dry-run
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics process
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics publish --mode longs --episodes 1-10 --dry-run
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics publish --mode longs --episodes 1-10
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics publish --mode shorts --dry-run
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics publish --mode shorts --episodes 1
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics metadata --dry-run
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics metadata --apply
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics cleanup --from-episode 2 --longs-only --dry-run
+    python tools/channel_cli.py --channel principles_of_wealth_finance_economics cleanup --from-episode 2 --longs-only
 """
 from __future__ import annotations
 from shared.layer_bridge import Symbol
@@ -69,7 +69,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="wealth_main.py",
+        prog="tools/channel_cli.py --channel principles_of_wealth_finance_economics",
         description=(
             "Principles of Wealth — scan the production drive, re-sign assets, "
             "upload longs then Shorts (relatedVideoId), and build ACT playlists."

@@ -14,7 +14,7 @@ Metadata strategy (US high-RPM):
   Category→ Entertainment (24) for cinematic visual-art / architecture
 
 Entry point:
-    python channels_config/endless_summer_paradise/esp_main.py scan
+    python tools/channel_cli.py --channel endless_summer_paradise scan
 """
 from __future__ import annotations
 

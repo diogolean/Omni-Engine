@@ -207,16 +207,13 @@ pytest -q products/aiwake \
 
 ## Deprecated until M14
 
-These still resolve. New commands use the paths above.
+These still resolve. New commands use the paths above. The entry points `agents/posting/pinterest_main.py`, `channels_config/endless_summer_paradise/esp_main.py`, and `channels_config/principles_of_wealth_finance_economics/wealth_main.py` were removed after two clean scheduler cycles. Use the Channel CLI commands above.
 
 | Old path | Current path |
 |---|---|
 | `engine/`, `agents/orchestrator/` | `production/pipeline/` |
 | `agents/writer/`, `agents/rag/` | `production/writers/` |
 | `agents/media/` (B2 client) | `shared/storage/` |
-| `agents/posting/pinterest_main.py` | `python tools/channel_cli.py --channel <id>` or `python tools/pinterest_cli.py` |
-| `channels_config/endless_summer_paradise/esp_main.py` | `python tools/channel_cli.py --channel endless_summer_paradise` |
-| `channels_config/principles_of_wealth_finance_economics/wealth_main.py` | `python tools/channel_cli.py --channel principles_of_wealth_finance_economics` |
 | `channels_config/aiwake/tools/` | `products/aiwake/tools/` |
 | `scripts/backup_supermemory.py` | `python tools/backup_supermemory.py` (the VM shell script is `deploy/vm/backup_supermemory.sh`) |
 | `core/animator/` | `animation/parametric/` and `products/aiwake/animator/` |
