@@ -13,14 +13,16 @@ equivalent but costs nothing at the margin and never counts toward the cap.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,10 @@ _REEL: list["SpendRecord"] = []
 _RUN: list["SpendRecord"] = []
 _INFO: list["SpendRecord"] = []
 _ATEXIT = False
+# None: the reel cap is the only check. A number is the hard cap for one pin.
+_PIN_CAP: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "pin_spend_cap_usd", default=None
+)
 
 
 class SpendCapExceeded(RuntimeError):
@@ -49,6 +55,28 @@ class SpendRecord:
     images: int
     cost_usd: float
     status: str = "ok"
+
+
+def pin_cap_usd() -> float | None:
+    """Active per-pin cap, or None when this call is not inside a pin."""
+    return _PIN_CAP.get()
+
+
+@contextmanager
+def pin_cap_scope(cap_usd: float | None) -> Iterator[None]:
+    """Apply a per-pin cap until the block exits.
+
+    ``None`` leaves the surrounding cap untouched. ``0`` refuses every
+    estimate above zero before the request is sent.
+    """
+    if cap_usd is None:
+        yield
+        return
+    token = _PIN_CAP.set(max(0.0, float(cap_usd)))
+    try:
+        yield
+    finally:
+        _PIN_CAP.reset(token)
 
 
 def reel_cap_usd() -> float:
@@ -90,8 +118,16 @@ def run_total() -> float:
 
 
 def preflight(estimate_usd: float, *, provider: str, model: str, source: str = "") -> None:
-    """Raise before the request when it would pass the reel cap."""
+    """Raise before the request when it would pass the pin cap or the reel cap."""
     extra = max(0.0, float(estimate_usd or 0.0))
+    pin_cap = _PIN_CAP.get()
+    if pin_cap is not None and extra > pin_cap + 1e-12:
+        msg = (
+            f"PIN SPEND CAP | provider={provider} | model={model} | src={source} | "
+            f"next=${extra:.5f} | cap=${pin_cap:.3f} | no request sent"
+        )
+        logger.error(msg)
+        raise SpendCapExceeded(msg)
     cap = reel_cap_usd()
     current = reel_total()
     if current + extra > cap + 1e-12:

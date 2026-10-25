@@ -1052,37 +1052,56 @@ class PinterestScheduler:
 
     def _ensure_photo(self, entry: dict, prefix: str) -> tuple[Path | None, bool]:
         ensure_flux_photo = Symbol('production.formats.pins.flux_photo', 'ensure_flux_photo')  # noqa: PLC0415
+        reuse_pool_image = Symbol('production.formats.pins.image_pool', 'reuse_pool_image')  # noqa: PLC0415
+        paid_image_fallback = Symbol('production.formats.pins.spend', 'paid_image_fallback')  # noqa: PLC0415
+        pin_scope = Symbol('production.formats.pins.spend', 'pin_scope')  # noqa: PLC0415
         from distribution.scheduling.library_source import materialize_image  # noqa: PLC0415
         is_text_graphic = Symbol('production.formats.pins.photos', 'is_text_graphic')  # noqa: PLC0415
 
         channel = str(cfg.CHANNEL_ID or self.context.get("account_id") or "pinterest")
-        path, delete_after = materialize_image(
-            entry,
-            prefix=prefix,
-            channel=channel,
-            client=self.context.get("b2_client"),
-            bucket=self.context.get("b2_bucket"),
-            folder_id=str(self.context.get("drive_folder_id") or ""),
-        )
-        if path is not None and path.is_file() and not is_text_graphic(path):
-            return path, delete_after
-        if delete_after and path is not None:
-            path.unlink(missing_ok=True)
-        free_path = self._free_license_photo(entry, channel)
-        if free_path is not None:
-            return free_path, True
-        entry["image_credit"] = ""
-        entry["image_license"] = ""
-        entry["image_credit_required"] = False
-        generated = ensure_flux_photo(
-            entry,
-            outputs_dir=self.outputs_dir,
-            channel_id=channel,
-            prefix=prefix or f"{channel}/library/",
-            client=self.context.get("b2_client"),
-            bucket=self.context.get("b2_bucket"),
-        )
-        return generated, False
+        with pin_scope(channel):
+            path, delete_after = materialize_image(
+                entry,
+                prefix=prefix,
+                channel=channel,
+                client=self.context.get("b2_client"),
+                bucket=self.context.get("b2_bucket"),
+                folder_id=str(self.context.get("drive_folder_id") or ""),
+            )
+            if path is not None and path.is_file() and not is_text_graphic(path):
+                return path, delete_after
+            if delete_after and path is not None:
+                path.unlink(missing_ok=True)
+            free_path = self._free_license_photo(entry, channel)
+            if free_path is not None:
+                return free_path, True
+            entry["image_credit"] = ""
+            entry["image_license"] = ""
+            entry["image_credit_required"] = False
+            if not paid_image_fallback(channel):
+                pooled = reuse_pool_image(
+                    channel, entry, outputs_dir=self.outputs_dir
+                )
+                if pooled is not None:
+                    return pooled, True
+                log.info("no free image")
+                return None, False
+            try:
+                generated = ensure_flux_photo(
+                    entry,
+                    outputs_dir=self.outputs_dir,
+                    channel_id=channel,
+                    prefix=prefix or f"{channel}/library/",
+                    client=self.context.get("b2_client"),
+                    bucket=self.context.get("b2_bucket"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                if type(exc).__name__ != "SpendCapExceeded":
+                    raise
+                log.error("%s", exc)
+                log.info("no free image")
+                return None, False
+            return generated, False
 
     def _free_license_photo(self, entry: dict, channel: str) -> Path | None:
         """One vetted free-license file, before FLUX. None when the search misses."""

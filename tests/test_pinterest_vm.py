@@ -720,6 +720,7 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
     from distribution.publishers.api import pinterest as publisher_mod
     from production.formats.pins.pin_copy import build_pin_description, keyword_first_title, pin_alt_text
 
+    monkeypatch.setattr(cfg, "CHANNEL_ID", cfg.CHANNEL_ID, raising=False)
     cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)
     source = tmp_path / "stones.jpg"
     _sample_photo(source)
@@ -1180,6 +1181,7 @@ def test_facebook_caption_is_a_hook_two_or_three_lines_and_the_article(
     from production.formats.pins.pin_copy import card_hook_text
 
     _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.setattr(cfg, "CHANNEL_ID", cfg.CHANNEL_ID, raising=False)
     cfg.configure(channel_id="ancient_knowledge")
     url = f"{_SITE}/baalbek"
     record = {

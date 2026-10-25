@@ -356,11 +356,14 @@ def test_pin_without_an_article_is_skipped(
     assert not list((tmp_path / "pinterest" / "dryrun").glob("*.jpg"))
 
 
-def test_hook_stays_short_and_off_the_upper_focal_band(tmp_path: Path) -> None:
+def test_hook_stays_short_and_off_the_upper_focal_band(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from PIL import Image, ImageDraw
 
     from production.formats.pins import config as cfg
 
+    monkeypatch.setattr(cfg, "CHANNEL_ID", cfg.CHANNEL_ID, raising=False)
     cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)
     long_hook = "What the records leave out about Easter Island moai"
     assert len(_hook_lines(long_hook)) <= 3

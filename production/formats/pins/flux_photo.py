@@ -36,6 +36,25 @@ def flux_prompt(
     )
 
 
+def _refuse_paid_flux(channel_id: str) -> None:
+    """Block Flux when this pin's hard cap is below the still estimate."""
+    from production.formats.pins.spend import guard_pin_spend  # noqa: PLC0415
+    from production.providers.image.together_image import (  # noqa: PLC0415
+        default_steps_for_model,
+        estimate_deepinfra_schnell_cost_usd,
+    )
+
+    steps = default_steps_for_model(FLUX_SCHNELL)
+    estimate = estimate_deepinfra_schnell_cost_usd(FLUX_PIN_WIDTH, FLUX_PIN_HEIGHT, steps)
+    guard_pin_spend(
+        channel_id,
+        estimate,
+        provider="deepinfra",
+        model=FLUX_SCHNELL,
+        source="pin_image",
+    )
+
+
 def generate_flux_photo(
     *,
     topic: str,
@@ -48,6 +67,7 @@ def generate_flux_photo(
     allow_model: bool = True,
 ) -> Path | None:
     """Render one FLUX.1-schnell image into ``dest_dir``. Returns the file or None."""
+    _refuse_paid_flux(channel_id)
     from production.formats.pins.scene_prompt import PIN_NEGATIVE_PROMPT  # noqa: PLC0415
     from production.providers.image.image_provider import get_image_adapter  # noqa: PLC0415
 
@@ -99,6 +119,7 @@ def ensure_flux_photo(
     stem = str(record.get("subject_slug") or record.get("post_id") or "pin")
     library_images = outputs_dir / "library" / "images"
     try:
+        _refuse_paid_flux(channel_id)
         path = generate_flux_photo(
             topic=topic,
             channel_id=channel_id,
@@ -108,6 +129,8 @@ def ensure_flux_photo(
             article=article,
         )
     except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ == "SpendCapExceeded":
+            raise
         log.warning("FLUX photo failed for %s (%s).", stem, type(exc).__name__)
         return None
     if path is None:
