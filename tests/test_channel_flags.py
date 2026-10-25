@@ -44,8 +44,10 @@ _HISTORICAL = (
 
 
 def test_discover_pages_matches_the_historical_order() -> None:
+    """Flag order stays historical. The CLI list is the sorted folder walk."""
     assert discover_pages() == _HISTORICAL
-    assert VALID_PAGES == _HISTORICAL
+    assert set(VALID_PAGES) == set(_HISTORICAL)
+    assert list(VALID_PAGES) == sorted(VALID_PAGES)
 
 
 def test_pipeline_flags_stay_on_the_channels_that_had_the_name_branch() -> None:

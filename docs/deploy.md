@@ -2,13 +2,15 @@
 
 Target: Oracle Cloud VM, Ubuntu 24.04, aarch64, checkout `/opt/omni-engine`. The image is `linux/arm64` at `ghcr.io/diogolean/omni-engine`, tagged with the git SHA and `latest`. How the pieces fit: [architecture/overview.md](architecture/overview.md).
 
-A push to `main` runs `.github/workflows/deploy.yml`. It builds `deploy/docker/Dockerfile` with the repo root as the build context, pushes the image, copies `deploy/compose/docker-compose.yml` to `/opt/omni-engine/docker-compose.yml`, copies `deploy/vm/backup_supermemory.sh` to `/opt/omni-engine/scripts/backup_supermemory.sh`, sets `OMNI_IMAGE_TAG`, and starts the **engine** service only. The remote step is `deploy/vm/remote-deploy.sh`:
+A push to `main` runs [Validate](../.github/workflows/validate.yml) first (lint, factory tests, Aiwake tests, secret scan). [Deploy](../.github/workflows/deploy.yml) starts from `workflow_run` only after that Validate run succeeds on a push to `main`. Pull requests run Validate and do not deploy. The diagram is in [architecture/diagrams.md](architecture/diagrams.md).
+
+Deploy builds `deploy/docker/Dockerfile` with the repo root as the build context, pushes the image, copies `deploy/compose/docker-compose.yml` to `/opt/omni-engine/docker-compose.yml`, copies `deploy/vm/backup_supermemory.sh` to `/opt/omni-engine/scripts/backup_supermemory.sh`, sets `OMNI_IMAGE_TAG`, and starts the **engine** service only. The remote step is `deploy/vm/remote-deploy.sh`:
 
 ```bash
 cd /opt/omni-engine && docker compose pull engine && docker compose up -d engine
 ```
 
-The job name on pull requests stays `lint and tests` (`.github/workflows/validate.yml`). Pull requests do not deploy.
+The job name on pull requests stays `lint and tests` (`.github/workflows/validate.yml`).
 
 ## What compose mounts
 

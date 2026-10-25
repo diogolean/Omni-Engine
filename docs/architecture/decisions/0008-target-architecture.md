@@ -315,7 +315,7 @@ Every PR follows the same rules: `git mv` plus a `sys.modules` shim at the old p
 |---|---|---|
 | M0 | This ADR | — |
 | M1 | import-linter contracts in CI, in report-only mode | makes the target measurable before moving anything |
-| M1b | **High priority (performance).** The scheduler resumes from the last publish in the ledger (for Pinterest, the newest `published_utc` in the B2 `PinLedger`; `next = last + cadence`) instead of the random 3–6h startup delay (`omni/worker.py` `_DEFAULT_MIN_HOURS=3.0`, `_DEFAULT_MAX_HOURS=6.0`) | Every deploy restarts the scheduler and resets that delay. Until M1b ships, merge in batches per deploy window. |
+| M1b | **High priority (performance).** The scheduler resumes from the last publish in the ledger (for Pinterest, the newest `published_utc` in the B2 `PinLedger`; `next = last + cadence`) instead of drawing a fresh startup gap. The operator cadence since #68 is `MIN_INTERVAL_HOURS=7` / `MAX_INTERVAL_HOURS=9`. The process keeps that pair. A channel `.env` does not replace it. | Every deploy restarts the scheduler and resets that delay. Until M1b ships, merge in batches per deploy window. |
 | M2 | `shared/` with env, paths, logging, ffmpeg, mime, retry; re-target the content of #35/#37/#38/#41/#42 | old `utils.*` become shims |
 | M3 | `shared/store`, `shared/contracts` (**`ContentItem` v1**, see below), `shared/memory` | Exit gate: production writes `ContentItem` v1 and distribution reads it without importing production; old readers still work through adapters. M4 does not start before this passes. |
 | M4 | `distribution/publishers` (base, registry, api, browser, export) — the only home of the `Publisher` protocol | Exit gate: import-linter shows no `distribution → production` import; publisher tests green. |
@@ -391,7 +391,7 @@ M15 writes these docs. It does not land in M12. The set is the README, an archit
 1. **What it is** in 3 lines, plus the overview mermaid above.
 2. **Layers**: production · distribution (publishers / scheduling / workers) · animation · products/aiwake · channels · shared · deploy. One paragraph each, with the dependency-rules table.
 3. **Quickstart (keyless mock mode)**: `pip install -r requirements-ci.txt`; the reel pipeline tests on fakes (ffmpeg real); `OMNI_SKIP_DOTENV=1 OUTPUT_PATH=/tmp/demo python -m distribution.workers --role scheduler --once --dry-run`. A real `--mock` flag for `main.py` is a follow-up: today `main.py --test` still opens a Gemini client.
-4. **Channel list**: `discover_channel_ids()` (the same sequence as `discover_pages()`) is the only channel list. `production.writers.persona.channel_profile_rows()` builds channel id, display name, default format, and avatar mode from each folder's `page_config.py` and `master_dna.json`. A new channel is a new folder. Do not add a second hardcoded channel-to-module table here. Distribution publishers stay a separate layer; the M15 README can describe them from the code, not from a list copied into this ADR.
+4. **Channel list**: `production.pipeline.channel_context.discover_channel_ids()` is the sorted folder walk (`master_dna.json`, same rows as `channel_profile_rows()`). `shared.channel_flags.discover_pages()` is the historical flag order and the default page. Neither list is typed out in the engine. A new channel is a new folder. Do not add a second hardcoded channel-to-module table here. The M15 README snapshot is a picture of the folders on that commit, not a list the engine branches on.
 
 5. **Environment variables** (names only; values live in `.env`):
 
@@ -415,3 +415,21 @@ M15 writes these docs. It does not land in M12. The set is the README, an archit
 - Production and distribution can scale and deploy independently: render workers can later run on GPU nodes, while the scheduler stays a single replica until the ledger gains conditional writes.
 - The animation engine can be extracted as its own package or repo without touching any channel.
 - Cost: about 15 small PRs, each needing review and a dry-run. Shims add one indirection until M14.
+
+## Known debt: hard-coded channels
+
+M16 moved the production name branches into `page_config.py` flags (`shared/channel_flags.py`). Lofi pages, Wan, brand colours, image-source policy, voice, captions, pins, grounding, YouTube playlist rules, and the VM mkdir list read those flags. Isolation is “the folder has `channel_adapter.py`”. The default page is `default_page()` (the first historical folder). CLI help lists channels from `discover_channel_ids()`.
+
+One-channel format modules stay on the guard allowlist: `production/formats/mei/`, `production/writers/mei_narrative.py`, `production/providers/image/visual_compiler.py`.
+
+What still names a channel:
+
+| What is locked | Where |
+|---|---|
+| Compose bind-mounts the Ancient Knowledge store. The line must equal `compose_store_mounts()` | `deploy/compose/docker-compose.yml` |
+| YouTube upload CLI default page | `distribution/publishers/api/youtube_upload.py` |
+| Inventory still compares one channel id | `distribution/scheduling/inventory.py` |
+| Facebook scheduler help and quote-sheet path | `distribution/publishers/browser/facebook_scheduler/` |
+| Per-channel entry points, deprecated until M14 | `agents/posting/pinterest_main.py`, `channels_config/endless_summer_paradise/esp_main.py`, `channels_config/principles_of_wealth_finance_economics/wealth_main.py` |
+
+The scheduler, `tools/channel_cli.py`, and Validate have no channel matrix. `config/pinterest_accounts.yaml` already accepts a new row.

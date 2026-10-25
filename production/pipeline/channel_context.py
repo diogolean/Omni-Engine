@@ -15,8 +15,11 @@ Each channel lives in an isolated directory and carries its own:
 
 Supported channels
 ---------------
-Each folder under ``channels_config/`` that owns a ``page_config.py``.
-The loader discovers them. It does not keep a name list in this module.
+  Whatever ``discover_channel_ids()`` returns: one id per
+  ``channels_config/<id>/master_dna.json``. ``aiwake`` and ``shared`` are
+  skipped. Adding a channel is adding that folder. There is no hand list.
+  Behaviour flags live on ``page_config.py`` and are read by
+  ``shared.channel_flags``. The loader does not branch on the channel name.
 
 Usage
 -----
@@ -35,8 +38,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-from production.pipeline.channel_flags import discover_pages
 
 _LOG = logging.getLogger(__name__)
 
@@ -115,7 +116,20 @@ def _extract_style_anchor_via_gemini_vision(image_paths: "list[Path]", page_id: 
 # Constants
 # ---------------------------------------------------------------------------
 
-VALID_PAGES: tuple[str, ...] = discover_pages()
+def discover_channel_ids(root: Path | None = None) -> tuple[str, ...]:
+    """Channel ids that have ``master_dna.json``.
+
+    Same walk as ``production.writers.persona.channel_profile_rows``:
+    skip ``aiwake``, ``shared``, and hidden or test folders. The result is
+    sorted by folder name. A new channel is a new folder.
+    Flag order for the engine is ``shared.channel_flags.discover_pages``.
+    """
+    from production.writers.persona import channel_profile_rows
+
+    return tuple(row["channel"] for row in channel_profile_rows(root))
+
+
+VALID_PAGES: tuple[str, ...] = discover_channel_ids()
 
 VALID_AVATAR_MODES: tuple[str, ...] = ("ON", "OFF")
 
@@ -1627,7 +1641,7 @@ def load_page_context(
     Parameters
     ----------
     page_id:
-        Channel folder slug under channels_config/.
+        A channel folder id from ``discover_channel_ids()``.
     avatar_mode:
         'ON' or 'OFF'.
     post_format:
