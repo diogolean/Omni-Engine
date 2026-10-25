@@ -158,7 +158,7 @@ The snapshot above is eight factory channels. The path to 10, 20, or 100 is the 
 
 **Ledger and the VM.** Idempotency is one file, `OUTPUT_PATH/_omni/publish_ledger.json` (`OMNI_LEDGER_PATH` overrides it). Every account appends to that file. The scheduler is a single replica because the file has no conditional write. A second replica waits on that store. The wake is serial: one account, then the next, one B2 object at a time. Wake duration grows with the number of active accounts. The Oracle VM stays one arm64 engine container plus this optional scheduler. Compose does not grow a service per channel.
 
-Hard-coded channel branches that still special-case a folder are listed under [Known debt](docs/architecture/decisions/0008-target-architecture.md#known-debt-hard-coded-channels).
+The production engine reads behaviour flags and does not special-case a folder id. What still names a channel is listed under [Known debt](docs/architecture/decisions/0008-target-architecture.md#known-debt-hard-coded-channels).
 
 ## Configuration
 

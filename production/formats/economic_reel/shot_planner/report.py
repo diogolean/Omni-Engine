@@ -9,6 +9,8 @@ prints the deterministic list and does not call a model.
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import json
 import sys
 
@@ -36,7 +38,9 @@ def _format(plan: ShotList, heading: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_report(topic: str, script: str, *, channel: str = "ancient_knowledge") -> str:
+def render_report(
+    topic: str, script: str, *, channel: str = sole_page("DOCUMENTARY_PIPELINE")
+) -> str:
     if planner_enabled(channel):
         planned = plan_for_reel(channel=channel, topic=topic, script=script)
         if planned is not None:

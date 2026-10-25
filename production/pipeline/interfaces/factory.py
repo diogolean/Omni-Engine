@@ -12,13 +12,29 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+from pathlib import Path
 from typing import Type
 
 from production.pipeline.interfaces.channel import BaseChannelConfig
 
-# Known isolated slugs (kept for callers that import the constant).
-# Isolation is also true whenever a dedicated channel_adapter.py exists.
-ISOLATED_CHANNEL_IDS = frozenset({"ancient_knowledge", "endless_summer_paradise"})
+
+def _ids_with_adapter() -> frozenset[str]:
+    """A channel is isolated when its folder owns ``channel_adapter.py``."""
+    root = Path(__file__).resolve().parents[3] / "channels_config"
+    found: list[str] = []
+    if root.is_dir():
+        for child in root.iterdir():
+            if (
+                child.is_dir()
+                and not child.name.startswith(".")
+                and (child / "channel_adapter.py").is_file()
+            ):
+                found.append(child.name)
+    return frozenset(found)
+
+
+# Callers import this set. It is every folder that ships an adapter.
+ISOLATED_CHANNEL_IDS = _ids_with_adapter()
 
 
 def _adapter_class(channel_id: str) -> Type[BaseChannelConfig] | None:
@@ -54,7 +70,9 @@ class ChannelFactory:
 
     @staticmethod
     def create(channel_id: str | None = None) -> BaseChannelConfig:
-        cid = (channel_id or os.environ.get("ACTIVE_PAGE") or "anna_protocol").strip()
+        from shared.channel_flags import default_page
+
+        cid = (channel_id or os.environ.get("ACTIVE_PAGE") or default_page()).strip()
         adapter_cls = _adapter_class(cid)
         if adapter_cls is not None:
             return adapter_cls()

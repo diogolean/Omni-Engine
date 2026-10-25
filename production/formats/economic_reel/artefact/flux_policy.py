@@ -7,6 +7,8 @@ A named artefact, its parts, and any specific object are never a Flux subject.
 """
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page
+
 import re
 from typing import Any
 
@@ -646,7 +648,7 @@ def _from_planner_config(channel: str) -> tuple[list[str], list[str]]:
     try:
         from production.formats.economic_reel.shot_planner.entities import load_channel_config
 
-        config = load_channel_config(channel or "ancient_knowledge")
+        config = load_channel_config(coalesce_page(channel, "DOCUMENTARY_PIPELINE"))
     except Exception:  # noqa: BLE001
         return [], []
     return _pair(config.get("flux_scenes") if isinstance(config, dict) else None)

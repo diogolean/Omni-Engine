@@ -2,6 +2,8 @@
 """Uploads, planner rows, library writes, and cost telemetry."""
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.stages.state import VariantState
 from production.pipeline.runtime import (
     Any,
@@ -104,7 +106,7 @@ def _stage_publish_01(state: VariantState) -> None:
             state.durable_abs = app_config.LIBRARY_DIR / state.durable_fname
             state.created_iso = datetime.now(timezone.utc).isoformat()
             state.smart_bait_payload = {'page_id': state.page_ctx.page_id if state.page_ctx else app_config.ACTIVE_PAGE, 'avatar_mode': state.avatar_mode, 'post_format': state.post_format, 'post_type': state.post_type, 'topic': state.resolved_subject, 'subject_slug': state.slug, 'variant_index': state.variant + 1, 'quantity_total': state.qty, 'economic_brain_mode': state.economic, 'image_relative': state.img_ref_engine, 'video_path': str(state.reel_path) if state.reel_path else state.video_path_str, 'b2_url': state._b2_video_url, 'imgbb_url': state.imgbb_url, 'overlay_text': state.overlay_text, 'humanized_caption': state.caption, 'caption_status': state.caption_mode_tag, 'created_utc': state.created_iso, 'qa_verdict': (state._qa_report or {}).get('verdict') or '', 'qa_report_path': (state._qa_report or {}).get('report_path') or '', 'publishable': bool((state._qa_report or {}).get('publishable'))}
-            if (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei':
+            if _channel_enabled(state.page_ctx, 'MEI_PIPELINE'):
                 from production.writers.mei_narrative import build_seo_description, build_seo_title
                 state.build_seo_description = build_seo_description
                 state.build_seo_title = build_seo_title
@@ -201,7 +203,7 @@ def _stage_publish_01(state: VariantState) -> None:
     state.lib_json_rel = path_under_engine(app_config.ENGINE_ROOT, state.durable_abs) if state.durable_abs else ''
     state._seo_title = ''
     state._seo_description = state.caption_str
-    if (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei':
+    if _channel_enabled(state.page_ctx, 'MEI_PIPELINE'):
         from production.writers.mei_narrative import build_seo_description, build_seo_title
         state.build_seo_description = build_seo_description
         state.build_seo_title = build_seo_title

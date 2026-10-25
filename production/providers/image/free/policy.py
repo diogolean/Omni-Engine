@@ -16,23 +16,29 @@ logger = logging.getLogger(__name__)
 POLICIES: frozenset[str] = frozenset({"free_first", "ai_only", "free_only"})
 
 # Channels that are not listed stay on ``ai_only`` so a shared image hook
-# does not change their pipeline.
-_DEFAULTS: dict[str, str] = {
-    "ancient_knowledge": "free_first",
-    "amazing_feed": "free_first",
-    "anna_protocol": "free_first",
-    "annas_garden": "free_first",
-    "wonder_feed": "free_first",
-    "aiwake": "ai_only",
-    "endless_summer_paradise": "ai_only",
-    "master_mei": "ai_only",
-}
+# does not change their pipeline. Folder defaults come from IMAGE_SOURCE_POLICY.
+# The extra keys are legacy slugs that are not channel folders.
+def _builtin_policy_tables() -> tuple[dict[str, str], dict[str, str]]:
+    from shared.channel_flags import discover_channel_ids, sole_page, value
 
-_ALIASES: dict[str, str] = {
-    "annas_garden": "anna_protocol",
-    "anna_s_garden": "anna_protocol",
-    "the_holistic_legacy": "anna_protocol",
-}
+    defaults: dict[str, str] = {}
+    for pid in discover_channel_ids():
+        raw = value(pid, "IMAGE_SOURCE_POLICY", None)
+        if isinstance(raw, str) and raw.strip():
+            defaults[pid] = raw.strip()
+    defaults.setdefault("amazing_feed", "free_first")
+    defaults.setdefault("annas_garden", "free_first")
+    defaults.setdefault("aiwake", "ai_only")
+    natural = sole_page("NATURAL_DRAW_LOCK")
+    aliases = {
+        "annas_garden": natural,
+        "anna_s_garden": natural,
+        "the_holistic_legacy": natural,
+    }
+    return defaults, aliases
+
+
+_DEFAULTS, _ALIASES = _builtin_policy_tables()
 
 
 def normalize_policy(raw: str | None) -> str | None:

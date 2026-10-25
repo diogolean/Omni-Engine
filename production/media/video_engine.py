@@ -133,15 +133,19 @@ def compile_dynamic_reel(
     _WF_LOGO_W_PX        = 380    # maximum prominence width → logo_clip.resize(width=380)
     _WF_LOGO_TOP_Y       = 1600   # absolute top-of-logo y  → set_position(('center', 1600))
     _WF_LOGO_OPACITY     = 0.98   # near-full brand opacity  → set_opacity(0.98)
-    if page_id.lower() == "wonder_feed":
+    from shared.channel_flags import flag
+
+    _graphite = flag((page_id or "").lower(), "GRAPHITE_STYLE_LOCK")
+    if _graphite:
         hook_y_frac         = _WF_HOOK_Y_FRAC
         subtitle_y_position = _WF_SUBTITLE_Y
         subtitle_fontsize   = _WF_SUBTITLE_FONT_SZ
         logo_width_px       = _WF_LOGO_W_PX
         logo_opacity        = _WF_LOGO_OPACITY
         logger.info(
-            "wonder_feed LAYOUT LOCK | hook_y_frac=%.2f | subtitle_y=%d | sub_font=%d"
+            "%s LAYOUT LOCK | hook_y_frac=%.2f | subtitle_y=%d | sub_font=%d"
             " | logo_w=%d | logo_top_y=%d | logo_opacity=%.0f%%",
+            (page_id or "").lower(),
             _WF_HOOK_Y_FRAC, _WF_SUBTITLE_Y, _WF_SUBTITLE_FONT_SZ,
             _WF_LOGO_W_PX, _WF_LOGO_TOP_Y, _WF_LOGO_OPACITY * 100,
         )
@@ -258,7 +262,7 @@ def compile_dynamic_reel(
             # All other pages: derive from logo_y_offset_px as normal.
             _logo_y = (
                 _WF_LOGO_TOP_Y
-                if page_id.lower() == "wonder_feed"
+                if _graphite
                 else _REEL_HEIGHT - logo_y_offset_px - _logo_target_h
             )
             _logo_canvas.paste(_logo_pil, (_logo_x, _logo_y), _logo_pil)

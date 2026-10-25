@@ -3,10 +3,12 @@
 VisualQA_Agent entrypoint — Master Mei biomechanical Visual QA loop.
 
 Usage (from factory root):
-    python -m production.qa.judges.visual_critic.main --channel master_mei --beat "A gaunt worker trapped in a CRT dungeon..."
+    python -m production.qa.judges.visual_critic.main --channel <channel> --beat "A gaunt worker trapped in a CRT dungeon..."
     python -m production.qa.judges.visual_critic.main --list-channels
 """
 from __future__ import annotations
+
+from shared.channel_flags import sole_page
 
 import argparse
 import logging
@@ -38,7 +40,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--channel",
-        default="master_mei",
+        default=sole_page("MEI_PIPELINE"),
         help=(
             "Channel DNA key "
             "(outputs → outputs/{channel}/VisualQA_Agent_Judge/...)"

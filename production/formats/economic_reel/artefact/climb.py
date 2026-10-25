@@ -2,6 +2,8 @@
 """Run one beat up the fallback ladder and return a still-gate result."""
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page, sole_page
+
 import contextvars
 import logging
 import os
@@ -298,7 +300,7 @@ def _entity(
 ) -> Entity | None:
     """The topic entity, unless this spoken line names a different one."""
     try:
-        rows = load_entities(channel or "ancient_knowledge")
+        rows = load_entities(coalesce_page(channel, "DOCUMENTARY_PIPELINE"))
     except Exception:  # noqa: BLE001
         return None
     return entity_for_line(
@@ -431,7 +433,7 @@ def _flux(
     scene_type: str = "",
     geography: str = "",
     coastal: bool = True,
-    channel: str = "ancient_knowledge",
+    channel: str = sole_page("DOCUMENTARY_PIPELINE"),
 ):
     def _run(ctx):
         name = entity.name if entity else ""

@@ -206,7 +206,9 @@ def normalize_niche_key(value: str | None) -> str:
     raw = str(value or "").strip().lower()
     if raw in {"relationship_reflective", "relationship"}:
         return "relationship"
-    if raw in {"parenting", "momma_circle"}:
+    from shared.channel_flags import flag
+
+    if raw == "parenting" or flag(raw, "REFERENCE_REEL_LOCK"):
         return "parenting"
     return "relationship"
 

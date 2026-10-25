@@ -13,6 +13,8 @@ are unchanged and are not the publish gate.
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -58,7 +60,7 @@ def _shift_prompt(prompt: str, attempt: int) -> str:
 def critique_still(
     image_path: Path | str,
     *,
-    channel: str = "ancient_knowledge",
+    channel: str = sole_page("DOCUMENTARY_PIPELINE"),
 ) -> tuple[float, bool, str]:
     """Return ``(score, passed, feedback)``. Never raises."""
     path = Path(image_path)
@@ -98,7 +100,7 @@ def apply_act_vision_qa(
     *,
     acts: list[dict[str, Any]],
     generate_fn: GenerateFn,
-    channel: str = "ancient_knowledge",
+    channel: str = sole_page("DOCUMENTARY_PIPELINE"),
     output_directory: Path | str | None = None,
     cost_tracker: Any | None = None,
     max_workers: int = _CRITIC_WORKERS,
@@ -431,7 +433,7 @@ def generate_and_gate(
     chunk_text: str,
     output_stem: str,
     output_directory: Path | str | None = None,
-    channel: str = "ancient_knowledge",
+    channel: str = sole_page("DOCUMENTARY_PIPELINE"),
     search_dirs: list[Path] | None = None,
     generate_kwargs: dict[str, Any] | None = None,
     banned_subjects: list[str] | None = None,

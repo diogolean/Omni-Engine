@@ -9,7 +9,7 @@ overlays an LLM-generated viral hook text, blends lullaby-style ambient music,
 renders a 9:16 (1080x1920) vertical MP4, uploads to Backblaze B2, and
 writes entries to the PostPlanner xlsx and content_library.json.
 
-Designed for the ``momma_circle`` page (PARENTAL_CONTENTS niche) but the
+Designed for the reference-reel page (PARENTAL_CONTENTS niche) but the
 architecture is fully generic — any page can configure a
 ``REFERENCE_VIDEO_DIR`` in its page_config.py to use this engine.
 
@@ -20,6 +20,8 @@ Public API
     results = engine.run(quantity=3, topic="My topic", clip_duration=30)
 """
 from __future__ import annotations
+
+from shared.channel_flags import sole_page
 from shared.layer_bridge import Symbol
 
 import hashlib
@@ -722,7 +724,7 @@ class ReferenceReelEngine:
     page_ctx:
         Active PageContext (from channel_loader.load_page_context).
     outputs_dir:
-        Root output directory for this page (e.g. outputs/momma_circle/).
+        Root output directory for this page (e.g. outputs/<channel>/).
     api_key_gemini:
         Google Gemini API key for LLM calls.
     api_key_elevenlabs:
@@ -1057,7 +1059,9 @@ class ReferenceReelEngine:
         return {
             "mode": "live",
             "post_type": "REFERENCE_BASED_REELS",
-            "page_id": getattr(self.page_ctx, "page_id", "momma_circle"),
+            "page_id": getattr(
+                self.page_ctx, "page_id", sole_page("REFERENCE_REEL_LOCK")
+            ),
             "quantity": qty,
             "items": results,
             "successful": len(successful),

@@ -5,7 +5,13 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-_CHANNEL_SLUGS = ("wonder_feed", "momma_circle")
+def _lofi_channel_slugs() -> tuple[str, ...]:
+    from production.pipeline.channel_flags import discover_pages, flag
+
+    return tuple(pid for pid in discover_pages() if flag(pid, "LOFI_ENABLED"))
+
+
+_CHANNEL_SLUGS = _lofi_channel_slugs()
 _ROOT_TEST_PREFIXES = ("_api_test_", "_tmp_", "test_")
 _ROOT_TEST_NAMES = frozenset(
     {

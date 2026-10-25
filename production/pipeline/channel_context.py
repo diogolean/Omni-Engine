@@ -18,12 +18,14 @@ Supported channels
   Whatever ``discover_channel_ids()`` returns: one id per
   ``channels_config/<id>/master_dna.json``. ``aiwake`` and ``shared`` are
   skipped. Adding a channel is adding that folder. There is no hand list.
+  Behaviour flags live on ``page_config.py`` and are read by
+  ``shared.channel_flags``. The loader does not branch on the channel name.
 
 Usage
 -----
     from production.pipeline.channel_context import load_page_context, PageContext
 
-    ctx = load_page_context("anna_protocol", avatar_mode="ON", post_format="IMAGE_AVATAR")
+    ctx = load_page_context("your_channel", avatar_mode="ON", post_format="IMAGE_AVATAR")
     print(ctx.page_dir)
     print(ctx.avatar_on)
     print(ctx.atmosphere_style)
@@ -120,6 +122,7 @@ def discover_channel_ids(root: Path | None = None) -> tuple[str, ...]:
     Same walk as ``production.writers.persona.channel_profile_rows``:
     skip ``aiwake``, ``shared``, and hidden or test folders. The result is
     sorted by folder name. A new channel is a new folder.
+    Flag order for the engine is ``shared.channel_flags.discover_pages``.
     """
     from production.writers.persona import channel_profile_rows
 
@@ -138,7 +141,7 @@ VALID_FORMATS: tuple[str, ...] = (
     "TEXT_QUOTE",         # brand-colour solid backdrop + text only (no Gemini image call)
     "DYNAMIC_REEL",       # ECONOMIC_REEL: single image → MP4 via video_engine
     "SEQUENCE_REEL",      # multi-image 80-second reel via core.reel_sequence_engine
-    "REFERENCE_BASED_REELS",  # raw footage clip + hook overlay + lullaby audio (momma_circle)
+    "REFERENCE_BASED_REELS",  # raw footage clip + hook overlay + lullaby audio
 )
 
 _ENGINE_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -169,7 +172,7 @@ class PageContext:
     Attributes
     ----------
     page_id:
-        Slug identifying the active page (e.g. 'anna_protocol').
+        Slug identifying the active page (the channel folder name).
     avatar_mode:
         'ON' — include human subject + reference image in image generation.
         'OFF' — bypass avatar pipeline; generate purely atmospheric imagery.
@@ -443,11 +446,7 @@ class PageContext:
     @property
     def elevenlabs_model(self) -> str:
         """ElevenLabs TTS model for ECONOMIC_REEL voiceover generation."""
-        default = (
-            "eleven_v3"
-            if (self.page_id or "").lower() == "master_mei"
-            else "eleven_multilingual_v2"
-        )
+        default = "eleven_multilingual_v2"
         return str(self.page_cfg.get("ELEVENLABS_MODEL", default)).strip() or default
 
     @property
@@ -455,7 +454,7 @@ class PageContext:
         """Prefer expressive eleven_v3 delivery when True (Master Mei default)."""
         raw = self.page_cfg.get("TTS_EXPRESSIVE_MODE", None)
         if raw is None:
-            return (self.page_id or "").lower() == "master_mei"
+            return False
         return bool(raw)
 
     @property
@@ -679,21 +678,21 @@ class PageContext:
 
     @property
     def subtitle_fontsize(self) -> int:
-        """ECONOMIC_REEL subtitle size — inherited from master_mei chrome."""
+        """ECONOMIC_REEL subtitle size — inherited from the Mei chrome module."""
         from production.formats.mei.mei_chrome import SUBTITLE_FONTSIZE
 
         return max(20, int(SUBTITLE_FONTSIZE))
 
     @property
     def subtitle_y_position(self) -> "int | None":
-        """Lower-third Y — inherited from master_mei chrome."""
+        """Lower-third Y — inherited from the Mei chrome module."""
         from production.formats.mei.mei_chrome import SUBTITLE_Y_POSITION
 
         return max(0, int(SUBTITLE_Y_POSITION))
 
     @property
     def cta_subtitle_y_position(self) -> "int | None":
-        """Follow/CTA overlay Y — inherited from master_mei chrome."""
+        """Follow/CTA overlay Y — inherited from the Mei chrome module."""
         from production.formats.mei.mei_chrome import CTA_SUBTITLE_Y_POSITION
 
         return max(0, int(CTA_SUBTITLE_Y_POSITION))
@@ -1072,7 +1071,7 @@ class PageContext:
         When False the headline/hook text is NOT burned into the top of the frame.
         Only lower-third word subtitles and the logo remain.
         Sourced from ENABLE_TOP_HOOK_TEXT in page_config.py; defaults to True
-        for backward compatibility with wonder_feed and other pages.
+        when the page does not set the flag.
         """
         return bool(self.page_cfg.get("ENABLE_TOP_HOOK_TEXT", True))
 
@@ -1147,15 +1146,7 @@ class PageContext:
         Known values: 'investigative' | 'warrior_discipline' | 'psychology' (default).
         """
         raw = str(self.page_cfg.get("NARRATIVE_MODE", "")).strip().lower()
-        if raw:
-            return raw
-        # Infer from known page IDs when unset
-        pid = (self.page_id or "").lower()
-        if pid == "ancient_knowledge":
-            return "investigative"
-        if pid == "master_mei":
-            return "warrior_discipline"
-        return "psychology"
+        return raw or "psychology"
 
     @property
     def reel_cta_text(self) -> str:
@@ -1182,10 +1173,9 @@ class PageContext:
         """
         try:
             val = float(self.page_cfg.get("AMBIENT_VOLUME", 0.32))
-            if (self.page_id or "").lower() == "master_mei":
-                # Absolute BGM mix (default 0.24) — under voice for narration clarity (−20% from 0.30)
-                return max(0.10, min(0.55, val))
-            return max(0.08, min(1.0, val))
+            lo = float(self.page_cfg.get("AMBIENT_VOLUME_MIN", 0.08))
+            hi = float(self.page_cfg.get("AMBIENT_VOLUME_MAX", 1.0))
+            return max(lo, min(hi, val))
         except (TypeError, ValueError):
             return 0.32
 
@@ -1203,20 +1193,14 @@ class PageContext:
         """When True, prefer Eleven Music v2 composition over local ambient pad."""
         raw = self.page_cfg.get("USE_MUSIC_V2_BED", None)
         if raw is None:
-            return (self.page_id or "").lower() == "master_mei"
+            return False
         return bool(raw)
 
     @property
     def ambient_music_style(self) -> str:
-        """``warrior`` (mei) or ``mystery`` (ancient_knowledge) music_prompt profile."""
+        """Music-prompt profile from AMBIENT_MUSIC_STYLE (warrior or mystery)."""
         raw = str(self.page_cfg.get("AMBIENT_MUSIC_STYLE", "") or "").strip().lower()
-        if raw:
-            return raw
-        return (
-            "warrior"
-            if (self.page_id or "").lower() == "master_mei"
-            else "mystery"
-        )
+        return raw or "mystery"
 
     @property
     def music_prompt_directive_path(self) -> "Path | None":
@@ -1374,23 +1358,14 @@ class PageContext:
         """
         Absolute path to the page's mandatory avatar.png.
 
-        For master_mei: ALWAYS resolves to
-        channels_config/master_mei/avatar_reference/avatar.png (zero-hallucination lock).
+        A channel that sets ``AVATAR_REFERENCE_PATH`` always resolves that file.
         """
-        page_id = (self.page_id or "").lower()
-        if page_id == "master_mei":
-            try:
-                from production.formats.mei.mei_visual import resolve_master_mei_avatar_path
-                p = resolve_master_mei_avatar_path(_ENGINE_ROOT)
-                return p
-            except Exception:
-                pass
         rel = str(self.page_cfg.get("AVATAR_REFERENCE_PATH", "")).strip()
         if rel:
             p = Path(rel)
             if not p.is_absolute():
                 p = _ENGINE_ROOT / rel
-            return p
+            return p.resolve()
         if self.avatar_reference_png.is_file():
             return self.avatar_reference_png
         return None
@@ -1481,13 +1456,13 @@ class PageContext:
         """Enable ElevenLabs SSML parsing (``<break time="…" />``) when True."""
         if "TTS_ENABLE_SSML" in self.page_cfg:
             return bool(self.page_cfg.get("TTS_ENABLE_SSML"))
-        return (self.page_id or "").lower() == "master_mei"
+        return False
 
     @property
     def reel_tail_pad_s(self) -> float:
         """
         Extra seconds appended after final audio so CTA/subtitles never clip.
-        Sourced from REEL_TAIL_PAD_S; defaults to 1.0 (ancient_knowledge buffer).
+        Sourced from REEL_TAIL_PAD_S; defaults to 1.0.
         """
         try:
             return max(0.0, float(self.page_cfg.get("REEL_TAIL_PAD_S", 1.0)))
@@ -1626,8 +1601,8 @@ class PageContext:
     def prompt_negative_terms(self) -> list:
         """
         List of words / phrases to strip from inherited atmosphere prompts.
-        Used to prevent cross-page style contamination (e.g. 'graphite' leaking
-        into ancient_knowledge's photorealistic prompts).
+        Used to prevent cross-page style contamination (for example a graphite
+        term leaking into a photorealistic prompt).
         Sourced from PROMPT_NEGATIVE_TERMS in page_config.py; defaults to [].
         """
         raw = self.page_cfg.get("PROMPT_NEGATIVE_TERMS", [])

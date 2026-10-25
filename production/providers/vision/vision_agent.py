@@ -2,12 +2,14 @@
 """
 Gemini Vision Agent — HARD RESET.
 
-1. Load ALL images from ``channels_config/master_mei/style_reference/``.
+1. Load ALL images from the warrior channel's ``style_reference/`` folder.
 2. Force Gemini Vision to inspect them as style ground truth (palette / texture / env).
 3. Emit the CANONICAL scene template for the concept — never freeform LLM scene rewrites
    that soften into gym/stock photography.
 """
 from __future__ import annotations
+
+from shared.channel_flags import sole_page
 
 import logging
 import os
@@ -55,7 +57,9 @@ def default_style_reference_folder(engine_root: "str | Path | None" = None) -> P
             root = Path(__file__).resolve().parents[3]
     else:
         root = Path(engine_root)
-    return (root / "channels_config" / "master_mei" / "style_reference").resolve()
+    return (
+        root / "channels_config" / sole_page("MEI_PIPELINE") / "style_reference"
+    ).resolve()
 
 
 def list_style_reference_images(reference_folder: str | Path) -> list[Path]:

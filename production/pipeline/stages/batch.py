@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+from shared.channel_flags import default_page
+
+from production.pipeline.channel_flags import enabled as _channel_enabled
 
 from production.pipeline.runtime import (
     Any,
@@ -173,7 +176,7 @@ def produce(
         topic_seed = (subject or "").strip() or "Auto subject imaginer (provide subject for production)"
         _LOG.info("TEST MODE scaffold | topic_hint=%s | quantity=%s", topic_seed, qty)
         print("\n=== TEST MODE - no Gemini or Anthropic network calls ===\n")
-        print(f"=== Page: {page_ctx.display_name if page_ctx else 'anna_protocol'} "
+        print(f"=== Page: {page_ctx.display_name if page_ctx else default_page()} "
               f"| Avatar: {avatar_mode} | Format: {post_format} ===\n")
 
         print("--- Knowledge test: PDF corpus inventory ---\n")
@@ -308,16 +311,16 @@ def produce(
             resolved_subject = imagine_subject(corpus)
 
     # WONDER_FEED + MASTER_MEI reels: ALWAYS pick a fresh topic from the TOPIC_POOL.
-    # ancient_knowledge is handled above and never reads the PDF/wellness corpus.
+    # The documentary page is handled above and never reads the PDF/wellness corpus.
     if (
         (not _isolated)
-        and _page_id_lower in ("wonder_feed", "master_mei")
+        and _channel_enabled(page_ctx, 'POOL_TOPIC_LOCK')
         and post_type in ("ECONOMIC_REEL", "SMART_BAIT")
         and page_ctx is not None
         and page_ctx.topic_pool
     ):
         resolved_subject = _rnd.choice(page_ctx.topic_pool)
-        if _page_id_lower == "master_mei":
+        if _channel_enabled(page_ctx, 'MEI_PIPELINE'):
             from production.writers.mei_narrative import episode_theme_meta
             _ep = episode_theme_meta(resolved_subject)
             _LOG.info(
@@ -573,10 +576,10 @@ def produce(
     # across all variants and depends only on avatar_mode and page_ctx.
     effective_ref_path: Path | None = None
     if avatar_mode == "ON":
-        # master_mei: hard-prefer forced avatar.png DNA over cycled avatars
+        # Mei pipeline: hard-prefer forced avatar.png DNA over cycled avatars
         if (
             page_ctx
-            and (page_ctx.page_id or "").lower() == "master_mei"
+            and _channel_enabled(page_ctx, 'MEI_PIPELINE')
             and not page_ctx.sequence_force_avatar_off
         ):
             _forced_ref = page_ctx.forced_avatar_reference_path

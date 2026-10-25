@@ -138,48 +138,9 @@ class DailyUploadSafetyGate:
     def remaining_capacity(self) -> int:
         return max(0, self.limit - self.successful)
 
-# ---------------------------------------------------------------------------
-# Per-page default playlist titles / descriptions
-# ---------------------------------------------------------------------------
-# Master Mei | Mind Control — Stoic finance playlist (page-exclusive).
-_MASTER_MEI_PLAYLIST_TITLE = "Stoic Financial Freedom & Wealth Mindset"
-_MASTER_MEI_PLAYLIST_DESCRIPTION = (
-    "Welcome to the official Master Mei playlist on Stoic discipline, financial clarity, "
-    "and executive mindset. In this series, Master Mei breaks down ancient Stoic philosophy "
-    "to help you build unbreakable mental toughness, eliminate distractions, control your "
-    "emotions, and make strategic financial decisions. Learn how to master self-discipline, "
-    "build long-term wealth, and lead with quiet power in business and life. "
-    "Subscribe to Master Mei | Mind Control for daily wisdom on Stoicism, business strategy, "
-    "and personal mastery."
-)
-
-_PAGE_DEFAULT_PLAYLISTS: dict[str, str] = {
-    "ancient_knowledge": "Ancient Mysteries & Forbidden History",
-    "master_mei": _MASTER_MEI_PLAYLIST_TITLE,
-    "wonder_feed": "",
-    "anna_protocol": "",
-    # Three ACT playlists are created by wealth_main.py — do not auto-dump here.
-    "principles_of_wealth_finance_economics": "",
-}
-
-_PAGE_PLAYLIST_DESCRIPTIONS: dict[str, str] = {
-    "master_mei": _MASTER_MEI_PLAYLIST_DESCRIPTION,
-}
-
-# Expected channel title substrings (enforce on upload; mismatch → token wipe + re-auth).
-# Master Mei matches "Master Mei" / "Master Mei | Mind Control" — rejects Ancient Knowledge tokens.
-_PAGE_EXPECTED_CHANNEL_HINTS: dict[str, str] = {
-    "master_mei": "Master Mei",
-    "ancient_knowledge": "Ancient Knowledge",
-    "principles_of_wealth_finance_economics": "Principles of Wealth",
-}
-
-# Legacy Master Mei playlist titles — never assign new uploads here.
-_MASTER_MEI_DEPRECATED_PLAYLISTS: frozenset[str] = frozenset({
-    "master mei — warrior discipline",
-    "master mei - warrior discipline",
-    "warrior discipline",
-})
+# Playlist titles, descriptions, hints, and title rules live on each
+# channel's page_config. This module reads those literals; it does not
+# branch on a channel name.
 
 _PLAYLIST_ID_CACHE: dict[str, str] = {}
 
@@ -202,14 +163,31 @@ def _channel_page_config(slug: str) -> Any:
         return None
 
 
-def _expected_channel_hint(slug: str) -> str:
-    """Prefer ``YOUTUBE_CHANNEL_HINT`` from the channel folder, then engine fallbacks."""
+def _cfg_attr(slug: str, name: str, default: Any = None) -> Any:
+    """Read one public name from the channel folder. Missing module → default."""
     cfg = _channel_page_config(slug)
-    if cfg is not None:
-        hint = getattr(cfg, "YOUTUBE_CHANNEL_HINT", None)
-        if hint:
-            return str(hint)
-    return _PAGE_EXPECTED_CHANNEL_HINTS.get(slug, "")
+    if cfg is None or not hasattr(cfg, name):
+        return default
+    val = getattr(cfg, name)
+    if val is None:
+        return default
+    return val
+
+
+def _cfg_text(slug: str, name: str) -> str:
+    return str(_cfg_attr(slug, name, "") or "").strip()
+
+
+def _cfg_seq(slug: str, name: str) -> tuple:
+    raw = _cfg_attr(slug, name, ())
+    if isinstance(raw, (list, tuple)):
+        return tuple(raw)
+    return ()
+
+
+def _expected_channel_hint(slug: str) -> str:
+    """``YOUTUBE_CHANNEL_HINT`` from the channel folder."""
+    return _cfg_text(slug, "YOUTUBE_CHANNEL_HINT")
 
 
 def default_token_dir() -> Path:
@@ -986,25 +964,24 @@ def reschedule_conflicting_publish_slots(
 # ---------------------------------------------------------------------------
 
 def _resolve_page_playlist_meta(page_name: str) -> tuple[str, str]:
-    """Return (title, description) for *page_name*, preferring page_config overrides."""
+    """Return (title, description) from the channel folder."""
     slug = _sanitize_page_name(page_name)
-    title = _PAGE_DEFAULT_PLAYLISTS.get(slug, "")
-    description = _PAGE_PLAYLIST_DESCRIPTIONS.get(slug, "")
+    return (
+        _cfg_text(slug, "YOUTUBE_PLAYLIST_TITLE"),
+        _cfg_text(slug, "YOUTUBE_PLAYLIST_DESCRIPTION"),
+    )
 
-    cfg = _channel_page_config(slug)
-    if cfg is not None:
-        title = (
-            getattr(cfg, "YOUTUBE_PLAYLIST_TITLE", None) or title or ""
-        ).strip() or title
-        description = (
-            getattr(cfg, "YOUTUBE_PLAYLIST_DESCRIPTION", None) or description or ""
-        ).strip() or description
 
-    if slug == "master_mei":
-        title = title or _MASTER_MEI_PLAYLIST_TITLE
-        description = description or _MASTER_MEI_PLAYLIST_DESCRIPTION
-
-    return title, description
+def _playlist_when_description_empty(slug: str, playlist_title: str) -> str:
+    """Description used only when the caller did not pass one."""
+    if _cfg_attr(slug, "YOUTUBE_PLAYLIST_FORCE_DESCRIPTION", False):
+        empty = _cfg_text(slug, "YOUTUBE_PLAYLIST_EMPTY_DESCRIPTION")
+        if empty:
+            return empty
+        forced = _cfg_text(slug, "YOUTUBE_PLAYLIST_DESCRIPTION")
+        if forced:
+            return forced
+    return f"Official playlist: {playlist_title}."
 
 
 def get_or_create_playlist(
@@ -1031,20 +1008,20 @@ def get_or_create_playlist(
         )
         return _PLAYLIST_ID_CACHE[cache_key]
 
-    # Refuse to target deprecated Master Mei "Warrior Discipline" playlist titles.
-    if (
-        _sanitize_page_name(page_name) == "master_mei"
-        and cache_key in _MASTER_MEI_DEPRECATED_PLAYLISTS
-    ):
+    # Refuse titles the channel lists as deprecated.
+    _page_slug = _sanitize_page_name(page_name)
+    _deprecated = {str(item).strip().lower() for item in _cfg_seq(_page_slug, "YOUTUBE_DEPRECATED_PLAYLISTS")}
+    if cache_key in _deprecated:
+        _redirect = _cfg_text(_page_slug, "YOUTUBE_PLAYLIST_TITLE") or playlist_title
         _LOG.warning(
-            "Deprecated Master Mei playlist title '%s' — redirecting to '%s'.",
+            "Deprecated playlist title '%s' — redirecting to '%s'.",
             playlist_title,
-            _MASTER_MEI_PLAYLIST_TITLE,
+            _redirect,
         )
-        playlist_title = _MASTER_MEI_PLAYLIST_TITLE
+        playlist_title = _redirect
         cache_key = playlist_title.strip().lower()
         if not playlist_description:
-            playlist_description = _MASTER_MEI_PLAYLIST_DESCRIPTION
+            playlist_description = _playlist_when_description_empty(_page_slug, playlist_title)
 
     _LOG.info("Searching channel playlists for '%s' …", playlist_title)
     page_token: Optional[str] = None
@@ -1076,10 +1053,10 @@ def get_or_create_playlist(
         # Other pages keep a neutral description (no Master Mei branding).
         if playlist_description:
             desc = playlist_description
-        elif _sanitize_page_name(page_name) == "master_mei":
-            desc = _MASTER_MEI_PLAYLIST_DESCRIPTION
         else:
-            desc = f"Official playlist: {playlist_title}."
+            desc = _playlist_when_description_empty(
+                _sanitize_page_name(page_name), playlist_title
+            )
         try:
             create_resp = youtube.playlists().insert(
                 part="snippet,status",
@@ -1272,11 +1249,11 @@ def sanitize_youtube_title(
     tags = _extract_hashtags(raw)
     clean = _re.sub(r"#\w+", " ", raw)
     slug = _sanitize_page_name(page_name)
-    # Principles of Wealth keeps the SEO pipe template and #shorts marker.
-    if slug == "principles_of_wealth_finance_economics":
+    # Channels that opt in keep the SEO pipe template and #shorts marker.
+    if _cfg_attr(slug, "YOUTUBE_PRESERVE_RAW_TITLE", False):
         clean = _re.sub(r"\s{2,}", " ", (title or "").strip())
         if not clean:
-            clean = "Principles of Wealth"
+            clean = _cfg_text(slug, "YOUTUBE_RAW_TITLE_FALLBACK") or "Untitled"
         return clean[:100], tags
     # Channels that opt in keep [Hook] — Anchor | Brand pipe structure.
     _cfg = _channel_page_config(slug)
@@ -1290,11 +1267,8 @@ def sanitize_youtube_title(
                 or "Untitled"
             )
         return clean[:100], tags
-    if slug == "master_mei":
-        clean = _re.sub(r"(?i)\bMASTER\s*MEI\b", " ", clean)
-        clean = _re.sub(r"(?i)\bMaster\s*Mei\b", " ", clean)
-        clean = _re.sub(r"(?i)\|\s*Mind\s*Control\b", " ", clean)
-        clean = _re.sub(r"(?i)\bMind\s*Control\b", " ", clean)
+    for _pat in _cfg_seq(slug, "YOUTUBE_TITLE_STRIP_PATTERNS"):
+        clean = _re.sub(str(_pat), " ", clean)
     # Collapse leftover pipes / punctuation noise
     clean = _re.sub(r"\s*[|·•]\s*", " — ", clean)
     clean = _re.sub(r"(?:\s*—\s*){2,}", " — ", clean)
@@ -1306,43 +1280,10 @@ def sanitize_youtube_title(
 
 def _default_tags_for_page(page_name: str) -> list[str]:
     slug = _sanitize_page_name(page_name)
-    cfg = _channel_page_config(slug)
-    if cfg is not None:
-        tags = getattr(cfg, "YOUTUBE_DEFAULT_TAGS", None)
-        if isinstance(tags, list) and tags:
-            return [str(t) for t in tags]
-    defaults: dict[str, list[str]] = {
-        "master_mei": [
-            "master mei",
-            "mind control",
-            "stoicism",
-            "financial freedom",
-            "wealth mindset",
-            "stoic philosophy",
-            "business strategy",
-            "self discipline",
-            "executive mindset",
-            "personal finance",
-            "shorts",
-        ],
-        "principles_of_wealth_finance_economics": [
-            "principles of wealth",
-            "stock market analysis",
-            "S&P 500 strategy",
-            "asset allocation",
-            "inflation protection",
-            "risk management",
-            "wealth preservation",
-            "ray dalio",
-        ],
-        "ancient_knowledge": [
-            "ancient knowledge",
-            "ancient mysteries",
-            "forbidden history",
-            "shorts",
-        ],
-    }
-    return list(defaults.get(slug, ["shorts"]))
+    tags = _cfg_attr(slug, "YOUTUBE_DEFAULT_TAGS", None)
+    if isinstance(tags, (list, tuple)) and tags:
+        return [str(t) for t in tags]
+    return ["shorts"]
 
 
 def _normalize_tags(tags: Optional[list[str]], page_name: str, description: str) -> list[str]:
@@ -1575,16 +1516,15 @@ def upload_short(
     # string-only processing below — prevents HttpError 400 (invalidDescription)
     # from raw JSON structures or oversized text leaking into the API payload.
     description = sanitize_youtube_description(description)
-    # Strip legacy factory / Warrior Discipline branding from Master Mei payloads.
-    if page_slug == "master_mei":
-        description = (description or "").replace("Unified Multi-Page Factory", "").strip()
-        description = _re.sub(
-            r"(?i)warrior\s+discipline",
-            "Stoic discipline",
-            description,
-        )
-        if "Warrior Discipline" in safe_title or "warrior discipline" in safe_title.lower():
-            safe_title = "Stoic Financial Freedom"
+    for _old, _new in _cfg_seq(page_slug, "YOUTUBE_DESCRIPTION_REPLACEMENTS"):
+        description = (description or "").replace(str(_old), str(_new)).strip()
+    for _pat, _repl in _cfg_seq(page_slug, "YOUTUBE_DESCRIPTION_REGEX"):
+        description = _re.sub(str(_pat), str(_repl), description or "")
+    _reject = _cfg_seq(page_slug, "YOUTUBE_TITLE_REJECT_SUBSTRINGS")
+    if _reject and any(str(bit).lower() in safe_title.lower() for bit in _reject):
+        _replacement = _cfg_text(page_slug, "YOUTUBE_TITLE_REJECT_REPLACEMENT")
+        if _replacement:
+            safe_title = _replacement
     # Append title-stripped hashtags into description (never leave them in the title)
     if title_hashtags:
         hash_line = " ".join(f"#{t}" for t in title_hashtags)
@@ -1602,11 +1542,16 @@ def upload_short(
     )
     # Belt-and-suspenders: sanitize again immediately before payload build.
     tag_list = sanitize_youtube_tags(tag_list)
-    # Never ship deprecated martial tags on Master Mei uploads.
-    if page_slug == "master_mei":
+    _drop_sub = tuple(
+        str(bit).lower() for bit in _cfg_seq(page_slug, "YOUTUBE_DROP_TAG_SUBSTRINGS")
+    )
+    _drop_exact = {
+        str(bit).lower() for bit in _cfg_seq(page_slug, "YOUTUBE_DROP_TAG_EXACT")
+    }
+    if _drop_sub or _drop_exact:
         tag_list = [
             t for t in tag_list
-            if "warrior discipline" not in t.lower() and t.lower() != "warrior mindset"
+            if not any(bit in t.lower() for bit in _drop_sub) and t.lower() not in _drop_exact
         ]
         tag_list = sanitize_youtube_tags(tag_list)
 
@@ -2390,13 +2335,8 @@ if __name__ == "__main__":
         _publish_at = get_next_publish_slot(_yt_cli, _ch_id)
         print(f"[Scheduler] Next slot: {_publish_at.strftime('%Y-%m-%d %H:%M UTC')}")
 
-    _desc = (
-        "Subscribe to Master Mei | Mind Control for cold discipline, classical strategy, "
-        "and true wealth sovereignty.\n"
-        "#Shorts #MasterMei #Stoicism #FinancialFreedom #Discipline #SunTzu #WealthMindset"
-        if _sanitize_page_name(ns.page) == "master_mei"
-        else f"Uploaded for {ns.page}.\n#Shorts"
-    )
+    _cli_desc = _cfg_text(_sanitize_page_name(ns.page), "YOUTUBE_CLI_DESCRIPTION")
+    _desc = _cli_desc or f"Uploaded for {ns.page}.\n#Shorts"
     _vid_id, _url, _pa = upload_short(
         video_path=ns.video,
         title=ns.title,

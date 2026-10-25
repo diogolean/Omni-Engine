@@ -92,7 +92,9 @@ def _preparse_active_page() -> str:
     (config, persona_dna) resolve the correct page-specific paths.
     Returns the page slug for informational logging.
     """
-    page = "anna_protocol"  # default
+    from shared.channel_flags import default_page
+
+    page = default_page()
     argv = sys.argv[1:]
     for i, arg in enumerate(argv):
         if arg in ("--channel", "--page") and i + 1 < len(argv):

@@ -88,34 +88,7 @@ _FONT_FALLBACK: list[str] = [
     "DejaVuSans-Bold.ttf", "ariblk.ttf", "LiberationSans-Bold.ttf",
 ]
 
-# ---------------------------------------------------------------------------
-# Page-aware brand colour palette
-# Maps active page_id → accent colour candidates.
-# Used for the 30 % chance text accent injection.
-# ---------------------------------------------------------------------------
-_PAGE_ACCENT_COLORS: dict[str, list[tuple[int, int, int]]] = {
-    "wonder_feed": [
-        (180, 210, 240),   # soft sky blue
-        (230, 180, 195),   # rose gold blush
-        (245, 230, 200),   # warm cream
-        (200, 220, 245),   # pale cornflower
-        (240, 200, 215),   # dusty rose
-    ],
-    "anna_protocol": [
-        (255, 220, 100),   # warm gold
-        (255, 235, 160),   # soft cream-gold
-        (255, 200,  80),   # amber
-        (240, 215, 140),   # parchment
-        (255, 230, 130),   # honey
-    ],
-    "down_dirty": [
-        (210, 255, 210),   # mint green
-        (255, 240, 180),   # warm straw
-        (200, 245, 230),   # sage
-        (240, 210, 150),   # terra cotta cream
-    ],
-}
-# Generic fallback palette when page_id not in map
+# Generic fallback palette when a channel sets no accent list.
 _DEFAULT_ACCENT_COLORS: list[tuple[int, int, int]] = [
     (255, 220, 100),
     (255, 235, 160),
@@ -436,6 +409,34 @@ def burn_text_on_video(
 # Public API — TEXT_QUOTE background generator
 # ---------------------------------------------------------------------------
 
+def _brand_accents(page_id: str | None) -> list[tuple[int, int, int]]:
+    """``BRAND_ACCENT_COLORS`` from the channel folder, else the neutral list."""
+    from production.pipeline.channel_flags import value
+
+    raw = value(str(page_id or ""), "BRAND_ACCENT_COLORS", None)
+    colors: list[tuple[int, int, int]] = []
+    if isinstance(raw, (list, tuple)):
+        for color in raw:
+            if isinstance(color, (list, tuple)) and len(color) == 3:
+                colors.append(tuple(int(channel) for channel in color))
+    return colors or list(_DEFAULT_ACCENT_COLORS)
+
+
+def _brand_gradient(page_id: str | None) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """``BRAND_GRADIENT`` from the channel folder, else the neutral default."""
+    from production.pipeline.channel_flags import value
+
+    default = ((10, 10, 10), (28, 28, 28))
+    raw = value(str(page_id or ""), "BRAND_GRADIENT", None)
+    if (
+        isinstance(raw, (list, tuple))
+        and len(raw) == 2
+        and all(isinstance(color, (list, tuple)) and len(color) == 3 for color in raw)
+    ):
+        return tuple(tuple(int(channel) for channel in color) for color in raw)  # type: ignore[return-value]
+    return default
+
+
 def generate_text_quote_background(
     size: tuple[int, int] = (1080, 1350),
     *,
@@ -459,19 +460,13 @@ def generate_text_quote_background(
     -------
     Path to the saved background PNG.
     """
-    # Page-brand gradient palettes (dark base → slightly lighter top edge)
-    _BRAND_BG: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {
-        "wonder_feed":    ((10, 18, 35),   (22, 38, 62)),   # deep navy
-        "anna_protocol":  ((14, 10, 6),    (30, 22, 12)),   # dark earth-gold
-        "down_dirty":     ((8, 18, 6),     (18, 34, 12)),   # deep forest
-    }
     try:
         import config as _cfg
         _pid = page_id or _cfg.ACTIVE_PAGE
     except Exception:  # noqa: BLE001
         _pid = page_id or ""
 
-    top_color, bottom_color = _BRAND_BG.get(_pid, ((10, 10, 10), (28, 28, 28)))
+    top_color, bottom_color = _brand_gradient(_pid)
 
     try:
         from PIL import Image  # type: ignore

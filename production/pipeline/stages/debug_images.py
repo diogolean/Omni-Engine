@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from production.pipeline.channel_flags import enabled as _channel_enabled
+
 from production.pipeline.runtime import (
     Any,
     BatchAngle,
@@ -107,13 +109,13 @@ def run_test_images_debug_mode(
 
     Generates the real production voiceover script and the first ``n`` visual
     image prompts using the SAME prompt-generation code path as a live run
-    (``_build_master_mei_script_act_prompts`` for master_mei, the generic
+    (``_build_master_mei_script_act_prompts`` for the Mei pipeline, the generic
     aligned-visual-block builder for other sequence pages), prints every
     final prompt, generates ``n`` images in parallel
     (``ThreadPoolExecutor(max_workers=5)``).
 
-    Master Mei saves stills (768×1344) to
-    ``outputs/master_mei/VisualQA_Agent_Judge/attempts/``.
+    The Mei pipeline saves stills (768×1344) to
+    ``outputs/<page_id>/VisualQA_Agent_Judge/attempts/``.
     Other pages save to ``outputs/<page_id>/test_previews/``.
 
     Bypasses ElevenLabs voiceover synthesis, MoviePy video compilation, and
@@ -126,7 +128,7 @@ def run_test_images_debug_mode(
     n = max(1, int(n))
     page_ctx = load_page_context(page_id, avatar_mode=avatar_mode, post_format=post_format)
     resolved_subject = (topic or "").strip() or page_ctx.display_name or page_id
-    is_mm = (page_ctx.page_id or "").lower() == "master_mei"
+    is_mm = _channel_enabled(page_ctx, 'MEI_PIPELINE')
     base_style = (
         page_ctx.illustration_style.rstrip(" .")
         if page_ctx.illustration_style
@@ -270,7 +272,7 @@ def run_test_images_debug_mode(
     # Sanitize BEFORE printing so the debug output matches EXACTLY what is
     # sent to Together/FLUX (TogetherImageAdapter.generate() re-applies the
     # same idempotent sanitizer right before the API call).
-    # For master_mei, preview_source is already exactly the pillar prompt set.
+    # For the Mei pipeline, preview_source is already exactly the pillar prompt set.
     _take = len(preview_source) if is_mm else n
     test_prompts = [sanitize_prompt_for_flux(p) for p in preview_source[:_take]]
     for idx, p in enumerate(test_prompts, start=1):
@@ -316,7 +318,7 @@ def run_test_images_debug_mode(
         producer="reel_image",
     )
 
-    # --test-images for master_mei: never attach avatar.png (Mei excluded).
+    # --test-images for the Mei pipeline: never attach avatar.png (Mei excluded).
     style_refs = page_ctx.resolve_style_reference_images()
     style_weight = page_ctx.style_reference_weight
     print(

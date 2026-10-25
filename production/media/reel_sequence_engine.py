@@ -698,9 +698,9 @@ def compute_dense_act_count(
     3.0–5.0 s band — NEVER silently forced to a fixed 4.0). The result is
     then clamped to ``[min_acts, max_acts]`` so a single act's screen time
     (``total_duration / n_acts`` at compile time) always lands inside the
-    per-page pacing window (e.g. master_mei's strict 4–5 s/shot rule).
+    per-page pacing window (e.g. the warrior pipeline's strict 4–5 s/shot rule).
 
-    Example: 90 s ÷ 4.5 = 20 images (master_mei default cadence).
+    Example: 90 s ÷ 4.5 = 20 images (warrior-pipeline default cadence).
     """
     dur = max(1.0, float(duration_s or _DEFAULT_DURATION))
     spa = float(seconds_per_act or _DENSE_SECONDS_PER_ACT)
@@ -976,7 +976,7 @@ _DURATION_CAP_S:   float = 80.0   # maximum reel length (hard cap)
 
 
 # ---------------------------------------------------------------------------
-# Procedural ambient drone — guaranteed fallback (ancient_knowledge mute fix)
+# Procedural ambient drone — guaranteed fallback when a page has no bed
 # ---------------------------------------------------------------------------
 
 def _synthesize_ambient_drone(
@@ -992,8 +992,8 @@ def _synthesize_ambient_drone(
 
     Profiles
     --------
-    mystery  — dark A1/E2/A2 drone (ancient_knowledge)
-    warrior  — deep sub-bass pad + subtle inspirational low synth (master_mei)
+    mystery  — dark A1/E2/A2 drone (documentary pipeline)
+    warrior  — deep sub-bass pad + subtle inspirational low synth (warrior pipeline)
     """
     try:
         from moviepy.audio.AudioClip import AudioArrayClip  # type: ignore[import]
@@ -1261,8 +1261,10 @@ def build_sequence_script_prompt(
             f"(total ~{total_words} words across all acts)."
         )
 
+    from shared.channel_flags import flag
+
     _ak = (
-        (channel_name or "").strip().lower() == "ancient_knowledge"
+        flag((channel_name or "").strip().lower(), "DOCUMENTARY_PIPELINE")
         and _mode != "warrior_discipline"
     )
     if _ak:
@@ -1365,7 +1367,7 @@ Write the complete {n_acts}-act script now:"""
             '"ancient records suggest", "according to legend", "one theory proposes".'
         )
     _asset_block = asset_prompt_block(asset_captions)
-    if (channel_name or "").strip().lower() == "ancient_knowledge":
+    if flag((channel_name or "").strip().lower(), "DOCUMENTARY_PIPELINE"):
         _anchor_rule = (
             f"Begin ACT 1 by naming this episode's topic ({topic}). "
             "The first sentence must include that name. Do not open on a "
@@ -2470,7 +2472,9 @@ def compile_sequence_reel(
         raise RuntimeError(
             "voice track required — refusing to compile a reel without narration"
         )
-    if (page_id or "").strip().lower() == "ancient_knowledge":
+    from shared.channel_flags import flag, sole_page, value
+
+    if flag((page_id or "").strip().lower(), "DOCUMENTARY_PIPELINE"):
         from production.providers.tts.audio_engine import (  # noqa: PLC0415
             assert_voice_and_subtitles_ready as _assert_ak_av,
         )
@@ -2478,7 +2482,7 @@ def compile_sequence_reel(
         _assert_ak_av(
             voice_audio=voice_audio,
             word_timings=word_timings,
-            page_id="ancient_knowledge",
+            page_id=sole_page("DOCUMENTARY_PIPELINE"),
         )
 
     # Harden against Windows MAX_PATH / failed act saves — every path must exist.
@@ -2512,7 +2516,7 @@ def compile_sequence_reel(
     _use_progressive = (
         not _strict_durs and (
             pacing_sequence is not None
-            or (_page == "ancient_knowledge" and not act_durations)
+            or (flag(_page, "DOCUMENTARY_PIPELINE") and not act_durations)
         )
     )
     _progressive_locked = False
@@ -2662,7 +2666,7 @@ def compile_sequence_reel(
         _act_durs = [max(0.05, float(d)) for d in act_durations]
         _scale = total_duration / max(1e-6, sum(_act_durs))
         _act_durs = [d * _scale for d in _act_durs]
-    elif (page_id or "").lower() == "master_mei" or float(hook_max_s or 0) > 0:
+    elif flag((page_id or "").lower(), "MEI_PIPELINE") or float(hook_max_s or 0) > 0:
         try:
             from production.media.visual_roles import compute_mei_act_durations
 
@@ -2815,8 +2819,8 @@ def compile_sequence_reel(
             require_voice=True,
             synthesize_drone=True,
             transition_booms=True,
-            caption_scale=(
-                1.5 if (page_id or "").strip().lower() == "ancient_knowledge" else 1.0
+            caption_scale=float(
+                value(page_id or "", "SEQUENCE_CAPTION_SCALE", 1.0) or 1.0
             ),
         )
 
@@ -2874,7 +2878,7 @@ def compile_sequence_reel(
                     "WAN act %d wrap failed (%s) — Ken Burns fallback.",
                     i + 1, _wan_wrap_exc,
                 )
-        _protect_head = (page_id or "").lower() == "master_mei" and i == n_acts - 1
+        _protect_head = flag((page_id or "").lower(), "MEI_PIPELINE") and i == n_acts - 1
         _log_z0 = _MEI_LAST_ZOOM_START if _protect_head else _ZOOM_PER_ACT_START
         _log_z1 = _MEI_LAST_ZOOM_END if _protect_head else _ZOOM_PER_ACT_END
         logger.info(

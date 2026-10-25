@@ -2,6 +2,8 @@
 """Generate a still and retry with a tighter prompt. Never borrow another image."""
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page, sole_page
+
 import logging
 from pathlib import Path
 from typing import Any, Callable
@@ -39,7 +41,7 @@ def _remember(
         except (TypeError, ValueError):
             score_f = None
         remember(
-            channel=channel or "ancient_knowledge",
+            channel=coalesce_page(channel, "DOCUMENTARY_PIPELINE"),
             topic=topic or spoken,
             spoken=spoken,
             visual_subject=primary_subject(prompt) or prompt[:240],
@@ -115,7 +117,7 @@ def generate_and_gate(
     chunk_text: str,
     output_stem: str,
     output_directory: Path | str | None = None,
-    channel: str = "ancient_knowledge",
+    channel: str = sole_page("DOCUMENTARY_PIPELINE"),
     search_dirs: list[Path] | None = None,
     generate_kwargs: dict[str, Any] | None = None,
     banned_subjects: list[str] | None = None,

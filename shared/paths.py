@@ -162,8 +162,8 @@ def coerce_outputs_path(raw: str | Path | None) -> Path:
     """Resolve a pack-relative ``outputs/...`` path against :func:`outputs_root`.
 
     Absolute paths are returned as-is. A leading ``outputs`` / ``output``
-    segment is stripped so ``outputs/ancient_knowledge`` lands under the
-    env root instead of ``<repo>/outputs/ancient_knowledge``.
+    segment is stripped so a pack path lands under the env root
+    instead of ``<repo>/outputs/<channel>``.
     """
     if raw is None or str(raw).strip() == "":
         return outputs_root()
@@ -469,12 +469,13 @@ def resolve_page_layout(
     does not create directories. ``rebind`` matches ``bind_active_page``:
     it writes ``ACTIVE_PAGE`` and also creates the clips directory.
     """
+    from shared.channel_flags import default_page, flag
     from shared.env import resolve_path
 
     if page is not None:
-        slug = (page or "").strip().lower() or "anna_protocol"
+        slug = (page or "").strip().lower() or default_page()
         os.environ["ACTIVE_PAGE"] = slug
-    active_page = os.getenv("ACTIVE_PAGE", "anna_protocol")
+    active_page = os.getenv("ACTIVE_PAGE", default_page())
     channels_root = engine_root / "channels_config"
     legacy_root = engine_root / "pages_config"
     pages_root = channels_root if channels_root.is_dir() else legacy_root
@@ -486,9 +487,9 @@ def resolve_page_layout(
     persona = active_dir / "persona_dna.py"
     master = active_dir / "master_dna.json"
     # Historical fallback directory name is ``agents.media`` (a dot), not agents/media.
-    if not master.is_file() and active_page == "anna_protocol":
+    if not master.is_file() and flag(active_page, "LEGACY_MEDIA_DNA"):
         master = engine_root / "agents.media" / "master_dna.json"
-    if not persona.is_file() and active_page == "anna_protocol":
+    if not persona.is_file() and flag(active_page, "LEGACY_MEDIA_DNA"):
         persona = engine_root / "agents.media" / "persona_dna.py"
 
     page_ref_avatar = active_dir / "avatar_reference" / "avatar.png"

@@ -2,6 +2,8 @@
 """Deterministic image prompt. No model call."""
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page
+
 import re
 from dataclasses import dataclass
 
@@ -54,7 +56,9 @@ def render_shot(shot: Shot, config: dict | None = None, *, channel: str = "") ->
     The canonical visual is the next sentence. Negatives stay out of the
     positive prompt. A token that names this shot's own subject is dropped.
     """
-    cfg = config if config is not None else load_channel_config(channel or "ancient_knowledge")
+    cfg = config if config is not None else load_channel_config(
+        coalesce_page(channel, "DOCUMENTARY_PIPELINE")
+    )
     subject = shot.subject or "the subject"
     positive = " ".join((
         f"EXPECTED SUBJECT: {subject}.",

@@ -15,11 +15,17 @@ import time
 from pathlib import Path
 from typing import Any
 
+from production.pipeline.channel_flags import pages_with
 from production.pipeline.post_type_registry import register_post_type
 
 logger = logging.getLogger(__name__)
 
-WAN_REEL_PAGE_ID = "ancient_knowledge"
+def _wan_reel_pages() -> tuple[str, ...]:
+    return pages_with("WAN_REEL")
+
+
+# First channel that opts in. Callers that import the name keep working.
+WAN_REEL_PAGE_ID = (_wan_reel_pages() or ("",))[0]
 
 # Wan img2vid canvas — matches smoke-test VRAM-safe size; MoviePy upscales to 1080x1920.
 _WAN_GEN_WIDTH = 512
@@ -50,9 +56,11 @@ _WAN_GPU_DURATION_CAP_S = 5.5
 
 def assert_wan_reel_page(page_id: str | None) -> None:
     pid = str(page_id or "").strip().lower()
-    if pid != WAN_REEL_PAGE_ID:
+    allowed = _wan_reel_pages()
+    if pid not in allowed:
+        named = ", ".join(f"--page {name}" for name in allowed) or "no channel"
         raise SystemExit(
-            "WAN_REEL is isolated to --page ancient_knowledge "
+            f"WAN_REEL is isolated to {named} "
             f"(got {page_id!r})."
         )
 

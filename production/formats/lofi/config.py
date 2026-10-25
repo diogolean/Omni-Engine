@@ -452,12 +452,51 @@ def max_sentence_words(
     return int(max_w) * 2
 
 
+def _lofi_from_channel_flags() -> tuple[
+    frozenset[str],
+    dict[str, frozenset[str]],
+    dict[str, dict[str, Any]],
+    str,
+]:
+    """Pages, module gates, and assembly come from each channel folder."""
+    from production.pipeline.channel_flags import discover_pages, flag, value
+
+    pages: list[str] = []
+    gates: dict[str, set[str]] = {}
+    assembly: dict[str, dict[str, Any]] = {}
+    fallback = ""
+    for pid in discover_pages():
+        if not flag(pid, "LOFI_ENABLED"):
+            continue
+        pages.append(pid)
+        for mod in value(pid, "LOFI_MODULES", ()) or ():
+            gates.setdefault(str(mod), set()).add(pid)
+        raw = value(pid, "LOFI_ASSEMBLY", None)
+        if isinstance(raw, dict):
+            assembly[pid] = dict(raw)
+        if flag(pid, "LOFI_ASSEMBLY_FALLBACK"):
+            fallback = pid
+    return (
+        frozenset(pages),
+        {name: frozenset(ids) for name, ids in gates.items()},
+        assembly,
+        fallback,
+    )
+
+
+def _lofi_asset(name: str) -> str:
+    """Asset path from the channel that owns the lofi assembly fallback."""
+    from production.pipeline.channel_flags import sole_page, value
+
+    page = sole_page("LOFI_ASSEMBLY_FALLBACK")
+    raw = value(page, name, "") if page else ""
+    return str(raw or "")
+
+
 VALID_MODULES: frozenset[str] = frozenset({"relationship", "parenting"})
-MODULE_PAGE_GATES: dict[str, frozenset[str]] = {
-    "relationship": frozenset({"momma_circle", "wonder_feed"}),
-    "parenting": frozenset({"momma_circle", "wonder_feed"}),
-}
-VALID_PAGES: frozenset[str] = frozenset({"momma_circle", "wonder_feed"})
+VALID_PAGES, MODULE_PAGE_GATES, CHANNEL_ASSEMBLY, _LOFI_ASSEMBLY_FALLBACK = (
+    _lofi_from_channel_flags()
+)
 
 # Riso library is the primary prompt source (verbatim). This base is fallback only
 # when a prompt is missing style language — never used to override library palettes.
@@ -1049,7 +1088,7 @@ GRAIN_HALF_RES: bool = True
 CAPTION_FILM_MULTIPLY_OPACITY: float = 0.18
 # Reference film-grain overlay (Screen), below caption; loop/trim to video duration
 ENABLE_DUST_OVERLAY: bool = True
-DUST_OVERLAY_REL: str = "channels_config/wonder_feed/overlays/overlay film grain.mp4"
+DUST_OVERLAY_REL: str = _lofi_asset("LOFI_DUST_OVERLAY")
 DUST_OVERLAY_PREFER_NPZ: bool = False
 DUST_OVERLAY_OPACITY: float = 1.0  # single-pass screen
 DUST_OVERLAY_BLEND: str = "screen"
@@ -1066,7 +1105,7 @@ ENABLE_DUST_PARTICLES: bool = False
 DUST_PARTICLE_COUNT: int = 48
 DUST_PARTICLE_OPACITY: float = 0.12
 # Library BGM — random pick, trimmed to clip length (no generated beds)
-BGM_DIR_REL: str = "channels_config/wonder_feed/audio/bgm"
+BGM_DIR_REL: str = _lofi_asset("LOFI_BGM_DIR")
 BGM_QUARANTINE_DIRNAME: str = "_quarantine_vocals"
 # Dump-named reference rips (0816.MP3) and leftover beds stay out of the pool.
 BGM_DENY_NAME_RE: str = r"^\d{3,8}(\(\d+\))?$"
@@ -1123,39 +1162,8 @@ CAPTION_STYLES: frozenset[str] = frozenset(
     }
 )
 
-# ── Per-channel watermark / brand ───────────────────────────────────────────
-CHANNEL_ASSEMBLY: dict[str, dict[str, Any]] = {
-    "momma_circle": {
-        "logo_candidates": [
-            "channels_config/momma_circle/logo/logo.png",
-            "assets/logos/momma_circle.png",
-            "assets/logos/momma_circle_watermark.png",
-        ],
-        "watermark_handle": "@Momma Circle",
-        "logo_position": "bottom_center",
-        "logo_opacity": 0.90,
-        "logo_scale": 0.18,
-        # The canonical source is ~4x larger than the former derived asset.
-        "logo_size_multiplier": 0.337,
-        "logo_bottom_px": 252,  # raised another 40px
-        "trim_logo_transparent_padding": True,
-        "caption_color": (255, 255, 255),
-        "use_text_watermark": False,
-    },
-    "wonder_feed": {
-        "logo_candidates": [
-            "channels_config/wonder_feed/logo/logo.png",
-        ],
-        "watermark_handle": "@Wonder Feed",
-        "logo_position": "bottom_center",
-        "logo_opacity": 0.95,
-        "logo_scale": 0.224,  # +5% vs 0.213
-        "logo_bottom_px": 389,  # center ≈ 412px from bottom (was ~262; +150)
-        "caption_color": (255, 255, 255),
-        # Use channel PNG logo on LOFI stills/reels (not text handle).
-        "use_text_watermark": False,
-    },
-}
+# Per-channel watermark / brand: CHANNEL_ASSEMBLY is built from LOFI_ASSEMBLY
+# on each channel folder (see _lofi_from_channel_flags).
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DATA_DIR = _PACKAGE_DIR / "data"
@@ -1311,4 +1319,9 @@ def resolve_logo_path(page_id: str, engine_root: Path) -> Path | None:
 
 
 def channel_assembly_cfg(page_id: str) -> dict[str, Any]:
-    return dict(CHANNEL_ASSEMBLY.get(page_id.lower()) or CHANNEL_ASSEMBLY["wonder_feed"])
+    page = (page_id or "").lower()
+    cfg = CHANNEL_ASSEMBLY.get(page)
+    if cfg:
+        return dict(cfg)
+    fallback = CHANNEL_ASSEMBLY.get(_LOFI_ASSEMBLY_FALLBACK) or {}
+    return dict(fallback)
