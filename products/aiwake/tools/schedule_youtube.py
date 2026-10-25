@@ -6,13 +6,13 @@ and the same per-page OAuth token isolation as Wealth / ESP:
 
     credentials/tokens/youtube_token_aiwake.json
 
-    python -m channels_config.aiwake.tools.schedule_youtube --limit 10 --interval 24h
-    python -m channels_config.aiwake.tools.schedule_youtube --limit 17 --interval 84h --dry-run
-    python -m channels_config.aiwake.tools.schedule_youtube --validate-only
+    python -m products.aiwake.tools.schedule_youtube --limit 10 --interval 24h
+    python -m products.aiwake.tools.schedule_youtube --limit 17 --interval 84h --dry-run
+    python -m products.aiwake.tools.schedule_youtube --validate-only
 
 Companion tools stay in this package:
-    python -m channels_config.aiwake.tools.backfill_metadata
-    python -m channels_config.aiwake.tools.sync_youtube_metadata
+    python -m products.aiwake.tools.backfill_metadata
+    python -m products.aiwake.tools.sync_youtube_metadata
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from shared.contracts import (
     validate_queue_ready,
 )
 from shared.store import restore_channel_state
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 _LOG = logging.getLogger("aiwake.youtube")
 
@@ -649,9 +649,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python -m channels_config.aiwake.tools.schedule_youtube --limit 10 --interval 24h\n"
-            "  python -m channels_config.aiwake.tools.schedule_youtube --limit 17 --interval 84h --dry-run\n"
-            "  python -m channels_config.aiwake.tools.schedule_youtube --validate-only\n"
+            "  python -m products.aiwake.tools.schedule_youtube --limit 10 --interval 24h\n"
+            "  python -m products.aiwake.tools.schedule_youtube --limit 17 --interval 84h --dry-run\n"
+            "  python -m products.aiwake.tools.schedule_youtube --validate-only\n"
         ),
     )
     parser.add_argument(

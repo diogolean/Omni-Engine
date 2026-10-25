@@ -101,7 +101,7 @@ def _legacy_reel_switches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("REEL_REEL_BUDGET_USD", "2.0")
     monkeypatch.setenv("REEL_BEAT_BUDGET_USD", "0.20")
     try:
-        from core.spend_ledger import reset_all
+        from production.cost.spend_ledger import reset_all
 
         reset_all()
     except Exception:  # noqa: BLE001
@@ -117,11 +117,11 @@ def _reset_reel_state() -> None:
     counters behind and the next ladder test skipped its reuse rung.
     """
     try:
-        from modules.reel_artefact.asset_pool import reset_claims
-        from modules.reel_artefact.budget import reset_nano_budget, reset_spend, reset_uses
-        from modules.reel_artefact.diversity import reset_diversity
-        from modules.reel_artefact.logbook import reset as reset_sources
-        from modules.reel_artefact.reuse import reset_approved
+        from production.formats.economic_reel.artefact.asset_pool import reset_claims
+        from production.formats.economic_reel.artefact.budget import reset_nano_budget, reset_spend, reset_uses
+        from production.formats.economic_reel.artefact.diversity import reset_diversity
+        from production.formats.economic_reel.artefact.logbook import reset as reset_sources
+        from production.formats.economic_reel.artefact.reuse import reset_approved
     except Exception:  # noqa: BLE001
         return
     reset_claims()

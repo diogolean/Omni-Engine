@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """ThemeCuratorAgent — pick a unique investigative angle for one post."""
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import logging
 import random
@@ -24,7 +25,7 @@ _SYSTEM = (
 
 def _topic_pool() -> list[str]:
     try:
-        from channels_config.ancient_knowledge import page_config as _pc
+        _pc = Symbol('channels_config.ancient_knowledge', 'page_config')
 
         pool = list(getattr(_pc, "TOPIC_POOL", []) or [])
         if pool:
@@ -48,9 +49,7 @@ class ThemeCuratorAgent(BaseAgent):
         self._bind_cost_tracker(state)
         pool = _topic_pool()
         try:
-            from channels_config.ancient_knowledge.channel_adapter import (
-                AncientKnowledgeAdapter,
-            )
+            AncientKnowledgeAdapter = Symbol('channels_config.ancient_knowledge.channel_adapter', 'AncientKnowledgeAdapter')
 
             adapter = AncientKnowledgeAdapter()
             pool = adapter.get_niche_topics() or pool

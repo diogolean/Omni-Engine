@@ -7,6 +7,7 @@ Longs and Shorts are separate CLI runs:
     parent long_video_id exists, otherwise the Short still uploads.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import json
 import logging
@@ -53,7 +54,7 @@ from production.formats.wealth.schedule import (
 )
 
 _LOG = logging.getLogger(__name__)
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 _ENGINE_ROOT = Path(__file__).resolve().parents[3]
 _OUTPUTS = page_outputs_dir(CHANNEL_ID)
@@ -70,7 +71,7 @@ def _utc_now() -> str:
 
 def _load_state() -> dict[str, Any]:
     try:
-        from modules.durable_store import hydrate_state_file, restore_channel_state
+        from shared.store import hydrate_state_file, restore_channel_state
 
         restore_channel_state(CHANNEL_ID)
         hydrate_state_file(_STATE_PATH)
@@ -100,7 +101,7 @@ def _save_state(state: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     try:
-        from modules.durable_store import sync_state_file
+        from shared.store import sync_state_file
 
         sync_state_file(_STATE_PATH)
     except Exception:
@@ -200,7 +201,7 @@ def run_scan(
     if persist:
         write_scan_snapshot(scan, _SCAN_PATH)
         try:
-            from modules.durable_store import sync_state_file
+            from shared.store import sync_state_file
 
             sync_state_file(_SCAN_PATH)
         except Exception:
@@ -519,11 +520,9 @@ def run_cleanup(
         f"{len(all_short_ids)} Short ID(s) across all episodes are untouchable."
     )
 
-    from agents.posting.youtube_publisher import (
-        build_youtube_client_for_page,
-        fetch_videos_metadata,
-        list_channel_upload_videos,
-    )
+    build_youtube_client_for_page = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client_for_page')
+    fetch_videos_metadata = Symbol('distribution.publishers.api.youtube_upload', 'fetch_videos_metadata')
+    list_channel_upload_videos = Symbol('distribution.publishers.api.youtube_upload', 'list_channel_upload_videos')
 
     youtube = build_youtube_client_for_page(_PAGE, enforce_channel=True)
     uploads = list_channel_upload_videos(youtube, max_pages=20)
@@ -658,7 +657,7 @@ def run_cleanup(
                 f"{item['video_id']}  {title}"
             )
     else:
-        from agents.posting.youtube_publisher import delete_youtube_video
+        delete_youtube_video = Symbol('distribution.publishers.api.youtube_upload', 'delete_youtube_video')
 
         for item in to_delete:
             title = (item.get("meta") or {}).get("title") or ""
@@ -885,17 +884,15 @@ def run_publish(
     limit: Optional[int] = None,
 ) -> dict[str, Any]:
     """Independent scheduled upload for longs (weekly) or Shorts (daily)."""
-    from agents.posting.youtube_publisher import (
-        DailyUploadSafetyGate,
-        YouTubeQuotaExceededError,
-        build_youtube_client_for_page,
-        link_short_to_related_long,
-        list_channel_upload_videos,
-        list_future_scheduled_videos,
-        queue_pending_upload,
-        set_video_thumbnail,
-        upload_short,
-    )
+    from shared.youtube_errors import YouTubeQuotaExceededError
+    DailyUploadSafetyGate = Symbol('distribution.publishers.api.youtube_upload', 'DailyUploadSafetyGate')
+    build_youtube_client_for_page = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client_for_page')
+    link_short_to_related_long = Symbol('distribution.publishers.api.youtube_upload', 'link_short_to_related_long')
+    list_channel_upload_videos = Symbol('distribution.publishers.api.youtube_upload', 'list_channel_upload_videos')
+    list_future_scheduled_videos = Symbol('distribution.publishers.api.youtube_upload', 'list_future_scheduled_videos')
+    queue_pending_upload = Symbol('distribution.publishers.api.youtube_upload', 'queue_pending_upload')
+    set_video_thumbnail = Symbol('distribution.publishers.api.youtube_upload', 'set_video_thumbnail')
+    upload_short = Symbol('distribution.publishers.api.youtube_upload', 'upload_short')
 
     mode_n = (mode or "longs").strip().lower()
     if mode_n not in {"longs", "shorts"}:
@@ -1230,11 +1227,9 @@ def run_publish(
 
 
 def _sync_playlists(youtube, state: dict[str, Any], episodes: list[int]) -> dict[str, str]:
-    from agents.posting.youtube_publisher import (
-        add_video_to_playlist,
-        get_or_create_playlist,
-        update_playlist_snippet,
-    )
+    add_video_to_playlist = Symbol('distribution.publishers.api.youtube_upload', 'add_video_to_playlist')
+    get_or_create_playlist = Symbol('distribution.publishers.api.youtube_upload', 'get_or_create_playlist')
+    update_playlist_snippet = Symbol('distribution.publishers.api.youtube_upload', 'update_playlist_snippet')
 
     ids: dict[str, str] = {}
     stored = state.setdefault("playlists", {})
@@ -1304,7 +1299,7 @@ def run_playlists(
             )
         return {"episodes": wanted, "dry_run": True}
 
-    from agents.posting.youtube_publisher import build_youtube_client_for_page
+    build_youtube_client_for_page = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client_for_page')
 
     youtube = build_youtube_client_for_page(_PAGE, enforce_channel=True)
     ids = _sync_playlists(youtube, state, wanted)
@@ -1512,11 +1507,9 @@ def run_metadata(
             "dry_run": True,
         }
 
-    from agents.posting.youtube_publisher import (
-        build_youtube_client_for_page,
-        update_playlist_snippet,
-        update_video_metadata,
-    )
+    build_youtube_client_for_page = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client_for_page')
+    update_playlist_snippet = Symbol('distribution.publishers.api.youtube_upload', 'update_playlist_snippet')
+    update_video_metadata = Symbol('distribution.publishers.api.youtube_upload', 'update_video_metadata')
 
     youtube = build_youtube_client_for_page(_PAGE, enforce_channel=True)
     patched = 0

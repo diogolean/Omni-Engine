@@ -5,17 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from core.audio_chunker import chunk_word_timings
-from modules.reel_grounding.brief import named_objects
-from modules.reel_grounding.prompt import (
-    assemble_beat,
-    format_resolved_objects,
-    ground_image_prompt,
-)
-from modules.reel_qa.beats import pack_sentences
-from modules.reel_qa.prompts import refine_prompt
-from modules.reel_qa.relevance import evaluate_chunk_relevance
-from modules.reel_qa.retry import _prompt_for_judge
+from production.media.audio_chunker import chunk_word_timings
+from production.formats.economic_reel.grounding.brief import named_objects
+from production.formats.economic_reel.grounding.prompt import assemble_beat, format_resolved_objects, ground_image_prompt
+from production.qa.beats import pack_sentences
+from production.qa.prompts import refine_prompt
+from production.qa.relevance import evaluate_chunk_relevance
+from production.qa.retry import _prompt_for_judge
 
 _TOPIC = "Lost OOPArts"
 _SCRIPT = (

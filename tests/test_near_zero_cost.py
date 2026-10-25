@@ -28,9 +28,9 @@ def prod(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
     for name in _KEYS:
         monkeypatch.setattr(config, name, None, raising=False)
-    from core.spend_ledger import reset_all
-    from modules.reel_artefact.budget import reset_spend
-    from modules.reel_artefact.provider_health import reset_providers
+    from production.cost.spend_ledger import reset_all
+    from production.formats.economic_reel.artefact.budget import reset_spend
+    from production.formats.economic_reel.artefact.provider_health import reset_providers
 
     reset_all()
     reset_spend()
@@ -39,9 +39,9 @@ def prod(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
 
 
 def test_nano_banana_is_off_and_the_reel_cap_is_five_cents(prod) -> None:
-    from modules.reel_artefact.budget import beat_budget_usd, nano_cap, reel_budget_usd
-    from modules.reel_artefact.ladder import rung_names
-    from modules.reel_artefact.pricing import NANOBANANA_MODELS
+    from production.formats.economic_reel.artefact.budget import beat_budget_usd, nano_cap, reel_budget_usd
+    from production.formats.economic_reel.artefact.ladder import rung_names
+    from production.formats.economic_reel.artefact.pricing import NANOBANANA_MODELS
 
     assert nano_cap() == 0
     assert reel_budget_usd() == pytest.approx(0.05)
@@ -53,8 +53,8 @@ def test_nano_banana_is_off_and_the_reel_cap_is_five_cents(prod) -> None:
 
 
 def test_judges_default_to_the_cheap_chain(prod) -> None:
-    from agents.media.providers.visual_eval import OpenRouterVisualEval
-    from modules.reel_qa.config import frame_samples, judge_retries, model_chain
+    from production.qa.judges.visual_eval import OpenRouterVisualEval
+    from production.qa.config import frame_samples, judge_retries, model_chain
 
     assert model_chain() == ["qwen"]
     assert frame_samples() == 2
@@ -65,7 +65,7 @@ def test_judges_default_to_the_cheap_chain(prod) -> None:
 
 
 def test_gemini_cap_is_clamped_and_prices_count_thinking(prod) -> None:
-    from core import google_guardrail as gg
+    from production.cost import google_guardrail as gg
 
     prod.setenv("MAX_GOOGLE_COST_PER_RUN_USD", "5.00")
     assert gg.max_google_cost_usd() == pytest.approx(0.05)
@@ -83,7 +83,7 @@ def test_gemini_cap_is_clamped_and_prices_count_thinking(prod) -> None:
 
 def test_gemini_text_config_turns_thinking_off(prod) -> None:
     pytest.importorskip("google.genai")
-    from core.google_guardrail import cheap_text_config
+    from production.cost.google_guardrail import cheap_text_config
 
     cfg = cheap_text_config(None, "models/gemini-2.5-flash")
     assert cfg.thinking_config.thinking_budget == 0
@@ -95,8 +95,8 @@ def test_gemini_text_config_turns_thinking_off(prod) -> None:
 
 
 def test_reel_cap_covers_llm_calls_and_stills(prod) -> None:
-    from core import spend_ledger
-    from modules.reel_artefact.budget import reset_spend, try_spend
+    from production.cost import spend_ledger
+    from production.formats.economic_reel.artefact.budget import reset_spend, try_spend
 
     spend_ledger.record(provider="openrouter", model="m", cost_usd=0.04)
     assert try_spend(0.003) is True
@@ -109,7 +109,8 @@ def test_reel_cap_covers_llm_calls_and_stills(prod) -> None:
 
 
 def test_cheap_llm_takes_the_first_live_provider(prod) -> None:
-    from core import cheap_llm, spend_ledger
+    from production.providers.llm import cheap_llm
+    from production.cost import spend_ledger
 
     prod.setenv("OPENROUTER_API_KEY", "or-test")
     prod.setenv("DEEPINFRA_API_KEY", "di-test")
@@ -133,7 +134,7 @@ def test_cheap_llm_takes_the_first_live_provider(prod) -> None:
 
 
 def test_cheap_llm_without_keys_is_unavailable(prod) -> None:
-    from core import cheap_llm
+    from production.providers.llm import cheap_llm
 
     assert cheap_llm.available("text") is False
     with pytest.raises(cheap_llm.CheapLLMUnavailable):
@@ -141,8 +142,8 @@ def test_cheap_llm_without_keys_is_unavailable(prod) -> None:
 
 
 def test_text_only_gemini_request_is_served_by_the_cheap_chain(prod) -> None:
-    from agents.media.providers import gemini_utils
-    from core import cheap_llm
+    from production.providers.llm import gemini_utils
+    from production.providers.llm import cheap_llm
 
     prod.setenv("GEMINI_TEXT_CHEAP_FIRST", "force")
     prod.setenv("DEEPINFRA_API_KEY", "di-test")
@@ -180,8 +181,8 @@ def _noise(path: Path, size=(800, 1400)) -> Path:
 
 
 def test_local_gate_rejects_a_blank_frame_without_a_model(prod, tmp_path: Path) -> None:
-    from modules.reel_qa.local_gate import check_still, reset_gate
-    from modules.reel_qa.relevance import evaluate_chunk_relevance
+    from production.qa.local_gate import check_still, reset_gate
+    from production.qa.relevance import evaluate_chunk_relevance
 
     prod.setenv("REEL_LOCAL_EMBED", "off")
     reset_gate()
@@ -200,7 +201,7 @@ def test_local_gate_rejects_a_blank_frame_without_a_model(prod, tmp_path: Path) 
 def test_scene_library_reuses_an_approved_scene_after_the_cooldown(
     prod, tmp_path: Path,
 ) -> None:
-    from modules.reel_artefact import scene_library as lib
+    from production.formats.economic_reel.artefact import scene_library as lib
 
     prod.setenv("REEL_SCENE_LIBRARY_DIR", str(tmp_path / "lib"))
     still = _noise(tmp_path / "sea.png", size=(64, 112))
@@ -219,7 +220,7 @@ def test_scene_library_reuses_an_approved_scene_after_the_cooldown(
 
 
 def test_subscription_voice_is_logged_but_not_capped(monkeypatch) -> None:
-    from core import spend_ledger
+    from production.cost import spend_ledger
 
     spend_ledger.reset_all()
     monkeypatch.setenv("REEL_REEL_BUDGET_USD", "0.05")

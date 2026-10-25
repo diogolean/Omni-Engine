@@ -8,13 +8,13 @@ _REORG_ROOT = _ReorgPath(__file__).resolve().parents[3]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 from pathlib import Path
 
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi.image_gen import generate_scene_image_dev
-from core.economic_reel_lofi.visual_identity import assemble_v2_prompt_dev
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi.image_gen import generate_scene_image_dev
+from production.formats.lofi.visual_identity import assemble_v2_prompt_dev
 
 ROOT = Path(__file__).resolve().parents[3]
 BEFORE = (

@@ -82,7 +82,7 @@ def existing_local_file(key: str, channel: str = "") -> Path | None:
     channel_slug, relative = _split(key)
     if channel and not channel_slug:
         channel_slug = channel.strip().lower()
-    from utils.pipeline_paths import outputs_path, outputs_root  # noqa: PLC0415
+    from shared.paths import outputs_path, outputs_root  # noqa: PLC0415
 
     candidates = [
         outputs_root() / key,
@@ -202,7 +202,7 @@ def materialize_publish_file(
 
             dest = download_cache_path(key)
         else:
-            from utils.pipeline_paths import temp_path  # noqa: PLC0415
+            from shared.paths import temp_path  # noqa: PLC0415
 
             dest = temp_path(channel or "publish", "library", raw.name or "asset.bin")
     found, _source = materialize_key(
@@ -267,7 +267,7 @@ def _copy_local_records(library: Path, prefix: str) -> int:
     channel, _rest = _split(prefix if prefix.endswith("/") else prefix + "/")
     if not channel:
         return 0
-    from utils.pipeline_paths import outputs_path  # noqa: PLC0415
+    from shared.paths import outputs_path  # noqa: PLC0415
 
     source = outputs_path(channel, "library")
     try:

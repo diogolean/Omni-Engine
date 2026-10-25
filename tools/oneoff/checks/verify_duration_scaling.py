@@ -31,16 +31,12 @@ os.environ.setdefault("ACTIVE_PAGE", "ancient_knowledge")
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from config import words_for_duration  # noqa: E402
-from core.reel_sequence_engine import (  # noqa: E402
-    compute_dense_act_count,
-    compute_hook_body_act_count,
-    compute_two_tier_act_count,
-)
+from production.media.reel_sequence_engine import compute_dense_act_count, compute_hook_body_act_count, compute_two_tier_act_count
 
 
 def _resolve_page_ctx(video_length_override: float | None) -> object:
     """Load AK page_ctx with an optional CLI-style --video-length override."""
-    import channel_loader  # noqa: PLC0415
+    import production.pipeline.channel_context as channel_loader  # noqa: PLC0415
     importlib.reload(channel_loader)
     ctx = channel_loader.load_page_context(
         page_id="ancient_knowledge",

@@ -5,8 +5,8 @@ Rewrites local ``content_library.json`` from transcripts (model matchups,
 researched descriptions, high-RPM tags), then patches already scheduled
 or uploaded videos via ``youtube_publisher.update_video_metadata``.
 
-    python -m channels_config.aiwake.tools.sync_youtube_metadata --dry-run
-    python -m channels_config.aiwake.tools.sync_youtube_metadata
+    python -m products.aiwake.tools.sync_youtube_metadata --dry-run
+    python -m products.aiwake.tools.sync_youtube_metadata
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from shared.contracts import (
     load_distribution_library,
 )
 from shared.store import restore_channel_state
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
     from products.aiwake.settings import (

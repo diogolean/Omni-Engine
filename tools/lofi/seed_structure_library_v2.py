@@ -21,11 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.economic_reel_lofi import config as lofi_cfg
-from agents.writer.claude_polish import (
-    _usage_rec,
-    append_cost_log,
-)
+from production.formats.lofi import config as lofi_cfg
+from production.writers.claude_polish import _usage_rec, append_cost_log
 
 DATA = lofi_cfg.DATA_DIR
 V1_PATH = DATA / "structure_library_v1.json"
@@ -193,7 +190,7 @@ def _seed_pass(user: str, *, tag: str) -> dict:
         print(f"[seed] claude model={model}")
         return _call_seed(client, model, user, tag=tag)
 
-    from core.cheap_llm import CheapLLMUnavailable, available, complete
+    from production.providers.llm.cheap_llm import CheapLLMUnavailable, available, complete
 
     if not available("text"):
         raise SystemExit(
@@ -249,7 +246,7 @@ def main() -> int:
         patterns.append(p)
     if len(patterns) < 15:
         raise SystemExit(f"seed returned {len(patterns)} patterns, need 15-25")
-    from core.economic_reel_lofi.corpus_echo import echo_hits
+    from production.formats.lofi.corpus_echo import echo_hits
 
     clean: list[dict] = []
     for p in patterns:
@@ -293,7 +290,7 @@ def main() -> int:
     }
     V2_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"[seed] wrote {V2_PATH} patterns={len(patterns)}")
-    from core.economic_reel_lofi.lofi_collections import reset_structure_library_cache
+    from production.formats.lofi.lofi_collections import reset_structure_library_cache
 
     reset_structure_library_cache()
     return 0

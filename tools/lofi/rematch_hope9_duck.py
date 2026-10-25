@@ -16,14 +16,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agents.media.audio_engine import _audio_file_duration_s  # noqa: E402
-from core.economic_reel_lofi.assembler import list_library_bgm_tracks  # noqa: E402
+from production.providers.tts.audio_engine import _audio_file_duration_s  # noqa: E402
+from production.formats.lofi.assembler import list_library_bgm_tracks  # noqa: E402
 from tools.lofi.probes.vo_pace_probe import silencedetect  # noqa: E402
-from core.economic_reel_lofi._tools.vo_pause_probe import (  # noqa: E402
-    OUT_DIR,
-    _expand_duck_windows,
-    _mix_ducked,
-)
+from production.formats.lofi._tools.vo_pause_probe import OUT_DIR, _expand_duck_windows, _mix_ducked
 
 
 def _overlap_ok(planned, sil_rep, lead=0.35):

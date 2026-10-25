@@ -318,7 +318,7 @@ def produce(
     ):
         resolved_subject = _rnd.choice(page_ctx.topic_pool)
         if _page_id_lower == "master_mei":
-            from agents.media.mei_narrative import episode_theme_meta
+            from production.writers.mei_narrative import episode_theme_meta
             _ep = episode_theme_meta(resolved_subject)
             _LOG.info(
                 "%s TOPIC LOCK | episode=%s | theme=%s | topic=%r (pool size=%d)",
@@ -617,7 +617,7 @@ def produce(
     generated_hooks_cache: list[str] = []
     try:
         import json as _jc
-        from modules.durable_store import hydrate_state_file
+        from shared.store import hydrate_state_file
 
         _hooks_cache_path = hydrate_state_file(_hooks_cache_path)
         if _hooks_cache_path.exists():

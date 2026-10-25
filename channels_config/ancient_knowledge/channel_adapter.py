@@ -9,6 +9,7 @@ Visual rules natively include the photoreal monument lock that currently
 lives as a page_id branch in main.py.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import json
 import random
@@ -16,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from core.interfaces.channel import BaseChannelConfig, VisualRules
+from shared.channel_protocol import BaseChannelConfig, VisualRules
 
 _CHANNEL_DIR = Path(__file__).resolve().parent
 _DNA_PATH = _CHANNEL_DIR / "master_dna.json"
@@ -234,7 +235,7 @@ class AncientKnowledgeAdapter(BaseChannelConfig):
         style_bit = f"{style}. " if style else ""
         raw = f"{opener} {style_bit}{body}"
         try:
-            from agents.media.scene_prompt_generator import apply_topic_visual_lock
+            apply_topic_visual_lock = Symbol('production.providers.image.scene_prompt_generator', 'apply_topic_visual_lock')
 
             locked = apply_topic_visual_lock(raw, topic=clean, caption=clean, style=style)
             return str(locked.get("image_generation_prompt") or raw)
@@ -322,11 +323,9 @@ class AncientKnowledgeAdapter(BaseChannelConfig):
 
     def _visualqa_rules_block(self) -> str:
         try:
-            from quality.VisualQA_Agent.channel_rag import (
-                get_channel_rules,
-                rules_as_prompt_block,
-                seed_default_channels,
-            )
+            get_channel_rules = Symbol('production.qa.judges.visual_critic.channel_rag', 'get_channel_rules')
+            rules_as_prompt_block = Symbol('production.qa.judges.visual_critic.channel_rag', 'rules_as_prompt_block')
+            seed_default_channels = Symbol('production.qa.judges.visual_critic.channel_rag', 'seed_default_channels')
 
             seed_default_channels(force=False)
             rules = get_channel_rules(self.channel_id)
@@ -337,7 +336,8 @@ class AncientKnowledgeAdapter(BaseChannelConfig):
     def _match_visual_concept(self, topic: str) -> str:
         lo = (topic or "").lower()
         try:
-            from quality.VisualQA_Agent.channel_rag import get_channel_rules, seed_default_channels
+            get_channel_rules = Symbol('production.qa.judges.visual_critic.channel_rag', 'get_channel_rules')
+            seed_default_channels = Symbol('production.qa.judges.visual_critic.channel_rag', 'seed_default_channels')
 
             seed_default_channels(force=False)
             concepts = (get_channel_rules(self.channel_id).get("visual_concepts") or {})

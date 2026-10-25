@@ -10,8 +10,8 @@ if str(_REORG_ROOT) not in _reorg_sys.path:
 import json
 from pathlib import Path
 
-from agents.writer.script_agent import _narrative_gate_reasons
-from core.economic_reel_lofi.setting_archetypes import classify_setting_archetype
+from production.writers.script_agent import _narrative_gate_reasons
+from production.formats.lofi.setting_archetypes import classify_setting_archetype
 
 path = Path("production/formats/lofi/store/locked_script_communication_v1.json")
 data = json.loads(path.read_text(encoding="utf-8"))

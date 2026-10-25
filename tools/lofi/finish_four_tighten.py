@@ -18,15 +18,9 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
 import tighten_four_scripts as t4  # noqa: E402
-from agents.writer.judge_gate import judge_draft  # noqa: E402
-from agents.writer.spoken_budget import (  # noqa: E402
-    apply_draft_to_script,
-    assess_lines,
-    must_keep_from_rows,
-    rewrite_single_line,
-    script_to_draft,
-)
-from core.economic_reel_lofi.visual_identity import assign_distinct_hook_varieties  # noqa: E402
+from production.qa.judges.judge_gate import judge_draft  # noqa: E402
+from production.writers.spoken_budget import apply_draft_to_script, assess_lines, must_keep_from_rows, rewrite_single_line, script_to_draft
+from production.formats.lofi.visual_identity import assign_distinct_hook_varieties  # noqa: E402
 
 OUT = t4.OUT_DIR
 REVIEW = t4.REVIEW_DIR

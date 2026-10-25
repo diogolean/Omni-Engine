@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Write production status, park non-ready captions, and generate captions v3.
 
-    python -m channels_config.aiwake.tools.repair_captions
+    python -m products.aiwake.tools.repair_captions
 
 Does not publish. Saves the library every 10 ready entries. Resumes rows that
 already have a passing captions_v3 pack.

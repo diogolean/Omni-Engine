@@ -23,7 +23,7 @@ from typing import Any, Sequence
 
 import numpy as np
 from PIL import Image as PILImage
-from utils.pipeline_paths import moviepy_temp_audio_dir
+from shared.paths import moviepy_temp_audio_dir
 from PIL import ImageEnhance
 
 from production.formats.lofi import config as lofi_cfg
@@ -80,7 +80,7 @@ def _ffmpeg_subprocess_timeout_s() -> float:
 
 def kill_descendant_ffmpeg() -> int:
     """Kill ffmpeg processes descended from this Python PID (timeout abort)."""
-    from utils.process_tools import kill_descendant_ffmpeg as _kill
+    from shared.ffmpeg import kill_descendant_ffmpeg as _kill
 
     return _kill()
 
@@ -1376,7 +1376,7 @@ def compute_caption_scene_duration_s(
     vo_dur = 0.0
     if voice_path is not None and Path(voice_path).is_file():
         try:
-            from agents.media.audio_engine import _audio_file_duration_s
+            from production.providers.tts.audio_engine import _audio_file_duration_s
 
             vo_dur = float(_audio_file_duration_s(Path(voice_path)))
         except Exception:  # noqa: BLE001

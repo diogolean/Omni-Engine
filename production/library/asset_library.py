@@ -24,7 +24,7 @@ _FACTORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _outputs_root() -> Path:
-    from utils.pipeline_paths import outputs_root
+    from shared.paths import outputs_root
 
     return outputs_root()
 _HASHTAG_RE = re.compile(r"(?<!\w)#([A-Za-z][A-Za-z0-9_]{1,48})")
@@ -77,7 +77,7 @@ def _split_camel(token: str) -> list[str]:
 
 def library_path(channel: str) -> Path:
     """Primary: ``channels_config/<channel>/store/asset_library.json``."""
-    from utils.pipeline_paths import channel_store_dir
+    from shared.paths import channel_store_dir
 
     slug = (channel or "unknown").strip().lower() or "unknown"
     return channel_store_dir(slug) / "asset_library.json"
@@ -184,7 +184,7 @@ def _coerce_library(raw: Any, channel: str) -> dict[str, Any]:
 
 
 def _read_library(path: Path, channel: str) -> dict[str, Any]:
-    from modules.durable_store import hydrate_state_file
+    from shared.store import hydrate_state_file
 
     path = hydrate_state_file(path)
     if not path.is_file():
@@ -198,7 +198,7 @@ def _read_library(path: Path, channel: str) -> dict[str, Any]:
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
-    from modules.durable_store import sync_state_file
+    from shared.store import sync_state_file
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")

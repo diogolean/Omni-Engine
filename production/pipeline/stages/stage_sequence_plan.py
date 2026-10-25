@@ -104,7 +104,7 @@ def _stage_sequence_plan_01(state: VariantState) -> None:
     state._seq_min = state.page_ctx.reel_narration_min_words if state.page_ctx else app_config.words_for_duration(80.0)
     state._planned_scene_durs = None
     if state._is_mm:
-        from agents.media.mei_narrative import resolve_mei_duration_profile
+        from production.writers.mei_narrative import resolve_mei_duration_profile
         state.resolve_mei_duration_profile = resolve_mei_duration_profile
         state._mei_prof = state.resolve_mei_duration_profile(state.page_ctx.reel_duration)
         state._seq_n = int(state._mei_prof['frames'])
@@ -114,7 +114,7 @@ def _stage_sequence_plan_01(state: VariantState) -> None:
     else:
         state._tier1_body_target = None
         if state.post_type == 'WAN_REEL':
-            from core.scene_pacing import parse_scene_duration as _parse_wan_scene_dur
+            from production.media.scene_pacing import parse_scene_duration as _parse_wan_scene_dur
             state._parse_wan_scene_dur = _parse_wan_scene_dur
             state._wan_spec = state._parse_wan_scene_dur(state.page_ctx.wan_scene_duration)
             state._wan_hold = float(state._wan_spec.fixed_s) if state._wan_spec.mode == 'fixed' and float(state._wan_spec.fixed_s) > 0 else 7.0
@@ -123,7 +123,7 @@ def _stage_sequence_plan_01(state: VariantState) -> None:
             state._planned_scene_durs = [state._wan_hold] * state._seq_n
             _LOG.info('WAN_REEL scene pacing | %s hold=%.1fs duration=%.1fs → %d acts (ECONOMIC_REEL two-tier unused)', state.page_ctx.wan_scene_duration, state._wan_hold, state._wan_dur, state._seq_n)
         elif getattr(state.page_ctx, 'use_two_tier_pacing', False):
-            from core.reel_sequence_engine import compute_two_tier_act_count as _compute_two_tier_act_count
+            from production.media.reel_sequence_engine import compute_two_tier_act_count as _compute_two_tier_act_count
             state._compute_two_tier_act_count = _compute_two_tier_act_count
             state._tier1_n, state._tier2_n, state._seq_n = state._compute_two_tier_act_count(state.page_ctx.reel_duration, tier1_max_acts=state.page_ctx.reel_tier1_max_acts, tier1_horizon_s=state.page_ctx.reel_tier1_horizon_s, tier1_seconds_per_act=state.page_ctx.reel_tier1_seconds_per_act, tier2_seconds_per_act=state.page_ctx.reel_tier2_seconds_per_act, min_acts=state.page_ctx.reel_image_min_count)
             state._tier1_body_target = max(0, state._tier1_n - 3)
@@ -300,7 +300,7 @@ def _stage_sequence_plan_02(state: VariantState) -> None:
                     state._tts_resumed = _tts_resumed
                     if not state._tts_resumed():
                         state.cost_tracker.track_audio(char_count=state._early_tts_chars, sfx=False)
-            from core.reel_sequence_engine import plan_bucket_act_durations as _plan_bucket_act_durations
+            from production.media.reel_sequence_engine import plan_bucket_act_durations as _plan_bucket_act_durations
             state._plan_bucket_act_durations = _plan_bucket_act_durations
             state._pre_snippets = _segment_script_into_act_snippets(state._early_seq_script or state.resolved_subject, state._seq_n)
             state._pre_snippets = [s or state.resolved_subject for s in state._pre_snippets]
@@ -320,7 +320,7 @@ def _stage_sequence_plan_02(state: VariantState) -> None:
             else:
                 if not state._is_mm and state._narr_word_timings:
                     try:
-                        from modules.reel_qa.beats import _scene_for as _sentence_scene, beats_from_timestamps
+                        from production.qa.beats import _scene_for as _sentence_scene, beats_from_timestamps
                         state._sentence_scene = _sentence_scene
                         state.beats_from_timestamps = beats_from_timestamps
                         state._cta_len = float(state._cta_audio_dur or 0.0)
@@ -368,7 +368,7 @@ def _stage_sequence_plan_02(state: VariantState) -> None:
                 state._seq_n = len(state._ak_act_durs)
             _LOG.info('BUCKET PLAN | n=%d durs=%s beats=%s', state._seq_n, ','.join((f'{d:.2f}' for d in state._ak_act_durs)), ' | '.join((f'{i + 1}[{len((state._ak_bucket_snippets[i] or '').split())}w→{state._ak_act_durs[i]:.1f}s]:{(state._ak_bucket_snippets[i] or '')[:40]}' for i in range(state._seq_n))))
     if _is_sequence_video_post(state.post_type):
-        from modules.reel_qa.beats import refine_reel_beats
+        from production.qa.beats import refine_reel_beats
         state.refine_reel_beats = refine_reel_beats
         state._beat_plan = state.refine_reel_beats(snippets=list(state._spoken_snippets or []), durations=list(state._ak_act_durs or []), word_timings=list(state._narr_word_timings or []), narration_s=float(state._narr_dur or 0.0), scenes=list(state._audio_first_scenes or []), topic=str(state.resolved_subject or ''))
         if state._beat_plan.changed:
@@ -384,13 +384,13 @@ def _stage_sequence_plan_03(state: VariantState) -> None:
     if state.page_ctx and (state.page_ctx.page_id or '').lower() == 'ancient_knowledge' and state._spoken_snippets and state._ak_act_durs:
         state._cta_line = (state.page_ctx.reel_cta_text or '').strip()
         if state._sentence_starts and float(state._timeline_audio or 0.0) > 0.5:
-            from modules.reel_qa.beats import seal_sentence_timeline as _seal_tl
+            from production.qa.beats import seal_sentence_timeline as _seal_tl
             state._seal_tl = _seal_tl
             state._spoken_snippets, state._ak_act_durs = state._seal_tl(list(state._spoken_snippets), list(state._ak_act_durs), list(state._sentence_starts), float(state._timeline_audio), cta_text=state._cta_line)
             state._seq_n = len(state._spoken_snippets)
             _LOG.info('TIMELINE | beats=%d video=%.2fs audio=%.2fs', len(state._ak_act_durs), sum(state._ak_act_durs), float(state._timeline_audio))
         try:
-            from modules.reel_qa.cta_beat import with_cta_beat as _with_cta
+            from production.qa.cta_beat import with_cta_beat as _with_cta
             state._with_cta = _with_cta
             state._cta_hold = float(getattr(state, '_cta_audio_dur', None) or 0.0) + float(getattr(state, '_cta_silence_s', None) or 1.0)
             if state._cta_line:
@@ -439,9 +439,9 @@ def _stage_sequence_plan_03(state: VariantState) -> None:
             _LOG.info('WAN_REEL | script+TTS+stills wall=%.1fs | frames=%d', state._wan_stage_times['script_tts_stills_s'], len(state._sequence_image_paths))
     if state._is_mm and state._sequence_image_paths and (state.adapter is not None) and (len(state._sequence_image_paths) >= 2):
         try:
-            from agents.media.visual_inspector import inspect_sequence_images
+            from production.qa.judges.visual_inspector import inspect_sequence_images
             state.inspect_sequence_images = inspect_sequence_images
-            from agents.media.visual_roles import ROLE_MASTER, assign_frame_beats, build_role_prompt
+            from production.media.visual_roles import ROLE_MASTER, assign_frame_beats, build_role_prompt
             state.ROLE_MASTER = ROLE_MASTER
             state.assign_frame_beats = assign_frame_beats
             state.build_role_prompt = build_role_prompt

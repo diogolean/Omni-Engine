@@ -19,17 +19,11 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from agents.writer.freeform_writer import ScriptDraft, split_long_line  # noqa: E402
-from agents.writer.judge_gate import judge_draft  # noqa: E402
-from agents.writer.spoken_budget import (  # noqa: E402
-    assess_lines,
-    count_words,
-    enforce_spoken_budget,
-    missing_keep_terms,
-    rewrite_single_line,
-)
-from agents.writer.writer_brief import WriterBrief  # noqa: E402
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
+from production.writers.freeform_writer import ScriptDraft, split_long_line  # noqa: E402
+from production.qa.judges.judge_gate import judge_draft  # noqa: E402
+from production.writers.spoken_budget import assess_lines, count_words, enforce_spoken_budget, missing_keep_terms, rewrite_single_line
+from production.writers.writer_brief import WriterBrief  # noqa: E402
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
 
 LOCKED = ROOT / "outputs/wonder_feed/clips/freeform_drafts/locked_freeform_01_distance.json"
 STILLS = ROOT / "outputs/wonder_feed/clips/lofi_stills_distance_silence_that_speaks_20260826_222416_v01.json"
@@ -174,13 +168,9 @@ def main() -> int:
         return 3
 
     print("\n=== TTS (real audio, not word estimate) ===")
-    from agents.media.audio_engine import generate_voiceover_with_timestamps
-    from core.economic_reel_lofi.assembler import measure_vo_speech_duration
-    from core.economic_reel_lofi.pipeline import (
-        _sanitize_caption_typos,
-        _tts_breath_commas,
-        _tts_text_with_breaks,
-    )
+    from production.providers.tts.audio_engine import generate_voiceover_with_timestamps
+    from production.formats.lofi.assembler import measure_vo_speech_duration
+    from production.formats.lofi.pipeline import _sanitize_caption_typos, _tts_breath_commas, _tts_text_with_breaks
 
     work_dir = Path(str(stills.get("work_dir") or ""))
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -311,7 +301,7 @@ def main() -> int:
         return 4
 
     print("\n=== Assemble pilot from EXISTING stills + tightened VO ===")
-    from core.economic_reel_lofi.regen import assemble_video_from_episode, save_episode_json
+    from production.formats.lofi.regen import assemble_video_from_episode, save_episode_json
 
     episode = dict(stills)
     new_script = dict(episode.get("script") or {})

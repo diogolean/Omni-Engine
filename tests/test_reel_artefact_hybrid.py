@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from agents.media.free_images.http import HttpResponse
-from modules.reel_artefact.hook import wrap_reel_generate
-from modules.reel_artefact.route import acquire_photo, generic_flux_prompt
-from modules.reel_qa.frames import strip_subtitle_band
-from modules.reel_qa.mp4_gate import SubtitleCue, beat_for_cue, gate_final_mp4
-from modules.reel_qa.relevance import _verdict_from_payload
-from modules.shot_planner.entities import Entity
-from modules.shot_planner.render import render_shot
-from modules.shot_planner.schema import Shot
+from production.providers.image.free.http import HttpResponse
+from production.formats.economic_reel.artefact.hook import wrap_reel_generate
+from production.formats.economic_reel.artefact.route import acquire_photo, generic_flux_prompt
+from production.qa.frames import strip_subtitle_band
+from production.qa.mp4_gate import SubtitleCue, beat_for_cue, gate_final_mp4
+from production.qa.relevance import _verdict_from_payload
+from production.formats.economic_reel.shot_planner.entities import Entity
+from production.formats.economic_reel.shot_planner.render import render_shot
+from production.formats.economic_reel.shot_planner.schema import Shot
 
 
 def _jpeg(width: int, height: int) -> bytes:
@@ -103,7 +103,7 @@ def _entity() -> Entity:
 
 
 def test_chain_edits_the_reference_when_the_photo_is_too_small(tmp_path: Path) -> None:
-    from modules.reel_artefact.budget import reset_nano_budget
+    from production.formats.economic_reel.artefact.budget import reset_nano_budget
 
     reset_nano_budget()
     url = "https://example.test/small.jpg"
@@ -409,7 +409,7 @@ def test_text_only_runs_only_when_the_entity_marks_it_safe(tmp_path: Path) -> No
 def test_preview_ref_refuses_a_missing_reference(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from modules.reel_artefact.preview import main, resolve_entity
+    from production.formats.economic_reel.artefact.preview import main, resolve_entity
 
     found = resolve_entity("quimbaya", "ancient_knowledge")
     assert found is not None and found.id == "quimbaya_ornaments"
@@ -422,7 +422,7 @@ def test_preview_ref_refuses_a_missing_reference(
 def test_preview_prints_the_reference_edit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from modules.reel_artefact.preview import main
+    from production.formats.economic_reel.artefact.preview import main
 
     reference = tmp_path / "reference.jpg"
     Image.new("RGB", (40, 30), (1, 2, 3)).save(reference, format="JPEG")
@@ -462,13 +462,7 @@ def test_preview_prints_the_reference_edit(
 def test_google_image_cost_stays_on_the_reel_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
 
-    from core.google_guardrail import (
-        GoogleCostTracker,
-        active_channel,
-        bind_cost_channel,
-        bind_run_channel,
-        image_unit_cost_usd,
-    )
+    from production.cost.google_guardrail import GoogleCostTracker, active_channel, bind_cost_channel, bind_run_channel, image_unit_cost_usd
 
     monkeypatch.setenv("ACTIVE_PAGE", "anna_protocol")
     monkeypatch.setenv("GEMINI_IMAGE_SIZE", "1K")
@@ -503,8 +497,8 @@ def test_google_image_cost_stays_on_the_reel_channel(monkeypatch: pytest.MonkeyP
 
 
 def test_a_second_beat_reuses_the_cached_edit(tmp_path: Path) -> None:
-    from modules.reel_artefact.budget import reset_nano_budget
-    from modules.reel_artefact.motion import motion_override
+    from production.formats.economic_reel.artefact.budget import reset_nano_budget
+    from production.formats.economic_reel.artefact.motion import motion_override
 
     reset_nano_budget()
     url = "https://example.test/small.jpg"
@@ -551,7 +545,7 @@ def test_a_second_beat_reuses_the_cached_edit(tmp_path: Path) -> None:
 
 
 def test_nano_cap_stops_a_fifth_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from modules.reel_artefact.budget import reset_nano_budget
+    from production.formats.economic_reel.artefact.budget import reset_nano_budget
 
     monkeypatch.setenv("REEL_NANOBANANA_MAX_PER_REEL", "1")
     reset_nano_budget()
@@ -619,7 +613,7 @@ def test_nano_cap_stops_a_fifth_call(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_commentary_uses_a_documentary_frame_not_the_artefact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modules.reel_artefact.reuse import remember_approved, reset_approved
+    from production.formats.economic_reel.artefact.reuse import remember_approved, reset_approved
 
     monkeypatch.setenv("REEL_ARTIFACT_IMAGES", "1")
     monkeypatch.delenv("REEL_ARTIFACT_IMAGE_PROVIDER", raising=False)
@@ -669,7 +663,7 @@ def test_commentary_uses_a_documentary_frame_not_the_artefact(
 
 
 def test_cheapest_nanobanana_model_is_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modules.reel_artefact.nanobanana import model_chain
+    from production.formats.economic_reel.artefact.nanobanana import model_chain
 
     monkeypatch.delenv("REEL_NANOBANANA_MODEL", raising=False)
     monkeypatch.delenv("REEL_NANOBANANA_MODELS", raising=False)
@@ -684,7 +678,7 @@ def test_cheapest_nanobanana_model_is_first(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_cost_lines_split_nano_flux_retries_real_and_tts() -> None:
-    from core.cost_tracker import CostTracker
+    from production.cost.cost_tracker import CostTracker
 
     tracker = CostTracker(page_id="ancient_knowledge")
     tracker.track_image("image_nanobanana_lite", count=1)
@@ -700,7 +694,7 @@ def test_cost_lines_split_nano_flux_retries_real_and_tts() -> None:
     assert cats["image_real_count"] == 2
     assert cats["image_reuse_count"] == 17
     assert cats["image_cost"] == pytest.approx(0.0426)
-    from core.cost_tracker import image_cost_lines
+    from production.cost.cost_tracker import image_cost_lines
 
     rendered = "\n".join(image_cost_lines(cats))
     assert "Commons/real" in rendered and "(2 stills)" in rendered
@@ -713,8 +707,8 @@ def test_cost_lines_split_nano_flux_retries_real_and_tts() -> None:
 
 
 def test_flux_retries_bill_and_a_real_photo_does_not(tmp_path: Path) -> None:
-    from modules.reel_artefact.pricing import generation_bill
-    from modules.reel_artefact.source import write_source_sidecar
+    from production.formats.economic_reel.artefact.pricing import generation_bill
+    from production.formats.economic_reel.artefact.source import write_source_sidecar
 
     flux = tmp_path / "flux.jpg"
     real = tmp_path / "real.jpg"

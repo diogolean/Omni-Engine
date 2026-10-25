@@ -7,18 +7,15 @@ _REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
-from utils.pipeline_paths import coerce_outputs_path
+from shared.paths import coerce_outputs_path
 
 import json
 from pathlib import Path
 
 from PIL import Image
 
-from agents.writer.script_agent import (
-    _narrative_gate_reasons,
-    analyze_principle_voice,
-)
-from core.economic_reel_lofi.setting_archetypes import score_composition_types
+from production.writers.script_agent import _narrative_gate_reasons, analyze_principle_voice
+from production.formats.lofi.setting_archetypes import score_composition_types
 
 meta_path = coerce_outputs_path("outputs/wonder_feed/clips/lofi_reel_communication_20260823_041756_v01.json")
 mp4 = coerce_outputs_path("outputs/wonder_feed/clips/lofi_reel_communication_20260823_041756_v01.mp4")

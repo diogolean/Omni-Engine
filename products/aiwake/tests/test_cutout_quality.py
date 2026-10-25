@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.animator.factory.rigger import birefnet_cutout  # noqa: E402
-from utils.pipeline_paths import assets_root, outputs_root  # noqa: E402
+from animation.parametric.factory.rigger import birefnet_cutout  # noqa: E402
+from shared.paths import assets_root, outputs_root  # noqa: E402
 
 
 def main() -> int:

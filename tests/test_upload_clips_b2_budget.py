@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agents.media.b2_budget import B2DailyCapError
+from shared.storage.b2_budget import B2DailyCapError
 
 
 def _clip(tmp_path: Path) -> Path:
@@ -19,7 +19,7 @@ def _clip(tmp_path: Path) -> Path:
 
 
 def test_dry_run_does_not_open_a_b2_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from scripts import upload_clips_to_b2 as mod
+    from tools.oneoff import upload_clips_to_b2 as mod
 
     created: list[str] = []
 
@@ -44,7 +44,7 @@ def test_dry_run_does_not_open_a_b2_client(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_cap_stops_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from scripts import upload_clips_to_b2 as mod
+    from tools.oneoff import upload_clips_to_b2 as mod
 
     seen: list[tuple[str, str]] = []
 

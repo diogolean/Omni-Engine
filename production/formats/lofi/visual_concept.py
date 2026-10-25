@@ -582,7 +582,7 @@ def translate_episode_visuals(
     Does not call Flux or TTS. Does not read _EPISODE_WORLDS.
     """
     del module
-    from agents.mcp.text_model import complete_script
+    from production.providers.llm.text_model import complete_script
 
     lines = [r for r in (script.get("lines") or []) if isinstance(r, dict)]
     if lines:

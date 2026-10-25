@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from channel_loader import VALID_PAGES
-from models_avatar.avatar_config import load_avatar
-from models_avatar.channel_bridge import channel_descriptor
-from models_avatar.errors import PromptPolicyError
-from models_avatar.prompts import compose_positive, default_template_path, load_templates
-from models_avatar.safety import MANDATORY_NEGATIVE_TERMS, merge_negatives
-from models_avatar.workflow import build_workflow
+from production.pipeline.channel_context import VALID_PAGES
+from production.providers.avatar.avatar_config import load_avatar
+from production.providers.avatar.channel_bridge import channel_descriptor
+from production.providers.avatar.errors import PromptPolicyError
+from production.providers.avatar.prompts import compose_positive, default_template_path, load_templates
+from production.providers.avatar.safety import MANDATORY_NEGATIVE_TERMS, merge_negatives
+from production.providers.avatar.workflow import build_workflow
 
 _REPO = Path(__file__).resolve().parents[2]
 _SCENE = (
@@ -231,7 +231,7 @@ def test_shipped_templates_pass_policy() -> None:
         "lifestyle",
         "lingerie_boudoir",
     ]
-    from models_avatar.prompts import render_scene
+    from production.providers.avatar.prompts import render_scene
 
     count = 0
     for template in library.templates_for("all"):

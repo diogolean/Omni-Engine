@@ -45,7 +45,7 @@ def default_backup_dir() -> Path:
     override = (os.getenv("SUPERMEMORY_BACKUP_DIR") or "").strip()
     if override:
         return Path(override)
-    from utils.pipeline_paths import outputs_root
+    from shared.paths import outputs_root
 
     return outputs_root() / "backups" / "supermemory"
 
@@ -73,14 +73,14 @@ def upload_archive(
     """Upload one archive. Skip when that day's object already exists."""
     key = b2_key(day)
     if existing_keys is None:
-        from agents.media.b2_client import list_object_keys
+        from shared.storage.b2_client import list_object_keys
 
         existing_keys = list_object_keys(B2_PREFIX)
     if key in set(existing_keys):
         _LOG.info("B2 already has %s; leaving it in place", key)
         return "skipped"
     if upload is None:
-        from agents.media.b2_client import upload_object
+        from shared.storage.b2_client import upload_object
 
         def _put(object_key: str, source: Path) -> None:
             upload_object(object_key, source, content_type="application/gzip")
@@ -201,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             prune_local(backup_dir)
             status = upload_archive(backup_dir / archive_name(day), day=day)
         except Exception as exc:
-            from agents.media.b2_budget import B2DailyCapError
+            from shared.storage.b2_budget import B2DailyCapError
 
             if isinstance(exc, B2DailyCapError):
                 _LOG.warning("B2 daily budget reached; local archive kept, nothing removed from B2")
@@ -219,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             image=args.image,
         )
     except Exception as exc:
-        from agents.media.b2_budget import B2DailyCapError
+        from shared.storage.b2_budget import B2DailyCapError
 
         if isinstance(exc, B2DailyCapError):
             _LOG.warning("B2 daily budget reached; local archive kept, nothing removed from B2")

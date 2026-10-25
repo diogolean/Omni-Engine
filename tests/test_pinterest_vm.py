@@ -13,24 +13,11 @@ import pytest
 import requests
 from PIL import Image, ImageDraw
 
-from agents.media.b2_client import media_bucket_name, resolve_b2_bucket_name
-from agents.posting.pinterest_engine.articles import Article
-from agents.posting.pinterest_engine.image_transformer import (
-    _SERIF_CANDIDATES,
-    PinTransformer,
-    _find_font,
-)
-from agents.posting.pinterest_engine.inventory import (
-    MasterInventory,
-    _generate_deepseek,
-    build_title_template,
-    sanitize_pin_title,
-    title_case_phrase,
-)
-from agents.posting.pinterest_engine.scheduler import (
-    _entry_is_video_only,
-    _title_is_filename,
-)
+from shared.storage.b2_client import media_bucket_name, resolve_b2_bucket_name
+from production.formats.pins.articles import Article
+from production.formats.pins.image_transformer import _SERIF_CANDIDATES, PinTransformer, _find_font
+from distribution.scheduling.inventory import MasterInventory, _generate_deepseek, build_title_template, sanitize_pin_title, title_case_phrase
+from distribution.scheduling.scheduler import _entry_is_video_only, _title_is_filename
 from accounts.pinterest import (
     account_blockers,
     active_pinterest_accounts,
@@ -450,8 +437,8 @@ def test_app_credentials_overlay_and_refresh_writeback(
 def test_publisher_refresh_writes_env_without_logging_tokens(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    import agents.posting.pinterest_engine.publisher as publisher_mod
-    from agents.posting.pinterest_engine import config as cfg
+    import distribution.publishers.api.pinterest as publisher_mod
+    from production.formats.pins import config as cfg
 
     caplog.set_level("DEBUG")
     env_path = tmp_path / ".env"
@@ -641,7 +628,7 @@ def test_rendered_card_matches_the_original_template(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Local and Docker share one renderer and the bundled Georgia substitute."""
-    from agents.posting.pinterest_engine import config as pcfg
+    from production.formats.pins import config as pcfg
 
     # A previous account configure() leaves CTA and domain globals set.
     monkeypatch.setattr(pcfg, "CTA_BUTTON_LABEL", "")
@@ -729,13 +716,9 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
 
     from PIL import ImageDraw
 
-    from agents.posting.pinterest_engine import config as cfg
-    from agents.posting.pinterest_engine import publisher as publisher_mod
-    from agents.posting.pinterest_engine.pin_copy import (
-        build_pin_description,
-        keyword_first_title,
-        pin_alt_text,
-    )
+    from production.formats.pins import config as cfg
+    from distribution.publishers.api import pinterest as publisher_mod
+    from production.formats.pins.pin_copy import build_pin_description, keyword_first_title, pin_alt_text
 
     cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)
     source = tmp_path / "stones.jpg"
@@ -849,7 +832,7 @@ def _prepare_channel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # channel's real master_inventory.json and scheduled_history.txt.
     monkeypatch.setenv("CHANNEL_STORE_ROOT", str(tmp_path / "_channels_store"))
     try:
-        from modules.durable_store import reset_restore_cache
+        from shared.store import reset_restore_cache
 
         reset_restore_cache()
     except ImportError:
@@ -871,7 +854,7 @@ def _prepare_channel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def test_dry_run_renders_library_photo_and_links_the_article(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from agents.posting.pinterest_engine.articles import Article
+    from production.formats.pins.articles import Article
 
     _prepare_channel(monkeypatch, tmp_path)
     image_key = "ancient_knowledge/library/images/baalbek.jpg"
@@ -978,7 +961,7 @@ def test_flux_fallback_replaces_a_missing_or_title_graphic(
         return path
 
     def _no_free(**_kwargs):
-        from agents.media.free_images.models import SourceDecision
+        from production.providers.image.free.models import SourceDecision
 
         return SourceDecision(policy="free_first", query="puma punku", reason="none_passed")
 
@@ -1033,7 +1016,7 @@ def test_missing_photo_uses_a_free_license_source_before_flux(
         raise AssertionError("Flux runs only after free-license search misses")
 
     def _free(**kwargs):
-        from agents.media.free_images.models import Attribution, FreeImageHit, SourceDecision
+        from production.providers.image.free.models import Attribution, FreeImageHit, SourceDecision
 
         dest = Path(kwargs["dest"])
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1069,11 +1052,7 @@ def test_missing_photo_uses_a_free_license_source_before_flux(
 
 
 def test_flux_asks_for_a_portrait_frame(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from agents.posting.pinterest_engine.flux_photo import (
-        FLUX_PIN_HEIGHT,
-        FLUX_PIN_WIDTH,
-        generate_flux_photo,
-    )
+    from production.formats.pins.flux_photo import FLUX_PIN_HEIGHT, FLUX_PIN_WIDTH, generate_flux_photo
 
     seen: dict = {}
 
@@ -1104,7 +1083,7 @@ def test_flux_asks_for_a_portrait_frame(monkeypatch: pytest.MonkeyPatch, tmp_pat
 def test_publish_sends_alt_text_and_does_not_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agents.posting.pinterest_engine.publisher import PinterestPublisher
+    from distribution.publishers.api.pinterest import PinterestPublisher
 
     captured: dict = {}
 
@@ -1152,7 +1131,7 @@ def _sheet_rows(path: Path) -> list[tuple]:
 
 
 def test_facebook_settings_come_from_the_account_file_when_the_runner_omits_them() -> None:
-    from agents.posting.pinterest_engine.facebook_queue import facebook_settings
+    from distribution.scheduling.queue import facebook_settings
 
     ancient = facebook_settings({"account_id": "ancient_knowledge"})
     assert ancient["enabled"] is True
@@ -1165,12 +1144,9 @@ def test_facebook_settings_come_from_the_account_file_when_the_runner_omits_them
 def test_facebook_caption_is_a_hook_two_or_three_lines_and_the_article(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from agents.posting.pinterest_engine import config as cfg
-    from agents.posting.pinterest_engine.facebook_queue import (
-        build_facebook_caption,
-        facebook_body_lines,
-    )
-    from agents.posting.pinterest_engine.pin_copy import card_hook_text
+    from production.formats.pins import config as cfg
+    from distribution.scheduling.queue import build_facebook_caption, facebook_body_lines
+    from production.formats.pins.pin_copy import card_hook_text
 
     _prepare_channel(monkeypatch, tmp_path)
     cfg.configure(channel_id="ancient_knowledge")
@@ -1475,7 +1451,7 @@ def test_facebook_postplanner_stays_off_when_the_account_flag_is_false(
 def test_facebook_media_url_uses_a_seven_day_presign_when_b2_offers_one(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from agents.posting.pinterest_engine.facebook_queue import enqueue_facebook_card
+    from distribution.scheduling.queue import enqueue_facebook_card
 
     class _Signing(FakeS3):
         def generate_presigned_url(self, operation, Params=None, ExpiresIn=None):
@@ -1513,7 +1489,7 @@ def test_facebook_media_url_uses_a_seven_day_presign_when_b2_offers_one(
 def test_facebook_media_falls_back_to_imgbb_when_b2_upload_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from agents.posting.pinterest_engine.facebook_queue import enqueue_facebook_card
+    from distribution.scheduling.queue import enqueue_facebook_card
 
     class _Down(FakeS3):
         def put_object(self, **kwargs):

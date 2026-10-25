@@ -284,7 +284,7 @@ def _track_adapter_image(
     _gpu_s = float(getattr(adapter, "last_gpu_seconds", 0) or 0)
     if _gpu_s > 0 or str(_cost_key).startswith("image_remote"):
         try:
-            from core.remote_gpu_manager import get_manager  # noqa: PLC0415
+            from production.providers.image.remote_gpu_manager import get_manager  # noqa: PLC0415
 
             mode = str(getattr(get_manager().client, "mode", None) or "comfyui")
         except Exception:
@@ -312,7 +312,7 @@ def _track_remote_gpu_batch(
     if cost_tracker is None:
         return 0.0
     try:
-        from core.remote_gpu_manager import get_manager  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import get_manager  # noqa: PLC0415
 
         client = get_manager().client
         after = float(getattr(client, "total_gpu_seconds", 0) or 0)
@@ -334,10 +334,7 @@ def _image_act_max_workers(default_legacy: int = 3) -> int:
     - Together legacy: small pool; adapter semaphore still serializes HTTP.
     """
     try:
-        from core.remote_gpu_manager import (  # noqa: PLC0415
-            is_remote_gpu_enabled,
-            remote_gpu_max_parallel,
-        )
+        from production.providers.image.remote_gpu_manager import is_remote_gpu_enabled, remote_gpu_max_parallel
 
         if is_remote_gpu_enabled("image"):
             n = remote_gpu_max_parallel()
@@ -363,7 +360,7 @@ def _run_acts_parallel(
     batch. RunPod Flux (IMAGE_PROVIDER=remote_gpu): still one Comfy job per
     still — images no longer share the video worker pool when Together is on.
     """
-    from core.remote_gpu_manager import run_parallel_jobs  # noqa: PLC0415
+    from production.providers.image.remote_gpu_manager import run_parallel_jobs  # noqa: PLC0415
 
     if max_workers is None:
         max_workers = _image_act_max_workers()
@@ -382,7 +379,7 @@ def _maybe_convert_to_video(
     if page_ctx is None or not page_ctx.is_hybrid_video:
         return ""
     try:
-        from agents.media.video_converter import make_zoom_loop
+        from production.media.video_converter import make_zoom_loop
         video_path = make_zoom_loop(image_path, duration_seconds=duration)
         return str(video_path)
     except ImportError:

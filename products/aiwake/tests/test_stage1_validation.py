@@ -16,15 +16,12 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.animator.asset_generator import (  # noqa: E402
-    DEFAULT_PUPPETS_DIR,
-    ensure_shared_panorama,
-)
-from core.animator.compositor import _HeroCamera, _alpha_blend_paste  # noqa: E402
-from core.animator.factory.create_puppet import build_deepseek_stage1  # noqa: E402
-from core.animator.puppet import PuppetRig, PuppetSkin  # noqa: E402
-from core.animator.animator_types import SpeakerStyle  # noqa: E402
-from utils.pipeline_paths import outputs_root  # noqa: E402
+from products.aiwake.animator.asset_generator import DEFAULT_PUPPETS_DIR, ensure_shared_panorama
+from animation.parametric.compositor import _HeroCamera, _alpha_blend_paste  # noqa: E402
+from products.aiwake.animator.factory.create_puppet import build_deepseek_stage1  # noqa: E402
+from animation.parametric.puppet import PuppetRig, PuppetSkin  # noqa: E402
+from animation.parametric.animator_types import SpeakerStyle  # noqa: E402
+from shared.paths import outputs_root  # noqa: E402
 
 
 def _deepseek_frame(background: Image.Image) -> np.ndarray:

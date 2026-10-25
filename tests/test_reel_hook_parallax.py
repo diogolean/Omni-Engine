@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from modules.reel_hook import parallax
+from production.formats.economic_reel.hook import parallax
 
 
 @pytest.fixture(autouse=True)

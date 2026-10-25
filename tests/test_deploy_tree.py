@@ -110,7 +110,7 @@ def test_vm_scripts_still_run_from_opt_omni_engine() -> None:
         encoding="utf-8"
     )
     assert "cd /opt/omni-engine" in backup
-    assert "python scripts/backup_supermemory.py --upload-only" in backup
+    assert "python tools/backup_supermemory.py --upload-only" in backup
 
 
 def test_infra_packages_reexport_deploy() -> None:

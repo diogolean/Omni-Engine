@@ -7,16 +7,7 @@ import pytest
 
 from PIL import Image, ImageDraw, ImageFont
 
-from utils.quote_renderer import (
-    ImageTextsAssetError,
-    ImageTextsRenderEngine,
-    _length_font_scale,
-    _rotation_choices_for_quote,
-    generate_notebook_template,
-    resolve_channel_assets,
-    wrap_quote,
-    wrap_quote_balanced,
-)
+from production.formats.quotes.quote_renderer import ImageTextsAssetError, ImageTextsRenderEngine, _length_font_scale, _rotation_choices_for_quote, generate_notebook_template, resolve_channel_assets, wrap_quote, wrap_quote_balanced
 
 
 def _write_vault(path: Path, texts: list[str]) -> None:

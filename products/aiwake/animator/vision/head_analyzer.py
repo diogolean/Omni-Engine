@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-from utils.pipeline_paths import assets_root, outputs_root
+from shared.paths import assets_root, outputs_root
 
 from ..render.facial_rig import (
     SCENE_GRAPH_BROW_ANGLES,

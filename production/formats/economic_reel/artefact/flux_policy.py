@@ -634,7 +634,7 @@ def safe_flux_prompt(
 
 def _from_rag(channel: str) -> tuple[list[str], list[str]]:
     try:
-        from quality.VisualQA_Agent.channel_rag import get_channel_rules
+        from production.qa.judges.visual_critic.channel_rag import get_channel_rules
 
         rules = get_channel_rules(channel or "")
     except Exception:  # noqa: BLE001

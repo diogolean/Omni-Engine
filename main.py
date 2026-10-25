@@ -32,11 +32,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from engine.bootstrap import (  # noqa: E402
-    REPO_ROOT,
-    _clean_all_python_sources,
-    _preparse_active_page,
-)
+from production.pipeline.bootstrap import REPO_ROOT, _clean_all_python_sources, _preparse_active_page
 
 _ENGINE_ROOT_BOOT = REPO_ROOT
 _clean_all_python_sources(_ENGINE_ROOT_BOOT)
@@ -48,13 +44,13 @@ _load_dotenv(REPO_ROOT / ".env", override=True, encoding="utf-8-sig")
 # .env must not clobber the Phase-0 CLI channel (``--channel`` / ``--page``).
 _PRELOADED_PAGE = _preparse_active_page()
 
-from engine.log import bind_logger  # noqa: E402
+from production.pipeline.log import bind_logger  # noqa: E402
 
 _LOG = logging.getLogger(__name__)
 bind_logger(_LOG)
 
 # Heavy imports and the ACTIVE_PAGE rebind. Must stay after the pre-parse.
-import engine.runtime as _runtime  # noqa: E402
+import production.pipeline.runtime as _runtime  # noqa: E402
 
 for _name in dir(_runtime):
     if _name.startswith("_") and _name not in {
@@ -79,72 +75,14 @@ for _name in dir(_runtime):
         continue
     globals().setdefault(_name, getattr(_runtime, _name))
 
-from engine.geo_anchors import _GEO_ANCHORS  # noqa: E402, F401
-from engine.acts import (  # noqa: E402, F401
-    _is_sequence_video_post,
-    _planner_media_url,
-    _is_logo_only_still,
-    _load_engagement_bait_examples,
-    _silence_noisy_http_loggers,
-    _looks_like_upstream_api_failure,
-    _extract_topic_visual_entities,
-    _strip_audio_behavior_tags,
-    _split_script_into_act_chunks,
-    _build_master_mei_script_act_prompts,
-    _build_reel_act_descriptors,
-)
-from engine.stills import (  # noqa: E402, F401
-    _export_scene_assets_sequential,
-    _ensure_sequence_image,
-    _is_valid_cached_still,
-    _sequence_cache_search_roots,
-    _score_cached_still,
-    _stem_act_globs,
-    _find_cached_sequence_still,
-    _collect_cached_act_stills,
-    _materialize_cached_still,
-    _apply_still_cache_to_jobs,
-    _track_adapter_image,
-    _track_remote_gpu_batch,
-    _image_act_max_workers,
-    _run_acts_parallel,
-    _maybe_convert_to_video,
-)
-from engine.reporting import (  # noqa: E402, F401
-    _color,
-    _emit_clean_api_error,
-    _format_cost_block,
-    _print_production_summary,
-    _snapshot_verified_models,
-    _preflight_gemini_image_batch_cost,
-    _bootstrap_pipeline_intro,
-    _print_video_cost_summary,
-    _print_test_footer,
-)
-from engine.voice import (  # noqa: E402, F401
-    _trim_script_to_word_limit,
-    _filter_audio_tag_timings,
-    _stitch_audio_sequential,
-    _commit_reel_angle,
-    _synthesize_sequence_voice_track,
-    _reel_audio_is_f5,
-)
-from engine.orchestrator import (  # noqa: E402, F401
-    _produce_variant_worker,
-    _produce_agentic,
-    _persist_agentic_postplanner,
-    produce,
-    run_pipeline,
-    run_test_images_debug_mode,
-)
-from engine.cli import (  # noqa: E402, F401
-    _together_cli_image_model,
-    cli,
-)
-from engine.bootstrap import (  # noqa: E402
-    _clean_all_python_sources,
-    _preparse_active_page,
-)
+from production.pipeline.geo_anchors import _GEO_ANCHORS  # noqa: E402, F401
+from production.pipeline.acts import _is_sequence_video_post, _planner_media_url, _is_logo_only_still, _load_engagement_bait_examples, _silence_noisy_http_loggers, _looks_like_upstream_api_failure, _extract_topic_visual_entities, _strip_audio_behavior_tags, _split_script_into_act_chunks, _build_master_mei_script_act_prompts, _build_reel_act_descriptors
+from production.pipeline.stills import _export_scene_assets_sequential, _ensure_sequence_image, _is_valid_cached_still, _sequence_cache_search_roots, _score_cached_still, _stem_act_globs, _find_cached_sequence_still, _collect_cached_act_stills, _materialize_cached_still, _apply_still_cache_to_jobs, _track_adapter_image, _track_remote_gpu_batch, _image_act_max_workers, _run_acts_parallel, _maybe_convert_to_video
+from production.pipeline.reporting import _color, _emit_clean_api_error, _format_cost_block, _print_production_summary, _snapshot_verified_models, _preflight_gemini_image_batch_cost, _bootstrap_pipeline_intro, _print_video_cost_summary, _print_test_footer
+from production.pipeline.voice import _trim_script_to_word_limit, _filter_audio_tag_timings, _stitch_audio_sequential, _commit_reel_angle, _synthesize_sequence_voice_track, _reel_audio_is_f5
+from production.pipeline.orchestrator import _produce_variant_worker, _produce_agentic, _persist_agentic_postplanner, produce, run_pipeline, run_test_images_debug_mode
+from production.pipeline.cli import _together_cli_image_model, cli
+from production.pipeline.bootstrap import _clean_all_python_sources, _preparse_active_page
 
 
 if __name__ == "__main__":

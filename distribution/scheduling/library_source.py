@@ -9,6 +9,7 @@ Nothing in Drive or B2 is deleted.
 """
 
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import json
 import logging
@@ -40,7 +41,7 @@ def ensure_local_library(
     When the local library already has records, remote sources are not listed.
     Images are not downloaded here.
     """
-    from agents.media.content_source import sync_library_records  # noqa: PLC0415
+    sync_library_records = Symbol('production.library.content_source', 'sync_library_records')  # noqa: PLC0415
 
     return sync_library_records(
         outputs_dir,
@@ -75,7 +76,7 @@ def image_object_key(record: dict, prefix: str) -> str:
 
 
 def _image_ref_to_key(raw: str, *, channel: str, prefix: str) -> str:
-    from agents.media.content_source import object_key_for_path  # noqa: PLC0415
+    object_key_for_path = Symbol('production.library.content_source', 'object_key_for_path')  # noqa: PLC0415
 
     key = object_key_for_path(raw, channel)
     if key:
@@ -108,8 +109,9 @@ def materialize_image(
     folder_id: str | None = None,
 ) -> tuple[Path | None, bool]:
     """Return ``(path, delete_after)`` for the one image this pin needs."""
-    from agents.media.content_source import existing_local_file, materialize_key  # noqa: PLC0415
-    from utils.pipeline_paths import temp_path  # noqa: PLC0415
+    existing_local_file = Symbol('production.library.content_source', 'existing_local_file')
+    materialize_key = Symbol('production.library.content_source', 'materialize_key')  # noqa: PLC0415
+    from shared.paths import temp_path  # noqa: PLC0415
 
     local = str(record.get("local_image_path") or "")
     if local and Path(local).is_file():
@@ -146,7 +148,7 @@ def upload_library_tree(
     bucket: str | None = None,
 ) -> list[str]:
     """Upload library JSON and images. Existing keys are left in place. Nothing is deleted."""
-    from agents.media.b2_client import list_object_keys, upload_object  # noqa: PLC0415
+    from shared.storage.b2_client import list_object_keys, upload_object  # noqa: PLC0415
 
     library = outputs_dir / "library"
     if not library.is_dir():
@@ -154,7 +156,7 @@ def upload_library_tree(
     try:
         existing = set(list_object_keys(prefix, client=client, bucket=bucket))
     except Exception as exc:
-        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+        from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
         if isinstance(exc, B2DailyCapError):
             raise

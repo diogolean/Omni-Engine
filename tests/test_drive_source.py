@@ -9,20 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from agents.media import content_source, drive_source
-from agents.media.b2_budget import reset_caches as reset_b2_caches
-from agents.media.drive_source import (
-    READONLY_SCOPE,
-    DriveQuotaError,
-    download_object,
-    list_object_keys,
-    object_size,
-)
-from agents.posting.pinterest_engine.library_source import (
-    ensure_local_library,
-    materialize_image,
-)
-from agents.posting.youtube_publisher import resolve_upload_video
+from production.library import content_source
+from shared.storage import drive_source
+from shared.storage.b2_budget import reset_caches as reset_b2_caches
+from shared.storage.drive_source import READONLY_SCOPE, DriveQuotaError, download_object, list_object_keys, object_size
+from distribution.scheduling.library_source import ensure_local_library, materialize_image
+from distribution.publishers.api.youtube_upload import resolve_upload_video
 
 _FOLDER = "application/vnd.google-apps.folder"
 _WIN_IMAGE = (
@@ -641,7 +633,7 @@ def _load_attach_b2_urls():
         package.__path__ = [str(root)]
         package.__package__ = name
         sys.modules[name] = package
-    from channels_config.aiwake.tools.post_planner import attach_b2_urls
+    from products.aiwake.tools.post_planner import attach_b2_urls
 
     return attach_b2_urls
 
@@ -722,7 +714,7 @@ def test_outputs_root_resolves_an_asset_beside_the_library(
 
 
 def test_image_refs_resolve_against_the_outputs_root() -> None:
-    from agents.posting.pinterest_engine.library_source import image_object_key
+    from distribution.scheduling.library_source import image_object_key
 
     prefix = "ancient_knowledge/library/"
     assert image_object_key({"image_relative": "assets/stone.jpg"}, prefix) == (

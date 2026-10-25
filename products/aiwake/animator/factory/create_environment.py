@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps
 
-from utils.pipeline_paths import assets_root, outputs_root, windows_fonts_dir
+from shared.paths import assets_root, outputs_root, windows_fonts_dir
 
 from .create_puppet import generate_character_image
 

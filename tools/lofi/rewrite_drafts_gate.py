@@ -11,15 +11,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-from agents.writer.script_agent import assess_story_quality  # noqa: E402
-from core.economic_reel_lofi.validator_agent import validate_script  # noqa: E402
-from core.economic_reel_lofi.visual_identity import (  # noqa: E402
-    apply_v2_prompts_to_lines_dev,
-)
+from production.writers.script_agent import assess_story_quality  # noqa: E402
+from production.formats.lofi.validator_agent import validate_script  # noqa: E402
+from production.formats.lofi.visual_identity import apply_v2_prompts_to_lines_dev
 
 OUT = page_outputs_dir("wonder_feed") / "clips" / "script_drafts_20260825"
 D1 = OUT / "self_respect_boundaries_without_guilt.json"

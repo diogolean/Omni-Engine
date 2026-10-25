@@ -8,16 +8,9 @@ from pathlib import Path
 
 import pytest
 import yaml
-from scripts.backup_supermemory import (
-    archive_name,
-    b2_key,
-    backup_once,
-    main,
-    prune_local,
-    upload_archive,
-)
+from tools.backup_supermemory import archive_name, b2_key, backup_once, main, prune_local, upload_archive
 
-from agents.media.b2_budget import B2DailyCapError
+from shared.storage.b2_budget import B2DailyCapError
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SHA = "b789be16cd7192b3c08e882396c0a94ba330ea467d5a7fb1b39ac3684abf5374"
@@ -216,7 +209,7 @@ def test_upload_only_returns_2_on_the_daily_budget(
     def _boom(*args, **kwargs):
         raise B2DailyCapError("class c")
 
-    monkeypatch.setattr("scripts.backup_supermemory.upload_archive", _boom)
+    monkeypatch.setattr("tools.backup_supermemory.upload_archive", _boom)
     code = main(
         ["--upload-only", "--day", "2026-10-17", "--backup-dir", str(tmp_path)]
     )
@@ -224,7 +217,7 @@ def test_upload_only_returns_2_on_the_daily_budget(
 
 
 def test_backup_module_has_no_b2_delete() -> None:
-    source = (_ROOT / "scripts" / "backup_supermemory.py").read_text(encoding="utf-8")
+    source = (_ROOT / "tools" / "backup_supermemory.py").read_text(encoding="utf-8")
     assert "delete_object" not in source
     assert "b2_delete" not in source
     assert "DeleteObject" not in source

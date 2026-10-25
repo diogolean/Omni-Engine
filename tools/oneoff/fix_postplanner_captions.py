@@ -27,11 +27,11 @@ _SCRIPT_DIR = Path(__file__).resolve().parents[2]
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 from openpyxl import load_workbook  # noqa: E402
 
-from agents.posting.post_planner import extract_clean_caption  # noqa: E402
+from distribution.publishers.export.post_planner import extract_clean_caption  # noqa: E402
 
 _DEFAULT_TARGET = (
     page_outputs_dir("ancient_knowledge")

@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from core import reel_ffmpeg_render as render
+from production.media import reel_ffmpeg_render as render
 
 
 def test_run_raises_when_ffmpeg_hangs(monkeypatch: pytest.MonkeyPatch) -> None:

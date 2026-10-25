@@ -2502,7 +2502,7 @@ class CaptionEngine:
             return "", "", "researcher_fallback", ""
 
         import json as _json  # noqa: PLC0415
-        from agents.posting.post_planner import extract_clean_caption  # noqa: PLC0415
+        from shared.caption_text import extract_clean_caption  # noqa: PLC0415
 
         overlay_text = ""
         visual_subject = ""
@@ -2727,7 +2727,7 @@ class CaptionEngine:
 
         # Parse JSON first; salvage caption_body from invalid/fenced JSON; else plain text
         import json as _json  # noqa: PLC0415
-        from agents.posting.post_planner import extract_clean_caption  # noqa: PLC0415
+        from shared.caption_text import extract_clean_caption  # noqa: PLC0415
 
         _copyright = _sig
         caption = ""

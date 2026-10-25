@@ -16,25 +16,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
-from core.economic_reel_lofi import lofi_collections as rag
-from agents.writer.script_agent import (
-    _narrative_gate_reasons,
-    _thematic_from_lines,
-)
-from core.economic_reel_lofi.setting_archetypes import (
-    ARCHETYPE_ORDER,
-    classify_setting_archetype,
-    pairs_for_archetype,
-    score_setting_archetypes,
-)
-from core.economic_reel_lofi.visual_identity import (
-    _object_stem,
-    _setting_stem,
-    score_episode_variety,
-    setting_object_pool,
-)
+from production.formats.lofi import lofi_collections as rag
+from production.writers.script_agent import _narrative_gate_reasons, _thematic_from_lines
+from production.formats.lofi.setting_archetypes import ARCHETYPE_ORDER, classify_setting_archetype, pairs_for_archetype, score_setting_archetypes
+from production.formats.lofi.visual_identity import _object_stem, _setting_stem, score_episode_variety, setting_object_pool
 
 CORPUS = (
     Path(__file__).resolve().parents[2]

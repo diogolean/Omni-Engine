@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """Print the object resolved for each spoken beat. No image calls.
 
-    python -m modules.reel_grounding.report "Lost OOPArts" "script text"
+    python -m production.formats.economic_reel.grounding.report "Lost OOPArts" "script text"
 """
 from __future__ import annotations
 
 import sys
 
 from production.formats.economic_reel.grounding.prompt import format_resolved_objects
-from modules.reel_qa.beats import split_sentences
+from production.qa.beats import split_sentences
 
 
 def main(argv: list[str] | None = None) -> int:

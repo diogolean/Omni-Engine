@@ -36,18 +36,8 @@ from production.formats.lofi.riso_prompt_bank import (
     assign_riso_prompts_for_scenes,
     export_active_library_diff,
 )
-from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
-from agents.writer.script_agent import (
-    _sanitize_caption_typos,
-    assess_object_beat_continuity,
-    generate_script,
-    get_script_cost_log,
-    get_script_llm_call_log,
-    note_batch_structure_id,
-    repair_script_captions,
-    reset_batch_structure_ids,
-    reset_script_llm_call_log,
-)
+from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client
+from production.writers.script_agent import _sanitize_caption_typos, assess_object_beat_continuity, generate_script, get_script_cost_log, get_script_llm_call_log, note_batch_structure_id, repair_script_captions, reset_batch_structure_ids, reset_script_llm_call_log
 from production.formats.lofi.validator_agent import validate_script
 
 _LOG = logging.getLogger(__name__)
@@ -104,7 +94,7 @@ def _render_one_voiceover(
     vo_path: Path,
 ) -> tuple[Path, list[tuple[str, float, float]], float]:
     """One ElevenLabs TTS render. Safe to call from a worker thread."""
-    from agents.media.audio_engine import generate_voiceover_with_timestamps
+    from production.providers.tts.audio_engine import generate_voiceover_with_timestamps
 
     tts_text = _tts_text_with_breaks(_tts_breath_commas(caption))
     use_ssml = "<break" in tts_text
@@ -920,7 +910,7 @@ def assess_anchor_object_identity(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -1080,7 +1070,7 @@ def assess_spoken_line_prop_leak(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -1401,7 +1391,7 @@ def assess_anchor_painterly_lock(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -1483,7 +1473,7 @@ def assess_couple_bed_pose(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -1625,7 +1615,7 @@ def assess_hook_still(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -1791,7 +1781,7 @@ def assess_garment_coverage(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -1888,7 +1878,7 @@ def assess_portrait_close_style(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -2003,7 +1993,7 @@ def assess_eye_close_crop(
     try:
         from google import genai
         from google.genai import types
-        from quality.VisualQA_Agent import config as qa_cfg
+        from production.qa.judges.visual_critic import config as qa_cfg
 
         if not qa_cfg.GEMINI_API_KEY:
             meta["skipped"] = True
@@ -2090,8 +2080,8 @@ def _qa_scene_image(
     struct_ok, struct_flaws = _assess_linework_complexity(image_path)
     fix = ""
     try:
-        from quality.VisualQA_Agent.channel_rag import get_channel_rules, set_channel_context
-        from quality.VisualQA_Agent.visual_critic import evaluate_image
+        from production.qa.judges.visual_critic.channel_rag import get_channel_rules, set_channel_context
+        from production.qa.judges.visual_critic.visual_critic import evaluate_image
 
         set_channel_context("lofi_economic")
         rules = get_channel_rules("lofi_economic")
@@ -2736,8 +2726,8 @@ def _repair_targeted_line(
     idx, constraint, must_keep = target
     lines = [r for r in (script.get("lines") or []) if isinstance(r, dict)]
     row = lines[idx]
-    from agents.writer.freeform_writer import split_long_line
-    from agents.writer.spoken_budget import repair_one_line, trim_at_clause_boundary
+    from production.writers.freeform_writer import split_long_line
+    from production.writers.spoken_budget import repair_one_line, trim_at_clause_boundary
 
     max_words, max_chars = lofi_cfg.caption_limits(
         str(script.get("arc_template") or "")
@@ -2826,7 +2816,7 @@ def _generate_validated_script(
     last_errors: list[str] = []
     last_script: dict[str, Any] | None = None
     mode = str(writer_mode or "emotional").strip().lower()
-    from agents.writer.writer_brief import get_narrative_harness
+    from production.writers.writer_brief import get_narrative_harness
 
     narrative_harness = (
         get_narrative_harness(
@@ -2838,9 +2828,9 @@ def _generate_validated_script(
         else {}
     )
     if not strict_judge:
-        from agents.writer.freeform_writer import write_draft
-        from agents.writer.script_brain import draft_to_script
-        from agents.writer.writer_brief import WriterBrief
+        from production.writers.freeform_writer import write_draft
+        from production.writers.script_brain import draft_to_script
+        from production.writers.writer_brief import WriterBrief
 
         common = {
             "duration_s": float(duration_s),
@@ -2957,8 +2947,8 @@ def _generate_validated_script(
                 duration_s=duration_s,
             )
         else:
-            from agents.writer.script_brain import compose, draft_to_script, paraphrase
-            from agents.writer.writer_brief import WriterBrief
+            from production.writers.script_brain import compose, draft_to_script, paraphrase
+            from production.writers.writer_brief import WriterBrief
 
             common = {
                 "duration_s": float(duration_s),
@@ -3136,7 +3126,7 @@ def _generate_validated_script(
     if mode != "theme":
         return None, last_errors or [f"{mode} writer did not clear validation"], True
     # Last resort: deterministic short-line fallback so a test still renders
-    from agents.writer.script_agent import _fallback_script
+    from production.writers.script_agent import _fallback_script
 
     last_details = list((last_script or {}).get("retrieved_details") or [])
     if not last_details:
@@ -3182,7 +3172,7 @@ def _resolve_page_dirs(
     ``clips/`` is final MP4s only. JSON diagnostics go to ``metadata/``.
     Scene stills and VO stay under ``assets/<run_id>/``.
     """
-    from utils.pipeline_paths import coerce_outputs_path, page_outputs_dir
+    from shared.paths import coerce_outputs_path, page_outputs_dir
 
     if outputs_dir is None:
         page_outputs = page_outputs_dir(page_id)
@@ -4489,7 +4479,7 @@ def _produce_one(
                     )
 
     # Per-image rate follows the provider/model this run actually posted.
-    from quality.VisualQA_Agent.config import COST_GEMINI_FLASH_USD
+    from production.qa.judges.visual_critic.config import COST_GEMINI_FLASH_USD
 
     img_cost_per_call, cost_meta = lofi_cfg.lofi_image_cost_per_call_usd(
         LOFI_IMAGE_WIDTH, LOFI_IMAGE_HEIGHT, schnell_steps=LOFI_IMAGE_STEPS
@@ -5158,7 +5148,7 @@ def run_economic_reel_lofi(
         item = asdict(result)
         item["post_type"] = "ECONOMIC_REEL_LOFI"
         if result.video_path or result.meta_path:
-            from modules.reel_qa.pipeline import seal_compiled_reel
+            from production.qa.pipeline import seal_compiled_reel
 
             _lofi_meta: dict[str, Any] = {}
             if result.meta_path and Path(result.meta_path).is_file():

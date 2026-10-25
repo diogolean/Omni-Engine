@@ -24,6 +24,7 @@ Interval config (in .env):
     MAX_INTERVAL_HOURS  default 6
 """
 from __future__ import annotations
+from shared.layer_bridge import Port, Symbol
 
 import json
 import logging
@@ -39,7 +40,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from agents.posting.pinterest_engine import config as cfg  # noqa: E402
+cfg = Port('production.formats.pins.config')  # noqa: E402
 from shared.env import parse_interval_hours  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -47,8 +48,8 @@ log = logging.getLogger(__name__)
 
 def _fetch_stop_reason(exc: BaseException) -> str:
     """Stop the run on a B2 daily cap or a Drive-only quota failure."""
-    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-    from agents.media.drive_source import DriveQuotaError  # noqa: PLC0415
+    from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
+    from shared.storage.drive_source import DriveQuotaError  # noqa: PLC0415
 
     if isinstance(exc, DriveQuotaError):
         return "drive_quota"
@@ -66,7 +67,7 @@ _LAZY_INVENTORY_SPARE = 2
 
 def _write_dry_run_card(account_id: str, post_id: str, pin_bytes: bytes) -> Path:
     """Save a dry-run card under outputs/pinterest/dryrun/ for inspection."""
-    from utils.pipeline_paths import outputs_root  # noqa: PLC0415
+    from shared.paths import outputs_root  # noqa: PLC0415
 
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", f"{account_id}_{post_id}")
     if not safe.lower().endswith((".jpg", ".jpeg")):
@@ -396,10 +397,8 @@ class PinterestScheduler:
 
         Returns stats dict: {published, skipped, skipped_by_history, errors, remaining}.
         """
-        from agents.posting.pinterest_engine.image_transformer import (  # noqa: PLC0415
-            PinTransformer,
-            configured_pin_method,
-        )
+        PinTransformer = Symbol('production.formats.pins.image_transformer', 'PinTransformer')
+        configured_pin_method = Symbol('production.formats.pins.image_transformer', 'configured_pin_method')
         from distribution.scheduling.inventory import MasterInventory, validate_caption_safe  # noqa: PLC0415
         from distribution.scheduling.library_source import ensure_local_library  # noqa: PLC0415
         from distribution.publishers.api.pinterest import (  # noqa: PLC0415
@@ -441,7 +440,7 @@ class PinterestScheduler:
             path.stem for path in (self.outputs_dir / "library").glob("post_*.json")
         }
         ready = inv.get_unposted(data)
-        from agents.posting.pinterest_engine.articles import article_link_required  # noqa: PLC0415
+        article_link_required = Symbol('production.formats.pins.articles', 'article_link_required')  # noqa: PLC0415
 
         account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
         wants_articles = article_link_required(account)
@@ -537,7 +536,7 @@ class PinterestScheduler:
         try:
             ledger = self._load_ledger()
         except Exception as exc:  # noqa: BLE001
-            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+            from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
             if not isinstance(exc, B2DailyCapError):
                 raise
@@ -657,7 +656,7 @@ class PinterestScheduler:
             missing_link = entry.get("_skip_article") == "no-link"
             missing_link = missing_link or not str(entry.get("target_url") or "").strip()
             if missing_link:
-                from agents.posting.pinterest_engine.articles import article_link_required  # noqa: PLC0415
+                article_link_required = Symbol('production.formats.pins.articles', 'article_link_required')  # noqa: PLC0415
 
                 account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
                 if article_link_required(account):
@@ -780,7 +779,7 @@ class PinterestScheduler:
                         article=article,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+                    from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
                     self._drop_reservation(ledger, post_id, source_hash)
                     if isinstance(exc, B2DailyCapError):
@@ -813,7 +812,7 @@ class PinterestScheduler:
                             entry, pin_bytes, ledger, record_note=False
                         )
                     except Exception as exc:  # noqa: BLE001
-                        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+                        from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
                         if not isinstance(exc, B2DailyCapError):
                             raise
@@ -839,7 +838,7 @@ class PinterestScheduler:
                             facebook_exported=exported,
                         )
                     except Exception as exc:  # noqa: BLE001
-                        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+                        from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
                         if not isinstance(exc, B2DailyCapError):
                             raise
@@ -921,7 +920,7 @@ class PinterestScheduler:
                 bucket=self.context.get("b2_bucket"),
             )
         except Exception as exc:  # noqa: BLE001
-            from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
+            from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
 
             if isinstance(exc, B2DailyCapError):
                 raise
@@ -952,7 +951,7 @@ class PinterestScheduler:
         verify = self.context.get("article_tls_verify", True)
         if isinstance(verify, str):
             verify = verify.strip().lower() not in {"0", "false", "no", "off"}
-        from agents.posting.pinterest_engine.articles import fetch_wordpress_catalog  # noqa: PLC0415
+        fetch_wordpress_catalog = Symbol('production.formats.pins.articles', 'fetch_wordpress_catalog')  # noqa: PLC0415
 
         account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
         catalog = fetch_wordpress_catalog(
@@ -969,7 +968,7 @@ class PinterestScheduler:
 
         Scanning the JSON is cheap. Pin copy is generated only for these ids.
         """
-        from agents.posting.pinterest_engine.articles import attach_article_url  # noqa: PLC0415
+        attach_article_url = Symbol('production.formats.pins.articles', 'attach_article_url')  # noqa: PLC0415
 
         catalog = self._article_catalog()
         site = str(self.context.get("site_url") or cfg.TARGET_URL or "").strip()
@@ -1003,7 +1002,7 @@ class PinterestScheduler:
             return
         account = str(self.context.get("account_id") or cfg.CHANNEL_ID or "")
         catalog = self._article_catalog()
-        from agents.posting.pinterest_engine.articles import attach_article_url  # noqa: PLC0415
+        attach_article_url = Symbol('production.formats.pins.articles', 'attach_article_url')  # noqa: PLC0415
 
         for entry in entries:
             linked = attach_article_url(entry, catalog, account, site_url=site)
@@ -1036,9 +1035,9 @@ class PinterestScheduler:
         return ledger
 
     def _ensure_photo(self, entry: dict, prefix: str) -> tuple[Path | None, bool]:
-        from agents.posting.pinterest_engine.flux_photo import ensure_flux_photo  # noqa: PLC0415
+        ensure_flux_photo = Symbol('production.formats.pins.flux_photo', 'ensure_flux_photo')  # noqa: PLC0415
         from distribution.scheduling.library_source import materialize_image  # noqa: PLC0415
-        from agents.posting.pinterest_engine.photos import is_text_graphic  # noqa: PLC0415
+        is_text_graphic = Symbol('production.formats.pins.photos', 'is_text_graphic')  # noqa: PLC0415
 
         channel = str(cfg.CHANNEL_ID or self.context.get("account_id") or "pinterest")
         path, delete_after = materialize_image(
@@ -1068,10 +1067,10 @@ class PinterestScheduler:
 
     def _free_license_photo(self, entry: dict, channel: str) -> Path | None:
         """One vetted free-license file, before FLUX. None when the search misses."""
-        from agents.media.b2_budget import B2DailyCapError  # noqa: PLC0415
-        from agents.media.free_images.policy import resolve_policy  # noqa: PLC0415
-        from agents.media.free_images.sourcer import resolve_image_source  # noqa: PLC0415
-        from utils.pipeline_paths import temp_path  # noqa: PLC0415
+        from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
+        resolve_policy = Symbol('production.providers.image.free.policy', 'resolve_policy')  # noqa: PLC0415
+        resolve_image_source = Symbol('production.providers.image.free.sourcer', 'resolve_image_source')  # noqa: PLC0415
+        from shared.paths import temp_path  # noqa: PLC0415
 
         policy = resolve_policy(channel)
         if policy == "ai_only":

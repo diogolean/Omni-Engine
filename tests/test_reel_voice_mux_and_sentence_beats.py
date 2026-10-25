@@ -153,7 +153,7 @@ def _stills(folder: Path) -> list[Path]:
 
 
 def test_audio_filter_uses_the_real_input_indexes() -> None:
-    from core.reel_ffmpeg_render import _audio_filter
+    from production.media.reel_ffmpeg_render import _audio_filter
 
     graph = _audio_filter(
         [
@@ -176,8 +176,8 @@ def test_audio_filter_uses_the_real_input_indexes() -> None:
 
 
 def test_a_reel_without_voice_is_refused(tmp_path: Path) -> None:
-    from core.reel_ffmpeg_render import compile_ffmpeg_reel
-    from core.reel_sequence_engine import compile_sequence_reel
+    from production.media.reel_ffmpeg_render import compile_ffmpeg_reel
+    from production.media.reel_sequence_engine import compile_sequence_reel
 
     still = _stills(tmp_path)[0]
     with pytest.raises(RuntimeError, match="voice track"):
@@ -200,7 +200,7 @@ def test_a_reel_without_voice_is_refused(tmp_path: Path) -> None:
 
 
 def test_sentence_beats_follow_the_spoken_line() -> None:
-    from modules.reel_qa.beats import beats_from_timestamps
+    from production.qa.beats import beats_from_timestamps
 
     script = "The hills roll toward Şanlıurfa. Farmers work the limestone fields."
     words = []
@@ -218,7 +218,7 @@ def test_sentence_beats_follow_the_spoken_line() -> None:
 
 
 def test_soft_ceiling_does_not_cut_the_opening_sentence() -> None:
-    from modules.reel_artefact.script_length import soft_ceiling
+    from production.formats.economic_reel.artefact.script_length import soft_ceiling
 
     opening = "In 9600 BC the pillars already stood."
     kept = soft_ceiling(opening + " " + ("More detail follows here. " * 80))
@@ -229,8 +229,8 @@ def test_soft_ceiling_does_not_cut_the_opening_sentence() -> None:
 def test_geography_reaches_the_flux_prompt_and_rejects_dunes() -> None:
     import json
 
-    from modules.reel_artefact.flux_policy import safe_flux_prompt
-    from modules.reel_qa.relevance import dune_conflict
+    from production.formats.economic_reel.artefact.flux_policy import safe_flux_prompt
+    from production.qa.relevance import dune_conflict
 
     entities = json.loads(
         Path("channels_config/ancient_knowledge/entities.json").read_text(encoding="utf-8")
@@ -255,7 +255,7 @@ def test_geography_reaches_the_flux_prompt_and_rejects_dunes() -> None:
 
 
 def test_burned_in_text_is_a_hard_defect(tmp_path: Path) -> None:
-    from modules.reel_qa.relevance import _verdict_from_payload
+    from production.qa.relevance import _verdict_from_payload
 
     image = tmp_path / "panel.jpg"
     Image.new("RGB", (8, 8), (20, 20, 20)).save(image)
@@ -282,7 +282,7 @@ def test_light_rays_are_off_for_ancient_knowledge() -> None:
 
 
 def test_adjacent_near_duplicates_are_rejected(tmp_path: Path) -> None:
-    from modules.reel_artefact.diversity import claim_diverse, reset_diversity
+    from production.formats.economic_reel.artefact.diversity import claim_diverse, reset_diversity
 
     reset_diversity()
     first = tmp_path / "a.jpg"
@@ -300,7 +300,7 @@ def test_adjacent_near_duplicates_are_rejected(tmp_path: Path) -> None:
 
 
 def test_an_exhausted_beat_still_gets_a_frame(tmp_path: Path) -> None:
-    from modules.reel_artefact.reuse import guarantee_still
+    from production.formats.economic_reel.artefact.reuse import guarantee_still
 
     path = guarantee_still(tmp_path / "beat.jpg", 3)
     assert path.is_file()
@@ -308,7 +308,7 @@ def test_an_exhausted_beat_still_gets_a_frame(tmp_path: Path) -> None:
 
 
 def test_final_frame_is_judged_against_the_planned_shot(tmp_path: Path) -> None:
-    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+    from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
 
     still = tmp_path / "approved.jpg"
     other = tmp_path / "frame.jpg"
@@ -378,7 +378,7 @@ def test_baghdad_search_includes_the_site_queries() -> None:
 )
 def test_ffmpeg_reel_keeps_the_voice(tmp_path: Path) -> None:
     _require_ffmpeg()
-    from core.reel_ffmpeg_render import compile_ffmpeg_reel, output_has_audio
+    from production.media.reel_ffmpeg_render import compile_ffmpeg_reel, output_has_audio
 
     voice = tmp_path / "voice.wav"
     bed = tmp_path / "bed.wav"
@@ -419,7 +419,7 @@ def test_voice_drone_and_boom_mux_matches_the_video(
     """
     _require_ffmpeg()
     monkeypatch.setenv("REEL_FFMPEG_TIMEOUT_S", "45")
-    from core.reel_ffmpeg_render import compile_ffmpeg_reel, output_has_audio
+    from production.media.reel_ffmpeg_render import compile_ffmpeg_reel, output_has_audio
 
     voice = tmp_path / "voice.wav"
     _tone(voice, 440.0, 0.35)
@@ -450,7 +450,7 @@ def test_a_longer_voice_is_not_cut_to_the_acts(
 ) -> None:
     """The picture holds when the narration runs past the planned acts."""
     _require_ffmpeg()
-    from core.reel_ffmpeg_render import compile_ffmpeg_reel
+    from production.media.reel_ffmpeg_render import compile_ffmpeg_reel
 
     voice = tmp_path / "voice.wav"
     _tone(voice, 440.0, 1.0)
@@ -478,10 +478,10 @@ def test_a_longer_voice_is_not_cut_to_the_acts(
 def test_offline_reel_compiles_with_voice_and_no_adjacent_dupes(tmp_path: Path) -> None:
     """Mocked stills, real ffmpeg. The gate the live smoke did not have."""
     _require_ffmpeg()
-    from core.reel_ffmpeg_render import output_has_audio
-    from core.reel_sequence_engine import compile_sequence_reel
-    from modules.reel_artefact.diversity import claim_diverse, reset_diversity
-    from modules.reel_qa.beats import beats_from_timestamps, check_timeline
+    from production.media.reel_ffmpeg_render import output_has_audio
+    from production.media.reel_sequence_engine import compile_sequence_reel
+    from production.formats.economic_reel.artefact.diversity import claim_diverse, reset_diversity
+    from production.qa.beats import beats_from_timestamps, check_timeline
 
     script = "Limestone hills face the farmland. The river plain holds date palms."
     words = []
@@ -540,8 +540,8 @@ def test_moviepy_fallback_keeps_the_voice(
 ) -> None:
     _require_ffmpeg()
     pytest.importorskip("moviepy")
-    from core.reel_ffmpeg_render import output_has_audio
-    from core.reel_sequence_engine import compile_sequence_reel
+    from production.media.reel_ffmpeg_render import output_has_audio
+    from production.media.reel_sequence_engine import compile_sequence_reel
 
     monkeypatch.setenv("REEL_RENDERER", "moviepy")
     voice = tmp_path / "voice.wav"
@@ -563,11 +563,7 @@ def test_moviepy_fallback_keeps_the_voice(
 
 
 def test_pauses_stay_on_the_sentence_and_the_cta_reaches_the_voice() -> None:
-    from modules.reel_qa.beats import (
-        beats_from_timestamps,
-        check_timeline,
-        seal_sentence_timeline,
-    )
+    from production.qa.beats import beats_from_timestamps, check_timeline, seal_sentence_timeline
 
     words = []
     clock = 0.7
@@ -605,14 +601,14 @@ def test_pauses_stay_on_the_sentence_and_the_cta_reaches_the_voice() -> None:
     assert snippets[-1] == "Follow for the next find."
     assert abs(sum(durations) - full) < 0.05
     check_timeline(durations, [start for _t, start, _e in beats], full)
-    from modules.reel_qa.beats import TimelineError
+    from production.qa.beats import TimelineError
 
     with pytest.raises(TimelineError):
         check_timeline([1.0, 1.0], [0.0, 1.0], 4.0)
 
 
 def test_a_short_picture_is_rejected(tmp_path: Path) -> None:
-    from core.reel_sequence_engine import compile_sequence_reel
+    from production.media.reel_sequence_engine import compile_sequence_reel
 
     voice = tmp_path / "voice.wav"
     _tone(voice, 440.0, 2.0)
@@ -630,7 +626,7 @@ def test_a_short_picture_is_rejected(tmp_path: Path) -> None:
 
 
 def test_final_qa_rejects_a_truncated_narration() -> None:
-    from modules.reel_qa.mp4_gate import decide_mp4_gate
+    from production.qa.mp4_gate import decide_mp4_gate
 
     probe = {
         "error": "",
@@ -647,7 +643,7 @@ def test_final_qa_rejects_a_truncated_narration() -> None:
 
 
 def test_yellow_captions_sit_in_a_dark_box() -> None:
-    from core.reel_ffmpeg_render import ass_document, ken_burns_filter
+    from production.media.reel_ffmpeg_render import ass_document, ken_burns_filter
 
     script = ass_document([("Sub", 0.0, 1.0, "the jar")])
     assert "&H0000E6FF" in script
@@ -665,7 +661,7 @@ def test_yellow_captions_sit_in_a_dark_box() -> None:
 def test_ffmpeg_flag_fails_loud_and_honors_the_env_binary(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from core.reel_ffmpeg_render import attempt_ffmpeg, ffmpeg_exe, ffprobe_exe
+    from production.media.reel_ffmpeg_render import attempt_ffmpeg, ffmpeg_exe, ffprobe_exe
 
     monkeypatch.setenv("REEL_RENDERER", "ffmpeg")
     monkeypatch.delenv("FFMPEG_BINARY", raising=False)
@@ -688,7 +684,7 @@ def test_ffmpeg_flag_fails_loud_and_honors_the_env_binary(
 
 
 def test_a_wide_photo_is_a_vertical_crop_not_a_blurred_band() -> None:
-    from modules.reel_artefact.crop import prepare_reel_frame
+    from production.formats.economic_reel.artefact.crop import prepare_reel_frame
 
     image = Image.new("RGB", (400, 120), (20, 20, 220))
     image.paste(Image.new("RGB", (80, 120), (220, 30, 30)), (0, 0))
@@ -700,7 +696,7 @@ def test_a_wide_photo_is_a_vertical_crop_not_a_blurred_band() -> None:
 
 
 def test_the_cta_frame_is_not_failed_for_anachronism(tmp_path: Path) -> None:
-    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+    from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
 
     still = tmp_path / "still.jpg"
     frame = tmp_path / "cta.jpg"
@@ -746,12 +742,7 @@ def test_the_cta_frame_is_not_failed_for_anachronism(tmp_path: Path) -> None:
 
 
 def test_the_hook_names_gobekli_and_rejects_turkish_sands() -> None:
-    from modules.reel_artefact.script_grounding import (
-        grounding_problem,
-        hook_names_topic,
-        script_is_usable,
-        terrain_conflicts,
-    )
+    from production.formats.economic_reel.artefact.script_grounding import grounding_problem, hook_names_topic, script_is_usable, terrain_conflicts
 
     topic = "Göbekli Tepe's carved stone pillars, 9600 BC"
     bad = (
@@ -774,7 +765,7 @@ def test_the_hook_names_gobekli_and_rejects_turkish_sands() -> None:
 
 
 def test_mystery_music_does_not_call_gemini_pro(monkeypatch: pytest.MonkeyPatch) -> None:
-    from agents.media.audio_engine import generate_dynamic_music_prompt
+    from production.providers.tts.audio_engine import generate_dynamic_music_prompt
 
     seen: dict = {}
 
@@ -809,7 +800,7 @@ def test_mystery_music_does_not_call_gemini_pro(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_nano_stops_on_a_billing_error() -> None:
-    from modules.reel_artefact.nanobanana import fatal_nano_error, run_model_chain
+    from production.formats.economic_reel.artefact.nanobanana import fatal_nano_error, run_model_chain
 
     calls: list[str] = []
 
@@ -824,7 +815,7 @@ def test_nano_stops_on_a_billing_error() -> None:
 
 
 def test_the_documentary_prompt_names_the_topic_not_giza() -> None:
-    from core.reel_sequence_engine import build_sequence_script_prompt
+    from production.media.reel_sequence_engine import build_sequence_script_prompt
 
     prompt = build_sequence_script_prompt(
         "Göbekli Tepe's carved stone pillars, 9600 BC",
@@ -842,11 +833,7 @@ def _script(words: int = 50) -> str:
 
 
 def test_billing_marks_gemini_dead_and_uses_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
-    from modules.reel_artefact.provider_health import (
-        complete_ak_text,
-        provider_dead,
-        reset_providers,
-    )
+    from production.formats.economic_reel.artefact.provider_health import complete_ak_text, provider_dead, reset_providers
 
     reset_providers()
     sleeps: list[int] = []
@@ -899,11 +886,7 @@ def test_billing_marks_gemini_dead_and_uses_openrouter(monkeypatch: pytest.Monke
 
 
 def test_openrouter_billing_falls_through_to_deepseek_then_anthropic() -> None:
-    from modules.reel_artefact.provider_health import (
-        complete_ak_text,
-        provider_dead,
-        reset_providers,
-    )
+    from production.formats.economic_reel.artefact.provider_health import complete_ak_text, provider_dead, reset_providers
 
     reset_providers()
     calls = {"openrouter": 0, "deepseek": 0, "anthropic": 0}
@@ -947,7 +930,7 @@ def test_openrouter_billing_falls_through_to_deepseek_then_anthropic() -> None:
 
 
 def test_text_preflight_stops_before_images_when_nobody_is_live() -> None:
-    from modules.reel_artefact.provider_health import preflight_text, provider_dead, reset_providers
+    from production.formats.economic_reel.artefact.provider_health import preflight_text, provider_dead, reset_providers
 
     reset_providers()
     sentinel = {"pool": 0}
@@ -974,7 +957,7 @@ def test_text_preflight_stops_before_images_when_nobody_is_live() -> None:
 def test_preflight_logs_the_names_of_the_live_providers(caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
-    from modules.reel_artefact.provider_health import preflight_text, reset_providers
+    from production.formats.economic_reel.artefact.provider_health import preflight_text, reset_providers
 
     reset_providers()
 
@@ -1000,8 +983,8 @@ def test_preflight_logs_the_names_of_the_live_providers(caplog: pytest.LogCaptur
 
 
 def test_a_402_is_not_retried_inside_the_google_guardrail() -> None:
-    from core.google_guardrail import guarded_generate_content, reset_google_cost_tracker
-    from modules.reel_artefact.provider_health import provider_dead, reset_providers
+    from production.cost.google_guardrail import guarded_generate_content, reset_google_cost_tracker
+    from production.formats.economic_reel.artefact.provider_health import provider_dead, reset_providers
 
     reset_providers()
     reset_google_cost_tracker()
@@ -1031,7 +1014,7 @@ def test_a_402_is_not_retried_inside_the_google_guardrail() -> None:
 def test_ancient_knowledge_script_uses_the_same_prompt_on_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agents.writer.caption_engine import CaptionEngine
+    from production.writers.caption_engine import CaptionEngine
 
     seen: dict[str, str] = {}
 
@@ -1117,7 +1100,7 @@ _TOPIC = "The Baghdad Battery, Parthian Mesopotamia, 250 BC"
 
 
 def _engine() -> object:
-    from agents.writer.caption_engine import CaptionEngine
+    from production.writers.caption_engine import CaptionEngine
 
     engine = CaptionEngine.__new__(CaptionEngine)
     engine._channel = type("Ch", (), {"channel_id": "ancient_knowledge"})()
@@ -1134,11 +1117,8 @@ def _engine() -> object:
 def test_a_qwen_reasoning_draft_is_extracted_and_passes_grounding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modules.reel_artefact.provider_health import reset_providers
-    from modules.reel_artefact.script_grounding import (
-        extract_narration,
-        grounding_problem,
-    )
+    from production.formats.economic_reel.artefact.provider_health import reset_providers
+    from production.formats.economic_reel.artefact.script_grounding import extract_narration, grounding_problem
 
     reset_providers()
     clean = extract_narration(_QWEN_DRAFT)
@@ -1194,12 +1174,8 @@ def test_a_qwen_reasoning_draft_is_extracted_and_passes_grounding(
 
 
 def test_a_hook_miss_is_repaired_and_a_long_draft_falls_through() -> None:
-    from modules.reel_artefact.provider_health import complete_ak_text, reset_providers
-    from modules.reel_artefact.script_grounding import (
-        grounding_problem,
-        repair_hook_if_only_miss,
-        script_is_usable,
-    )
+    from production.formats.economic_reel.artefact.provider_health import complete_ak_text, reset_providers
+    from production.formats.economic_reel.artefact.script_grounding import grounding_problem, repair_hook_if_only_miss, script_is_usable
 
     reset_providers()
     topic = _TOPIC
@@ -1225,7 +1201,7 @@ def test_a_hook_miss_is_repaired_and_a_long_draft_falls_through() -> None:
         return _QWEN_DRAFT
 
     def _refine(text: str) -> str:
-        from modules.reel_artefact.script_grounding import extract_narration
+        from production.formats.economic_reel.artefact.script_grounding import extract_narration
 
         return repair_hook_if_only_miss(
             extract_narration(text), topic, channel="ancient_knowledge",
@@ -1306,7 +1282,7 @@ def test_openrouter_text_excludes_reasoning(
     fake = types.ModuleType("openai")
     fake.OpenAI = _Client  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "openai", fake)
-    from modules.reel_artefact.provider_health import openrouter_text
+    from production.formats.economic_reel.artefact.provider_health import openrouter_text
 
     with caplog.at_level(logging.INFO):
         text = openrouter_text("Write the narration.", timeout=3.0, max_tokens=1800)
@@ -1324,8 +1300,8 @@ def test_openrouter_text_excludes_reasoning(
 
 
 def test_a_spoken_follow_line_is_removed_and_a_long_voice_extends_the_last_slot() -> None:
-    from modules.reel_artefact.script_grounding import strip_spoken_cta
-    from modules.reel_qa.beats import seal_sentence_timeline
+    from production.formats.economic_reel.artefact.script_grounding import strip_spoken_cta
+    from production.qa.beats import seal_sentence_timeline
 
     spoken = strip_spoken_cta(
         "Göbekli Tepe stands on a limestone hill. "
@@ -1355,8 +1331,8 @@ def test_a_spoken_follow_line_is_removed_and_a_long_voice_extends_the_last_slot(
 
 
 def test_camera_directions_and_hard_claims_ask_for_a_rewrite() -> None:
-    from core.reel_sequence_engine import build_sequence_script_prompt
-    from modules.reel_artefact.script_grounding import grounding_problem
+    from production.media.reel_sequence_engine import build_sequence_script_prompt
+    from production.formats.economic_reel.artefact.script_grounding import grounding_problem
 
     topic = "The Baghdad Battery"
     camera = (
@@ -1400,8 +1376,8 @@ def test_camera_directions_and_hard_claims_ask_for_a_rewrite() -> None:
 
 
 def test_an_unjudgeable_final_frame_warns_and_does_not_block(tmp_path: Path) -> None:
-    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
-    from modules.reel_visual_qa import _strip_json
+    from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
+    from production.qa.reel_visual_qa import _strip_json
 
     fenced = _strip_json('note ```json\n{"relevance_score": 0.8,}\n``` thanks')
     assert fenced["relevance_score"] == 0.8
@@ -1509,7 +1485,7 @@ def test_openrouter_vision_gives_each_judge_time_and_one_retry(
     fake = types.ModuleType("openai")
     fake.OpenAI = _Client  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "openai", fake)
-    from agents.media.providers.visual_eval import OpenRouterVisualEval
+    from production.qa.judges.visual_eval import OpenRouterVisualEval
 
     judge = OpenRouterVisualEval(
         api_key="test-key",
@@ -1525,7 +1501,7 @@ def test_openrouter_vision_gives_each_judge_time_and_one_retry(
 
 
 def test_a_blocked_reel_does_not_write_the_postplanner_xlsx(tmp_path: Path) -> None:
-    from modules.reel_qa.publish import write_postplanner_xlsx_if_allowed
+    from production.qa.publish import write_postplanner_xlsx_if_allowed
 
     dest = tmp_path / "postplan_20261019_065111.xlsx"
 

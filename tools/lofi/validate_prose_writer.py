@@ -20,15 +20,12 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("LOFI_SKIP_COHERENCE_LLM", "1")
 os.environ.setdefault("LOFI_SKIP_COMPOSE_ALTERNATE", "1")
 
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi import lofi_collections as rag
-from agents.writer.claude_polish import summarize_cost_log
-from core.economic_reel_lofi.corpus_echo import echo_hits
-from agents.writer.script_agent import generate_script
-from core.economic_reel_lofi.theme_guard import (
-    assess_theme_drift,
-    scan_pattern_theme_leaks,
-)
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi import lofi_collections as rag
+from production.writers.claude_polish import summarize_cost_log
+from production.formats.lofi.corpus_echo import echo_hits
+from production.writers.script_agent import generate_script
+from production.formats.lofi.theme_guard import assess_theme_drift, scan_pattern_theme_leaks
 
 _ARGUMENT_HOLD_MARKERS = (
     "principle",

@@ -70,9 +70,9 @@ def test_resolve_path(tmp_path: Path) -> None:
 
 
 def test_old_names_are_aliases() -> None:
-    import agents.media.providers.model_router as mr
-    import core.google_guardrail as gg
-    import modules.reel_artefact.still_guard as sg
+    import production.providers.llm.model_router as mr
+    import production.cost.google_guardrail as gg
+    import production.formats.economic_reel.artefact.still_guard as sg
 
     assert mr._bool_env is env.env_bool
     assert gg._env_float is env.env_float

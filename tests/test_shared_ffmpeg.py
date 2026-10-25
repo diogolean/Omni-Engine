@@ -28,6 +28,6 @@ def test_ffprobe_sibling(monkeypatch, tmp_path) -> None:
 
 
 def test_old_names_delegate() -> None:
-    from core.utils import fingerprint_engine
+    from production.formats.wealth import fingerprint_engine
 
     assert fingerprint_engine.resolve_ffmpeg is ffmpeg.resolve_ffmpeg

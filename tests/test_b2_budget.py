@@ -9,17 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from agents.media.b2_budget import (
-    B2DailyCapError,
-    choose_publish_key,
-    reset_caches,
-)
-from agents.media.b2_client import (
-    download_object,
-    list_object_keys,
-    read_object_text,
-    upload_object,
-)
+from shared.storage.b2_budget import B2DailyCapError, choose_publish_key, reset_caches
+from shared.storage.b2_client import download_object, list_object_keys, read_object_text, upload_object
 
 
 class _CapError(Exception):
@@ -170,7 +161,7 @@ def test_known_size_over_the_download_budget_is_not_fetched(
     del budget
     monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "1")
     client = _Client({"clips/huge.jpg": b"x"})
-    from agents.media.b2_budget import client_token, store_listing
+    from shared.storage.b2_budget import client_token, store_listing
 
     store_listing(
         client_token(client),
@@ -220,7 +211,7 @@ def test_class_c_limit_from_env(
 
 def test_defaults_stay_at_half_the_free_allowance(budget: Path) -> None:
     del budget
-    from agents.media.b2_budget import class_b_limit, class_c_limit, download_limit_bytes
+    from shared.storage.b2_budget import class_b_limit, class_c_limit, download_limit_bytes
 
     assert download_limit_bytes() == 500 * 1024 * 1024
     assert class_b_limit() == 1500
@@ -231,12 +222,7 @@ def test_env_cannot_raise_budgets_above_the_free_allowance(
     budget: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     del budget
-    from agents.media.b2_budget import (
-        charge,
-        class_b_limit,
-        class_c_limit,
-        download_limit_bytes,
-    )
+    from shared.storage.b2_budget import charge, class_b_limit, class_c_limit, download_limit_bytes
 
     monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "5000")
     monkeypatch.setenv("B2_DAILY_CLASS_B", "9000")
@@ -257,7 +243,7 @@ def test_clamped_download_cap_refuses_the_fetch(
     del budget
     monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "4000")
     client = _Client({"clips/huge.jpg": b"x"})
-    from agents.media.b2_budget import client_token, store_listing
+    from shared.storage.b2_budget import client_token, store_listing
 
     store_listing(
         client_token(client),
@@ -273,7 +259,7 @@ def test_clamped_download_cap_refuses_the_fetch(
 
 def test_lower_env_override_is_kept(budget: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     del budget
-    from agents.media.b2_budget import class_b_limit, download_limit_mb
+    from shared.storage.b2_budget import class_b_limit, download_limit_mb
 
     monkeypatch.setenv("B2_DAILY_DOWNLOAD_MB", "100")
     monkeypatch.setenv("B2_DAILY_CLASS_B", "10")
@@ -285,7 +271,7 @@ def test_usage_lock_excludes_concurrent_writers(budget: Path) -> None:
     import threading
     import time
 
-    from agents.media.b2_budget import _usage_file_lock
+    from shared.storage.b2_budget import _usage_file_lock
 
     del budget
     order: list[str] = []
@@ -354,7 +340,7 @@ def test_processes_share_one_usage_file(budget: Path) -> None:
 
 
 def test_backblaze_endpoint_is_not_treated_as_runpod() -> None:
-    from agents.media.b2_budget import is_backblaze_endpoint
+    from shared.storage.b2_budget import is_backblaze_endpoint
 
     assert is_backblaze_endpoint("https://s3.us-east-005.backblazeb2.com")
     assert is_backblaze_endpoint("https://s3.eu-central-003.backblaze.com")
@@ -371,7 +357,7 @@ def test_recycled_client_identity_does_not_reuse_a_listing(budget: Path) -> None
     """
     import gc
 
-    from agents.media.b2_budget import cached_listing, client_token, store_listing
+    from shared.storage.b2_budget import cached_listing, client_token, store_listing
 
     del budget
     prefix = "ancient_knowledge/library/"
@@ -429,7 +415,7 @@ def test_a_new_client_never_inherits_a_collected_clients_cache_token() -> None:
     """id() is reused after garbage collection; the token must not be."""
     import gc
 
-    from agents.media.b2_budget import client_token
+    from shared.storage.b2_budget import client_token
 
     class _Client:
         pass

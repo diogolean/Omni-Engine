@@ -2,7 +2,7 @@
 """Replay pipeline.py's per-scene QA retry loop on one locked-script beat.
 
 Usage (from factory root):
-  python -m core.economic_reel_lofi._tools.probe_scene \\
+  python -m tools.lofi.probes.probe_scene \\
     --script outputs/wonder_feed/clips/lofi_stills_attachment_20260821_v02.json \\
     --scene 3 --trials 3
 """
@@ -54,14 +54,10 @@ def _run_trial(
     *,
     focus_step_override: int | None,
 ) -> dict[str, Any]:
-    from core.economic_reel_lofi import config as lofi_cfg
-    from core.economic_reel_lofi.image_gen import generate_scene_image
-    from core.economic_reel_lofi.pipeline import (
-        _qa_scene_image,
-        assess_default_object_intrusion,
-        assess_photoreal_style,
-    )
-    from core.economic_reel_lofi.visual_identity import assemble_v2_prompt
+    from production.formats.lofi import config as lofi_cfg
+    from production.formats.lofi.image_gen import generate_scene_image
+    from production.formats.lofi.pipeline import _qa_scene_image, assess_default_object_intrusion, assess_photoreal_style
+    from production.formats.lofi.visual_identity import assemble_v2_prompt
 
     row = deepcopy(base_row)
     visual = assemble_v2_prompt(row, focus_step=int(focus_step_override or 0))

@@ -15,6 +15,7 @@ Does not upload by itself — produces manifests consumed by the YouTube
 publisher / ``esp_main.py schedule`` path.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import json
 import logging
@@ -25,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 _LOG = logging.getLogger(__name__)
 
@@ -475,7 +476,7 @@ def build_seo_pack(
     page_cfg: Any,
 ) -> dict[str, Any]:
     """Map library assets → US high-RPM YouTube title / description / tags."""
-    from agents.posting.youtube_publisher import sanitize_youtube_tags
+    sanitize_youtube_tags = Symbol('distribution.publishers.api.youtube_upload', 'sanitize_youtube_tags')
 
     defaults = list(getattr(page_cfg, "YOUTUBE_DEFAULT_TAGS", []) or [])
     anchors = list(getattr(page_cfg, "YOUTUBE_KEYWORD_ANCHORS", []) or [])
@@ -776,7 +777,7 @@ def resolve_next_publish_slot(
     interval: timedelta,
 ) -> datetime:
     """Pick the next slot from max(YouTube future publishAt, local state) + interval."""
-    from agents.posting.youtube_publisher import get_next_publish_slot
+    get_next_publish_slot = Symbol('distribution.publishers.api.youtube_upload', 'get_next_publish_slot')
 
     yt_slot = get_next_publish_slot(
         youtube,
@@ -818,18 +819,16 @@ def schedule_ready_uploads(
     Requires ``credentials/tokens/youtube_token_endless_summer_paradise.json``.
     """
     import config as app_config
-    from agents.posting.youtube_publisher import (
-        DailyUploadSafetyGate,
-        YouTubeQuotaExceededError,
-        advance_slot,
-        build_credentials,
-        build_youtube_client,
-        parse_interval_spec,
-        resolve_youtube_token_path,
-        sanitize_youtube_tags,
-        upload_short,
-        verify_authorized_channel,
-    )
+    from shared.youtube_errors import YouTubeQuotaExceededError
+    DailyUploadSafetyGate = Symbol('distribution.publishers.api.youtube_upload', 'DailyUploadSafetyGate')
+    advance_slot = Symbol('distribution.publishers.api.youtube_upload', 'advance_slot')
+    build_credentials = Symbol('distribution.publishers.api.youtube_upload', 'build_credentials')
+    build_youtube_client = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client')
+    parse_interval_spec = Symbol('distribution.publishers.api.youtube_upload', 'parse_interval_spec')
+    resolve_youtube_token_path = Symbol('distribution.publishers.api.youtube_upload', 'resolve_youtube_token_path')
+    sanitize_youtube_tags = Symbol('distribution.publishers.api.youtube_upload', 'sanitize_youtube_tags')
+    upload_short = Symbol('distribution.publishers.api.youtube_upload', 'upload_short')
+    verify_authorized_channel = Symbol('distribution.publishers.api.youtube_upload', 'verify_authorized_channel')
 
     interval = parse_interval_spec(interval_hours, default_hours=84.0)
     interval_h = interval.total_seconds() / 3600.0
@@ -1065,13 +1064,11 @@ def reschedule_existing_conflicts(
     timestamps. Updates via ``youtube.videos().update(part='status', ...)``.
     """
     import config as app_config
-    from agents.posting.youtube_publisher import (
-        build_credentials,
-        build_youtube_client,
-        parse_interval_spec,
-        reschedule_conflicting_publish_slots,
-        verify_authorized_channel,
-    )
+    build_credentials = Symbol('distribution.publishers.api.youtube_upload', 'build_credentials')
+    build_youtube_client = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client')
+    parse_interval_spec = Symbol('distribution.publishers.api.youtube_upload', 'parse_interval_spec')
+    reschedule_conflicting_publish_slots = Symbol('distribution.publishers.api.youtube_upload', 'reschedule_conflicting_publish_slots')
+    verify_authorized_channel = Symbol('distribution.publishers.api.youtube_upload', 'verify_authorized_channel')
 
     interval = parse_interval_spec(interval_hours, default_hours=84.0)
     creds = build_credentials(

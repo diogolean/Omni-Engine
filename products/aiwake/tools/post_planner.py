@@ -13,10 +13,11 @@ bulk-upload workbook used by the other video channels:
 Primary file: ``{OUTPUT_PATH}/aiwake/automated_bulk_posts_import.xlsx``
 Snapshot:     ``{OUTPUT_PATH}/aiwake/postplanner/postplan_aiwake.xlsx``
 
-    python -m channels_config.aiwake.tools.post_planner
-    python -m channels_config.aiwake.tools.post_planner --dry-run
+    python -m products.aiwake.tools.post_planner
+    python -m products.aiwake.tools.post_planner --dry-run
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import argparse
 import json
@@ -47,7 +48,7 @@ from products.aiwake.tools.library_sanitize import (
 )
 from products.aiwake.tools.schedule_youtube import excluded_video_folder
 from shared.store import restore_channel_state
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
     from products.aiwake.settings import YOUTUBE_DESCRIPTION_CTA
@@ -245,7 +246,7 @@ def json_planner_path(*, outputs_dir: Path | None = None) -> Path:
 
 def store_planner_path() -> Path:
     """``channels_config/aiwake/store/post_planner.json``."""
-    from utils.pipeline_paths import channel_store_dir
+    from shared.paths import channel_store_dir
 
     return channel_store_dir(CHANNEL_ID) / "post_planner.json"
 
@@ -358,10 +359,8 @@ def attach_b2_urls(
             continue
         url = ""
         if upload and not path.is_file():
-            from production.library.content_source import (  # noqa: PLC0415
-                ensure_b2_public_url,
-                materialize_publish_file,
-            )
+            ensure_b2_public_url = Symbol('production.library.content_source', 'ensure_b2_public_url')
+            materialize_publish_file = Symbol('production.library.content_source', 'materialize_publish_file')
 
             found = materialize_publish_file(path, channel=CHANNEL_ID)
             if found is not None and found.is_file():
@@ -1485,15 +1484,7 @@ def write_planner_xlsx(
     ready_only: bool = True,
 ) -> Path:
     """Write the official PostPlanner V2 workbook (caption B, B2 URL C)."""
-    from agents.posting.post_planner import (
-        _COL_CAPTION,
-        _COL_DATETIME,
-        _COL_MEDIA,
-        _sanitize_caption_for_export,
-        _sanitize_excel_cell_text,
-        _save_workbook,
-        _URL_CELL_MAX_LEN,
-    )
+    from distribution.publishers.export.post_planner import _COL_CAPTION, _COL_DATETIME, _COL_MEDIA, _sanitize_caption_for_export, _sanitize_excel_cell_text, _save_workbook, _URL_CELL_MAX_LEN
     from openpyxl import Workbook
     from openpyxl.styles import Alignment
 

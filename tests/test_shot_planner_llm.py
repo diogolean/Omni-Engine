@@ -4,19 +4,13 @@ from __future__ import annotations
 
 import json
 
-import agents.orchestrator.llm as llm
-from core.cost_tracker import CostTracker
-from modules.reel_grounding.prompt import assemble_beat
-from modules.reel_qa.config import RELEVANCE_THRESHOLD
-from modules.shot_planner.entities import load_entities
-from modules.shot_planner.plan import (
-    plan_episode,
-    plan_for_reel,
-    planner_enabled,
-    planner_prompt,
-    shot_for_beat,
-)
-from modules.shot_planner.render import render_shot
+import production.pipeline.agentic.llm as llm
+from production.cost.cost_tracker import CostTracker
+from production.formats.economic_reel.grounding.prompt import assemble_beat
+from production.qa.config import RELEVANCE_THRESHOLD
+from production.formats.economic_reel.shot_planner.entities import load_entities
+from production.formats.economic_reel.shot_planner.plan import plan_episode, plan_for_reel, planner_enabled, planner_prompt, shot_for_beat
+from production.formats.economic_reel.shot_planner.render import render_shot
 
 _BCE = (
     "The Antikythera Mechanism came out of a shipwreck. "
@@ -191,7 +185,7 @@ def test_visible_warning_says_whether_the_planner_was_used(monkeypatch, caplog) 
 def test_planner_cost_line_uses_the_reel_channel(caplog) -> None:
     import logging
 
-    from core.google_guardrail import GoogleCostTracker, bind_cost_channel
+    from production.cost.google_guardrail import GoogleCostTracker, bind_cost_channel
 
     seen: list[str | None] = []
 
@@ -199,7 +193,7 @@ def test_planner_cost_line_uses_the_reel_channel(caplog) -> None:
         seen.append(channel)
 
     # The planner binds the reel channel around the Gemini call, then clears it.
-    import core.google_guardrail as guard
+    import production.cost.google_guardrail as guard
 
     original = guard.bind_cost_channel
     guard.bind_cost_channel = _record  # type: ignore[method-assign]

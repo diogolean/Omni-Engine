@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 core — framework-agnostic modules shared across all page profiles.
 
@@ -14,9 +14,9 @@ Public surface
 """
 from __future__ import annotations
 
-from core.cost_tracker import CostTracker
-from core.reel_sequence_engine import compile_sequence_reel, build_sequence_script_prompt
-from core.page_profile import BasePageProfile
+from production.cost.cost_tracker import CostTracker
+from production.media.reel_sequence_engine import compile_sequence_reel, build_sequence_script_prompt
+from production.pipeline.page_profile import BasePageProfile
 
 __all__ = [
     "CostTracker",

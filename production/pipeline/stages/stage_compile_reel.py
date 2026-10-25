@@ -113,7 +113,7 @@ def _stage_compile_reel_01(state: VariantState) -> None:
             state._timeline_s = float(state._reel_dur or state.page_ctx.reel_duration or 80.0)
             if state._voice_path is not None:
                 try:
-                    from agents.media.audio_engine import _audio_file_duration_s as _voice_dur_s
+                    from production.providers.tts.audio_engine import _audio_file_duration_s as _voice_dur_s
                     state._voice_dur_s = _voice_dur_s
                     state._vd = float(state._voice_dur_s(Path(state._voice_path)))
                     if state._vd > 1.0:
@@ -143,7 +143,7 @@ def _stage_compile_reel_01(state: VariantState) -> None:
         state._compile_act_durs = list(getattr(state, '_ak_act_durs', None) or []) if state.page_ctx and str(getattr(state.page_ctx, 'page_id', '')).lower() == 'ancient_knowledge' and getattr(state, '_ak_act_durs', None) else state._paced_act_durs
         state._act_video_paths = None
         if state._is_wan_reel:
-            from core.wan_reel_production import generate_wan_act_videos as _gen_wan_acts
+            from production.providers.image.wan_reel_production import generate_wan_act_videos as _gen_wan_acts
             state._gen_wan_acts = _gen_wan_acts
             state._wan_dir = (state._episode_assets_dir or Path(app_config.ASSETS_DIR)) / 'wan_clips'
             state._holds = [float(d) for d in state._compile_act_durs or []]
@@ -299,7 +299,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
         state._is_mei_page = (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei'
         state._tts_ssml = bool(state.page_ctx.tts_enable_ssml) if state.page_ctx else False
         if state._is_mei_page:
-            from agents.media.mei_narrative import prepare_mei_tts_text, strip_inline_follow_cta
+            from production.writers.mei_narrative import prepare_mei_tts_text, strip_inline_follow_cta
             state.prepare_mei_tts_text = prepare_mei_tts_text
             state.strip_inline_follow_cta = strip_inline_follow_cta
             state._pre = state._voiceover_script
@@ -333,7 +333,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
                 raise RuntimeError(f'Voiceover generation failed (variant {state.variant + 1}): {state.vaudio_exc} — refusing silent ancient_knowledge compile.') from state.vaudio_exc
             _LOG.warning('Voiceover generation failed (variant %s): %s — reel will be silent.', state.variant + 1, state.vaudio_exc)
         state._cta_text = (state.page_ctx.reel_cta_text if state.page_ctx else '') or ''
-        from agents.media.mei_narrative import approved_cta_text, fix_cta_typos
+        from production.writers.mei_narrative import approved_cta_text, fix_cta_typos
         state.approved_cta_text = approved_cta_text
         state.fix_cta_typos = fix_cta_typos
         if (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei':
@@ -348,7 +348,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
             try:
                 state._is_mei_cta = (state.page_ctx.page_id if state.page_ctx else '').lower() == 'master_mei'
                 if state._is_mei_cta:
-                    from agents.media.audio_engine import default_cta_cache_path, ensure_cached_cta_voiceover
+                    from production.providers.tts.audio_engine import default_cta_cache_path, ensure_cached_cta_voiceover
                     state.default_cta_cache_path = default_cta_cache_path
                     state.ensure_cached_cta_voiceover = ensure_cached_cta_voiceover
                     import shutil as _shutil_cta
@@ -382,7 +382,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
         if state._voice_path is not None and state._cta_path is not None:
             state._narr_dur = 0.0
             try:
-                from agents.media.audio_engine import _audio_file_duration_s as _audio_dur_s
+                from production.providers.tts.audio_engine import _audio_file_duration_s as _audio_dur_s
                 state._audio_dur_s = _audio_dur_s
                 state._narr_dur = float(state._audio_dur_s(Path(state._voice_path)))
             except Exception:
@@ -403,7 +403,7 @@ def _stage_compile_reel_04(state: VariantState) -> None:
             state._cta_offset = state._narr_dur + 1.0
             if not state._cta_word_timings:
                 try:
-                    from agents.media.audio_engine import _audio_file_duration_s as _audio_dur_s2, approximate_word_timings as _approx_wt
+                    from production.providers.tts.audio_engine import _audio_file_duration_s as _audio_dur_s2, approximate_word_timings as _approx_wt
                     state._audio_dur_s2 = _audio_dur_s2
                     state._approx_wt = _approx_wt
                     state._cta_dur_fill = float(state._audio_dur_s2(Path(state._cta_path)))
@@ -461,7 +461,7 @@ def _stage_compile_reel_05(state: VariantState) -> None:
             _LOG.info('%s | BGM music_v2 ready (≥%.0fs) → %s | style=%s', (state.page_ctx.page_id or 'PAGE').upper(), state._music_min, Path(state._music_bed).name, state._music_style)
             if state.cost_tracker is not None:
                 try:
-                    from agents.media.audio_engine import LAST_MUSIC_COMPOSE_MODE
+                    from production.providers.tts.audio_engine import LAST_MUSIC_COMPOSE_MODE
                     state.LAST_MUSIC_COMPOSE_MODE = LAST_MUSIC_COMPOSE_MODE
                     state._mode = str(state.LAST_MUSIC_COMPOSE_MODE or '').strip().lower()
                     state.cost_tracker.track_music(api=state._mode not in ('', 'local', 'ambient', 'none'))
@@ -507,7 +507,7 @@ def _stage_compile_reel_05(state: VariantState) -> None:
                 _LOG.info('ANCIENT_KNOWLEDGE | Local ambient mystery fallback: %s', state._legacy_mystery.name)
     if state._ambient_path is not None and Path(state._ambient_path).is_file():
         try:
-            from agents.media.audio_engine import resample_audio_48k as _rs48
+            from production.providers.tts.audio_engine import resample_audio_48k as _rs48
             state._rs48 = _rs48
             state._amb_src = Path(state._ambient_path)
             if state._amb_src.resolve().parent != state._reel_dir.resolve():

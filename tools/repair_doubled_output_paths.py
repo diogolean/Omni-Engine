@@ -10,7 +10,7 @@ _FACTORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_FACTORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_FACTORY_ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 _TEXT_SUFFIXES = {".json", ".txt", ".csv", ".md"}
 _XLSX_SUFFIXES = {".xlsx", ".xlsm"}

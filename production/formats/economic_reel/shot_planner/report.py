@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Print a shot list and the rendered prompts. No image generation.
 
-    python -m modules.shot_planner.report "Lost OOPArts" "script text"
+    python -m production.formats.economic_reel.shot_planner.report "Lost OOPArts" "script text"
 
 With ``REEL_SHOT_PLANNER=1`` the same command uses the planner call and,
 if that JSON fails, prints the deterministic list instead. The default

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from utils.pipeline_paths import review_path, temp_path
+from shared.paths import review_path, temp_path
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -40,6 +40,7 @@ _ALLOWED_ROOT = {
     "docs",
     "engine",
     "infra",
+    "layer_wiring.py",
     "main.py",
     "models_avatar",
     "modules",

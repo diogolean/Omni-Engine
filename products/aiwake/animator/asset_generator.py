@@ -55,7 +55,7 @@ def _default_puppets_dir() -> Path:
     silently back to a repo-tracked location when the factory *is* present.
     """
     try:
-        from utils.pipeline_paths import assets_root  # noqa: PLC0415
+        from shared.paths import assets_root  # noqa: PLC0415
 
         return assets_root() / "puppets"
     except Exception as exc:  # noqa: BLE001 — standalone extraction, no parent factory

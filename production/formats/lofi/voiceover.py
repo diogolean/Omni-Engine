@@ -79,7 +79,7 @@ def ensure_script_voiceover(
     work_dir: Path | str,
 ) -> list[Path | None]:
     """Generate/reuse exact approved VO and persist elastic scene timing."""
-    from agents.media.audio_engine import generate_voiceover_with_timestamps
+    from production.providers.tts.audio_engine import generate_voiceover_with_timestamps
     from production.formats.lofi.assembler import measure_vo_speech_duration
 
     lines = [row for row in (script.get("lines") or []) if isinstance(row, dict)]

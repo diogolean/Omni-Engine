@@ -33,10 +33,10 @@ Model downloads (not generated media) go to `MODELS_AVATAR_MODELS_DIR` when that
 ## Commands
 
 ```bash
-python -m models_avatar list
-python -m models_avatar generate --avatar sophie_bennet --preset fast --set lifestyle --template-id cafe_morning
-python -m models_avatar batch --avatar sophie_bennet --set lifestyle --count 200 --preset fast --batch-id night-1
-python -m models_avatar download-models --avatar sophie_bennet
+python -m production.providers.avatar list
+python -m production.providers.avatar generate --avatar sophie_bennet --preset fast --set lifestyle --template-id cafe_morning
+python -m production.providers.avatar batch --avatar sophie_bennet --set lifestyle --count 200 --preset fast --batch-id night-1
+python -m production.providers.avatar download-models --avatar sophie_bennet
 ```
 
 `batch` is resumable. The same `--batch-id` skips manifest rows with `"status": "ok"`. Transport errors retry (`--max-attempts`, default 3). `--interval` is the pause between jobs (`MODELS_AVATAR_MIN_INTERVAL_S` when omitted). The manifest records `prompt`, `negative`, `seed`, `preset`, and `file` for every image.

@@ -3,8 +3,8 @@
 VisualQA_Agent entrypoint — Master Mei biomechanical Visual QA loop.
 
 Usage (from factory root):
-    python -m VisualQA_Agent.main --channel master_mei --beat "A gaunt worker trapped in a CRT dungeon..."
-    python -m VisualQA_Agent.main --list-channels
+    python -m production.qa.judges.visual_critic.main --channel master_mei --beat "A gaunt worker trapped in a CRT dungeon..."
+    python -m production.qa.judges.visual_critic.main --list-channels
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
-import utils.pipeline_paths as pp
+import shared.paths as pp
 
 
 def test_drive_root_default_and_override(monkeypatch, tmp_path) -> None:
@@ -37,7 +37,7 @@ def test_fingerprint_engine_uses_ffmpeg_binary(monkeypatch, tmp_path) -> None:
     exe = tmp_path / "ffmpeg"
     exe.write_bytes(b"")
     monkeypatch.setenv("FFMPEG_BINARY", str(exe))
-    from core.utils import fingerprint_engine
+    from production.formats.wealth import fingerprint_engine
 
     assert fingerprint_engine.resolve_ffmpeg() == str(exe)
 

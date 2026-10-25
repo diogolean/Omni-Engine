@@ -3,7 +3,7 @@
 
 As a submodule of the parent engine::
 
-    python -m channels_config.aiwake --offline --turns 2
+    python -m products.aiwake --offline --turns 2
 
 Standalone (from inside the ``aiwake/`` directory)::
 

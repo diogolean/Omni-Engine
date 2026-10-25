@@ -1,7 +1,7 @@
 """One-shot puppet factory. BiRefNet alpha is saved exactly as the model returns it.
 
 Usage:
-    python -m core.animator.factory.one_shot_factory --character-id deepseek_cyborg_v3 --facing left
+    python -m products.aiwake.animator.factory.one_shot_factory --character-id deepseek_cyborg_v3 --facing left
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from utils.pipeline_paths import assets_root, outputs_root
+from shared.paths import assets_root, outputs_root
 
 from .create_puppet import (
     DEEPSEEK_MASTER_PROMPT,

@@ -7,8 +7,9 @@ phrase length, lower-third Y) is inherited from
 ``channels_config.master_mei.page_config``. Do not hardcode sizes elsewhere.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
-from channels_config.master_mei import page_config as _mei
+_mei = Symbol('channels_config.master_mei', 'page_config')
 
 SUBTITLE_FONTSIZE: int = int(_mei.SUBTITLE_FONTSIZE)
 SUBTITLE_Y_POSITION: int = int(_mei.SUBTITLE_Y_POSITION)

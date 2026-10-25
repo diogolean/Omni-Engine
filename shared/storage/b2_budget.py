@@ -126,7 +126,7 @@ def usage_path() -> Path:
     override = (os.getenv("B2_USAGE_PATH") or "").strip()
     if override:
         return Path(override)
-    from utils.pipeline_paths import outputs_root  # noqa: PLC0415
+    from shared.paths import outputs_root  # noqa: PLC0415
 
     return outputs_root() / "b2" / "usage.json"
 

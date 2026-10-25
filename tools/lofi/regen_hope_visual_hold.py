@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 os.environ["LOFI_FLUX_BACKEND"] = "dev"
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -26,15 +26,10 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.image_gen import generate_scene_image_dev  # noqa: E402
-from core.economic_reel_lofi.pipeline import generate_and_qa_scene  # noqa: E402
-from core.economic_reel_lofi.visual_identity import (  # noqa: E402
-    apply_hope_composition_spec,
-    apply_lighting_to_beat,
-    assemble_v2_prompt_dev,
-    hope_beat_spec,
-)
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.image_gen import generate_scene_image_dev  # noqa: E402
+from production.formats.lofi.pipeline import generate_and_qa_scene  # noqa: E402
+from production.formats.lofi.visual_identity import apply_hope_composition_spec, apply_lighting_to_beat, assemble_v2_prompt_dev, hope_beat_spec
 
 HOLD = page_outputs_dir("wonder_feed") / "clips" / "lofi_hold_hope_20260824_194933_v01.json"
 PROFILE = "style-riso_painting_retro_vintage"

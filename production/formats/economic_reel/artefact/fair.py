@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from production.formats.economic_reel.artefact.climb import cursor_for, reset_cursors, set_share
-from modules.reel_qa.models import StillGateResult
+from production.qa.models import StillGateResult
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +221,6 @@ def _safety_result(previous: Any, path: Path) -> StillGateResult:
 
 
 def _parallel(jobs: dict[int, Callable[[], Any]]) -> dict[int, Any]:
-    from core.remote_gpu_manager import run_parallel_jobs
+    from production.providers.image.remote_gpu_manager import run_parallel_jobs
 
     return run_parallel_jobs(jobs)

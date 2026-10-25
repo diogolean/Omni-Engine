@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-import agents.posting.pinterest_engine.ledger as legacy_ledger
-import agents.posting.pinterest_engine.publisher as legacy_publisher
+import distribution.scheduling.ledger as legacy_ledger
+import distribution.publishers.api.pinterest as legacy_publisher
 import distribution.publishers.api.pinterest as pinterest_api
 import distribution.scheduling.ledger as pin_ledger
 import distribution.workers.__main__ as worker_main
@@ -256,7 +256,7 @@ def test_complete_fills_the_reserved_row_without_a_second_append(tmp_path: Path)
 def test_already_posted_record_does_not_call_pinterest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agents.posting.pinterest_engine import config as cfg
+    from production.formats.pins import config as cfg
 
     monkeypatch.setattr(cfg, "DOTENV_LOADED_FROM_FILE", True, raising=False)
     monkeypatch.setenv("PINTEREST_BOARD_NAME", "Board")

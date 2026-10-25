@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
 from dotenv import load_dotenv
-from utils.pipeline_paths import moviepy_temp_audio_dir, page_outputs_dir
+from shared.paths import moviepy_temp_audio_dir, page_outputs_dir
 
 load_dotenv(ROOT / ".env")
 os.environ.setdefault("ENABLE_REMOTE_GPU_WORKFLOWS", "false")
@@ -196,7 +196,7 @@ def regenerate_mystery_music(
     style: str = "mystery",
     directive: "Path | None" = None,
 ) -> Path:
-    from agents.media.audio_engine import generate_music_v2_bed
+    from production.providers.tts.audio_engine import generate_music_v2_bed
 
     path = generate_music_v2_bed(
         Path(out_path),

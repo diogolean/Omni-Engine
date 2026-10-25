@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from utils.pipeline_paths import assets_root, outputs_root
+from shared.paths import assets_root, outputs_root
 
 from .viseme_inspector import _approved_head, _chin_anchor, _chin_plate
 from .visemes import (

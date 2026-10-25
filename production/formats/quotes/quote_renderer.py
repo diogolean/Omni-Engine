@@ -43,7 +43,7 @@ if str(_ENGINE_ROOT) not in sys.path:
     sys.path.insert(0, str(_ENGINE_ROOT))
 
 from production.formats.quotes.ocr_text import strip_wrapping_quotes
-from utils.pipeline_paths import assets_path, page_outputs_dir, windows_fonts_dir
+from shared.paths import assets_path, page_outputs_dir, windows_fonts_dir
 
 _ASSETS_ROOT: Path = assets_path()
 FACTORY_ROOT: Path = _ASSETS_ROOT.parent

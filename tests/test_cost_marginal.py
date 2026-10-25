@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from core import spend_ledger
-from core.cost_tracker import CostTracker
+from production.cost import spend_ledger
+from production.cost.cost_tracker import CostTracker
 
 
 @pytest.fixture(autouse=True)
