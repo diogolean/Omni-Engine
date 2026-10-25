@@ -18,8 +18,8 @@ Three requirement files stay separate:
 
 | File | Who installs it |
 |---|---|
-| `requirements.txt` | A local factory, including `mediapipe` and `pyautogui` |
-| `requirements-docker.txt` | The `linux/arm64` image. Drops `mediapipe` (no aarch64 wheel) and `pyautogui` (needs a desktop) |
+| `requirements.txt` | A local factory, including `mediapipe`, `pyautogui`, `playwright`, and `skia-python` |
+| `requirements-docker.txt` | The `linux/arm64` image. Drops `mediapipe` (no aarch64 wheel), `pyautogui` (needs a desktop), `playwright` (PC browser publishers), and `skia-python` (Aiwake mouth sprites) |
 | `requirements-ci.txt` | Pull-request checks. Pytest, ruff, and the imports that suite needs, without the media stack |
 
 Commands, channels, and post types: [COMMAND_REFERENCE.md](COMMAND_REFERENCE.md).

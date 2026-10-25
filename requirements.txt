@@ -2,6 +2,8 @@ google-genai>=1.0.0
 anthropic>=0.39.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0,<12.0
+# Direct import across the factory. opencv and moviepy also install it.
+numpy>=1.26.0
 openpyxl>=3.1.0
 pypdf>=5.0.0
 requests>=2.31.0
@@ -24,12 +26,37 @@ google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.1.0
 # Google Sheets queue (Facebook scheduler)
 gspread>=6.0.0
+# Direct import of google.oauth2 / google.auth (YouTube and Drive).
+google-auth>=2.23.0
 # Reels scheduler — OS file-dialog bypass for CDP >50MB uploads
 pyautogui>=0.9.54
 pyperclip>=1.8.2
+# PC Chrome CDP publishers (distribution/publishers/browser). Not in the arm64 image.
+playwright>=1.64,<2
 edge-tts>=6.1.9
 PyYAML>=6.0
+# Visual critic console. The module imports rich at import time.
+rich>=13.0.0
+# Lofi negative prompts count CLIP tokens with these. The call does not fall back.
+huggingface_hub>=0.26.0
+tokenizers>=0.20.0
+# Aiwake mouth sprites (import skia). Not in the arm64 image.
+skia-python>=138
 # v3 API. The 5.x SDK speaks /ns/{namespace} and does not work with server 0.0.8.
 supermemory==3.62.0
 psutil>=5.9.0
 imageio-ffmpeg>=0.5.1
+# Optional extras. Imported lazily and skipped when the package is missing.
+# They are not required for the factory, the scheduler, or the PC publishers.
+#   chromadb        VISUALQA_USE_CHROMA=1 (also in production/qa/judges/visual_critic/requirements.txt)
+#   open_clip       FREE_IMAGE_CLIP=1 or REEL_LOCAL_EMBED (package open-clip-torch)
+#   torch           those embedders, and the optional depth-parallax hook
+#   transformers    REEL_HOOK_PARALLAX=1 depth model
+#   pandas          engagement-bait spreadsheet; the call returns "" if missing
+#   scipy           lofi blur; numpy is the fallback
+#   soundfile       audio decode; moviepy is the fallback
+#   mutagen         audio duration; moviepy is the fallback
+#   imageio         Ken Burns fallback after ffmpeg and opencv
+#   httpx           TTS wire log; elevenlabs brings it when that SDK is installed
+#   winocr          Windows-only avatar OCR
+#   botocore        installed with boto3; imported as botocore.config / botocore.exceptions
