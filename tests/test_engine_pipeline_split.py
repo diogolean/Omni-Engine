@@ -237,6 +237,6 @@ def test_worker_source_keeps_preflight_pool_and_unique_stills_order() -> None:
     stills = source.find("_unique_stills(")
     compile_call = source.find("_core_compile_sequence_reel(")
     assert 0 <= preflight < pool
-    assert "ancient_knowledge" in source[preflight : preflight + 80]
+    assert 'sole_page("DOCUMENTARY_PIPELINE")' in source[preflight : preflight + 80]
     assert "The first sentence must contain" in source
     assert 0 <= stills < compile_call

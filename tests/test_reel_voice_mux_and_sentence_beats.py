@@ -978,7 +978,7 @@ def test_preflight_logs_the_names_of_the_live_providers(caplog: pytest.LogCaptur
     preflight = source.find("_preflight_text(")
     pool = source.find("_build_topic_pool(")
     assert 0 <= preflight < pool
-    assert "ancient_knowledge" in source[preflight:preflight + 80]
+    assert 'sole_page("DOCUMENTARY_PIPELINE")' in source[preflight:preflight + 80]
     reset_providers()
 
 
