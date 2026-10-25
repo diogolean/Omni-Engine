@@ -25,7 +25,7 @@ from production.providers.image.free.quality import (
     prepare_portrait,
     rank_candidates,
 )
-from production.providers.image.free.query import build_query
+from production.providers.image.free.query import query_variants
 
 logger = logging.getLogger(__name__)
 
@@ -57,27 +57,39 @@ def resolve_image_source(
     Search metadata is cached per query.
     """
     chosen_policy = policy or resolve_policy(channel, page_cfg)
-    query = build_query(topic=topic, entity=entity, sentence=sentence)
+    variants = query_variants(topic=topic, entity=entity, sentence=sentence)
+    query = variants[0] if variants else ""
     if chosen_policy == "ai_only":
         return SourceDecision(policy=chosen_policy, query=query, reason="ai_only")
     if not query:
         return SourceDecision(policy=chosen_policy, query="", reason="empty_query")
 
     with _DOWNLOAD_LOCK:
-        return _resolve_locked(
-            channel=channel,
-            dest=Path(dest),
-            query=query,
-            policy=chosen_policy,
-            providers=providers,
-            client=client,
-            cache_dir=cache_dir,
-            min_short_side=min_short_side,
-            allow_smart_crop=allow_smart_crop,
-            vision_check=vision_check,
-            allowlist=allowlist,
-            producer=producer,
-        )
+        last: SourceDecision | None = None
+        for index, variant in enumerate(variants):
+            decision = _resolve_locked(
+                channel=channel,
+                dest=Path(dest),
+                query=variant,
+                policy=chosen_policy,
+                providers=providers,
+                client=client,
+                cache_dir=cache_dir,
+                min_short_side=min_short_side,
+                allow_smart_crop=allow_smart_crop,
+                vision_check=vision_check,
+                allowlist=allowlist,
+                producer=producer,
+            )
+            last = decision
+            if decision.hit is not None or decision.reason != "no_hits":
+                return decision
+            if index < len(variants) - 1:
+                logger.info(
+                    "Free image query %r had no hits; broadening the subject.",
+                    variant,
+                )
+        return last or SourceDecision(policy=chosen_policy, query=query, reason="no_hits")
 
 
 def _resolve_locked(
@@ -135,6 +147,9 @@ def _resolve_locked(
     clip = optional_clip_scorer()
     if clip is not None and ranked:
         ranked = _rerank_with_clip(ranked[:5], query, http, clip) + ranked[5:]
+
+    if not candidates:
+        return SourceDecision(policy=policy, query=query, reason="no_hits")
 
     for candidate in ranked:
         hit = _download_one(
@@ -319,9 +334,40 @@ def _min_short_side() -> int:
         return 1000
 
 
+def _dry_run_requested() -> bool:
+    raw = (os.getenv("PIN_DRY_RUN") or os.getenv("FREE_IMAGE_DRY_RUN") or "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
+def free_image_cache_dir(channel: str, *, dry_run: bool = False) -> Path | None:
+    """Cache directory for search metadata.
+
+    ``FREE_IMAGE_CACHE_DIR`` wins. A dry run stays out of the Drive outputs
+    tree and uses the system temp directory. ``None`` means the normal
+    per-channel scratch cache.
+    """
+    override = (os.getenv("FREE_IMAGE_CACHE_DIR") or "").strip()
+    if override:
+        return Path(override)
+    if dry_run or _dry_run_requested():
+        import tempfile
+
+        slug = _cache_slug(channel)
+        return Path(tempfile.gettempdir()) / "omni-free-image-cache" / slug
+    return None
+
+
+def _cache_slug(channel: str) -> str:
+    text = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (channel or "shared"))
+    return text.strip("_") or "shared"
+
+
 def _cache_dir(channel: str, explicit: Path | None) -> Path:
     if explicit is not None:
         return Path(explicit)
+    override = free_image_cache_dir(channel, dry_run=_dry_run_requested())
+    if override is not None:
+        return override
     from shared.paths import temp_path
 
     return temp_path(channel or "shared", "free_images", "cache")

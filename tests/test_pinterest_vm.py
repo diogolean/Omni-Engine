@@ -953,7 +953,7 @@ def test_flux_fallback_replaces_a_missing_or_title_graphic(
     )
     calls: list[str] = []
 
-    def fake_flux(*, topic, channel_id, dest_dir, stem):
+    def fake_flux(*, topic, channel_id, dest_dir, stem, **_extra):
         calls.append(topic)
         dest_dir.mkdir(parents=True, exist_ok=True)
         path = dest_dir / f"{stem}.jpg"

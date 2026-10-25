@@ -72,6 +72,11 @@ class Entity:
     coastal: bool = False
     # Usable real photographs already known, before the Nano Banana cap.
     usable_photos: int = 0
+    # Pin photograph. A concrete sentence of what the subject looks like.
+    # When set, the pin Flux prompt uses this and does not call the text model.
+    pin_scene: str = ""
+    # Two or three search words for Commons and Openverse. Empty uses the name.
+    search_query: str = ""
 
 
 def repo_root() -> Path:
@@ -176,6 +181,8 @@ def load_entities(channel: str) -> list[Entity]:
             geography=str(row.get("geography") or "").strip(),
             coastal=bool(row.get("coastal")),
             usable_photos=_count(row.get("usable_photos")),
+            pin_scene=str(row.get("pin_scene") or "").strip(),
+            search_query=str(row.get("search_query") or "").strip(),
         ))
     return found
 

@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Build a short search query from a topic, a named entity, and a sentence."""
+"""Build a short subject query for Commons and Openverse.
+
+The subject is the named entity, or the first two or three words of the
+title. The article sentence is not added. A longer subject broadens by
+dropping the last word.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +25,14 @@ _STOP = frozenset(
         "portrait", "landscape", "film", "grain", "bokeh", "dramatic", "soft",
         "warm", "cold", "dark", "bright", "high", "quality", "8k", "4k",
         "masterpiece", "trending", "artstation",
+        "world", "worlds", "world's", "most", "mysterious", "unbelievable",
+        "incredible", "hidden", "secret", "amazing", "shocking",
     }
+)
+
+_SUBJECT_WORDS = 3
+_TRAILING_GENERIC = frozenset(
+    {"book", "books", "story", "article", "history", "mystery", "mysteries", "site", "place"}
 )
 
 
@@ -38,24 +50,48 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 
+def _subject_tokens(entity: str, topic: str, cap: int) -> list[str]:
+    """Entity words first. The title is used only when the entity adds none."""
+    tokens = tokenize(entity)[:cap] if (entity or "").strip() else []
+    if not tokens:
+        tokens = tokenize(topic)[:cap]
+    while len(tokens) > 2 and tokens[-1] in _TRAILING_GENERIC:
+        tokens.pop()
+    return tokens
+
+
+def query_variants(
+    *,
+    topic: str = "",
+    entity: str = "",
+    sentence: str = "",
+    limit: int = _SUBJECT_WORDS,
+) -> list[str]:
+    """Short subject, then a broader prefix when the subject is three words.
+
+    ``sentence`` is accepted so callers can keep passing the article. It is
+    not part of the query. ``limit`` caps the subject at two or three words.
+    """
+    del sentence
+    cap = max(1, min(int(limit), _SUBJECT_WORDS))
+    tokens = _subject_tokens(entity, topic, cap)
+    if not tokens:
+        return []
+    variants = [" ".join(tokens)]
+    if len(tokens) > 2:
+        broader = " ".join(tokens[:2])
+        if broader not in variants:
+            variants.append(broader)
+    return variants
+
+
 def build_query(
     *,
     topic: str = "",
     entity: str = "",
     sentence: str = "",
-    limit: int = 8,
+    limit: int = _SUBJECT_WORDS,
 ) -> str:
-    """Prefer the named entity, then the topic, then leftover sentence tokens."""
-    pieces: list[str] = []
-    for token in tokenize(entity):
-        pieces.append(token)
-    for token in tokenize(topic):
-        if token not in pieces:
-            pieces.append(token)
-    if len(pieces) < limit:
-        for token in tokenize(sentence):
-            if token not in pieces:
-                pieces.append(token)
-            if len(pieces) >= limit:
-                break
-    return " ".join(pieces[:limit])
+    """Two or three subject words. The article sentence is left out."""
+    variants = query_variants(topic=topic, entity=entity, sentence=sentence, limit=limit)
+    return variants[0] if variants else ""

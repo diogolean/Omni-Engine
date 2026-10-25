@@ -129,15 +129,29 @@ def test_channel_page_configs_match_defaults() -> None:
 
 
 def test_query_prefers_the_named_entity() -> None:
+    from production.providers.image.free.query import query_variants
+
     query = build_query(
         topic="ancient quarry",
         entity="Baalbek",
         sentence="A cinematic photograph of dramatic lighting at the temple",
     )
-    assert query.startswith("baalbek")
+    assert query == "baalbek"
     assert "cinematic" not in query
     assert "lighting" not in query
-    assert "quarry" in query
+    assert "quarry" not in query
+    noisy = build_query(
+        topic="Voynich Manuscript world's most mysterious book",
+        sentence="polish american researchers debate the pages",
+    )
+    assert noisy == "voynich manuscript"
+    assert "polish" not in noisy
+    assert "mysterious" not in noisy
+    variants = query_variants(
+        entity="Easter Island moai",
+        sentence="world's most mysterious statues polish american",
+    )
+    assert variants == ["easter island moai", "easter island"]
 
 
 def test_rank_prefers_title_match_and_resolution() -> None:
@@ -601,3 +615,79 @@ def test_load_card_source_records_credit(
     assert image.size[1] > image.size[0]
     assert "Herb garden" in record["image_credit"]
     assert credit_for_image(tmp_path / "herb_free_source.jpg") == record["image_credit"]
+
+
+def test_short_query_broadens_when_the_first_search_is_empty(tmp_path: Path) -> None:
+    url = "https://cdn.example/moai.jpg"
+    seen: list[str] = []
+
+    class _Selective:
+        name = "fake"
+
+        def enabled(self) -> bool:
+            return True
+
+        def search(self, query, client, *, limit=10):
+            del client, limit
+            seen.append(query)
+            if query == "easter island":
+                return [_candidate(title="Moai", download_url=url)]
+            return []
+
+    client = _MapClient({url: (200, _jpeg(1400, 2000))})
+    decision = resolve_image_source(
+        channel="ancient_knowledge",
+        dest=tmp_path / "moai.jpg",
+        entity="Easter Island moai",
+        sentence="world's most mysterious statues polish american",
+        policy="free_first",
+        providers=[_Selective()],
+        client=client,
+        cache_dir=tmp_path / "cache",
+    )
+    assert seen == ["easter island moai", "easter island"]
+    assert decision.reason == "free_image"
+    assert decision.query == "easter island"
+
+
+def test_missing_stock_keys_are_logged_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    from production.providers.image.free import providers as providers_mod
+
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("SMITHSONIAN_API_KEY", raising=False)
+    providers_mod._MISSING_KEY_LOGGED.clear()
+    with caplog.at_level(logging.INFO, logger=providers_mod.logger.name):
+        default_providers()
+        default_providers()
+        assert PexelsProvider().search("moai", None) == []
+        assert UnsplashProvider().search("moai", None) == []
+        assert SmithsonianProvider().search("moai", None) == []
+    logs = [record.message for record in caplog.records if "API key is not set" in record.message]
+    assert logs.count("Skipping image provider pexels — API key is not set.") == 1
+    assert logs.count("Skipping image provider unsplash — API key is not set.") == 1
+    assert logs.count("Skipping image provider smithsonian — API key is not set.") == 1
+
+
+def test_free_image_cache_stays_out_of_drive_outputs_on_dry_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from production.providers.image.free.sourcer import _cache_dir, free_image_cache_dir
+
+    monkeypatch.delenv("FREE_IMAGE_CACHE_DIR", raising=False)
+    monkeypatch.delenv("PIN_DRY_RUN", raising=False)
+    drive = tmp_path / "outputs" / "ancient_knowledge"
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path / "outputs"))
+    live = _cache_dir("ancient_knowledge", None)
+    assert "outputs" in live.parts
+    dry = free_image_cache_dir("ancient_knowledge", dry_run=True)
+    assert dry is not None
+    assert "outputs" not in dry.parts
+    monkeypatch.setenv("FREE_IMAGE_CACHE_DIR", str(tmp_path / "local-cache"))
+    chosen = free_image_cache_dir("ancient_knowledge", dry_run=True)
+    assert chosen == tmp_path / "local-cache"
+    assert drive.is_dir() is False or "local-cache" not in drive.parts

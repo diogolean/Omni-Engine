@@ -52,6 +52,28 @@ def _topic_already_named(title: str, topic: str) -> bool:
     return bool(words) and all(word in title_l for word in words)
 
 
+def _collapse_repeated_title(text: str) -> str:
+    """``Giants: Giants`` and ``Giants Giants`` become ``Giants``."""
+    raw = (text or "").strip()
+    parts = re.split(r"\s*[:|—–\-]\s*", raw, maxsplit=1)
+    if len(parts) == 2:
+        left, right = parts[0].strip(), parts[1].strip()
+        if left and left.lower() == right.lower():
+            return left
+        if left and right.lower().startswith(left.lower()):
+            rest = right[len(left):].strip(" :-")
+            return f"{left} {rest}".strip() if rest else left
+    words = raw.split()
+    if len(words) >= 2 and len(words) % 2 == 0:
+        half = len(words) // 2
+        if [word.lower() for word in words[:half]] == [word.lower() for word in words[half:]]:
+            return " ".join(words[:half])
+    return raw
+
+
+_CAPTION_LIMIT = 500
+
+
 def keyword_first_title(title: str, topic: str) -> str:
     """Search title, subject first, at most 100 characters. No template suffix.
 
@@ -63,17 +85,20 @@ def keyword_first_title(title: str, topic: str) -> str:
     cleaned = sanitize_pin_title(title)
     subject = sanitize_pin_title(title_case_phrase(topic))
     if not cleaned:
-        return subject
+        return _collapse_repeated_title(subject)
     if _topic_already_named(cleaned, subject):
-        return cleaned
+        return _collapse_repeated_title(cleaned)
     head = ""
     for word in re.split(r"[^A-Za-z0-9']+", subject.lower()):
         if len(word) > 2 and word not in _TITLE_STOPWORDS:
             head = word
             break
     if head and head not in cleaned.lower():
-        cleaned = sanitize_pin_title(f"{subject}: {cleaned}")
-    return cleaned
+        if cleaned.lower() not in subject.lower():
+            cleaned = sanitize_pin_title(f"{subject}: {cleaned}")
+        elif subject:
+            cleaned = subject
+    return _collapse_repeated_title(cleaned)
 
 
 _HOOK_WORD_LIMIT = 8
@@ -177,10 +202,36 @@ def build_pin_description(record: dict) -> str:
     return f"{lead}{separator}{closer}"
 
 
+def trim_pin_caption(text: str, limit: int = _CAPTION_LIMIT) -> str:
+    """Pin captions stay within the Pinterest 500-character description limit.
+
+    A caption that already fits is left unchanged, including its line breaks.
+    """
+    raw = text or ""
+    if len(raw) <= limit:
+        return raw
+    from shared.pin_text import fit_pin_title, polish_pin_text  # noqa: PLC0415
+
+    return fit_pin_title(polish_pin_text(raw), limit)
+
+
+def polish_stored_pin_copy(entry: dict) -> None:
+    """Collapse a repeated title and trim an over-long caption on a stored pin."""
+    title = _collapse_repeated_title(str(entry.get("pinterest_title") or ""))
+    if title:
+        entry["pinterest_title"] = title
+    caption = str(entry.get("pinterest_caption") or "")
+    if caption:
+        entry["pinterest_caption"] = trim_pin_caption(caption)
+
+
 def finalize_pin_copy(entry: dict) -> None:
     """Apply the config title and hook onto one inventory entry."""
     topic = str(entry.get("topic") or "")
     entry["pinterest_title"] = keyword_first_title(str(entry.get("pinterest_title") or ""), topic)
+    caption = str(entry.get("pinterest_caption") or "")
+    if caption:
+        entry["pinterest_caption"] = trim_pin_caption(caption)
     hook = card_hook_text(entry)
     if hook:
         entry["visual_hook"] = hook

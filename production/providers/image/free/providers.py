@@ -19,6 +19,15 @@ from production.providers.image.free.models import Candidate
 logger = logging.getLogger(__name__)
 
 _TAG = re.compile(r"<[^>]+>")
+_MISSING_KEY_LOGGED: set[str] = set()
+
+
+def note_missing_key(name: str) -> None:
+    """Log a missing provider key once per process."""
+    if name in _MISSING_KEY_LOGGED:
+        return
+    _MISSING_KEY_LOGGED.add(name)
+    logger.info("Skipping image provider %s — API key is not set.", name)
 
 
 def _plain(value: Any) -> str:
@@ -324,6 +333,7 @@ class SmithsonianProvider:
     def search(self, query: str, client: HttpClient, *, limit: int = 10) -> list[Candidate]:
         key = _env("SMITHSONIAN_API_KEY")
         if not key:
+            note_missing_key(self.name)
             return []
         response = client.get(
             self.endpoint,
@@ -402,6 +412,7 @@ class PexelsProvider:
     def search(self, query: str, client: HttpClient, *, limit: int = 10) -> list[Candidate]:
         key = _env("PEXELS_API_KEY")
         if not key:
+            note_missing_key(self.name)
             return []
         response = client.get(
             self.endpoint,
@@ -451,6 +462,7 @@ class UnsplashProvider:
     def search(self, query: str, client: HttpClient, *, limit: int = 10) -> list[Candidate]:
         key = _env("UNSPLASH_ACCESS_KEY")
         if not key:
+            note_missing_key(self.name)
             return []
         response = client.get(
             self.endpoint,
@@ -514,7 +526,7 @@ def default_providers() -> list:
         if provider.enabled():
             enabled.append(provider)
         else:
-            logger.info("Skipping image provider %s — API key is not set.", provider.name)
+            note_missing_key(provider.name)
     return enabled
 
 

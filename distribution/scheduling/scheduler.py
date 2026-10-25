@@ -629,6 +629,10 @@ class PinterestScheduler:
 
             if ensure_writer_pin_copy(entry, use_ai=True) and not self.dry_run:
                 inv.save(data)
+            polish_stored_pin_copy = Symbol(
+                'production.formats.pins.pin_copy', 'polish_stored_pin_copy'
+            )  # noqa: PLC0415
+            polish_stored_pin_copy(entry)
             post_id = entry["post_id"]
             topic = entry.get("topic", "?")
             title = entry.get("pinterest_title", topic)
@@ -1075,19 +1079,28 @@ class PinterestScheduler:
         policy = resolve_policy(channel)
         if policy == "ai_only":
             return None
+        search_subject = Symbol('production.formats.pins.scene_prompt', 'search_subject')  # noqa: PLC0415
+        free_image_cache_dir = Symbol(
+            'production.providers.image.free.sourcer', 'free_image_cache_dir'
+        )  # noqa: PLC0415
         stem = str(entry.get("subject_slug") or entry.get("post_id") or "pin").strip() or "pin"
         dest = temp_path(channel or "pinterest", "free_images", "pins", f"{stem}.jpg")
+        explicit_entity = str(entry.get("entity") or entry.get("named_entity") or "").strip()
+        try:
+            subject = explicit_entity or search_subject(channel, entry)
+        except Exception as exc:  # noqa: BLE001
+            log.info("Pin subject lookup skipped (%s).", type(exc).__name__)
+            subject = explicit_entity
         try:
             decision = resolve_image_source(
                 channel=channel,
                 dest=dest,
-                topic=str(entry.get("topic") or entry.get("pinterest_title") or ""),
-                entity=str(entry.get("entity") or entry.get("named_entity") or ""),
-                sentence=str(
-                    entry.get("original_caption") or entry.get("humanized_caption") or ""
-                ),
+                topic=str(entry.get("pinterest_title") or entry.get("topic") or ""),
+                entity=subject,
+                sentence="",
                 policy=policy,
                 producer="pinterest_card",
+                cache_dir=free_image_cache_dir(channel, dry_run=bool(self.dry_run)),
             )
         except B2DailyCapError:
             raise
