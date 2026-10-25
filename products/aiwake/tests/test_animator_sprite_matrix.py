@@ -31,43 +31,12 @@ from products.aiwake.media.audio import (
     resolve_voice,
 )
 from products.aiwake.settings import AudioConfig
-from core.animator.audio_analyzer import (
-    AudioAnalyzer,
-    active_speaker_lookup,
-    camera_tight_lookup,
-    emotion_lookup,
-    speaking_speaker_lookup,
-)
-from core.animator.compositor import (
-    CAMERA_NORMAL,
-    CAMERA_NORMAL_ZOOM,
-    CAMERA_TIGHT,
-    CAMERA_TIGHT_ZOOM,
-    GEMINI_LEAD_X,
-    LLAMA_LEAD_X,
-    POST_ROLL_S,
-    PRESENT_SCALE,
-    lead_anchor_x,
-    ShotReverseShotCompositor,
-    _HeroCamera,
-    dramatic_camera_mode,
-    emphasis_head_target,
-)
-from core.animator.puppet import (
-    BROW_STATES,
-    REQUIRED_REST_MOUTH_STATES,
-    REST_MOUTH_STATES,
-    PuppetRig,
-    PuppetSkin,
-    emotion_brow_angles,
-    emotion_brow_state,
-    emotion_rest_mouth_state,
-    onset_rest_mouth,
-    supported_rest_mouth,
-)
-from core.animator.renderer import AnimationRenderer
-from core.animator.subtitles import build_ass
-from core.animator.animator_types import VISEMES, DialogueTurn, SpeakerStyle
+from animation.parametric.audio_analyzer import AudioAnalyzer, active_speaker_lookup, camera_tight_lookup, emotion_lookup, speaking_speaker_lookup
+from animation.parametric.compositor import CAMERA_NORMAL, CAMERA_NORMAL_ZOOM, CAMERA_TIGHT, CAMERA_TIGHT_ZOOM, GEMINI_LEAD_X, LLAMA_LEAD_X, POST_ROLL_S, PRESENT_SCALE, lead_anchor_x, ShotReverseShotCompositor, _HeroCamera, dramatic_camera_mode, emphasis_head_target
+from animation.parametric.puppet import BROW_STATES, REQUIRED_REST_MOUTH_STATES, REST_MOUTH_STATES, PuppetRig, PuppetSkin, emotion_brow_angles, emotion_brow_state, emotion_rest_mouth_state, onset_rest_mouth, supported_rest_mouth
+from animation.parametric.renderer import AnimationRenderer
+from animation.parametric.subtitles import build_ass
+from animation.parametric.animator_types import VISEMES, DialogueTurn, SpeakerStyle
 
 
 def _layer(path: Path, size: tuple[int, int], box: tuple[int, int, int, int]) -> None:
@@ -696,7 +665,7 @@ def test_versioned_skin_registry_follows_the_models() -> None:
 
 
 def test_llama_blink_follows_the_circular_lens() -> None:
-    from core.animator.asset_generator import _draw_artist_eyelids
+    from products.aiwake.animator.asset_generator import _draw_artist_eyelids
 
     box = (20, 20, 220, 220)
     half = np.asarray(

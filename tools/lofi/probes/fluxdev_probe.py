@@ -13,7 +13,7 @@ _REORG_ROOT = _ReorgPath(__file__).resolve().parents[3]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 import argparse
 import copy
@@ -23,16 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi.image_gen import (
-    generate_scene_image,
-    generate_scene_image_dev,
-)
-from core.economic_reel_lofi.pipeline import generate_and_qa_scene
-from core.economic_reel_lofi.visual_identity import (
-    assemble_v2_prompt,
-    assemble_v2_prompt_dev,
-)
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi.image_gen import generate_scene_image, generate_scene_image_dev
+from production.formats.lofi.pipeline import generate_and_qa_scene
+from production.formats.lofi.visual_identity import assemble_v2_prompt, assemble_v2_prompt_dev
 
 # Frozen subset of the distance / silence_that_speaks validation mix.
 # Used when --episode is omitted or cannot be read.
@@ -245,10 +239,7 @@ def run_fluxdev_probe(
     n_beats: int = 5,
     skip_schnell: bool = False,
 ) -> Path:
-    from agents.media.providers.together_image import (
-        estimate_deepinfra_schnell_cost_usd,
-        estimate_together_image_cost,
-    )
+    from production.providers.image.together_image import estimate_deepinfra_schnell_cost_usd, estimate_together_image_cost
 
     n_beats = max(3, min(int(n_beats), 5))
     beats = _load_beats(episode, n_beats)
@@ -280,7 +271,7 @@ def run_fluxdev_probe(
     )
     schnell_sum = _summarize(schnell_rows, "schnell")
     dev_sum = _summarize(dev_rows, "dev")
-    from core.economic_reel_lofi.image_gen import LOFI_IMAGE_STEPS
+    from production.formats.lofi.image_gen import LOFI_IMAGE_STEPS
 
     schnell_cost = estimate_deepinfra_schnell_cost_usd(
         lofi_cfg.LOFI_IMAGE_WIDTH, lofi_cfg.LOFI_IMAGE_HEIGHT, LOFI_IMAGE_STEPS

@@ -20,21 +20,11 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
 import tighten_four_scripts as t4  # noqa: E402
-from agents.mcp.text_model import complete_script  # noqa: E402
-from agents.writer.judge_gate import judge_draft  # noqa: E402
-from agents.writer.spoken_budget import (  # noqa: E402
-    _extract_json,
-    _REWRITE_SYSTEM,
-    _writer_provider,
-    apply_draft_to_script,
-    assess_lines,
-    count_words,
-    missing_keep_terms,
-    rewrite_single_line,
-    script_to_draft,
-)
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.visual_identity import assign_distinct_hook_varieties  # noqa: E402
+from production.providers.llm.text_model import complete_script  # noqa: E402
+from production.qa.judges.judge_gate import judge_draft  # noqa: E402
+from production.writers.spoken_budget import _extract_json, _REWRITE_SYSTEM, _writer_provider, apply_draft_to_script, assess_lines, count_words, missing_keep_terms, rewrite_single_line, script_to_draft
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.visual_identity import assign_distinct_hook_varieties  # noqa: E402
 
 OUT_DIR = t4.OUT_DIR
 REVIEW_DIR = t4.REVIEW_DIR
@@ -183,7 +173,7 @@ def main() -> int:
         [r for r in (script.get("lines") or []) if isinstance(r, dict)],
         stills_rows=stills_rows,
     ) if hasattr(t4, "must_keep_from_rows") else None
-    from agents.writer.spoken_budget import must_keep_from_rows
+    from production.writers.spoken_budget import must_keep_from_rows
     rows = [r for r in (script.get("lines") or []) if isinstance(r, dict)]
     keep = must_keep_from_rows(rows, stills_rows=stills_rows)
     feedback = str(((blob.get("judge") or {}).get("revision_note")) or "")

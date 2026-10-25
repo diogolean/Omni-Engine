@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from agents.media.b2_budget import B2DailyCapError, reset_caches
-from agents.media.b2_client import read_object_outcome, read_object_text
-from agents.posting.pinterest_engine.ledger import PinLedger
+from shared.storage.b2_budget import B2DailyCapError, reset_caches
+from shared.storage.b2_client import read_object_outcome, read_object_text
+from distribution.scheduling.ledger import PinLedger
 from distribution.publishers.base import Account
 from distribution.workers.runtime import (
     newest_pin_published,
@@ -418,8 +418,8 @@ def test_immediate_restart_keeps_the_daily_cap_and_ledger_dedupe(
     """
     import json
 
-    from agents.media.b2_budget import reset_caches
-    from agents.posting.pinterest_engine.articles import Article
+    from shared.storage.b2_budget import reset_caches
+    from production.formats.pins.articles import Article
     from distribution.scheduling.drip import publish_account
     from tests.test_pinterest_vm import FakeS3, _ancient, _library_record, _photo, _prepare_channel
 

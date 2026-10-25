@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from agents.media.free_images.http import HttpResponse
-from modules.reel_artefact.crop import anchor_for, prepare_reel_frame, usable_as_still
-from modules.reel_artefact.fetch import fetch_artefact, fetch_gallery, list_candidates
-from modules.reel_artefact.motion import motion_override, write_motion_sidecar
-from modules.reel_artefact.policy import artefact_mode
-from modules.reel_artefact.pricing import hybrid_reel_usd, price_for_model
-from modules.reel_artefact.role import image_role_for
-from modules.reel_artefact.speech import spoken_numbers, subtitle_text
-from modules.shot_planner.entities import Entity, load_entities
+from production.providers.image.free.http import HttpResponse
+from production.formats.economic_reel.artefact.crop import anchor_for, prepare_reel_frame, usable_as_still
+from production.formats.economic_reel.artefact.fetch import fetch_artefact, fetch_gallery, list_candidates
+from production.formats.economic_reel.artefact.motion import motion_override, write_motion_sidecar
+from production.formats.economic_reel.artefact.policy import artefact_mode
+from production.formats.economic_reel.artefact.pricing import hybrid_reel_usd, price_for_model
+from production.formats.economic_reel.artefact.role import image_role_for
+from production.formats.economic_reel.artefact.speech import spoken_numbers, subtitle_text
+from production.formats.economic_reel.shot_planner.entities import Entity, load_entities
 
 
 def _jpeg(width: int, height: int, color: tuple[int, int, int] = (180, 140, 40)) -> bytes:
@@ -280,7 +280,7 @@ def test_motion_sidecar_selects_a_slow_push(tmp_path: Path) -> None:
 
 
 def test_thumbnail_is_downloaded_and_the_original_is_not(tmp_path: Path) -> None:
-    from agents.media.free_images.http import USER_AGENT
+    from production.providers.image.free.http import USER_AGENT
 
     original = "https://upload.example/original.jpg"
     thumb = "https://upload.example/thumb-1280.jpg"
@@ -385,7 +385,7 @@ def test_a_cached_reference_is_not_downloaded_again(tmp_path: Path) -> None:
 def test_default_cache_lives_in_the_channel_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modules.reel_artefact.fetch import artefact_cache_dir
+    from production.formats.economic_reel.artefact.fetch import artefact_cache_dir
 
     monkeypatch.setenv("CHANNEL_STORE_ROOT", str(tmp_path))
     path = artefact_cache_dir("ancient_knowledge", "quimbaya_ornaments")
@@ -504,8 +504,8 @@ def test_met_410_is_skipped_without_a_second_try(
 
 
 def test_a_figure_pendant_title_is_not_the_quimbaya_object() -> None:
-    from agents.media.free_images.models import Candidate
-    from modules.reel_artefact.fetch import _accept
+    from production.providers.image.free.models import Candidate
+    from production.formats.economic_reel.artefact.fetch import _accept
 
     entity = _entity(
         name="Quimbaya golden ornaments",

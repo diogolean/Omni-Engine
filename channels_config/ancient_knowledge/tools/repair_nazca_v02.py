@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Rebuild Nazca v02 stills with topic lock and replace the scheduled YouTube upload."""
 from __future__ import annotations
+from shared.layer_bridge import Port, Symbol
 
 import os
 import shutil
@@ -12,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
-from utils.pipeline_paths import outputs_path  # noqa: E402
+from shared.paths import outputs_path  # noqa: E402
 
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
@@ -78,17 +79,15 @@ def main() -> int:
 
     app_config.bind_active_page("ancient_knowledge")
 
-    from agents.media.audio_engine import approximate_word_timings
-    from agents.media.providers.together_image import (
-        JUGGERNAUT_LIGHTNING_FLUX_MODEL,
-        TogetherImageAdapter,
-    )
-    from agents.media.scene_prompt_generator import generate_scene_prompts
-    from channel_loader import load_page_context
-    from channels_config.shared import mei_chrome
-    from core.audio_chunker import chunk_word_timings
-    from core.reel_sequence_engine import compile_sequence_reel
-    from modules.reel_visual_qa import generate_and_gate
+    approximate_word_timings = Symbol('production.providers.tts.audio_engine', 'approximate_word_timings')
+    JUGGERNAUT_LIGHTNING_FLUX_MODEL = Symbol('production.providers.image.together_image', 'JUGGERNAUT_LIGHTNING_FLUX_MODEL')
+    TogetherImageAdapter = Symbol('production.providers.image.together_image', 'TogetherImageAdapter')
+    generate_scene_prompts = Symbol('production.providers.image.scene_prompt_generator', 'generate_scene_prompts')
+    load_page_context = Symbol('production.pipeline.channel_context', 'load_page_context')
+    mei_chrome = Port('production.formats.mei.mei_chrome')
+    chunk_word_timings = Symbol('production.media.audio_chunker', 'chunk_word_timings')
+    compile_sequence_reel = Symbol('production.media.reel_sequence_engine', 'compile_sequence_reel')
+    generate_and_gate = Symbol('production.qa.reel_visual_qa', 'generate_and_gate')
 
     page_ctx = load_page_context(
         "ancient_knowledge", avatar_mode="OFF", post_format="DYNAMIC_REEL",
@@ -238,7 +237,7 @@ def main() -> int:
     )
     print(f"[repair] compiled {reel_path} ({reel_path.stat().st_size / 1e6:.1f} MB)", flush=True)
 
-    from agents.media.b2_client import B2VideoUploader
+    from shared.storage.b2_client import B2VideoUploader
 
     uploader = B2VideoUploader()
     try:
@@ -249,12 +248,10 @@ def main() -> int:
     b2_url = uploader.upload(reel_path)
     print(f"[repair] B2 {b2_url}", flush=True)
 
-    from agents.posting.youtube_publisher import (
-        build_youtube_client_for_page,
-        delete_youtube_video,
-        fetch_videos_metadata,
-        upload_short,
-    )
+    build_youtube_client_for_page = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client_for_page')
+    delete_youtube_video = Symbol('distribution.publishers.api.youtube_upload', 'delete_youtube_video')
+    fetch_videos_metadata = Symbol('distribution.publishers.api.youtube_upload', 'fetch_videos_metadata')
+    upload_short = Symbol('distribution.publishers.api.youtube_upload', 'upload_short')
 
     youtube = build_youtube_client_for_page("ancient_knowledge", enforce_channel=True)
     meta = fetch_videos_metadata(youtube, [OLD_YT_ID]).get(OLD_YT_ID) or {}

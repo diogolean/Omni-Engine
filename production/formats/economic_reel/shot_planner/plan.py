@@ -169,13 +169,13 @@ def _unbind_tracker(tracker: Any | None) -> None:
 
 
 def _bind_channel(channel: str) -> None:
-    from core.google_guardrail import bind_cost_channel
+    from production.cost.google_guardrail import bind_cost_channel
 
     bind_cost_channel(channel)
 
 
 def _unbind_channel() -> None:
-    from core.google_guardrail import bind_cost_channel
+    from production.cost.google_guardrail import bind_cost_channel
 
     bind_cost_channel(None)
 

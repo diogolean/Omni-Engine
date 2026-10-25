@@ -26,11 +26,11 @@ from urllib.parse import unquote
 
 from PIL import Image
 
-from agents.media.free_images.attribution import credit_line, write_sidecar
-from agents.media.free_images.http import USER_AGENT, HttpClient, HttpResponse, RequestsClient
-from agents.media.free_images.licenses import license_allowed
-from agents.media.free_images.models import Attribution, Candidate
-from agents.media.free_images.providers import parse_wikimedia
+from production.providers.image.free.attribution import credit_line, write_sidecar
+from production.providers.image.free.http import USER_AGENT, HttpClient, HttpResponse, RequestsClient
+from production.providers.image.free.licenses import license_allowed
+from production.providers.image.free.models import Attribution, Candidate
+from production.providers.image.free.providers import parse_wikimedia
 from production.formats.economic_reel.artefact.crop import (
     STILL_MIN_SHORT,
     prepare_reel_frame,
@@ -221,7 +221,7 @@ def artefact_cache_dir(channel: str, entity_id: str) -> Path:
         folder = Path(override) / slug
         folder.mkdir(parents=True, exist_ok=True)
         return folder
-    from utils.pipeline_paths import channel_store_dir
+    from shared.paths import channel_store_dir
 
     root = channel_store_dir(channel or "ancient_knowledge", create=True)
     return root / "artefact_cache" / (slug or "entity")
@@ -560,7 +560,7 @@ def _commons_category(category: str, client: HttpClient) -> list[Candidate]:
 
 def _openverse_search(query: str, client: HttpClient) -> list[Candidate]:
     try:
-        from agents.media.free_images.providers import OpenverseProvider
+        from production.providers.image.free.providers import OpenverseProvider
 
         return OpenverseProvider().search(query, client, limit=6)
     except Exception as exc:  # noqa: BLE001
@@ -721,7 +721,7 @@ def _smithsonian_search(query: str, client: HttpClient) -> list[Candidate]:
     if not (os.getenv("SMITHSONIAN_API_KEY") or "").strip():
         return []
     try:
-        from agents.media.free_images.providers import SmithsonianProvider
+        from production.providers.image.free.providers import SmithsonianProvider
 
         return SmithsonianProvider().search(query, client, limit=4)
     except Exception as exc:  # noqa: BLE001

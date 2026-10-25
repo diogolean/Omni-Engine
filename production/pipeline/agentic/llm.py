@@ -52,7 +52,7 @@ def _report_cost(response: Any, char_est: int) -> None:
 
 def _client():
     import config as app_config
-    from agents.media.providers.gemini_utils import make_gemini_client_with_fallback
+    from production.providers.llm.gemini_utils import make_gemini_client_with_fallback
 
     key = getattr(app_config, "GEMINI_API_KEY", None)
     if not key:
@@ -74,7 +74,7 @@ def _model_id() -> str:
 
 def complete_text(prompt: str, *, system: str | None = None) -> str:
     """Single-turn Gemini completion. Returns stripped text (may be empty)."""
-    from agents.media.providers.gemini_utils import generate_content_with_model_fallback
+    from production.providers.llm.gemini_utils import generate_content_with_model_fallback
 
     blob = prompt.strip()
     if system:

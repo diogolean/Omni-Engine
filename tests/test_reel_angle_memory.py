@@ -6,14 +6,8 @@ import json
 from pathlib import Path
 
 import pytest
-from modules.reel_grounding.config import angle_memory_for
-from modules.reel_grounding.memory import (
-    opening_hook,
-    plan_episode_angle,
-    recall,
-    remember,
-    remember_angle,
-)
+from production.formats.economic_reel.grounding.config import angle_memory_for
+from production.formats.economic_reel.grounding.memory import opening_hook, plan_episode_angle, recall, remember, remember_angle
 
 _POOL = (
     "suppressed evidence — findings institutions will not discuss",

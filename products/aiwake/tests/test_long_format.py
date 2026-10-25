@@ -7,8 +7,8 @@ from products.aiwake.__main__ import build_parser
 from products.aiwake.contracts import PostType, SpeakerRole, Utterance
 from products.aiwake.memory import DebateMemory
 from products.aiwake.settings import MemoryConfig, load_settings
-from core.animator.compositor import DualPresenceCompositor
-from core.animator.subtitles import subtitle_centre_y
+from animation.parametric.compositor import DualPresenceCompositor
+from animation.parametric.subtitles import subtitle_centre_y
 
 
 def test_long_format_cli_contract() -> None:

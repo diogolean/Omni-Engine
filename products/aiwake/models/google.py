@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Direct Gemini Developer API provider for explicit per-seat opt-in."""
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import time
 from typing import Any, Sequence
@@ -82,7 +83,7 @@ class GoogleProvider(LLMProvider):
                 self.spec.model,
                 "google-genai is not installed",
             ) from exc
-        from core.google_guardrail import make_guarded_gemini_client
+        make_guarded_gemini_client = Symbol('production.cost.google_guardrail', 'make_guarded_gemini_client')
 
         self._client = make_guarded_gemini_client(
             self.api_key,
@@ -115,7 +116,7 @@ class GoogleProvider(LLMProvider):
 
             system, contents = self._wire_messages(messages)
             started = time.perf_counter()
-            from core.google_guardrail import guarded_generate_content
+            guarded_generate_content = Symbol('production.cost.google_guardrail', 'guarded_generate_content')
 
             response = guarded_generate_content(
                 self._get_client(),

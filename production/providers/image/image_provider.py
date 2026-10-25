@@ -580,7 +580,7 @@ class GeminiImageAdapter(ImageProvider):
         """Native Gemini image path (original Anna Protocol engine)."""
         client = self._gemini_client_lazy()
         ratio = aspect_ratio or app_config.GEMINI_IMAGE_ASPECT_RATIO or "3:4"
-        from utils.pipeline_paths import page_assets_dir
+        from shared.paths import page_assets_dir
 
         configured = (
             output_directory

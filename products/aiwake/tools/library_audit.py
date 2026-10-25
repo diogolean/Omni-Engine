@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Triage Aiwake sessions: keep unique top-tier rows, move rejects to reproved/.
 
-    python -m channels_config.aiwake.tools.library_audit
-    python -m channels_config.aiwake.tools.library_audit --dry-run
+    python -m products.aiwake.tools.library_audit
+    python -m products.aiwake.tools.library_audit --dry-run
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from shared.contracts import (
     save_distribution_library,
 )
 from shared.store import restore_channel_state
-from utils.pipeline_paths import channel_store_dir, page_outputs_dir
+from shared.paths import channel_store_dir, page_outputs_dir
 
 _LOG = logging.getLogger("aiwake.audit")
 

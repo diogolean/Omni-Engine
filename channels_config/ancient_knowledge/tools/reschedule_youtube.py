@@ -7,6 +7,7 @@
 4. Queue remuxed v11–v20 for the next quota window.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import os
 import re
@@ -29,15 +30,13 @@ from channels_config.ancient_knowledge.tools.rebuild_silent_reels import (
     _find_reel,
     _load_captions,
 )
-from agents.posting.youtube_publisher import (
-    build_youtube_client_for_page,
-    get_next_publish_slot,
-    delete_youtube_video,
-    queue_pending_upload,
-    update_video_publish_at,
-    upload_short,
-    YouTubeQuotaExceededError,
-)
+from shared.youtube_errors import YouTubeQuotaExceededError
+build_youtube_client_for_page = Symbol('distribution.publishers.api.youtube_upload', 'build_youtube_client_for_page')
+get_next_publish_slot = Symbol('distribution.publishers.api.youtube_upload', 'get_next_publish_slot')
+delete_youtube_video = Symbol('distribution.publishers.api.youtube_upload', 'delete_youtube_video')
+queue_pending_upload = Symbol('distribution.publishers.api.youtube_upload', 'queue_pending_upload')
+update_video_publish_at = Symbol('distribution.publishers.api.youtube_upload', 'update_video_publish_at')
+upload_short = Symbol('distribution.publishers.api.youtube_upload', 'upload_short')
 
 PAGE = "ancient_knowledge"
 PLAYLIST = "Ancient Mysteries & Forbidden History"

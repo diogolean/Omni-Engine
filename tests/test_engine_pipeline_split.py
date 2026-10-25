@@ -188,8 +188,8 @@ def test_engine_files_stay_under_a_thousand_lines() -> None:
 
 
 def test_public_signatures_match_the_pre_split_functions() -> None:
-    from engine.cli import cli
-    from engine.orchestrator import _produce_variant_worker, produce, run_pipeline
+    from production.pipeline.cli import cli
+    from production.pipeline.orchestrator import _produce_variant_worker, produce, run_pipeline
 
     found = {
         "produce": _params(produce),
@@ -202,15 +202,8 @@ def test_public_signatures_match_the_pre_split_functions() -> None:
 
 def test_main_reexports_the_same_objects() -> None:
     import main
-    from engine.cli import _together_cli_image_model, cli
-    from engine.orchestrator import (
-        _persist_agentic_postplanner,
-        _produce_agentic,
-        _produce_variant_worker,
-        produce,
-        run_pipeline,
-        run_test_images_debug_mode,
-    )
+    from production.pipeline.cli import _together_cli_image_model, cli
+    from production.pipeline.orchestrator import _persist_agentic_postplanner, _produce_agentic, _produce_variant_worker, produce, run_pipeline, run_test_images_debug_mode
 
     assert main.produce is produce
     assert main.run_pipeline is run_pipeline
@@ -223,7 +216,7 @@ def test_main_reexports_the_same_objects() -> None:
 
 
 def test_cli_destinations_are_unchanged() -> None:
-    from engine.cli_parser import parse_cli_args
+    from production.pipeline.cli_parser import parse_cli_args
 
     args = parse_cli_args([])
     assert CLI_DESTS <= set(vars(args))

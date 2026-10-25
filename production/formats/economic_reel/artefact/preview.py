@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Render one artefact still for inspection.
 
-    python -m modules.reel_artefact.preview quimbaya
-    python -m modules.reel_artefact.preview quimbaya --ref
+    python -m production.formats.economic_reel.artefact.preview quimbaya
+    python -m production.formats.economic_reel.artefact.preview quimbaya --ref
 """
 from __future__ import annotations
 
@@ -26,14 +26,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--channel", default="ancient_knowledge")
     args = parser.parse_args(argv)
-    from core.google_guardrail import bind_run_channel
+    from production.cost.google_guardrail import bind_run_channel
 
     bind_run_channel(args.channel)
     entity = resolve_entity(args.entity, args.channel)
     if entity is None:
         print(f"Unknown entity: {args.entity}", file=sys.stderr)
         return 2
-    from utils.pipeline_paths import review_path
+    from shared.paths import review_path
 
     dest = review_path(args.channel, "artefact_preview", f"{entity.id}.jpg")
     cache_dir: Path | None = None

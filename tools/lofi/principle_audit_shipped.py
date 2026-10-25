@@ -8,12 +8,12 @@ _REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 import json
 from pathlib import Path
 
-from agents.writer.script_agent import analyze_principle_voice
+from production.writers.script_agent import analyze_principle_voice
 
 ROOT = Path(__file__).resolve().parents[2]
 CLIPS = page_outputs_dir("wonder_feed") / "clips"

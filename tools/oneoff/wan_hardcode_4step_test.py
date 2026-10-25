@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 os.chdir(ROOT)
 
 from dotenv import load_dotenv
@@ -118,8 +118,8 @@ def _prep_mgr():
     os.environ["REMOTE_GPU_MODE"] = "runpod"
     os.environ.setdefault("REMOTE_GPU_TIMEOUT_S", "1800")
     os.environ["WAN_ENABLE_4STEP_LORA"] = "false"
-    from agents.mcp.model_api_flows import apply_production_flow, resolve_production_flow
-    from core.remote_gpu_manager import get_manager, reset_manager
+    from production.providers.llm.model_api_flows import apply_production_flow, resolve_production_flow
+    from production.providers.image.remote_gpu_manager import get_manager, reset_manager
 
     apply_production_flow(
         resolve_production_flow(preset_name="remote_gpu_serverless"),
@@ -131,7 +131,7 @@ def _prep_mgr():
 
 def dump_graphs(mgr, still: Path) -> dict:
     """Build prompts without running GPU. Needs the still only for LoadImage name."""
-    from core.remote_gpu_manager import patch_workflow
+    from production.providers.image.remote_gpu_manager import patch_workflow
 
     os.environ["WAN_ENABLE_4STEP_LORA"] = "false"
     wf_off = mgr.prepare_video_workflow(

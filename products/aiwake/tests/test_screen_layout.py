@@ -10,7 +10,7 @@ import pytest
 
 from products.aiwake.animator_bridge import build_speaker_styles
 from products.aiwake.avatars import facing_for, screen_placement
-from core.animator.compositor import place_body_offset
+from animation.parametric.compositor import place_body_offset
 
 
 def test_gemini_asker_draws_left_facing_right() -> None:

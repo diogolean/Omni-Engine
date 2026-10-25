@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Regenerate Aiwake titles and captions from the master-copy cascade.
 
-    python -m channels_config.aiwake.tools.refresh_metadata
-    python -m channels_config.aiwake.tools.refresh_metadata --dry-run
+    python -m products.aiwake.tools.refresh_metadata
+    python -m products.aiwake.tools.refresh_metadata --dry-run
 """
 from __future__ import annotations
 
@@ -104,7 +104,7 @@ def write_planner_exports(rows: list[dict], *, outputs_dir: Path | None = None) 
         (reels_json_path(outputs_dir=outputs_dir), compact_reels_export(entries)),
         (linkedin_json_path(outputs_dir=outputs_dir), compact_linkedin_export(entries)),
     ]
-    from utils.pipeline_paths import channel_store_dir
+    from shared.paths import channel_store_dir
 
     store = channel_store_dir("aiwake")
     targets.extend(

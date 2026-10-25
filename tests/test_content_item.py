@@ -10,15 +10,15 @@ import ast
 import json
 from pathlib import Path
 
-import modules.distribution_contract as distribution_contract
-import modules.durable_store as durable_store
-import modules.memory as memory_pkg
-import modules.memory.client as memory_client
+import shared.contracts as distribution_contract
+import shared.store as durable_store
+import shared.memory as memory_pkg
+import shared.memory.client as memory_client
 import shared.contracts as contracts
 import shared.memory as shared_memory
 import shared.memory.client as shared_memory_client
 import shared.store as store
-from agents.media.content_library import build_library_metadata
+from production.library.content_library import build_library_metadata
 from shared.contracts import (
     CONTENT_ITEM_SCHEMA_VERSION,
     DistributionRecord,

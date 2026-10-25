@@ -32,7 +32,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 os.chdir(ROOT)
 
 from dotenv import load_dotenv
@@ -104,7 +104,7 @@ def _safe_endpoint_view(meta: Mapping[str, Any] | dict) -> dict[str, Any]:
 
 
 def list_volume_model_keys(limit: int = 400) -> list[str]:
-    from core.remote_gpu_manager import _get_runpod_s3_client, _resolve_runpod_s3_creds
+    from production.providers.image.remote_gpu_manager import _get_runpod_s3_client, _resolve_runpod_s3_creds
 
     creds = _resolve_runpod_s3_creds()
     if not creds:
@@ -232,8 +232,8 @@ def run_wan_config(
     os.environ["REMOTE_GPU_MODE"] = "runpod"
     os.environ.setdefault("REMOTE_GPU_TIMEOUT_S", "1800")
 
-    from agents.mcp.model_api_flows import apply_production_flow, resolve_production_flow
-    from core.remote_gpu_manager import get_manager, reset_manager
+    from production.providers.llm.model_api_flows import apply_production_flow, resolve_production_flow
+    from production.providers.image.remote_gpu_manager import get_manager, reset_manager
 
     flow = resolve_production_flow(preset_name="remote_gpu_serverless")
     apply_production_flow(flow, explicit=True)
@@ -315,7 +315,7 @@ def run_wan_config(
 
 def dump_sampler_payloads() -> dict[str, Any]:
     """Dump what KSampler/Switch nodes actually contain after prepare, no GPU job."""
-    from core.remote_gpu_manager import RemoteGPUManager
+    from production.providers.image.remote_gpu_manager import RemoteGPUManager
 
     mgr = RemoteGPUManager()
     dummy = page_outputs_dir("ancient_knowledge") / "video_clip_benchmarks" / "_dummy.png"

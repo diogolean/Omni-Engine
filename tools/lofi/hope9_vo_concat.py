@@ -17,25 +17,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
-from agents.media.audio_engine import (  # noqa: E402
-    apply_elevenlabs_voice_settings,
-    generate_voiceover_with_timestamps,
-    _audio_file_duration_s,
-)
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
+from production.providers.tts.audio_engine import apply_elevenlabs_voice_settings, generate_voiceover_with_timestamps, _audio_file_duration_s
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
 from tools.lofi.probes.vo_pace_probe import silencedetect  # noqa: E402
-from core.economic_reel_lofi.assembler import list_library_bgm_tracks  # noqa: E402
-from core.economic_reel_lofi.pipeline import (  # noqa: E402
-    _tts_breath_commas,
-    _tts_text_with_breaks,
-)
-from core.economic_reel_lofi._tools.vo_pause_probe import (  # noqa: E402
-    _concat,
-    _make_silence,
-    _mix_ducked,
-)
+from production.formats.lofi.assembler import list_library_bgm_tracks  # noqa: E402
+from production.formats.lofi.pipeline import _tts_breath_commas, _tts_text_with_breaks
+from production.formats.lofi._tools.vo_pause_probe import _concat, _make_silence, _mix_ducked
 
 LINES = [
     "Hope was never a speech I gave myself",

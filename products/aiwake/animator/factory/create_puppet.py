@@ -1,10 +1,11 @@
 """End-to-end prompt/image-to-puppet command-line utility.
 
 Usage:
-    python -m core.animator.factory.create_puppet \
+    python -m products.aiwake.animator.factory.create_puppet \
         --character-id example --prompt "robot bust" --facing left
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import argparse
 import json
@@ -18,7 +19,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from utils.pipeline_paths import assets_root
+from shared.paths import assets_root
 
 from animation.parametric.factory.layer_slicer import slice_jaw_contour
 from animation.parametric.factory.rigger import (
@@ -202,11 +203,9 @@ def generate_imagen3_image(
     key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is required when --image-path is omitted")
-    from core.google_guardrail import (  # noqa: PLC0415
-        estimate_call_cost_usd,
-        get_google_cost_tracker,
-        make_guarded_gemini_client,
-    )
+    estimate_call_cost_usd = Symbol('production.cost.google_guardrail', 'estimate_call_cost_usd')
+    get_google_cost_tracker = Symbol('production.cost.google_guardrail', 'get_google_cost_tracker')
+    make_guarded_gemini_client = Symbol('production.cost.google_guardrail', 'make_guarded_gemini_client')
     from google.genai import types  # noqa: PLC0415
 
     client = make_guarded_gemini_client(key)
@@ -254,10 +253,8 @@ def generate_character_image(
     key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY is required when --image-path is omitted")
-    from core.google_guardrail import (  # noqa: PLC0415
-        guarded_generate_content,
-        make_guarded_gemini_client,
-    )
+    guarded_generate_content = Symbol('production.cost.google_guardrail', 'guarded_generate_content')
+    make_guarded_gemini_client = Symbol('production.cost.google_guardrail', 'make_guarded_gemini_client')
     from google.genai import types  # noqa: PLC0415
 
     client = make_guarded_gemini_client(key)
@@ -722,7 +719,7 @@ def build_deepseek_master() -> dict[str, Any]:
         DEFAULT_PUPPETS_DIR,
         ensure_shared_panorama,
     )
-    from utils.pipeline_paths import outputs_root  # noqa: PLC0415
+    from shared.paths import outputs_root  # noqa: PLC0415
 
     rgba = np.asarray(master)
     green = (rgba[..., 1] > 120) & (rgba[..., 1] > rgba[..., 0] + 25) & (rgba[..., 3] > 16)

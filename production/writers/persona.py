@@ -11,18 +11,17 @@ The import-time facade that binds ``ACTIVE_PAGE`` is
 ``production.writers.persona_dna``.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import ast
 import json
 import logging
 from pathlib import Path
 
-from channels_config.shared.persona_bind import (
-    read_dna,
-    resolve_master_dna,
-    select_cta,
-    stub_dna,
-)
+read_dna = Symbol('channels_config.shared.persona_bind', 'read_dna')
+resolve_master_dna = Symbol('channels_config.shared.persona_bind', 'resolve_master_dna')
+select_cta = Symbol('channels_config.shared.persona_bind', 'select_cta')
+stub_dna = Symbol('channels_config.shared.persona_bind', 'stub_dna')
 
 ENGINE_ROOT = Path(__file__).resolve().parents[2]
 _LOG = logging.getLogger("production.writers.persona_dna")

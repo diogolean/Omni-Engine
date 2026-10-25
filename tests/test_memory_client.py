@@ -9,17 +9,13 @@ from typing import Any
 
 import pytest
 
-from modules.memory.ancient import (
-    ANCIENT_KNOWLEDGE_REEL_ANGLES,
-    ANCIENT_KNOWLEDGE_REEL_VISUALS,
-    load_visual_memory,
-)
-from modules.memory.client import MemoryClient, MemoryService
-from modules.memory.config import load_settings
-from modules.memory.gate import require_production_memory
-from modules.memory.namespaces import memory_namespace
-from modules.memory.transport import HttpTransport, SdkTransport, open_transport
-from modules.memory.wsl import ensure_supermemory_running, reset_start_attempt
+from shared.memory.ancient import ANCIENT_KNOWLEDGE_REEL_ANGLES, ANCIENT_KNOWLEDGE_REEL_VISUALS, load_visual_memory
+from shared.memory.client import MemoryClient, MemoryService
+from shared.memory.config import load_settings
+from shared.memory.gate import require_production_memory
+from shared.memory.namespaces import memory_namespace
+from shared.memory.transport import HttpTransport, SdkTransport, open_transport
+from shared.memory.wsl import ensure_supermemory_running, reset_start_attempt
 
 
 class FakeTransport:
@@ -298,7 +294,7 @@ def test_soft_gate_allows_offline_and_strict_mode_does_not(monkeypatch: pytest.M
 
 
 def test_wsl_launch_is_windows_only_and_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    import modules.memory.wsl as wsl_module
+    import shared.memory.wsl as wsl_module
 
     launched: list[list[str]] = []
     monkeypatch.setattr(wsl_module, "_port_open", lambda *args, **kwargs: False)

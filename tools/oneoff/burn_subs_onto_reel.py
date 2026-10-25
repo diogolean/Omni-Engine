@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
 from dotenv import load_dotenv
-from utils.pipeline_paths import moviepy_temp_audio_dir, page_outputs_dir
+from shared.paths import moviepy_temp_audio_dir, page_outputs_dir
 
 load_dotenv(ROOT / ".env")
 
@@ -31,12 +31,8 @@ import numpy as np
 from moviepy import VideoFileClip  # type: ignore
 from PIL import Image, ImageDraw, ImageFont
 
-from agents.media.audio_engine import approximate_word_timings
-from core.reel_sequence_engine import (
-    _chunk_words_into_phrases,
-    _draw_wrapped_text,
-    _sanitize_subtitle_timings,
-)
+from production.providers.tts.audio_engine import approximate_word_timings
+from production.media.reel_sequence_engine import _chunk_words_into_phrases, _draw_wrapped_text, _sanitize_subtitle_timings
 
 CLIPS = page_outputs_dir("ancient_knowledge") / "clips"
 
@@ -70,7 +66,7 @@ def transcribe_audio(audio_path: Path) -> str:
     """Cheap Gemini transcription of existing VO (no TTS spend)."""
     import config as app_config
     from google.genai import types
-    from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
+    from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client
 
     key = getattr(app_config, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     if not key:

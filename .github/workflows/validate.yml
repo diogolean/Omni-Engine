@@ -36,10 +36,10 @@ jobs:
         # content_source, library_source, the B2 modules, and their tests.
         run: ruff check .
 
-      - name: Import contracts (report only)
-        # ADR 0008 M1. Broken contracts are the gap to the target layers.
-        # M14 removes continue-on-error and this step starts failing the job.
-        continue-on-error: true
+      - name: Import contracts
+        # ADR 0008. The five layer contracts are blocking. Compat shims that
+        # re-export a canonical module are the only ignores, and they go away
+        # after 1-2 clean scheduler cycles.
         run: lint-imports
 
       - name: Secret scan

@@ -95,9 +95,9 @@ def main() -> int:
     # Wan 7s can exceed the old 600s default on cold flex workers.
     os.environ.setdefault("REMOTE_GPU_TIMEOUT_S", "1800")
 
-    from agents.mcp.model_api_flows import apply_production_flow, resolve_production_flow
-    from core.remote_gpu_manager import reset_manager
-    from core.wan_reel_engine import run_wan_reel_test
+    from production.providers.llm.model_api_flows import apply_production_flow, resolve_production_flow
+    from production.providers.image.remote_gpu_manager import reset_manager
+    from production.providers.image.wan_reel_engine import run_wan_reel_test
 
     preset = args.model_api_flow or (
         "remote_gpu_serverless" if args.mode == "runpod" else "remote_gpu_pod"

@@ -347,7 +347,7 @@ def validate_script(
     # Regex spine/stakes/close scoring is a production gate on every path.
     # Freeform quote mode also has the five-criterion LLM judge upstream, but
     # locked/theme/paraphrase scripts must obey this same baseline here.
-    from agents.writer.script_agent import assess_story_quality
+    from production.writers.script_agent import assess_story_quality
 
     story = assess_story_quality(
         lines if isinstance(lines, list) else [],

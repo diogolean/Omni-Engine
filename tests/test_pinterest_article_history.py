@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from agents.mcp.text_model import TextResult
-from agents.posting.pinterest_engine.pin_copy import keyword_first_title
+from production.providers.llm.text_model import TextResult
+from production.formats.pins.pin_copy import keyword_first_title
 from distribution.scheduling.inventory import (
     MasterInventory,
     build_caption_regex,
@@ -385,7 +385,7 @@ def test_rebuild_keeps_a_saved_article_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Ancient Knowledge rebuilds must not wipe the article already on the entry."""
-    from agents.posting.pinterest_engine import config as cfg
+    from production.formats.pins import config as cfg
 
     _clear_opt_in(monkeypatch)
     cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)

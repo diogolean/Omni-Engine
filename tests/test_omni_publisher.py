@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import json
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -175,7 +173,7 @@ def test_pinterest_adapter_posts_with_mocked_http(
         response = _Response(201, {"id": f"pin_{len(captured)}"})
         return response
 
-    import agents.posting.pinterest_engine.publisher as pin_mod
+    import distribution.publishers.api.pinterest as pin_mod
 
     monkeypatch.setattr(pin_mod.requests, "post", fake_post)
 
@@ -246,9 +244,10 @@ def test_youtube_adapter_delegates_and_is_idempotent(monkeypatch: pytest.MonkeyP
         calls.append(kwargs)
         return ("abc123", "https://youtu.be/abc123", None)
 
-    module = types.ModuleType("agents.posting.youtube_publisher")
-    module.upload_short_from_envelope = fake_upload  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "agents.posting.youtube_publisher", module)
+    monkeypatch.setattr(
+        "distribution.publishers.api.youtube_upload.upload_short_from_envelope",
+        fake_upload,
+    )
 
     account = Account(
         branding="ancient_knowledge",

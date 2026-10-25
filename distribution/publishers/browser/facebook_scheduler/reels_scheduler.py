@@ -20,18 +20,18 @@ Built on ``media_scheduler_base.UniversalComposerScheduler``:
 Usage
 -----
     # Dry-run (scan queue, print plan — no browser clicks)
-    python -m facebook_scheduler.reels_scheduler --channel master_mei --dry-run
+    python -m distribution.publishers.browser.facebook_scheduler.reels_scheduler --channel master_mei --dry-run
 
     # Any folder of MP4s (captions from <folder>/asset_library.json)
-    python -m facebook_scheduler.reels_scheduler --folder "D:/clips" --dry-run
-    python -m facebook_scheduler.reels_scheduler --folder "D:/clips" --modelCTA
-    python -m facebook_scheduler.reels_scheduler --folder "D:/clips" --modelHashtag
+    python -m distribution.publishers.browser.facebook_scheduler.reels_scheduler --folder "D:/clips" --dry-run
+    python -m distribution.publishers.browser.facebook_scheduler.reels_scheduler --folder "D:/clips" --modelCTA
+    python -m distribution.publishers.browser.facebook_scheduler.reels_scheduler --folder "D:/clips" --modelHashtag
 
     # Live schedule (attach to Dolphin CDP / running Business Suite tab)
-    python -m facebook_scheduler.reels_scheduler --channel master_mei
+    python -m distribution.publishers.browser.facebook_scheduler.reels_scheduler --channel master_mei
 
     # Limit batch size
-    python -m facebook_scheduler.reels_scheduler --channel master_mei --max 3
+    python -m distribution.publishers.browser.facebook_scheduler.reels_scheduler --channel master_mei --max 3
 
 Requirements
 ------------

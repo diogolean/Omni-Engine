@@ -14,7 +14,7 @@ import numpy as np
 import skia
 from PIL import Image, ImageDraw
 
-from utils.pipeline_paths import assets_root
+from shared.paths import assets_root
 
 from animation.parametric.animator_types import VISEMES
 from .skia_mouths import (

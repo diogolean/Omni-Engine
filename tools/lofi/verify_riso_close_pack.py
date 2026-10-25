@@ -8,15 +8,15 @@ _REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
 if str(_REORG_ROOT) not in _reorg_sys.path:
     _reorg_sys.path.insert(0, str(_REORG_ROOT))
 
-from utils.pipeline_paths import coerce_outputs_path
+from shared.paths import coerce_outputs_path
 
 import json
 from pathlib import Path
 
 from PIL import Image
 
-from core.economic_reel_lofi import config as lofi_cfg
-from agents.writer.script_agent import _narrative_gate_reasons
+from production.formats.lofi import config as lofi_cfg
+from production.writers.script_agent import _narrative_gate_reasons
 
 CLIPS = coerce_outputs_path("outputs/wonder_feed/clips")
 WANT_TAG = "style-riso_painting_retro_vintage/dev/riso_retro_flat_v2"
@@ -94,7 +94,7 @@ def main() -> None:
         if imgs:
             im = Image.open(imgs[0])
             print(f"               still0={im.size} tag={lofi_cfg.still_style_tag_of(Path(imgs[0]))}")
-    from core.economic_reel_lofi import lofi_collections as rag
+    from production.formats.lofi import lofi_collections as rag
 
     rag.reset_batch_scripts()
     caps: dict[str, list[str]] = {}

@@ -85,22 +85,7 @@ except ImportError:
     pass
 
 from shared.logging import setup_cli_logging  # noqa: E402
-from agents.posting.youtube_publisher import (  # noqa: E402
-    build_credentials,
-    build_youtube_client,
-    get_or_create_playlist,
-    add_video_to_playlist,
-    get_next_publish_slot,
-    advance_slot,
-    upload_short,
-    update_video_metadata,
-    POST_INTERVAL_HOURS,
-    MAX_DAILY_UPLOADS,
-    DailyUploadSafetyGate,
-    YouTubeQuotaExceededError,
-    queue_pending_upload,
-    resume_pending_youtube_uploads,
-)
+from distribution.publishers.api.youtube_upload import build_credentials, build_youtube_client, get_or_create_playlist, add_video_to_playlist, get_next_publish_slot, advance_slot, upload_short, update_video_metadata, POST_INTERVAL_HOURS, MAX_DAILY_UPLOADS, DailyUploadSafetyGate, YouTubeQuotaExceededError, queue_pending_upload, resume_pending_youtube_uploads
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +186,7 @@ def lookup_metadata_by_video_id(page: str, video_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def resolve_video_paths(raw_paths: list[str]) -> list[Path]:
-    from utils.pipeline_paths import coerce_outputs_path
+    from shared.paths import coerce_outputs_path
 
     resolved: list[Path] = []
     for raw in raw_paths:

@@ -45,7 +45,7 @@ def test_health_probe_does_not_call_anthropic_unless_opted_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import config
-    from modules.reel_artefact import provider_health as ph
+    from production.formats.economic_reel.artefact import provider_health as ph
 
     _clear_opt_in(monkeypatch)
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "test-key", raising=False)
@@ -69,7 +69,7 @@ def test_health_probe_does_not_call_anthropic_unless_opted_in(
 def test_script_writer_does_not_call_claude_unless_opted_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agents.mcp import text_model
+    from production.providers.llm import text_model
 
     _clear_opt_in(monkeypatch)
     calls: list[str] = []
@@ -109,7 +109,7 @@ def test_script_writer_does_not_call_claude_unless_opted_in(
 def test_caption_fallbacks_omit_anthropic_unless_opted_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agents.writer.caption_engine import CaptionEngine
+    from production.writers.caption_engine import CaptionEngine
 
     _clear_opt_in(monkeypatch)
     engine = CaptionEngine.__new__(CaptionEngine)
@@ -125,7 +125,7 @@ def test_caption_fallbacks_omit_anthropic_unless_opted_in(
 def test_inventory_does_not_open_an_anthropic_client_unless_opted_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agents.posting.pinterest_engine import config as cfg
+    from production.formats.pins import config as cfg
     from distribution.scheduling.inventory import MasterInventory
 
     _clear_opt_in(monkeypatch)

@@ -16,15 +16,9 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from modules.reel_artefact import asset_pool, still_guard
-from modules.reel_artefact.asset_pool import (
-    PoolAsset,
-    ShotAssignment,
-    make_pool_job,
-    unique_stills,
-    write_asset_crop,
-)
-from modules.reel_artefact.crop import _blur_fill, prepare_reel_frame
+from production.formats.economic_reel.artefact import asset_pool, still_guard
+from production.formats.economic_reel.artefact.asset_pool import PoolAsset, ShotAssignment, make_pool_job, unique_stills, write_asset_crop
+from production.formats.economic_reel.artefact.crop import _blur_fill, prepare_reel_frame
 
 S23B_A_SOURCES = [(1280, 1687), (1280, 850), (3264, 2448), (2736, 3648)]
 

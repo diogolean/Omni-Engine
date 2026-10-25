@@ -18,6 +18,7 @@ Every entry carries:
 This module is imported by scheduler.py, publisher.py, and pinterest_main.py.
 """
 from __future__ import annotations
+from shared.layer_bridge import Port, Symbol
 
 import html
 import json
@@ -29,6 +30,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from shared.pin_text import (
+    fit_pin_title,
+    normalize_pin_text,
+    polish_pin_text,
+    sanitize_pin_title,
+    title_case_phrase,
+)
+from shared.video_still import extract_video_still
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -38,57 +48,13 @@ MASTER_INVENTORY_FILENAME = "master_inventory.json"
 SCHEMA_VERSION = "2.0"
 
 
-def normalize_pin_text(text: str) -> str:
-    """Decode HTML entities and curly quotes so pin copy is plain text."""
-    cleaned = html.unescape(text or "")
-    cleaned = (
-        cleaned.replace("\u2019", "'")
-        .replace("\u2018", "'")
-        .replace("\u201c", '"')
-        .replace("\u201d", '"')
-        .replace("\u00a0", " ")
-    )
-    return re.sub(r"\s+", " ", cleaned).strip()
-
-
-def title_case_phrase(text: str) -> str:
-    """Title-case a phrase without turning ``Baalbek's`` into ``Baalbek'S``."""
-    cleaned = normalize_pin_text(text)
-
-    def one(word: str) -> str:
-        parts = re.split(r"(')", word)
-        out: list[str] = []
-        first = True
-        for part in parts:
-            if part == "'":
-                out.append(part)
-                first = False
-                continue
-            if not part:
-                continue
-            if first:
-                out.append(part[:1].upper() + part[1:].lower())
-                first = False
-            else:
-                out.append(part.lower())
-        return "".join(out)
-
-    return " ".join(one(word) for word in cleaned.split())
-
-
-def polish_pin_text(text: str) -> str:
-    """Unescape pin copy and keep the letter after an apostrophe lowercase."""
-    cleaned = normalize_pin_text(text)
-    return re.sub(r"(?<=')([A-Z])", lambda match: match.group(1).lower(), cleaned)
-
-
 def _target_url() -> str:
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
     return cfg.TARGET_URL
 
 
 def _default_topic() -> str:
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
     return cfg.DEFAULT_TOPIC
 
 
@@ -133,7 +99,7 @@ def _channel_cta_variants() -> list[str]:
 
     Empty list means: do not inject engine CTAs — keep inventory metadata as-is.
     """
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
     return list(cfg.CTA_VARIANTS or [])
 
 # ---------------------------------------------------------------------------
@@ -222,7 +188,7 @@ def inject_sales_cta(text: str, variant_idx: int = 0) -> str:
     If the channel pack has no CTA templates, return *text* unchanged so
     inventory/post metadata remains the sole source of caption content.
     """
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
     variants = _channel_cta_variants()
     if not variants:
@@ -245,7 +211,7 @@ def build_caption_regex(source: str, variant_idx: int = 0) -> str:
     url = _target_url()
     variants = _channel_cta_variants()
     if variants:
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
         fallback = cfg.format_cta_variant(variants[0], url).strip()
     elif url:
         fallback = url
@@ -266,47 +232,6 @@ def build_caption_regex(source: str, variant_idx: int = 0) -> str:
     for word in _BANNED_WORDS:
         result = re.sub(rf"\b{re.escape(word)}\b", "", result, flags=re.IGNORECASE)
     return re.sub(r"  +", " ", result).strip()
-
-
-_BLOCKED_TITLE_SUFFIXES = (
-    " | Practical Guide",
-    " | Complete Overview",
-    " Tips | Quick Reference",
-    " — Key Insights",
-    " - Key Insights",
-    " | Key Insights",
-)
-
-
-def fit_pin_title(text: str, limit: int = 100) -> str:
-    """At most ``limit`` characters, ending on a word boundary."""
-    raw = (text or "").strip()
-    if len(raw) <= limit:
-        return raw
-    head = raw[:limit]
-    if not raw[limit].isspace() and " " in head:
-        head = head.rsplit(" ", 1)[0]
-    fitted = head.rstrip(" ,;:|-—–").strip()
-    return fitted or raw[:limit].rstrip()
-
-
-def sanitize_pin_title(title: str) -> str:
-    """Plain pin title. Template suffixes such as ``| Practical Guide`` are removed."""
-    text = polish_pin_text(title)
-    changed = True
-    while changed and text:
-        changed = False
-        for suffix in _BLOCKED_TITLE_SUFFIXES:
-            if text.lower().endswith(suffix.lower()):
-                text = text[: -len(suffix)].strip(" |-—–")
-                changed = True
-    text = re.sub(
-        r"\s*[|—–-]\s*(?:practical guide|complete overview|key insights|quick reference)\s*$",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    ).strip(" |-—–")
-    return fit_pin_title(text)
 
 
 def build_title_template(topic: str) -> str:
@@ -580,8 +505,8 @@ def resolve_image_path(record: dict) -> str:
     Checks: local_image_path -> image_relative / image_path relative to
     the local workspace root (ENGINE_ROOT). Returns empty string if missing.
     """
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
-    from utils.pipeline_paths import coerce_outputs_path, factory_root
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
+    from shared.paths import coerce_outputs_path, factory_root
 
     # 1. Already resolved
     existing = record.get("local_image_path", "")
@@ -615,7 +540,7 @@ def resolve_video_path(record: dict) -> str:
     Checks ``local_video_path`` / ``video_path``, then ``clips/`` matches
     by subject slug or basename.
     """
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
     for field in ("local_video_path", "video_path"):
         raw = record.get(field, "")
@@ -623,7 +548,7 @@ def resolve_video_path(record: dict) -> str:
             continue
         candidate = Path(raw)
         if not candidate.is_absolute():
-            from utils.pipeline_paths import coerce_outputs_path, factory_root
+            from shared.paths import coerce_outputs_path, factory_root
 
             for trial in (
                 coerce_outputs_path(raw),
@@ -661,38 +586,6 @@ def _title_from_clip_name(filename: str) -> str:
 def is_video_filename(name: str) -> bool:
     """True when *name* is a video clip. Those files are never published as pins."""
     return Path(str(name or "")).suffix.lower() in _VIDEO_EXTS
-
-
-def extract_video_still(video_path: Path, dest: Path) -> str:
-    """Extract a mid-clip JPEG still. Returns dest path or empty string."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.is_file() and dest.stat().st_size > 0:
-        return str(dest.resolve())
-
-    try:
-        from shared.ffmpeg import run_ffmpeg
-
-        cmd = [
-            "ffmpeg", "-y", "-ss", "2", "-i", str(video_path),
-            "-frames:v", "1", "-q:v", "3", str(dest),
-        ]
-        proc = run_ffmpeg(cmd, text=True, timeout=30)
-        if proc.returncode == 0 and dest.is_file():
-            return str(dest.resolve())
-    except Exception as exc:  # noqa: BLE001
-        log.debug("ffmpeg still extract failed for %s: %s", video_path.name, exc)
-
-    try:
-        from moviepy.editor import VideoFileClip  # noqa: PLC0415
-        clip = VideoFileClip(str(video_path))
-        t = min(2.0, max(0.1, (clip.duration or 2.0) * 0.2))
-        clip.save_frame(str(dest), t)
-        clip.close()
-        if dest.is_file():
-            return str(dest.resolve())
-    except Exception as exc:  # noqa: BLE001
-        log.debug("moviepy still extract failed for %s: %s", video_path.name, exc)
-    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +648,7 @@ def _generate_deepseek(
 
     import requests  # noqa: PLC0415
 
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
     api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
     if not api_key:
@@ -856,8 +749,8 @@ def _generate_cheap(
 ) -> dict:
     """Pin copy through ``text_model`` Writer_Primary on DeepInfra. No Claude."""
     del variant_idx
-    from agents.mcp.text_model import complete_writer_primary  # noqa: PLC0415
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    complete_writer_primary = Symbol('production.providers.llm.text_model', 'complete_writer_primary')  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
     source = caption if caption not in ("PENDING_CAPTION", "") else fact_sheet[:500]
     url = cfg.TARGET_URL
@@ -931,7 +824,7 @@ def ensure_writer_pin_copy(
         entry["visual_hook"] = ""
         fill_pin_templates(entry, source, variant)
         entry.update(_copy_stamp("template", "template"))
-    from agents.posting.pinterest_engine.pin_copy import finalize_pin_copy  # noqa: PLC0415
+    finalize_pin_copy = Symbol('production.formats.pins.pin_copy', 'finalize_pin_copy')  # noqa: PLC0415
 
     finalize_pin_copy(entry)
     return True
@@ -1053,7 +946,7 @@ def _generate_ai(
     model: str,
     variant_idx: int,
 ) -> dict:
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+    cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
     # No channel persona/prompt configured → skip AI (use inventory/templates).
     if not cfg.AI_SYSTEM_PROMPT:
@@ -1110,7 +1003,7 @@ class MasterInventory:
     """
 
     def __init__(self, outputs_dir: Path | None = None) -> None:
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
         self.outputs_dir: Path = outputs_dir or cfg.OUTPUTS_DIR
         self.library_dir: Path = (
@@ -1220,7 +1113,7 @@ class MasterInventory:
                 log.warning("Cannot read %s: %s", lib_path.name, exc)
                 continue
 
-            from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+            cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
             post_id = lib_path.stem
             topic = raw.get("topic") or _default_topic()
@@ -1294,7 +1187,7 @@ class MasterInventory:
                         entry["pinterest_caption"], variant_idx
                     )
 
-            from agents.posting.pinterest_engine.pin_copy import finalize_pin_copy  # noqa: PLC0415
+            finalize_pin_copy = Symbol('production.formats.pins.pin_copy', 'finalize_pin_copy')  # noqa: PLC0415
 
             finalize_pin_copy(entry)
             entries.append(entry)   # always accumulate in memory
@@ -1308,7 +1201,7 @@ class MasterInventory:
         if recycled:
             log.info("  recycled unpaired video clips: %d", recycled)
 
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
         data = {
             "schema_version": SCHEMA_VERSION,
@@ -1408,7 +1301,7 @@ class MasterInventory:
         checks["token_preview"] = (token[:12] + "...") if token else "(not set)"
 
         # 2. Board ID or auto-create name
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
         board_id = os.getenv("PINTEREST_BOARD_ID", "")
         board_name = os.getenv("PINTEREST_BOARD_NAME") or getattr(cfg, "BOARD_NAME", "")
         checks["board_id_set"] = bool(board_id or board_name)
@@ -1499,7 +1392,7 @@ class MasterInventory:
                 return None, None
             import anthropic  # noqa: PLC0415
 
-            from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+            cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
             if not cfg.ANTHROPIC_API_KEY:
                 return None, None

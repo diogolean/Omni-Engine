@@ -20,30 +20,21 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from agents.writer.freeform_writer import write_draft  # noqa: E402
-from agents.writer.judge_gate import (  # noqa: E402
-    CRITERIA,
-    CriterionScore,
-    JudgeVerdict,
-)
-from agents.writer.script_brain import draft_to_script  # noqa: E402
-from agents.writer.spoken_budget import enforce_spoken_budget  # noqa: E402
-from agents.writer.writer_brief import WriterBrief  # noqa: E402
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi import lofi_collections as rag  # noqa: E402
-from core.economic_reel_lofi.visual_concept import (  # noqa: E402
-    stamp_stage1_timing,
-    translate_episode_visuals,
-)
-from core.economic_reel_lofi.visual_identity import (  # noqa: E402
-    assign_distinct_hook_varieties,
-)
+from production.writers.freeform_writer import write_draft  # noqa: E402
+from production.qa.judges.judge_gate import CRITERIA, CriterionScore, JudgeVerdict
+from production.writers.script_brain import draft_to_script  # noqa: E402
+from production.writers.spoken_budget import enforce_spoken_budget  # noqa: E402
+from production.writers.writer_brief import WriterBrief  # noqa: E402
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi import lofi_collections as rag  # noqa: E402
+from production.formats.lofi.visual_concept import stamp_stage1_timing, translate_episode_visuals
+from production.formats.lofi.visual_identity import assign_distinct_hook_varieties
 
 
 def _simulate_judge(lines: list[str]) -> JudgeVerdict:
@@ -162,7 +153,7 @@ def _run(*, theme: str, subtheme: str, module: str, duration_s: int) -> dict:
         if variety.get("palette_key"):
             lines[0]["palette_key"] = variety["palette_key"]
         script["lines"] = lines
-    from core.economic_reel_lofi.pipeline import _assemble_stage3_prompts
+    from production.formats.lofi.pipeline import _assemble_stage3_prompts
 
     _assemble_stage3_prompts(
         script,

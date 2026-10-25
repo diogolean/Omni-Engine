@@ -37,7 +37,7 @@ from typing import Any, TYPE_CHECKING
 from distribution.publishers.browser.facebook_scheduler import config
 from distribution.publishers.browser.facebook_scheduler.human_behavior import HumanBehavior
 from distribution.publishers.browser.facebook_scheduler.logger import get_logger, save_screenshot
-from utils.pipeline_paths import outputs_path
+from shared.paths import outputs_path
 
 if TYPE_CHECKING:
     from playwright.sync_api import Locator, Page
@@ -286,7 +286,7 @@ class LocalMediaQueue:
             self.posted_dir.mkdir(parents=True, exist_ok=True)
             try:
                 from shared.store import hydrate_state_file, restore_channel_state
-                from utils.pipeline_paths import channel_store_dir
+                from shared.paths import channel_store_dir
 
                 restore_channel_state(channel_name)
                 store = channel_store_dir(channel_name, create=True)

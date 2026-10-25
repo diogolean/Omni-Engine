@@ -17,20 +17,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
-from core.economic_reel_lofi.pipeline import (  # noqa: E402
-    _linework_stats,
-    assess_cross_beat_style,
-    assess_object_beat_visual_continuity,
-    pixel_lighting_label,
-)
-from agents.writer.script_agent import (  # noqa: E402
-    assess_aphorism_close,
-    assess_fixed_referent,
-    assess_load_bearing_connectives,
-    assess_object_beat_continuity,
-)
+from production.formats.lofi.pipeline import _linework_stats, assess_cross_beat_style, assess_object_beat_visual_continuity, pixel_lighting_label
+from production.writers.script_agent import assess_aphorism_close, assess_fixed_referent, assess_load_bearing_connectives, assess_object_beat_continuity
 import imageio_ffmpeg
 
 META = page_outputs_dir("wonder_feed") / "clips" / "lofi_reel_hope_20260824_143339_v01.json"

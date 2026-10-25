@@ -15,13 +15,10 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.animator.asset_generator import (  # noqa: E402
-    DEFAULT_PUPPETS_DIR,
-    ensure_shared_panorama,
-)
-from core.animator.factory.create_puppet import generate_character_image  # noqa: E402
-from core.animator.factory.rigger import birefnet_cutout  # noqa: E402
-from utils.pipeline_paths import outputs_root  # noqa: E402
+from products.aiwake.animator.asset_generator import DEFAULT_PUPPETS_DIR, ensure_shared_panorama
+from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: E402
+from animation.parametric.factory.rigger import birefnet_cutout  # noqa: E402
+from shared.paths import outputs_root  # noqa: E402
 
 HEAD_PROMPT = (
     "Studio Ghibli vintage anime mecha head, tall dignified oval dome helmet in "

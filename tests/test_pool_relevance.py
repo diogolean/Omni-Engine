@@ -6,8 +6,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from modules.reel_artefact import asset_pool
-from modules.reel_artefact.asset_pool import PoolAsset, assign_shots, screen_pool, view_key
+from production.formats.economic_reel.artefact import asset_pool
+from production.formats.economic_reel.artefact.asset_pool import PoolAsset, assign_shots, screen_pool, view_key
 
 
 def _jar(i: int) -> PoolAsset:

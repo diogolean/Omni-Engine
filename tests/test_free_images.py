@@ -10,38 +10,17 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from agents.media.free_images.attribution import (
-    append_credit,
-    credit_for_image,
-    credit_line,
-)
-from agents.media.free_images.http import HttpResponse
-from agents.media.free_images.integrate import (
-    FreeImageUnavailable,
-    acquire_free_file,
-    load_card_source,
-    wrap_image_generate,
-)
-from agents.media.free_images.licenses import classify_license, license_allowed
-from agents.media.free_images.models import Candidate, FreeImageHit, SourceDecision
-from agents.media.free_images.policy import default_policy, resolve_policy
-from agents.media.free_images.providers import (
-    PexelsProvider,
-    SmithsonianProvider,
-    UnsplashProvider,
-    default_providers,
-    parse_loc,
-    parse_nasa,
-    parse_openverse,
-    parse_pexels,
-    parse_smithsonian,
-    parse_unsplash,
-    parse_wikimedia,
-)
-from agents.media.free_images.quality import image_has_watermark, prepare_portrait, rank_candidates
-from agents.media.free_images.query import build_query
-from agents.media.free_images.sourcer import resolve_image_source
-from agents.posting.pinterest_engine.image_transformer import PinTransformer
+from production.providers.image.free.attribution import append_credit, credit_for_image, credit_line
+from production.providers.image.free.http import HttpResponse
+from production.providers.image.free.integrate import FreeImageUnavailable, acquire_free_file, load_card_source, wrap_image_generate
+from production.providers.image.free.licenses import classify_license, license_allowed
+from production.providers.image.free.models import Candidate, FreeImageHit, SourceDecision
+from production.providers.image.free.policy import default_policy, resolve_policy
+from production.providers.image.free.providers import PexelsProvider, SmithsonianProvider, UnsplashProvider, default_providers, parse_loc, parse_nasa, parse_openverse, parse_pexels, parse_smithsonian, parse_unsplash, parse_wikimedia
+from production.providers.image.free.quality import image_has_watermark, prepare_portrait, rank_candidates
+from production.providers.image.free.query import build_query
+from production.providers.image.free.sourcer import resolve_image_source
+from production.formats.pins.image_transformer import PinTransformer
 
 
 def _jpeg(width: int, height: int, color=(30, 80, 120), watermark: bool = False) -> bytes:
@@ -491,7 +470,7 @@ def test_wrap_falls_back_to_flux_and_free_only_does_not() -> None:
         producer="reel_image",
     )
     # Patch the name the wrapper closes over.
-    import agents.media.free_images.integrate as integrate
+    import production.providers.image.free.integrate as integrate
 
     previous = integrate.resolve_image_source
     integrate.resolve_image_source = hit

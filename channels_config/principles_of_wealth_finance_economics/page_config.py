@@ -10,7 +10,7 @@ Entry point: ``python channels_config/principles_of_wealth_finance_economics/wea
 """
 from __future__ import annotations
 
-from utils.pipeline_paths import drive_root, path_from_env
+from shared.paths import drive_root, path_from_env
 
 # ---------------------------------------------------------------------------
 # Core profile

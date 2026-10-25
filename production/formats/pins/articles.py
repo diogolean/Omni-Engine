@@ -6,6 +6,7 @@ for the URL. Featured images and title graphics are never downloaded.
 """
 
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import json
 import logging
@@ -136,7 +137,7 @@ class Article:
 
 
 def _plain(raw_html: str) -> str:
-    from agents.posting.pinterest_engine.inventory import normalize_pin_text  # noqa: PLC0415
+    normalize_pin_text = Symbol('distribution.scheduling.inventory', 'normalize_pin_text')  # noqa: PLC0415
 
     return normalize_pin_text(_TAG_RE.sub(" ", raw_html or ""))
 
@@ -521,7 +522,7 @@ def image_map_path() -> Path:
     override = (os.getenv("PINTEREST_IMAGE_MAP") or "").strip()
     if override:
         return Path(override).expanduser()
-    from accounts.brandings import repo_root  # noqa: PLC0415
+    from shared.paths import repo_root  # noqa: PLC0415
 
     return repo_root() / "config" / "pinterest_image_map.yaml"
 

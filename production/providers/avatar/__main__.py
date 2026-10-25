@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""``python -m models_avatar``."""
+"""``python -m production.providers.avatar``."""
 from __future__ import annotations
 
 from production.providers.avatar.cli import main

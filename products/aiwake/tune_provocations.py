@@ -5,8 +5,8 @@ Not a training loop. Reads past transcripts, scores which tagged categories
 preceded a judged win (CONCEDE / EMBARRASSED / FUNNY) versus a hard-cap fizzle,
 and prints recommended mixed-mode weights. A render never calls this.
 
-    python -m channels_config.aiwake.tune_provocations
-    python -m channels_config.aiwake.tune_provocations --write store/provocation_weight_recommendations.json
+    python -m products.aiwake.tune_provocations
+    python -m products.aiwake.tune_provocations --write store/provocation_weight_recommendations.json
 
 Low-volume categories are flagged for human review instead of being zeroed.
 """

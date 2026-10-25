@@ -67,11 +67,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
 
     # ── model_api_flows: resolve + apply before any generation ──────────────
     # Precedence: per-media flags > --model-api-flow > .env default.
-    from agents.mcp.model_api_flows import (
-        apply_production_flow as _apply_flow,
-        bootstrap_validate_all_presets as _validate_flow_presets,
-        resolve_production_flow as _resolve_flow,
-    )
+    from production.providers.llm.model_api_flows import apply_production_flow as _apply_flow, bootstrap_validate_all_presets as _validate_flow_presets, resolve_production_flow as _resolve_flow
 
     try:
         _validate_flow_presets()
@@ -532,9 +528,9 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
     # ── WAN_REEL production (registry) — reuses produce() / variant worker ──
     # Smoke test remains core.wan_reel_engine.run_wan_reel_test (not CLI).
     if _active_post_type == "WAN_REEL":
-        import core.wan_reel_production  # noqa: F401 — registers runner
+        import production.providers.image.wan_reel_production  # noqa: F401 — registers runner
         from production.pipeline.post_type_registry import get_post_type_runner
-        from core.wan_reel_production import assert_wan_reel_page
+        from production.providers.image.wan_reel_production import assert_wan_reel_page
 
         assert_wan_reel_page(page_id)
         if get_post_type_runner("WAN_REEL") is None:
@@ -654,7 +650,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         if _rand_max_m < 0:
             _rand_max_m = 0
 
-        from modules.reel_qa.publish import row_publishable
+        from production.qa.publish import row_publishable
 
         _yt_candidates = [
             row for row in (envelope.get("items") or [])

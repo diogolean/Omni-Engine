@@ -6,45 +6,15 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
-    from agents.media.audio_engine import (
-        MUSIC_PROMPT_SYSTEM_DIRECTIVE,
-        _mei_section_styles,
-        generate_dynamic_music_prompt,
-    )
-    from agents.media.mei_narrative import resolve_mei_duration_profile
-    from agents.media.visual_roles import (
-        GLOBAL_FIREARM_BAN,
-        MEI_BASE_ANCHOR,
-        MEI_PRIMARY_ENVIRONMENTS,
-        MEI_SECONDARY_ENVIRONMENTS,
-        SCENE_03_BIOMECHANICAL_PROMPT,
-        SCENE_07_CYBORG_CLOSEUP_PROMPT,
-        SCENE_FINAL_HOOK_PROMPT,
-        SCENE_01_HOOK_PROMPT,
-        PENULTIMATE_LIBERATION_PROMPT,
-        _load_penultimate_prompt,
-        build_role_prompt,
-        compute_mei_act_durations,
-        frame_lore_for_acts,
-        pick_mei_meditation_environment,
-        pick_mei_frame1_setup,
-        pick_mei_frame_final_setup,
-        compose_scene_01_prompt,
-        compose_scene_final_prompt,
-        select_style_references_for_mei_frame,
-        MEI_FRAME1_ACTIONS,
-        MEI_FRAME1_CAMERAS,
-        MEI_FINAL_ACTIONS,
-        MEI_FINAL_CAMERAS,
-        MEI_OUTDOOR_TOKENS,
-        validate_mei_visual_prompt,
-    )
+    from production.providers.tts.audio_engine import MUSIC_PROMPT_SYSTEM_DIRECTIVE, _mei_section_styles, generate_dynamic_music_prompt
+    from production.writers.mei_narrative import resolve_mei_duration_profile
+    from production.media.visual_roles import GLOBAL_FIREARM_BAN, MEI_BASE_ANCHOR, MEI_PRIMARY_ENVIRONMENTS, MEI_SECONDARY_ENVIRONMENTS, SCENE_03_BIOMECHANICAL_PROMPT, SCENE_07_CYBORG_CLOSEUP_PROMPT, SCENE_FINAL_HOOK_PROMPT, SCENE_01_HOOK_PROMPT, PENULTIMATE_LIBERATION_PROMPT, _load_penultimate_prompt, build_role_prompt, compute_mei_act_durations, frame_lore_for_acts, pick_mei_meditation_environment, pick_mei_frame1_setup, pick_mei_frame_final_setup, compose_scene_01_prompt, compose_scene_final_prompt, select_style_references_for_mei_frame, MEI_FRAME1_ACTIONS, MEI_FRAME1_CAMERAS, MEI_FINAL_ACTIONS, MEI_FINAL_CAMERAS, MEI_OUTDOOR_TOKENS, validate_mei_visual_prompt
     from channels_config.master_mei import page_config as mei_cfg
 
     fails: list[str] = []
@@ -96,7 +66,7 @@ def main() -> int:
         fails.append("Scene 3 missing post-apocalyptic slave / VR headset details")
     if "computing apparatus" not in SCENE_07_CYBORG_CLOSEUP_PROMPT.lower() and "hydraulic" not in SCENE_07_CYBORG_CLOSEUP_PROMPT.lower():
         fails.append("Scene 7 prompt missing computing-apparatus captive details")
-    from agents.media.visual_roles import SCENE_08_UNPLUG_ESCAPE_PROMPT
+    from production.media.visual_roles import SCENE_08_UNPLUG_ESCAPE_PROMPT
     if "samurai" not in SCENE_08_UNPLUG_ESCAPE_PROMPT.lower() or "katana" not in SCENE_08_UNPLUG_ESCAPE_PROMPT.lower():
         fails.append("Scene 8 missing samurai matrix-slice details")
     if "ninja" not in PENULTIMATE_LIBERATION_PROMPT.lower() and "warrior" not in PENULTIMATE_LIBERATION_PROMPT.lower():
@@ -113,12 +83,7 @@ def main() -> int:
     if "firearm" not in GLOBAL_FIREARM_BAN.lower():
         fails.append("firearm ban missing")
 
-    from agents.media.prompt_builder import (
-        FLUX_MAX_CHARS,
-        FLUX_MAX_WORDS,
-        finalize_flux_prompt,
-        flux_prompt_stats,
-    )
+    from production.providers.image.prompt_builder import FLUX_MAX_CHARS, FLUX_MAX_WORDS, finalize_flux_prompt, flux_prompt_stats
 
     for label, prompt, need_prefix in (
         ("scene1", SCENE_01_HOOK_PROMPT, False),

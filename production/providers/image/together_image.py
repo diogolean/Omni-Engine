@@ -1595,7 +1595,7 @@ class TogetherImageAdapter:
             visual_role=flux_visual_role(page, visual_role) or None,
         )
 
-        from utils.pipeline_paths import default_page_dir, page_assets_dir
+        from shared.paths import default_page_dir, page_assets_dir
 
         configured = (
             output_directory

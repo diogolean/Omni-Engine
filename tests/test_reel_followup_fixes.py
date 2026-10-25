@@ -7,9 +7,9 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
-from modules.reel_qa.mp4_gate import decide_mp4_gate, probe_media
-from modules.reel_qa.timings import filter_spoken_timings
-from modules.reel_visual_qa import generate_and_gate
+from production.qa.mp4_gate import decide_mp4_gate, probe_media
+from production.qa.timings import filter_spoken_timings
+from production.qa.reel_visual_qa import generate_and_gate
 
 
 def test_visual_gate_forwards_episode_subject(monkeypatch) -> None:

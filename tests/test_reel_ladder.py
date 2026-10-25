@@ -8,26 +8,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from modules.reel_artefact.budget import (
-    note_real_use,
-    real_allowed,
-    reel_spent,
-    reset_nano_budget,
-    reset_spend,
-    reset_uses,
-    still_uses,
-)
-from modules.reel_artefact.diversity import reset_diversity
-from modules.reel_artefact.ladder import (
-    RungContext,
-    history_text,
-    reprompt_from_defect,
-    run_ladder,
-    rung_names,
-    rungs_for,
-)
-from modules.reel_artefact.reuse import remember_approved, reset_approved, reuse_into
-from modules.reel_qa.config import RELEVANCE_THRESHOLD, relevance_threshold
+from production.formats.economic_reel.artefact.budget import note_real_use, real_allowed, reel_spent, reset_nano_budget, reset_spend, reset_uses, still_uses
+from production.formats.economic_reel.artefact.diversity import reset_diversity
+from production.formats.economic_reel.artefact.ladder import RungContext, history_text, reprompt_from_defect, run_ladder, rung_names, rungs_for
+from production.formats.economic_reel.artefact.reuse import remember_approved, reset_approved, reuse_into
+from production.qa.config import RELEVANCE_THRESHOLD, relevance_threshold
 
 
 def _jpeg(path: Path, color: tuple[int, int, int] = (40, 36, 28)) -> Path:
@@ -296,8 +281,8 @@ def test_each_real_photo_repeats_at_most_twice(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_divers_and_commentary_are_scenes_not_artefact_photos() -> None:
-    from modules.reel_artefact.role import beat_kind
-    from modules.shot_planner.entities import Entity
+    from production.formats.economic_reel.artefact.role import beat_kind
+    from production.formats.economic_reel.shot_planner.entities import Entity
 
     entity = Entity(
         id="antikythera",
@@ -364,11 +349,8 @@ def test_scene_ladder_never_calls_real_or_nano(
 
 
 def test_ak_flux_prompts_have_no_cyberpunk_anchor() -> None:
-    from agents.media.providers.together_image import (
-        flux_visual_role,
-        sanitize_prompt_for_flux,
-    )
-    from modules.reel_artefact.route import generic_flux_prompt
+    from production.providers.image.together_image import flux_visual_role, sanitize_prompt_for_flux
+    from production.formats.economic_reel.artefact.route import generic_flux_prompt
 
     raw = generic_flux_prompt(
         "Setting: Desolate ancient landscape (e.g. a dry plateau at dusk)."
@@ -408,7 +390,7 @@ def test_defect_reprompt_stays_documentary(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_cta_beat_gets_its_own_hold() -> None:
-    from modules.reel_qa.cta_beat import with_cta_beat
+    from production.qa.cta_beat import with_cta_beat
 
     snips, durs, index = with_cta_beat(
         ["alpha", "beta"],
@@ -425,7 +407,7 @@ def test_cta_beat_gets_its_own_hold() -> None:
 
 
 def test_reuse_cost_line_is_separate_from_commons() -> None:
-    from core.cost_tracker import CostTracker, image_cost_lines
+    from production.cost.cost_tracker import CostTracker, image_cost_lines
 
     tracker = CostTracker(page_id="ancient_knowledge")
     tracker.track_image("image_commons", count=2)
@@ -535,7 +517,7 @@ def test_replan_stops_when_the_beat_budget_is_spent(
 
 
 def test_accepted_rungs_drive_the_reel_counter() -> None:
-    from modules.reel_artefact.logbook import note_accepted, note_source, reset, summary_line
+    from production.formats.economic_reel.artefact.logbook import note_accepted, note_source, reset, summary_line
 
     reset()
     note_source("nb-ref:gemini", "quimbaya", 1)
@@ -554,8 +536,8 @@ def test_accepted_rungs_drive_the_reel_counter() -> None:
 def test_cached_edit_is_reuse_and_a_third_copy_is_a_new_angle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modules.reel_artefact.route import _variation
-    from modules.shot_planner.entities import Entity
+    from production.formats.economic_reel.artefact.route import _variation
+    from production.formats.economic_reel.shot_planner.entities import Entity
 
     monkeypatch.setenv("REEL_REUSE_MAX_PER_STILL", "2")
     monkeypatch.setenv("REEL_NANOBANANA_MAX_PER_REEL", "4")
@@ -616,7 +598,7 @@ def test_cached_edit_is_reuse_and_a_third_copy_is_a_new_angle(
 
 
 def test_event_rungs_and_prompt_keep_the_artefact_out() -> None:
-    from modules.reel_artefact.prompts import context_flux_prompt, event_flux_prompt
+    from production.formats.economic_reel.artefact.prompts import context_flux_prompt, event_flux_prompt
 
     assert rungs_for("scene", event=True) == ["event", "flux", "reuse"]
     text = event_flux_prompt(
@@ -678,7 +660,7 @@ def test_near_duplicate_frames_do_not_both_publish(
 def test_ignore_checkpoint_does_not_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from modules.reel_artefact.checkpoint import ReelCheckpoint
+    from production.formats.economic_reel.artefact.checkpoint import ReelCheckpoint
 
     image = _jpeg(tmp_path / "saved.jpg")
     ckpt = ReelCheckpoint(tmp_path / "manifest.json")
@@ -714,9 +696,9 @@ def test_ignore_checkpoint_does_not_resume(
 
 
 def test_event_search_publishes_a_commons_still(tmp_path: Path) -> None:
-    from agents.media.free_images.http import HttpResponse
-    from modules.reel_artefact.events import acquire_event_photo
-    from modules.shot_planner.entities import Entity
+    from production.providers.image.free.http import HttpResponse
+    from production.formats.economic_reel.artefact.events import acquire_event_photo
+    from production.formats.economic_reel.shot_planner.entities import Entity
 
     entity = Entity(
         id="antikythera_mechanism",
@@ -781,7 +763,7 @@ def test_event_search_publishes_a_commons_still(tmp_path: Path) -> None:
 
 
 def test_flux_scenes_come_from_the_channel_style_guide() -> None:
-    from modules.reel_artefact.flux_policy import load_flux_policy
+    from production.formats.economic_reel.artefact.flux_policy import load_flux_policy
 
     policy = load_flux_policy("ancient_knowledge")
     allowed = " ".join(policy["allowed"]).lower()
@@ -796,8 +778,8 @@ def test_flux_scenes_come_from_the_channel_style_guide() -> None:
 
 
 def test_object_flux_is_a_context_scene_and_keeps_edit_negatives(tmp_path: Path) -> None:
-    from modules.reel_artefact.climb import _flux
-    from modules.shot_planner.entities import Entity
+    from production.formats.economic_reel.artefact.climb import _flux
+    from production.formats.economic_reel.shot_planner.entities import Entity
 
     entity = Entity(
         id="antikythera_mechanism",
@@ -891,9 +873,9 @@ def test_replan_cap_stops_another_concept(
 
 
 def test_a_blank_download_is_not_an_event_photo(tmp_path: Path) -> None:
-    from modules.reel_artefact.events import acquire_event_photo
-    from modules.reel_artefact.pixels import image_defect
-    from modules.shot_planner.entities import Entity
+    from production.formats.economic_reel.artefact.events import acquire_event_photo
+    from production.formats.economic_reel.artefact.pixels import image_defect
+    from production.formats.economic_reel.shot_planner.entities import Entity
 
     blank = Image.new("RGB", (1600, 1200), (250, 250, 250))
     assert image_defect(blank, nbytes=9000) == "blank"
@@ -920,7 +902,7 @@ def test_a_blank_download_is_not_an_event_photo(tmp_path: Path) -> None:
 
     class _Client:
         def get(self, url, params=None, headers=None):
-            from agents.media.free_images.http import HttpResponse
+            from production.providers.image.free.http import HttpResponse
 
             del headers
             params = params or {}
@@ -962,8 +944,8 @@ def test_a_blank_download_is_not_an_event_photo(tmp_path: Path) -> None:
 
 
 def test_event_cc_by_credit_is_written(tmp_path: Path) -> None:
-    from modules.reel_artefact.events import acquire_event_photo
-    from modules.shot_planner.entities import Entity
+    from production.formats.economic_reel.artefact.events import acquire_event_photo
+    from production.formats.economic_reel.shot_planner.entities import Entity
 
     entity = Entity(
         id="antikythera_mechanism",
@@ -997,7 +979,7 @@ def test_event_cc_by_credit_is_written(tmp_path: Path) -> None:
 
     class _Client:
         def get(self, url, params=None, headers=None):
-            from agents.media.free_images.http import HttpResponse
+            from production.providers.image.free.http import HttpResponse
 
             del headers
             params = params or {}
@@ -1021,7 +1003,7 @@ def test_event_cc_by_credit_is_written(tmp_path: Path) -> None:
 
 
 def test_final_frame_trusts_the_approved_still(tmp_path: Path) -> None:
-    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+    from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
 
     still = _jpeg(tmp_path / "still.jpg", (30, 80, 40))
 
@@ -1060,7 +1042,7 @@ def test_final_frame_trusts_the_approved_still(tmp_path: Path) -> None:
 
 
 def test_a_different_final_frame_names_the_beat(tmp_path: Path) -> None:
-    from modules.reel_qa.mp4_gate import SubtitleCue, gate_final_mp4
+    from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
 
     still = tmp_path / "still.jpg"
     other = tmp_path / "other.jpg"
@@ -1142,8 +1124,8 @@ def test_fair_wave_gives_every_beat_one_attempt_before_retries(
 ) -> None:
     from functools import partial
 
-    from modules.reel_artefact.climb import climb_act, reset_cursors
-    from modules.reel_artefact.fair import run_fair
+    from production.formats.economic_reel.artefact.climb import climb_act, reset_cursors
+    from production.formats.economic_reel.artefact.fair import run_fair
 
     monkeypatch.setenv("REEL_FLUX_MAX_PER_REEL", "2")
     monkeypatch.setenv("REEL_REPLAN_MAX_PER_REEL", "0")
@@ -1198,9 +1180,9 @@ def test_fair_wave_gives_every_beat_one_attempt_before_retries(
 def test_event_photo_prefers_the_dive_over_the_statue(
     tmp_path: Path,
 ) -> None:
-    from agents.media.free_images.http import HttpResponse
-    from modules.reel_artefact.events import acquire_event_photo
-    from modules.shot_planner.entities import Entity
+    from production.providers.image.free.http import HttpResponse
+    from production.formats.economic_reel.artefact.events import acquire_event_photo
+    from production.formats.economic_reel.shot_planner.entities import Entity
 
     entity = Entity(
         id="antikythera_mechanism",
@@ -1292,7 +1274,7 @@ def test_event_photo_prefers_the_dive_over_the_statue(
 def test_a_checkerboard_is_not_a_photograph() -> None:
     import io
 
-    from modules.reel_artefact.pixels import image_defect
+    from production.formats.economic_reel.artefact.pixels import image_defect
 
     raw = _checker_bytes()
     with Image.open(io.BytesIO(raw)) as opened:
@@ -1303,8 +1285,8 @@ def test_a_checkerboard_is_not_a_photograph() -> None:
 
 
 def test_a_replan_that_names_the_object_is_dropped() -> None:
-    from modules.reel_artefact.flux_policy import acceptable_flux_concept
-    from modules.reel_artefact.replan import next_concept
+    from production.formats.economic_reel.artefact.flux_policy import acceptable_flux_concept
+    from production.formats.economic_reel.artefact.replan import next_concept
 
     assert acceptable_flux_concept(
         "A gold ornament lying on an open book.",

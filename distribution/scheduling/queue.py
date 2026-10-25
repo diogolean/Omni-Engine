@@ -8,6 +8,7 @@ Facebook export does not fail the pin.
 """
 
 from __future__ import annotations
+from shared.layer_bridge import Port, Symbol
 
 import logging
 import os
@@ -29,7 +30,7 @@ def facebook_settings(context: dict | None) -> dict[str, Any]:
     ctx = context or {}
     channel = str(ctx.get("account_id") or "").strip()
     if not channel:
-        from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
         channel = str(cfg.CHANNEL_ID or "").strip()
     keys = ("facebook_postplanner", "facebook_page_name", "facebook_caption_template")
@@ -84,11 +85,9 @@ def build_facebook_caption(
     template: str = "",
 ) -> str:
     """Hook, two or three lines, then the article link."""
-    from agents.posting.pinterest_engine.articles import resolve_pin_link  # noqa: PLC0415
-    from agents.posting.pinterest_engine.pin_copy import (  # noqa: PLC0415
-        _fill,
-        card_hook_text,
-    )
+    resolve_pin_link = Symbol('production.formats.pins.articles', 'resolve_pin_link')  # noqa: PLC0415
+    _fill = Symbol('production.formats.pins.pin_copy', '_fill')
+    card_hook_text = Symbol('production.formats.pins.pin_copy', 'card_hook_text')
 
     hook = card_hook_text(record)
     lines = facebook_body_lines(record)
@@ -193,7 +192,7 @@ def _card_media_url(
     client: Any | None,
     bucket: str | None,
 ) -> str:
-    from agents.media.b2_client import media_bucket_name, upload_object  # noqa: PLC0415
+    from shared.storage.b2_client import media_bucket_name, upload_object  # noqa: PLC0415
 
     bucket_name = (bucket or "").strip() or media_bucket_name()
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", post_id.strip()) or "card"
@@ -239,8 +238,8 @@ def _imgbb_url(channel_id: str, safe_id: str, card_bytes: bytes) -> str:
     api_key = (os.getenv("IMGBB_API_KEY") or "").strip()
     if not api_key:
         return ""
-    from agents.media.imgbb_client import upload_image_file_to_imgbb  # noqa: PLC0415
-    from utils.pipeline_paths import temp_path  # noqa: PLC0415
+    from shared.storage.imgbb_client import upload_image_file_to_imgbb  # noqa: PLC0415
+    from shared.paths import temp_path  # noqa: PLC0415
 
     dest = temp_path(channel_id, "pinterest", f"fb_{safe_id}.jpg")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -267,7 +266,7 @@ def _remove_empty_dirs(start: Path) -> None:
 
 
 def _upload_workbook(path: Path, key: str, *, client: Any | None, bucket: str | None) -> None:
-    from agents.media.b2_client import upload_object  # noqa: PLC0415
+    from shared.storage.b2_client import upload_object  # noqa: PLC0415
 
     try:
         upload_object(key, path, client=client, bucket=bucket, content_type=_XLSX_TYPE)

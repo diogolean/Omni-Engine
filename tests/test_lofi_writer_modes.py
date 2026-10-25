@@ -6,30 +6,17 @@ from inspect import signature
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agents.writer.claude_compose import (
-    compose_instruction,
-    compose_system,
-    format_compose_user,
-)
-from agents.writer.script_agent import assess_story_quality
-from agents.writer.script_brain import _anaphora_profile, _function_shape
-from agents.writer.spoken_budget import trim_at_clause_boundary
-from agents.writer.writer_brief import WriterBrief
-from core.economic_reel_lofi.aphorism_bank import bank_path, entries, get_entry
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi.pipeline import (
-    _repair_targeted_line,
-    _targeted_line_failure,
-    run_economic_reel_lofi,
-)
-from core.economic_reel_lofi.validator_agent import validate_script
-from core.economic_reel_lofi.visual_concept import stamp_stage1_timing
-from core.economic_reel_lofi.visual_identity import (
-    apply_anchor_callback_beats,
-    apply_windowless_interior_frame,
-    assemble_v2_prompt,
-    hook_silhouette_dissolve_scene,
-)
+from production.writers.claude_compose import compose_instruction, compose_system, format_compose_user
+from production.writers.script_agent import assess_story_quality
+from production.writers.script_brain import _anaphora_profile, _function_shape
+from production.writers.spoken_budget import trim_at_clause_boundary
+from production.writers.writer_brief import WriterBrief
+from production.formats.lofi.aphorism_bank import bank_path, entries, get_entry
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi.pipeline import _repair_targeted_line, _targeted_line_failure, run_economic_reel_lofi
+from production.formats.lofi.validator_agent import validate_script
+from production.formats.lofi.visual_concept import stamp_stage1_timing
+from production.formats.lofi.visual_identity import apply_anchor_callback_beats, apply_windowless_interior_frame, assemble_v2_prompt, hook_silhouette_dissolve_scene
 
 
 def test_theme_compose_prompt_is_duration_aware() -> None:
@@ -407,11 +394,7 @@ def test_portrait_has_neck_and_sweater() -> None:
 
 
 def test_critic_model_remaps_retired_flash_lite() -> None:
-    from quality.VisualQA_Agent.config import (
-        CURRENT_CRITIC_MODEL,
-        GEMINI_CRITIC_MODEL,
-        resolve_critic_model,
-    )
+    from production.qa.judges.visual_critic.config import CURRENT_CRITIC_MODEL, GEMINI_CRITIC_MODEL, resolve_critic_model
 
     assert CURRENT_CRITIC_MODEL == "models/gemini-3.5-flash-lite"
     assert "2.5-flash-lite" not in GEMINI_CRITIC_MODEL
@@ -422,14 +405,11 @@ def test_critic_model_remaps_retired_flash_lite() -> None:
 def test_together_flux2_backend_and_cost() -> None:
     import os
 
-    from agents.media.providers.together_image import (
-        FLUX_2_DEV_MODEL,
-        estimate_together_image_cost,
-    )
+    from production.providers.image.together_image import FLUX_2_DEV_MODEL, estimate_together_image_cost
 
     usd = estimate_together_image_cost(FLUX_2_DEV_MODEL)
     assert abs(usd - 0.0154) < 0.00001
-    from agents.media.providers.together_image import _is_flux2_dev_model
+    from production.providers.image.together_image import _is_flux2_dev_model
 
     assert _is_flux2_dev_model("black-forest-labs/FLUX-2-dev")
     assert _is_flux2_dev_model("black-forest-labs/FLUX.2-dev")
@@ -453,8 +433,8 @@ def test_together_flux2_backend_and_cost() -> None:
 
 
 def test_hook_line_brevity_is_writer_target_not_still_hold() -> None:
-    from agents.writer.freeform_writer import _output_contract
-    from agents.writer.writer_brief import WriterBrief
+    from production.writers.freeform_writer import _output_contract
+    from production.writers.writer_brief import WriterBrief
 
     clause = lofi_cfg.hook_line_brevity_clause()
     assert "target 4" in clause and "6 words" in clause
@@ -470,7 +450,7 @@ def test_hook_line_brevity_is_writer_target_not_still_hold() -> None:
 
 
 def test_slot_duration_follows_measured_vo_not_estimate() -> None:
-    from core.economic_reel_lofi.config import slot_duration_for_vo
+    from production.formats.lofi.config import slot_duration_for_vo
 
     slot, driven = slot_duration_for_vo(4.13, base_s=6.0, trailing_silence_s=0.30)
     assert driven is True
@@ -486,7 +466,7 @@ def test_slot_duration_follows_measured_vo_not_estimate() -> None:
 
 
 def test_coverage_infra_error_does_not_fail_closed() -> None:
-    from core.economic_reel_lofi.pipeline import _is_critic_infra_error
+    from production.formats.lofi.pipeline import _is_critic_infra_error
 
     err = RuntimeError(
         "404 NOT_FOUND. This model models/gemini-2.5-flash-lite "

@@ -121,7 +121,7 @@ def write_approval_artifact(
     extra: dict[str, Any] | None = None,
 ) -> Path:
     """Single review file: tightened beats + image prompts. Stop before Flux."""
-    from agents.writer.spoken_budget import assess_lines, count_words
+    from production.writers.spoken_budget import assess_lines, count_words
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

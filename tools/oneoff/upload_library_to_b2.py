@@ -28,11 +28,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    from agents.posting.pinterest_engine import config as cfg  # noqa: PLC0415
-    from agents.posting.pinterest_engine.library_source import (  # noqa: PLC0415
-        library_prefix,
-        upload_library_tree,
-    )
+    from production.formats.pins import config as cfg  # noqa: PLC0415
+    from distribution.scheduling.library_source import library_prefix, upload_library_tree
 
     cfg.configure(channel_id=args.channel)
     prefix = library_prefix(args.channel, args.prefix)

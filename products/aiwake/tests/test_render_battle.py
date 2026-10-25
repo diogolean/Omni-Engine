@@ -55,7 +55,7 @@ if str(REPO_ROOT) not in sys.path:
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from utils.pipeline_paths import page_outputs_dir  # noqa: E402
+from shared.paths import page_outputs_dir  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cv_ground_truth as gt  # noqa: E402
@@ -278,7 +278,7 @@ def _build_real_tts_transcript_and_audio(tmp_dir: Path):
     """
     from products.aiwake.contracts import DebateTranscript, SpeakerRole, Utterance
     from products.aiwake.media.audio import AudioAsset
-    from core.animator.audio_analyzer import load_mono_waveform
+    from animation.parametric.audio_analyzer import load_mono_waveform
 
     payload = json.loads(CORNERED_SESSION_PATH.read_text(encoding="utf-8"))
     source_utterances = payload["utterances"][:6]
@@ -413,8 +413,8 @@ def _decode_muxed_audio_metrics(path: Path) -> dict[str, float]:
     """Decode the delivered MP4's AAC stream to PCM and measure audibility."""
     import tempfile
 
-    from core.animator.audio_analyzer import load_mono_waveform
-    from core.animator.renderer import resolve_ffmpeg
+    from animation.parametric.audio_analyzer import load_mono_waveform
+    from animation.parametric.renderer import resolve_ffmpeg
 
     wav_path = Path(tempfile.gettempdir()) / f"{path.stem}_decoded_audio.wav"
     wav_path.unlink(missing_ok=True)
@@ -454,7 +454,7 @@ def _decode_muxed_audio_metrics(path: Path) -> dict[str, float]:
 
 def _background_bed_gap_rms(path: Path, *, gap_start_s: float, gap_end_s: float) -> float:
     """Measure the non-dialogue bed inside a known inter-turn silent gap."""
-    from core.animator.audio_analyzer import load_mono_waveform
+    from animation.parametric.audio_analyzer import load_mono_waveform
 
     mono, sample_rate, _ = load_mono_waveform(path)
     start = int(round((gap_start_s + 0.05) * sample_rate))
@@ -465,8 +465,8 @@ def _background_bed_gap_rms(path: Path, *, gap_start_s: float, gap_end_s: float)
 
 def _assert_brow_peak_separation(audio_by_turn: dict) -> str:
     """Measure real speech peaks and require distinct role-specific brow angles."""
-    from core.animator.audio_analyzer import load_mono_waveform
-    from core.animator.puppet import emotion_brow_angles
+    from animation.parametric.audio_analyzer import load_mono_waveform
+    from animation.parametric.puppet import emotion_brow_angles
 
     measured: dict[str, tuple[float, float]] = {}
     telemetry: list[str] = []
@@ -497,8 +497,8 @@ def _assert_brow_peak_separation(audio_by_turn: dict) -> str:
 
 def _assert_real_rhubarb_schedules(transcript) -> list[str]:
     """Require real phonetic schedules from every exported spoken turn."""
-    from core.animator.rhubarb import analyze_visemes
-    from core.animator.animator_types import VISEMES
+    from animation.parametric.rhubarb import analyze_visemes
+    from animation.parametric.animator_types import VISEMES
 
     turn_dir = ANIMATION_CLIPS_DIR / f"{transcript.session_id}_battle_audio_turns"
     wavs = sorted(turn_dir.glob("turn_*.wav"))
@@ -613,13 +613,8 @@ def run_dynamic_animation_stage() -> StageResult:
     _LOG.info("=" * 78)
 
     from products.aiwake.animator_bridge import render_debate_animation
-    from core.animator.asset_generator import (
-        DEFAULT_PUPPETS_DIR,
-        archive_v1_retro_skins,
-        ensure_shared_panorama,
-        generate_default_puppet,
-    )
-    from core.animator.rhubarb import find_rhubarb
+    from products.aiwake.animator.asset_generator import DEFAULT_PUPPETS_DIR, archive_v1_retro_skins, ensure_shared_panorama, generate_default_puppet
+    from animation.parametric.rhubarb import find_rhubarb
 
     _LOG.info("V2 cyborg skins (incl. 9-viseme mouth sets) under %s", DEFAULT_PUPPETS_DIR)
     archive_v1_retro_skins()
@@ -806,7 +801,7 @@ def _source_subtracted_mask(
     """Isolate the avatar from the pristine panorama without assuming darkness."""
     from PIL import Image
 
-    from core.animator.asset_generator import ensure_shared_panorama
+    from products.aiwake.animator.asset_generator import ensure_shared_panorama
 
     path = ensure_shared_panorama()
     with Image.open(path) as opened:
@@ -1094,7 +1089,7 @@ def run_cv_compliance_stage() -> StageResult:
 # --------------------------------------------------------------------------- #
 def extract_proof_frames() -> list[str]:
     """Pull the two proof stills straight out of the delivered MP4."""
-    from core.animator.renderer import resolve_ffmpeg
+    from animation.parametric.renderer import resolve_ffmpeg
 
     ffmpeg = resolve_ffmpeg()
     commands = [

@@ -107,7 +107,7 @@ def _ask_once(plan: ShotList) -> None:
             f"scene: {shot.scene_type or shot.image_role}"
         )
     try:
-        from core.cheap_llm import complete
+        from production.providers.llm.cheap_llm import complete
 
         text = complete(
             "You check a documentary shot list. For each line, the picture "

@@ -46,7 +46,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("test_remote_gpu")
 
-from utils.pipeline_paths import outputs_root  # noqa: E402
+from shared.paths import outputs_root  # noqa: E402
 
 DEFAULT_OUT = outputs_root() / "remote_gpu_tests"
 
@@ -130,20 +130,7 @@ def _banner(title: str) -> None:
 
 
 def run_dry_run(out_dir: Path) -> int:
-    from core.remote_gpu_manager import (
-        WORKFLOW_F5TTS_TXT2AUDIO,
-        WORKFLOW_FLUX_LORA_TXT2IMG,
-        WORKFLOW_FLUX_TXT2IMG,
-        WORKFLOW_WAN22_IMG2VID,
-        RemoteGPUManager,
-        find_nodes_by_class,
-        get_image_adapter,
-        is_remote_gpu_enabled,
-        load_workflow,
-        normalize_comfy_base_url,
-        resolve_node,
-        workflows_dir,
-    )
+    from production.providers.image.remote_gpu_manager import WORKFLOW_F5TTS_TXT2AUDIO, WORKFLOW_FLUX_LORA_TXT2IMG, WORKFLOW_FLUX_TXT2IMG, WORKFLOW_WAN22_IMG2VID, RemoteGPUManager, find_nodes_by_class, get_image_adapter, is_remote_gpu_enabled, load_workflow, normalize_comfy_base_url, resolve_node, workflows_dir
 
     _banner("DRY RUN — workflow load + payload injection")
     wdir = workflows_dir()
@@ -212,7 +199,7 @@ def run_dry_run(out_dir: Path) -> int:
 
 
 def _build_manager(args: argparse.Namespace):
-    from core.remote_gpu_manager import ComfyUIClient, RemoteGPUManager, reset_manager
+    from production.providers.image.remote_gpu_manager import ComfyUIClient, RemoteGPUManager, reset_manager
 
     reset_manager()
     client = ComfyUIClient(

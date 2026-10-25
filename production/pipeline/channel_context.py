@@ -76,7 +76,7 @@ def _extract_style_anchor_via_gemini_vision(image_paths: "list[Path]", page_id: 
         from PIL import Image
 
         import config as app_config
-        from core.google_guardrail import guarded_generate_content, make_guarded_gemini_client
+        from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client
         api_key = getattr(app_config, "GEMINI_API_KEY", None)
         if not api_key:
             _LOG.warning(
@@ -288,7 +288,7 @@ class PageContext:
           2. ``{page_id}_voice_ref_10s.wav``
           3. First ``*_voice_ref*.wav`` / sole ``.wav`` in the folder
         """
-        from core.remote_gpu_manager import resolve_page_voice_reference  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import resolve_page_voice_reference  # noqa: PLC0415
 
         audio, _text = resolve_page_voice_reference(self.page_id, page_dir=self.page_dir)
         return audio
@@ -296,7 +296,7 @@ class PageContext:
     @property
     def voice_reference_text(self) -> str | None:
         """Exact transcript for the page voice-reference clip (F5 ``sample_text``)."""
-        from core.remote_gpu_manager import resolve_page_voice_reference  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import resolve_page_voice_reference  # noqa: PLC0415
 
         _audio, text = resolve_page_voice_reference(self.page_id, page_dir=self.page_dir)
         return text
@@ -304,7 +304,7 @@ class PageContext:
     @property
     def voice_reference_ready(self) -> bool:
         """True when both the reference wav and its matching transcript exist."""
-        from core.remote_gpu_manager import resolve_page_voice_reference  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import resolve_page_voice_reference  # noqa: PLC0415
 
         audio, text = resolve_page_voice_reference(self.page_id, page_dir=self.page_dir)
         return audio is not None and bool((text or "").strip())
@@ -312,7 +312,7 @@ class PageContext:
     @property
     def remote_gpu_lora_enabled(self) -> bool:
         """True when this channel has a Flux LoRA configured for remote GPU."""
-        from core.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
 
         return bool(
             resolve_page_lora_config(self.page_id, page_dir=self.page_dir).get("enabled")
@@ -320,13 +320,13 @@ class PageContext:
 
     @property
     def remote_gpu_lora_name(self) -> str | None:
-        from core.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
 
         return resolve_page_lora_config(self.page_id, page_dir=self.page_dir).get("lora_name")
 
     @property
     def remote_gpu_lora_trigger(self) -> str:
-        from core.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
 
         return str(
             resolve_page_lora_config(self.page_id, page_dir=self.page_dir).get("trigger") or ""
@@ -334,7 +334,7 @@ class PageContext:
 
     @property
     def remote_gpu_lora_strength(self) -> float:
-        from core.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
+        from production.providers.image.remote_gpu_manager import resolve_page_lora_config  # noqa: PLC0415
 
         try:
             return float(
@@ -939,7 +939,7 @@ class PageContext:
     @property
     def image_source_policy(self) -> str:
         """``free_first``, ``ai_only``, or ``free_only``. See the free-image ADR."""
-        from agents.media.free_images.policy import resolve_policy
+        from production.providers.image.free.policy import resolve_policy
 
         return resolve_policy(self.page_id, self.page_cfg)
 
@@ -1709,12 +1709,7 @@ def load_page_context(
         legacy = _LEGACY_PAGES_CONFIG_ROOT / page_id
         if legacy.is_dir():
             page_dir = legacy
-    from utils.pipeline_paths import (
-        channel_store_dir,
-        page_assets_dir,
-        page_library_dir,
-        page_outputs_dir,
-    )
+    from shared.paths import channel_store_dir, page_assets_dir, page_library_dir, page_outputs_dir
 
     outputs_dir = page_outputs_dir(page_id, create=True)
 
@@ -1724,7 +1719,7 @@ def load_page_context(
     (outputs_dir / "postplanner").mkdir(parents=True, exist_ok=True)
     store_dir = channel_store_dir(page_id, create=True)
     try:
-        from modules.durable_store import restore_channel_state
+        from shared.store import restore_channel_state
 
         restore_channel_state(page_id)
     except Exception as exc:  # noqa: BLE001 — G: offline must not abort a run

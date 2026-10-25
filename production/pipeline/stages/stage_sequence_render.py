@@ -98,7 +98,7 @@ from production.pipeline.voice import _commit_reel_angle, _filter_audio_tag_timi
 def _stage_sequence_render_01(state: VariantState) -> None:
     """Variant worker stage. Original lines 2062-2302."""
     try:
-        from agents.media.visual_roles import pick_mei_meditation_environment as _mei_pick_env_prod, select_style_references_for_mei_frame as _mei_select_srefs
+        from production.media.visual_roles import pick_mei_meditation_environment as _mei_pick_env_prod, select_style_references_for_mei_frame as _mei_select_srefs
         state._mei_pick_env_prod = _mei_pick_env_prod
         state._mei_select_srefs = _mei_select_srefs
         state._hook_env = state._mei_pick_env_prod(episode_seed=state.resolved_subject or '', spoken_beat=state._early_seq_script or (state.caption if state.caption and state.caption != '(skipped)' else ''))
@@ -109,7 +109,7 @@ def _stage_sequence_render_01(state: VariantState) -> None:
             return [] if int(act_index) == 0 else list(refs or [])
     from production.formats.mei.mei_visual import MASTER_STYLE_ANCHOR_DEFAULT as _MM_STYLE_DEFAULT_PROD
     state._MM_STYLE_DEFAULT_PROD = _MM_STYLE_DEFAULT_PROD
-    from agents.media.style_reader import default_master_mei_ref_folder as _mm_ref_folder_prod
+    from production.media.style_reader import default_master_mei_ref_folder as _mm_ref_folder_prod
     state._mm_ref_folder_prod = _mm_ref_folder_prod
     state._mm_fixed_anchor = (state.page_ctx.master_style_anchor or state._MM_STYLE_DEFAULT_PROD).strip() or state._MM_STYLE_DEFAULT_PROD
     state._mm_prompts, state._mm_slots, state._mm_roles, state._mm_negatives = _build_master_mei_script_act_prompts(subject=state.resolved_subject, script=state._early_seq_script or (state.caption if state.caption and state.caption != '(skipped)' else state.resolved_subject), n_acts=state._seq_n, base_style=state._ak_base_style, visual_dna=state.page_ctx.master_mei_visual_dna or _MEI_DNA_FALLBACK, hook_env=state._hook_env, master_style_anchor=state._mm_fixed_anchor, reference_folder=state._mm_ref_folder_prod(), use_vision_style=False)
@@ -152,7 +152,7 @@ def _stage_sequence_render_01(state: VariantState) -> None:
         state._mm_act_jobs[state._act_i] = functools.partial(state.adapter.generate, state._act_prompt, output_stem=f'{state.stem}_act{state._act_i + 1:02d}', output_directory=state._reel_img_dir, reference_image_path=state._mm_avatar_ref if state._use_avatar else None, avatar_mode='ON' if state._use_avatar else 'OFF', reference_image_weight=state._mm_avatar_w if state._use_avatar else None, style_reference_paths=(state._mei_select_srefs(state._mm_style_refs, act_index=state._act_i, episode_seed=state.resolved_subject or '', n_acts=state._seq_n) if state._use_avatar and state._act_i not in (2, state._seq_n - 2) else None) or None, style_reference_weight=state._mm_style_weight if state._use_avatar and state._act_i not in (2, state._seq_n - 2) else None, visual_role=state._act_role, negative_prompt=state._act_neg or None)
     state._mm_gpu_baseline = 0.0
     try:
-        from core.remote_gpu_manager import get_manager as _get_rgpu_mm, is_remote_gpu_enabled as _rgpu_on_mm
+        from production.providers.image.remote_gpu_manager import get_manager as _get_rgpu_mm, is_remote_gpu_enabled as _rgpu_on_mm
         state._get_rgpu_mm = _get_rgpu_mm
         state._rgpu_on_mm = _rgpu_on_mm
         if state._rgpu_on_mm('image'):
@@ -201,12 +201,12 @@ def _stage_sequence_render_02(state: VariantState) -> None:
     state._act_descriptors = _build_reel_act_descriptors(state.resolved_subject, state._seq_n, page_id=state.page_ctx.page_id or '')
     state._topic_entity_ctx = _extract_topic_visual_entities(state.resolved_subject)
     state._topic_entity_prefix = f'TOPIC ANCHOR: {state._topic_entity_ctx}. ' if state._topic_entity_ctx else ''
-    from agents.media.prompt_alignment import build_aligned_visual_block, plan_episode_visual_sequence
+    from production.providers.image.prompt_alignment import build_aligned_visual_block, plan_episode_visual_sequence
     state.build_aligned_visual_block = build_aligned_visual_block
     state.plan_episode_visual_sequence = plan_episode_visual_sequence
     state._ak_visual_plan = state.plan_episode_visual_sequence(state._seq_n, topic=state.resolved_subject, seed=str(state.stem or state.resolved_subject or ''), channel_name=state.page_ctx.page_id or '' if state.page_ctx else '')
     try:
-        from agents.rag.channel_rag import get_image_guidance
+        from production.writers.rag.channel_rag import get_image_guidance
         state.get_image_guidance = get_image_guidance
         state._ak_rag_image_block = state.get_image_guidance(state.page_ctx.page_id or '' if state.page_ctx else '')
     except Exception:
@@ -281,7 +281,7 @@ def _stage_sequence_render_03(state: VariantState) -> None:
         state._act_banned = list((state._scene_row or {}).get('banned_subjects') or [])
         state._act_anchors = str((state._scene_row or {}).get('domain_anchors') or '')
         if state._scene_row and state._scene_row.get('image_generation_prompt'):
-            from agents.media.scene_prompt_generator import sanitize_channel_style as _sanitize_style
+            from production.providers.image.scene_prompt_generator import sanitize_channel_style as _sanitize_style
             state._sanitize_style = _sanitize_style
             state._safe_style = state._sanitize_style(state._ak_base_style, state._snippet, state._act_banned)
             state._act_prompt = f'{state._scene_row['image_generation_prompt']} {state._safe_style}. {state._parallax_directive}{state._lighting_tail}'
@@ -351,7 +351,7 @@ def _stage_sequence_render_03(state: VariantState) -> None:
         state._sr_act_meta[state._act_i]['generate_fn'] = state._gen
         state._sr_act_meta[state._act_i]['artefact_kwargs'] = dict(state._art_kwargs)
         state._sr_act_meta[state._act_i]['is_cta'] = bool(state._cta_beat_index is not None and state._act_i == state._cta_beat_index)
-        from modules.reel_visual_qa import generate_and_gate as _qwen_gate
+        from production.qa.reel_visual_qa import generate_and_gate as _qwen_gate
         state._qwen_gate = _qwen_gate
         state._doc_role = 'documentary' if (state.page_ctx.page_id or '').lower() != 'master_mei' else None
         if state._asset_assignments and state._act_i < len(state._asset_assignments):
@@ -368,7 +368,7 @@ def _stage_sequence_render_03(state: VariantState) -> None:
             state._sr_act_jobs[state._act_i] = functools.partial(state._qwen_gate, state._gen, prompt=state._act_prompt, chunk_text=state._snippet, output_stem=state._act_stem, output_directory=state._reel_img_dir, channel=state.page_ctx.page_id or 'ancient_knowledge', search_dirs=[state._reel_img_dir, *([state.subject_assets] if state.subject_assets else [])], generate_kwargs={'avatar_mode': 'OFF', 'visual_role': state._doc_role, 'negative_prompt': state._act_neg, 'free_image_sentence': state._snippet, 'free_image_entity': str(state.resolved_subject_for_beat or state.resolved_subject or ''), **state._art_kwargs}, banned_subjects=list(state._act_banned or []) or None, domain_anchors=str(state._act_anchors or ''), prefer_stem=state.stem, episode_subject=str(state.resolved_subject_for_beat or state.resolved_subject or ''))
     state._gpu_baseline = 0.0
     try:
-        from core.remote_gpu_manager import get_manager as _get_rgpu, is_remote_gpu_enabled as _rgpu_on
+        from production.providers.image.remote_gpu_manager import get_manager as _get_rgpu, is_remote_gpu_enabled as _rgpu_on
         state._get_rgpu = _get_rgpu
         state._rgpu_on = _rgpu_on
         if state._rgpu_on('image'):
@@ -422,9 +422,9 @@ def _stage_sequence_render_03(state: VariantState) -> None:
 
 def _stage_sequence_render_04(state: VariantState) -> None:
     """Variant worker stage. Original lines 2814-3133."""
-    from modules.reel_qa.models import StillGateResult
+    from production.qa.models import StillGateResult
     state.StillGateResult = StillGateResult
-    from modules.reel_visual_qa import generate_and_gate as _qwen_gate
+    from production.qa.reel_visual_qa import generate_and_gate as _qwen_gate
     state._qwen_gate = _qwen_gate
 
     def _accept_gate(_gate: state.StillGateResult, _idx: int, _text: str) -> None:
@@ -541,12 +541,12 @@ def _stage_sequence_render_04(state: VariantState) -> None:
         state._snippet = state._meta['snippet']
         state._cached_still = state._meta.get('cached_path')
         if state._cached_still is not None:
-            from modules.reel_qa.relevance import evaluate_chunk_relevance as _score_still
+            from production.qa.relevance import evaluate_chunk_relevance as _score_still
             state._score_still = _score_still
-            from modules.reel_qa.relevance import evaluate_with_technical_retry as _score_retry
+            from production.qa.relevance import evaluate_with_technical_retry as _score_retry
             state._score_retry = _score_retry
             state._cached_verdict = state._score_retry(state._score_still, state._cached_still, state._snippet, str(state._meta.get('prompt') or ''), banned_subjects=list(state._meta.get('banned_subjects') or []) or None)
-            from modules.reel_qa.relevance import verdict_passed as _verdict_passed
+            from production.qa.relevance import verdict_passed as _verdict_passed
             state._verdict_passed = _verdict_passed
             if state._verdict_passed(state._cached_verdict) and state._cached_verdict.get('qa_status') != 'unavailable' and Path(state._cached_still).is_file():
                 _accept_gate(state.StillGateResult(path=Path(state._cached_still), extra_generations=0, publishable=True, attempts=[state._cached_verdict], verdict=state._cached_verdict), state._act_i, state._snippet)

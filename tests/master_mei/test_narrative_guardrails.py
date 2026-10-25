@@ -5,25 +5,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
-    from agents.media.mei_narrative import (
-        MASTER_SCRIPTWRITER_DIRECTIVE,
-        apply_mei_word_budget_from_duration,
-        build_three_act_script_instructions,
-        enforce_humble_mei_voice,
-        episode_theme_meta,
-        master_scriptwriter_directive,
-        mei_voice_prompt_block,
-        narration_word_budget,
-        resolve_mei_duration_profile,
-        sanitize_mei_narration_body,
-    )
-    from agents.media.visual_roles import PENULTIMATE_LIBERATION_PROMPT
+    from production.writers.mei_narrative import MASTER_SCRIPTWRITER_DIRECTIVE, apply_mei_word_budget_from_duration, build_three_act_script_instructions, enforce_humble_mei_voice, episode_theme_meta, master_scriptwriter_directive, mei_voice_prompt_block, narration_word_budget, resolve_mei_duration_profile, sanitize_mei_narration_body
+    from production.media.visual_roles import PENULTIMATE_LIBERATION_PROMPT
     from channels_config.master_mei import page_config as mei_cfg
 
     fails: list[str] = []
@@ -104,7 +93,7 @@ def main() -> int:
         fails.append("penultimate_frame.txt missing")
 
     # CTA color helper + no black-bar dependency
-    from core.reel_sequence_engine import _rgb_tuple_to_moviepy_color
+    from production.media.reel_sequence_engine import _rgb_tuple_to_moviepy_color
 
     if _rgb_tuple_to_moviepy_color((255, 204, 0)) != "#ffcc00":
         fails.append("CTA color helper mismatch for subtitle fill")

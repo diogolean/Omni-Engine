@@ -7,7 +7,7 @@ import unittest
 from datetime import datetime
 from types import SimpleNamespace
 
-from core import google_guardrail as gg
+from production.cost import google_guardrail as gg
 from tools.audit_google_costs import parse_log_line, _estimate_cost
 
 

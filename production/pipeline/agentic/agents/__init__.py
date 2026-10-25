@@ -15,7 +15,7 @@ __all__ = [
 
 def __getattr__(name: str):
     if name == "CopywriterAgent":
-        from agents.writer.copywriter import CopywriterAgent
+        from production.writers.copywriter import CopywriterAgent
 
         return CopywriterAgent
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -22,9 +22,9 @@ from products.aiwake.contracts import (  # noqa: E402
     Utterance,
 )
 from products.aiwake.media.audio import AudioAsset  # noqa: E402
-from core.animator.audio_analyzer import load_mono_waveform  # noqa: E402
-from core.animator.rhubarb import analyze_visemes, find_rhubarb  # noqa: E402
-from utils.pipeline_paths import assets_root, outputs_root  # noqa: E402
+from animation.parametric.audio_analyzer import load_mono_waveform  # noqa: E402
+from animation.parametric.rhubarb import analyze_visemes, find_rhubarb  # noqa: E402
+from shared.paths import assets_root, outputs_root  # noqa: E402
 
 CHARACTER_ID = "deepseek_cyborg_v3"
 OUTPUT_PATH = (

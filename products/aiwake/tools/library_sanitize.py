@@ -5,10 +5,11 @@ Public YouTube descriptions are rebuilt as:
 
     Hook + unscripted dialogue + dialectics CTA + clean hashtags
 
-    python -m channels_config.aiwake.tools.library_sanitize
-    python -m channels_config.aiwake.tools.library_sanitize --dry-run
+    python -m products.aiwake.tools.library_sanitize
+    python -m products.aiwake.tools.library_sanitize --dry-run
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import argparse
 import logging
@@ -24,7 +25,7 @@ if __package__ in (None, ""):  # pragma: no cover — loose-script invocation
 
 import json
 
-from production.library.asset_library import library_path as asset_library_path
+asset_library_path = Symbol('production.library.asset_library', 'library_path')
 from shared.contracts import (
     X_CAPTION_MAX_CHARS,
     clip_text,
@@ -34,7 +35,7 @@ from shared.contracts import (
     strip_shorts_title,
 )
 from shared.store import restore_channel_state
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
     from products.aiwake.settings import YOUTUBE_DESCRIPTION_CTA
@@ -269,7 +270,7 @@ def resolve_root_production_mp4(
     if candidate.is_absolute():
         checks.append(candidate)
     else:
-        from utils.pipeline_paths import outputs_root
+        from shared.paths import outputs_root
 
         checks.append(outputs_root() / candidate)
         for root in bases:
@@ -339,7 +340,7 @@ def prune_content_library(
 
 def delete_asset_library() -> list[Path]:
     """content_library.json is the only canonical registry — drop asset_library."""
-    from utils.pipeline_paths import channel_store_dir, page_outputs_dir
+    from shared.paths import channel_store_dir, page_outputs_dir
 
     candidates = [
         asset_library_path(CHANNEL_ID),

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """One-time ingest of approved Aiwake sessions into local Supermemory.
 
-    python -m channels_config.aiwake.tools.seed_supermemory
-    python -m channels_config.aiwake.tools.seed_supermemory --dry-run
+    python -m products.aiwake.tools.seed_supermemory
+    python -m products.aiwake.tools.seed_supermemory --dry-run
 """
 from __future__ import annotations
 

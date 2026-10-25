@@ -41,7 +41,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from agents.posting.pinterest_engine import config  # noqa: E402
+from production.formats.pins import config  # noqa: E402
 
 # Unicode-safe logging on Windows consoles
 _safe_stream = io.TextIOWrapper(
@@ -123,7 +123,7 @@ def _add_channel_args(parser: argparse.ArgumentParser) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_sync(args: argparse.Namespace) -> None:
-    from agents.posting.pinterest_engine.inventory import MasterInventory  # noqa: PLC0415
+    from distribution.scheduling.inventory import MasterInventory  # noqa: PLC0415
 
     outputs_dir = _apply_runtime_overrides(args)
 
@@ -177,8 +177,8 @@ def _runner_allows_this_process(channel_id: str | None) -> bool:
 
 
 def cmd_schedule(args: argparse.Namespace) -> None:
-    from agents.posting.pinterest_engine.publisher import PinterestTokenExpiredError  # noqa: PLC0415
-    from agents.posting.pinterest_engine.scheduler import PinterestScheduler  # noqa: PLC0415
+    from distribution.publishers.api.pinterest import PinterestTokenExpiredError  # noqa: PLC0415
+    from distribution.scheduling.scheduler import PinterestScheduler  # noqa: PLC0415
 
     outputs_dir = _apply_runtime_overrides(args)
     if not _runner_allows_this_process(config.CHANNEL_ID):
@@ -230,8 +230,8 @@ def cmd_schedule(args: argparse.Namespace) -> None:
 
 
 def cmd_transform(args: argparse.Namespace) -> None:
-    from agents.posting.pinterest_engine.image_transformer import PinTransformer  # noqa: PLC0415
-    from agents.posting.pinterest_engine.inventory import MasterInventory  # noqa: PLC0415
+    from production.formats.pins.image_transformer import PinTransformer  # noqa: PLC0415
+    from distribution.scheduling.inventory import MasterInventory  # noqa: PLC0415
 
     outputs_dir = _apply_runtime_overrides(args)
     inv = MasterInventory(outputs_dir=outputs_dir)
@@ -277,7 +277,7 @@ def cmd_transform(args: argparse.Namespace) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    from agents.posting.pinterest_engine.scheduler import PinterestScheduler  # noqa: PLC0415
+    from distribution.scheduling.scheduler import PinterestScheduler  # noqa: PLC0415
 
     outputs_dir = _apply_runtime_overrides(args)
     config.print_dotenv_bootstrap()
@@ -304,7 +304,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
 
 def cmd_check_readiness(args: argparse.Namespace) -> None:
-    from agents.posting.pinterest_engine.inventory import MasterInventory  # noqa: PLC0415
+    from distribution.scheduling.inventory import MasterInventory  # noqa: PLC0415
 
     outputs_dir = _apply_runtime_overrides(args)
     inv = MasterInventory(outputs_dir=outputs_dir)
@@ -313,7 +313,7 @@ def cmd_check_readiness(args: argparse.Namespace) -> None:
 
 
 def cmd_validate_token(args: argparse.Namespace) -> None:
-    from agents.posting.pinterest_engine.publisher import PinterestPublisher  # noqa: PLC0415
+    from distribution.publishers.api.pinterest import PinterestPublisher  # noqa: PLC0415
 
     _apply_runtime_overrides(args)
     print("\n[TOKEN CHECK] Validating Pinterest access token...")

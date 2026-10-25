@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from utils.pipeline_paths import assets_root, outputs_root
+from shared.paths import assets_root, outputs_root
 
 from .visemes import MOUTH_DOCK_CHIN_RATIO, PALETTES
 

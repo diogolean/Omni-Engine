@@ -46,7 +46,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import config  # noqa: E402  -- loads .env
-from utils.pipeline_paths import coerce_outputs_path, drive_root, path_from_env  # noqa: E402
+from shared.paths import coerce_outputs_path, drive_root, path_from_env  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -202,7 +202,7 @@ def _generate_metadata_cheap(
         sales_url=SALES_URL,
     )
     try:
-        from core.cheap_llm import available, complete
+        from production.providers.llm.cheap_llm import available, complete
 
         if not available("text"):
             return {}

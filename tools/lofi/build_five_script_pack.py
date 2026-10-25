@@ -12,20 +12,14 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-from agents.writer.script_agent import (  # noqa: E402
-    _CAUSAL_LINK_RE,
-    assess_story_quality,
-)
-from core.economic_reel_lofi import config as lofi_cfg  # noqa: E402
-from core.economic_reel_lofi.visual_identity import (  # noqa: E402
-    act_for_index,
-    apply_v2_prompts_to_lines_dev,
-)
-from core.economic_reel_lofi.validator_agent import validate_script  # noqa: E402
+from production.writers.script_agent import _CAUSAL_LINK_RE, assess_story_quality
+from production.formats.lofi import config as lofi_cfg  # noqa: E402
+from production.formats.lofi.visual_identity import act_for_index, apply_v2_prompts_to_lines_dev
+from production.formats.lofi.validator_agent import validate_script  # noqa: E402
 
 OUT = page_outputs_dir("wonder_feed") / "clips" / "script_pack_20260825"
 DRAFT1 = (

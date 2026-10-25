@@ -1033,7 +1033,7 @@ def place_assignment(
     beat_index: int = 0,
 ) -> Any:
     """One still. A failed Flux sky falls back to a relevant crop."""
-    from modules.reel_qa.models import StillGateResult
+    from production.qa.models import StillGateResult
 
     target = Path(dest)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1214,7 +1214,7 @@ def _judge_flux(
 ) -> dict[str, Any]:
     if judge_fn is not None:
         return judge_fn(path, sentence) or {}
-    from modules.reel_qa.relevance import evaluate_chunk_relevance
+    from production.qa.relevance import evaluate_chunk_relevance
 
     verdict = evaluate_chunk_relevance(
         path,
@@ -1243,7 +1243,7 @@ def build_topic_pool(topic: str, channel: str, dest: Path) -> list[PoolAsset]:
         download_candidate_bytes,
     )
     from production.formats.economic_reel.artefact.preview import resolve_entity
-    from modules.reel_qa.relevance import evaluate_chunk_relevance
+    from production.qa.relevance import evaluate_chunk_relevance
     from production.formats.economic_reel.shot_planner.entities import entity_for_line, load_entities
 
     entities = load_entities(channel)

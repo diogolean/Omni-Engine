@@ -221,7 +221,7 @@ def _record_channel(record: dict) -> str:
         if value is not None and str(value).strip():
             return str(value).strip()
     try:
-        from agents.posting.pinterest_engine import config as cfg
+        from production.formats.pins import config as cfg
 
         return str(cfg.CHANNEL_ID or "")
     except Exception:  # noqa: BLE001

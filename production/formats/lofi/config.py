@@ -686,11 +686,7 @@ def lofi_image_cost_per_call_usd(
     (Together serverless Dev is unavailable). Schnell uses DeepInfra's
     $0.0005 × megapixel × steps formula.
     """
-    from agents.media.providers.together_image import (
-        estimate_deepinfra_dev_cost_usd,
-        estimate_deepinfra_schnell_cost_usd,
-        estimate_together_image_cost,
-    )
+    from production.providers.image.together_image import estimate_deepinfra_dev_cost_usd, estimate_deepinfra_schnell_cost_usd, estimate_together_image_cost
 
     width = int(width if width is not None else LOFI_IMAGE_WIDTH)
     height = int(height if height is not None else LOFI_IMAGE_HEIGHT)

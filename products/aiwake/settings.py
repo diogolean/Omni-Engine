@@ -1033,7 +1033,7 @@ def resolve_outputs_dir(settings: AiwakeSettings | None = None) -> Path:
     when the factory tree cannot be created (drive offline) — never as the
     default, and never the repo ``outputs/`` directory.
     """
-    from utils.pipeline_paths import page_outputs_dir
+    from shared.paths import page_outputs_dir
 
     cfg = settings or cached_settings()
     global_dir = page_outputs_dir(cfg.paths.channel_slug)
@@ -1058,7 +1058,7 @@ def resolve_store_dir() -> Path:
     Restores missing JSONs from the G: outputs tree on first access, then
     returns the C: store. Media still renders to ``{OUTPUT_PATH}/aiwake/``.
     """
-    from utils.pipeline_paths import channel_store_dir
+    from shared.paths import channel_store_dir
 
     store = channel_store_dir("aiwake", create=True)
     try:
@@ -1072,7 +1072,7 @@ def resolve_store_dir() -> Path:
 
 def resolve_scratch_dir() -> Path:
     """Scratch space for TTS chunks and MoviePy temp audio under ``OUTPUT_PATH/tmp``."""
-    from utils.pipeline_paths import pipeline_tmp_dir
+    from shared.paths import pipeline_tmp_dir
 
     return Path(pipeline_tmp_dir("aiwake"))
 

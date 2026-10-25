@@ -20,6 +20,7 @@ Public API
     results = engine.run(quantity=3, topic="My topic", clip_duration=30)
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import hashlib
 import json
@@ -33,7 +34,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from utils.pipeline_paths import moviepy_temp_audio_dir
+from shared.paths import moviepy_temp_audio_dir
 
 _LOG = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ class _SegmentTracker:
 def _call_gemini(prompt: str, api_key: str, model: str = "models/gemini-2.5-flash") -> str:
     """Simple single-turn Gemini text call; returns stripped response text."""
     try:
-        from agents.media.providers.gemini_utils import generate_text_with_client_chain
+        from production.providers.llm.gemini_utils import generate_text_with_client_chain
         resp = generate_text_with_client_chain(
             api_key=api_key,
             preferred_model=model,
@@ -980,8 +981,8 @@ class ReferenceReelEngine:
             }
 
             # ── PostPlanner xlsx (only when reel QA verdict is pass) ────
-            from modules.reel_qa.pipeline import seal_compiled_reel
-            from modules.reel_qa.publish import planner_row_allowed
+            from production.qa.pipeline import seal_compiled_reel
+            from production.qa.publish import planner_row_allowed
 
             _qa = seal_compiled_reel(
                 video_path=rendered,
@@ -1020,10 +1021,8 @@ class ReferenceReelEngine:
             else:
                 try:
                     import config as _cfg
-                    from agents.posting.post_planner import (
-                        append_planner_row,
-                        append_postplanner_xlsx_row,
-                    )
+                    append_planner_row = Symbol('distribution.publishers.export.post_planner', 'append_planner_row')
+                    append_postplanner_xlsx_row = Symbol('distribution.publishers.export.post_planner', 'append_postplanner_xlsx_row')
 
                     append_postplanner_xlsx_row(
                         Path(pp_dir),

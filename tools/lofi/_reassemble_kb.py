@@ -47,7 +47,7 @@ def main() -> int:
     if len(captions) < n:
         captions = (captions + [""] * n)[:n]
 
-    from core.economic_reel_lofi import config as lofi_cfg
+    from production.formats.lofi import config as lofi_cfg
 
     # Word-fade timings: spread caption words across the VO's ORIGINAL file
     # length so the assembler's remap maps them onto normalized audio without
@@ -58,7 +58,7 @@ def main() -> int:
         dur = 0.0
         if vp is not None and Path(vp).is_file():
             try:
-                from core.economic_reel_lofi.assembler import normalize_vo_pcm
+                from production.formats.lofi.assembler import normalize_vo_pcm
 
                 _a, _sr, vmeta = normalize_vo_pcm(vp)
                 dur = float(vmeta.get("file_duration_s") or 0.0)
@@ -67,11 +67,11 @@ def main() -> int:
         if dur <= 0.05 or not (cap or "").strip():
             word_timings_per_scene.append(None)
             continue
-        from agents.media.audio_engine import approximate_word_timings
+        from production.providers.tts.audio_engine import approximate_word_timings
 
         word_timings_per_scene.append(approximate_word_timings(cap, dur))
 
-    from core.economic_reel_lofi.assembler import assemble_lofi_reel
+    from production.formats.lofi.assembler import assemble_lofi_reel
 
     print(
         f"[reassemble-kb] images={n} captions={len(captions)} "

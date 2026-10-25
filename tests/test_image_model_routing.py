@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 import config as app_config
-from agents.media.providers.image_provider import _gemini_image_chain, _gemini_image_size
+from production.providers.image.image_provider import _gemini_image_chain, _gemini_image_size
 
 
 class ImageModelAliasTests(unittest.TestCase):

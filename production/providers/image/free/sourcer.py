@@ -322,6 +322,6 @@ def _min_short_side() -> int:
 def _cache_dir(channel: str, explicit: Path | None) -> Path:
     if explicit is not None:
         return Path(explicit)
-    from utils.pipeline_paths import temp_path
+    from shared.paths import temp_path
 
     return temp_path(channel or "shared", "free_images", "cache")

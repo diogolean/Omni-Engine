@@ -41,10 +41,7 @@ from production.pipeline.runtime import (
 
 def _together_cli_image_model(args: argparse.Namespace) -> tuple[str, str] | None:
     """Return (flag_label, together_model_id) for Together image CLI flags."""
-    from agents.media.providers.together_image import (
-        FLUX_2_DEV_MODEL,
-        JUGGERNAUT_LIGHTNING_FLUX_MODEL,
-    )
+    from production.providers.image.together_image import FLUX_2_DEV_MODEL, JUGGERNAUT_LIGHTNING_FLUX_MODEL
 
     if getattr(args, "together_flux2dev", False):
         return "together_flux2dev", FLUX_2_DEV_MODEL
@@ -599,7 +596,7 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Exits after resuming — does not generate new content."
         ),
     )
-    from agents.mcp.model_api_flows import list_preset_names as _list_flow_presets
+    from production.providers.llm.model_api_flows import list_preset_names as _list_flow_presets
 
     parser.add_argument(
         "--model-api-flow",

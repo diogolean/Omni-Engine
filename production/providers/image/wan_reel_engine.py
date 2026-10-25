@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from utils.pipeline_paths import moviepy_temp_audio_dir
+from shared.paths import moviepy_temp_audio_dir
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +253,7 @@ def run_wan_reel_test(
         video_length_s = scene_dur * n
 
     stamp = started.strftime("%Y%m%d_%H%M%S")
-    from utils.pipeline_paths import page_outputs_dir
+    from shared.paths import page_outputs_dir
 
     root = Path(out_dir or page_outputs_dir(page_id) / "wan_reel_tests" / f"run_{stamp}")
     root.mkdir(parents=True, exist_ok=True)

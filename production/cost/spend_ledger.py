@@ -251,7 +251,7 @@ def _register_exit_dump() -> None:
 
     def _dump() -> None:
         try:
-            from utils.pipeline_paths import pipeline_logs_dir
+            from shared.paths import pipeline_logs_dir
 
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             dest = write_ledger(pipeline_logs_dir() / f"spend_{stamp}.json")

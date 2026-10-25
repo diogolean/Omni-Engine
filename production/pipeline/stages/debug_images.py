@@ -120,8 +120,8 @@ def run_test_images_debug_mode(
     all YouTube / B2 / ImgBB uploads entirely.
     """
     from production.pipeline.channel_context import load_page_context
-    from agents.writer.caption_engine import CaptionEngine
-    from agents.media.providers.model_router import image_model as _route_image_dbg
+    from production.writers.caption_engine import CaptionEngine
+    from production.providers.llm.model_router import image_model as _route_image_dbg
 
     n = max(1, int(n))
     page_ctx = load_page_context(page_id, avatar_mode=avatar_mode, post_format=post_format)
@@ -196,7 +196,7 @@ def run_test_images_debug_mode(
         TEST_PREVIEW_MODULES_3 as _MM_TEST_MODULES_3,
         build_test_preview_prompts as _mm_build_test_previews,
     )
-    from agents.media.style_reader import default_master_mei_ref_folder as _mm_ref_folder
+    from production.media.style_reader import default_master_mei_ref_folder as _mm_ref_folder
 
     _mm_pillar_keys: tuple = ()
     if is_mm:
@@ -227,7 +227,7 @@ def run_test_images_debug_mode(
         )
     else:
         mei_slots = set()
-        from agents.media.prompt_alignment import build_aligned_visual_block
+        from production.providers.image.prompt_alignment import build_aligned_visual_block
 
         spoken_snippets = _segment_script_into_act_snippets(script, seq_n)
         act_descriptors = _build_reel_act_descriptors(
@@ -265,7 +265,7 @@ def run_test_images_debug_mode(
             )
         preview_source = all_prompts
 
-    from agents.media.providers.together_image import sanitize_prompt_for_flux
+    from production.providers.image.together_image import sanitize_prompt_for_flux
 
     # Sanitize BEFORE printing so the debug output matches EXACTLY what is
     # sent to Together/FLUX (TogetherImageAdapter.generate() re-applies the
@@ -306,7 +306,7 @@ def run_test_images_debug_mode(
     adapter = get_image_adapter(
         model_id=img_model_id, page_cost_tier=_page_cost, tier=_img_route.tier,
     )
-    from agents.media.free_images.integrate import wrap_image_generate
+    from production.providers.image.free.integrate import wrap_image_generate
 
     adapter.generate = wrap_image_generate(
         adapter.generate,

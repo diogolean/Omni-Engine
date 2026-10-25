@@ -57,7 +57,7 @@ class ReelCheckpoint:
 
     @classmethod
     def for_reel(cls, channel: str, reel_id: str) -> ReelCheckpoint:
-        from utils.pipeline_paths import channel_store_dir
+        from shared.paths import channel_store_dir
 
         root = channel_store_dir(channel or "ancient_knowledge", create=True)
         folder = root / "reel_checkpoints" / _slug(reel_id)

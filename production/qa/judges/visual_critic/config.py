@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from utils.pipeline_paths import outputs_root, page_outputs_dir, pipeline_logs_dir
+from shared.paths import outputs_root, page_outputs_dir, pipeline_logs_dir
 
 # ---------------------------------------------------------------------------
 # Paths

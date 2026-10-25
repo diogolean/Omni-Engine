@@ -20,6 +20,7 @@ Typical first run
     python channels_config/principles_of_wealth_finance_economics/wealth_main.py cleanup --from-episode 2 --longs-only
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import argparse
 import logging
@@ -38,15 +39,13 @@ except ImportError:
     pass
 
 from shared.logging import setup_cli_logging  # noqa: E402
-from core.principles_of_wealth.pipeline import (  # noqa: E402
-    run_cleanup,
-    run_metadata,
-    run_playlists,
-    run_process,
-    run_publish,
-    run_scan,
-    run_status,
-)
+run_cleanup = Symbol('production.formats.wealth.pipeline', 'run_cleanup')
+run_metadata = Symbol('production.formats.wealth.pipeline', 'run_metadata')
+run_playlists = Symbol('production.formats.wealth.pipeline', 'run_playlists')
+run_process = Symbol('production.formats.wealth.pipeline', 'run_process')
+run_publish = Symbol('production.formats.wealth.pipeline', 'run_publish')
+run_scan = Symbol('production.formats.wealth.pipeline', 'run_scan')
+run_status = Symbol('production.formats.wealth.pipeline', 'run_status')
 
 
 def _setup_logging(verbose: bool) -> None:

@@ -16,12 +16,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
-from core.economic_reel_lofi import lofi_collections as rag
-from agents.writer.script_agent import _thematic_from_lines
-from core.economic_reel_lofi.setting_archetypes import classify_setting_archetype
-from core.economic_reel_lofi.visual_identity import setting_object_pool
+from production.formats.lofi import lofi_collections as rag
+from production.writers.script_agent import _thematic_from_lines
+from production.formats.lofi.setting_archetypes import classify_setting_archetype
+from production.formats.lofi.visual_identity import setting_object_pool
 
 OUT = page_outputs_dir("wonder_feed") / "clips" / "lofi_script_hope_20260824_closing.json"
 

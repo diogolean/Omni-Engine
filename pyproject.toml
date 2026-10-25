@@ -101,19 +101,17 @@ ignore = ["E501", "E402", "E731", "E741"]
 [tool.ruff.lint.isort]
 known-first-party = ["engine", "agents", "utils", "core", "modules", "channels_config", "shared", "distribution", "accounts", "production", "animation", "products"]
 
-# ADR 0008 M1. These names are today's packages, standing in for the target
-# layers until the moves land. CI runs them in report-only mode; M14 makes
-# the same contracts blocking.
+# ADR 0008. Callers import the canonical modules. The compat shims stay
+# until 1-2 clean scheduler cycles, then they are deleted. CI fails the
+# job when a contract breaks. The ignore_imports below are only those
+# re-export shims, not the layer rules.
 #
-# shared is the real layer (ADR 0008 M2 and M3). Shims stay until M14.
-# shared stand-ins that remain: utils.pipeline_paths, utils.process_tools,
-# modules.durable_store, modules.distribution_contract, modules.memory
+# shared is the real layer (ADR 0008 M2 and M3).
 # animation: animation (parametric engine). core.animator re-exports it.
-#   Aiwake plate, voices, and harness live in products.aiwake.animator.
-# production: production (M8), plus shim trees that still import as
-#   engine, modules, agents.orchestrator, core
+# production: production, plus the shim trees engine, modules, agents.media,
+#   agents.writer, agents.rag, agents.orchestrator, agents.mcp, core
 # distribution: distribution, accounts, and the agents.posting shims
-# products.aiwake: the show. channels_config.aiwake re-exports it until M14.
+# products.aiwake: the show. channels_config.aiwake re-exports it.
 # channels: the other channels_config packages
 [tool.importlinter]
 root_packages = [
@@ -194,6 +192,16 @@ forbidden_modules = [
     "animation",
     "products",
 ]
+# Compat shims under agents.posting re-export production.formats.pins.
+# They stay until the scheduler cycles; callers already use the new path.
+ignore_imports = [
+    "agents.posting.pinterest_engine.articles -> production.formats.pins.articles",
+    "agents.posting.pinterest_engine.config -> production.formats.pins.config",
+    "agents.posting.pinterest_engine.flux_photo -> production.formats.pins.flux_photo",
+    "agents.posting.pinterest_engine.image_transformer -> production.formats.pins.image_transformer",
+    "agents.posting.pinterest_engine.photos -> production.formats.pins.photos",
+    "agents.posting.pinterest_engine.pin_copy -> production.formats.pins.pin_copy",
+]
 
 [[tool.importlinter.contracts]]
 name = "Factory code does not import Aiwake"
@@ -254,6 +262,10 @@ forbidden_modules = [
     "channels_config.aiwake",
     "products.aiwake",
     "production",
+]
+# Compat shim. Callers use production.formats.mei.mei_chrome.
+ignore_imports = [
+    "channels_config.shared.mei_chrome -> production.formats.mei.mei_chrome",
 ]
 
 [[tool.importlinter.contracts]]

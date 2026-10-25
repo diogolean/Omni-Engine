@@ -1,4 +1,4 @@
-"""YouTube adapter over ``agents.posting.youtube_publisher``.
+"""YouTube adapter over ``distribution.publishers.api.youtube_upload``.
 
 ``publish_envelope`` is a straight forwarder used by ``main.py`` so the
 existing ``--publish-youtube`` path keeps its arguments and return value.
@@ -33,7 +33,7 @@ def publish_envelope(
     youtube=None,
 ) -> tuple[str, str, Optional[datetime]]:
     """Forward to the existing uploader. Does not consult ``brandings.yaml``."""
-    from agents.posting.youtube_publisher import upload_short_from_envelope
+    from distribution.publishers.api.youtube_upload import upload_short_from_envelope
 
     return upload_short_from_envelope(
         row=row,
@@ -50,7 +50,7 @@ class YouTubeAccountPublisher(Publisher):
     platform = "youtube"
 
     def publish_once(self, content: Content, account: Account) -> PublishResult:
-        from agents.posting.youtube_publisher import upload_short_from_envelope
+        from distribution.publishers.api.youtube_upload import upload_short_from_envelope
 
         row = dict(content.payload)
         if content.media_path and not row.get("video_path"):

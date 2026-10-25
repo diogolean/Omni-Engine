@@ -16,10 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from core.economic_reel_lofi.caption_style_lofi import _clean_caption_text  # noqa: E402
-from core.economic_reel_lofi.caption_style_lofi import (  # noqa: E402
-    render_lofi_caption_layer_word_fade,
-)
+from production.formats.lofi.caption_style_lofi import _clean_caption_text  # noqa: E402
+from production.formats.lofi.caption_style_lofi import render_lofi_caption_layer_word_fade
 
 RAW_CLEAN = "It's just finally putting it down."
 

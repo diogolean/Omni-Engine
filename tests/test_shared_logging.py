@@ -4,7 +4,8 @@ from __future__ import annotations
 import logging
 
 from shared import logging as shared_logging
-from utils import gemini_usage, ocr_engine, ocr_paraphrase
+from production.cost import gemini_usage
+from production.formats.quotes import ocr_engine, ocr_paraphrase
 
 
 def test_setup_cli_logging(monkeypatch) -> None:

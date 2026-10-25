@@ -5,6 +5,7 @@ Master Mei narrative helpers — V4.0 Cinematic Story Arc.
 Episode theme lock, CTA dedupe, high-RPM SEO metadata, philosopher roster.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import hashlib
 import json
@@ -12,17 +13,15 @@ import re
 from pathlib import Path
 from typing import Any
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 try:
-    from channels_config.master_mei.system_config import (
-        is_didactic_philosophy_enabled,
-        is_explicit_philosopher_citations_enabled,
-        is_siren_enabled,
-        is_v3_active,
-        is_v4_active,
-        is_western_majority_masses_enabled,
-    )
+    is_didactic_philosophy_enabled = Symbol('channels_config.master_mei.system_config', 'is_didactic_philosophy_enabled')
+    is_explicit_philosopher_citations_enabled = Symbol('channels_config.master_mei.system_config', 'is_explicit_philosopher_citations_enabled')
+    is_siren_enabled = Symbol('channels_config.master_mei.system_config', 'is_siren_enabled')
+    is_v3_active = Symbol('channels_config.master_mei.system_config', 'is_v3_active')
+    is_v4_active = Symbol('channels_config.master_mei.system_config', 'is_v4_active')
+    is_western_majority_masses_enabled = Symbol('channels_config.master_mei.system_config', 'is_western_majority_masses_enabled')
 except Exception:  # noqa: BLE001 — allow import outside package context
     def is_v3_active() -> bool:  # type: ignore[misc]
         return True

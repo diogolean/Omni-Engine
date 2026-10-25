@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils.pipeline_paths import page_outputs_dir
+from shared.paths import page_outputs_dir
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
@@ -30,8 +30,8 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
 
-from agents.writer.script_brain import BrainResult, compose  # noqa: E402
-from agents.writer.writer_brief import WriterBrief  # noqa: E402
+from production.writers.script_brain import BrainResult, compose  # noqa: E402
+from production.writers.writer_brief import WriterBrief  # noqa: E402
 
 OUT_DIR = page_outputs_dir("wonder_feed") / "clips" / "freeform_drafts"
 
@@ -132,7 +132,7 @@ def main() -> int:
     ap.add_argument("--judge", default=None, help="claude | gemini | deepseek")
     args = ap.parse_args()
 
-    from core.economic_reel_lofi import config as lofi_cfg
+    from production.formats.lofi import config as lofi_cfg
 
     duration_s = float(args.duration if args.duration is not None else lofi_cfg.DEFAULT_DURATION_S)
     beat_s = float(lofi_cfg.beat_duration_s())
@@ -215,7 +215,7 @@ def main() -> int:
     print(f"[LOFI drafts] {json_path}")
     print(f"[LOFI drafts] {md_path}")
 
-    from agents.writer.script_brain import draft_to_script
+    from production.writers.script_brain import draft_to_script
 
     for r in results:
         if not r.ok or r.draft is None:

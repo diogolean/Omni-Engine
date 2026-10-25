@@ -120,7 +120,7 @@ def _cmd_download(args: argparse.Namespace) -> int:
 
 
 def _configure_logging() -> None:
-    from utils.pipeline_paths import pipeline_logs_dir
+    from shared.paths import pipeline_logs_dir
 
     logger = logging.getLogger("models_avatar")
     if logger.handlers:
