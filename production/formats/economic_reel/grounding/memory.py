@@ -47,7 +47,9 @@ def ledger_path(channel: str, root: Path | None = None) -> Path:
         return path
     from shared.paths import review_path
 
-    return review_path(channel or "ancient_knowledge", "visual_memory.jsonl")
+    from shared.channel_flags import sole_page
+
+    return review_path(channel or sole_page("VISUAL_GROUNDING"), "visual_memory.jsonl")
 
 
 def remember(

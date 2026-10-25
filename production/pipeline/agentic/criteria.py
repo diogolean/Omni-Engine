@@ -7,9 +7,11 @@ Injected into ``VisualQAAgent`` as the judgement rubric and into
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 MAX_RETRIES: int = 1  # one fallback → r01 + r02 only (never r03)
 QUALITY_THRESHOLD: float = 5.5
-CHANNEL_ID: str = "ancient_knowledge"
+CHANNEL_ID: str = sole_page("DOCUMENTARY_PIPELINE")
 
 # Hard cap: only truly corrupt / toy-CGI garbage is forced below this.
 CGI_HARD_CAP: float = 4.0

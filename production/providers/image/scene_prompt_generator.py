@@ -8,6 +8,8 @@ spoken in that window — not the channel's generic tropes.
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import json
 import logging
 import math
@@ -23,7 +25,7 @@ _DEDUPE_THRESHOLD = 0.75
 # Channel-style extras only (not historical landmark bans). Landmark bans
 # come from ``_DOMAIN_PROFILES`` so they stay topic-specific.
 _GENERIC_TROPES: dict[str, tuple[str, ...]] = {
-    "master_mei": (
+    sole_page("MEI_PIPELINE"): (
         "neon billboard", "cybernetic visor", "matrix pod",
     ),
 }

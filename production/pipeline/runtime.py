@@ -31,7 +31,9 @@ from shared.paths import outputs_root, page_outputs_dir, pipeline_logs_dir
 
 from production.cost.google_guardrail import bind_run_channel
 
-_PRELOADED_PAGE = os.environ.get("ACTIVE_PAGE", "anna_protocol")
+from shared.channel_flags import default_page as _default_page
+
+_PRELOADED_PAGE = os.environ.get("ACTIVE_PAGE", _default_page())
 if (app_config.ACTIVE_PAGE or "").lower() != (_PRELOADED_PAGE or "").lower():
     app_config.bind_active_page(_PRELOADED_PAGE)
     print(

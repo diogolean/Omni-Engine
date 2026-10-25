@@ -589,8 +589,10 @@ def article_link_required(account_id: str = "") -> bool:
     """Ancient Knowledge pins must link to an article. Never a sales URL."""
     from production.formats.pins import config as cfg  # noqa: PLC0415
 
+    from shared.channel_flags import flag
+
     channel = (account_id or cfg.CHANNEL_ID or "").strip()
-    return channel == "ancient_knowledge"
+    return flag(channel, "ARTICLE_LINK_REQUIRED")
 
 
 def resolve_pin_link(record: dict | None) -> str:

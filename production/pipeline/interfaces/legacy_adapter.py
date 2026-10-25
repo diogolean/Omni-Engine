@@ -19,8 +19,10 @@ class LegacyChannelAdapter(BaseChannelConfig):
     """Thin wrapper around the current shared DNA loaders."""
 
     def __init__(self, channel_id: str | None = None) -> None:
+        from shared.channel_flags import default_page
+
         self._channel_id = (
-            (channel_id or os.environ.get("ACTIVE_PAGE") or "anna_protocol")
+            (channel_id or os.environ.get("ACTIVE_PAGE") or default_page())
             .strip()
             .lower()
         )

@@ -5,16 +5,16 @@ Source-file matching (10 Shorts per episode) lives in ``scanner.py``.
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-CHANNEL_ID = "principles_of_wealth_finance_economics"
+CHANNEL_ID = sole_page("WEALTH_CATALOG")
 _ENGINE_ROOT = Path(__file__).resolve().parents[3]
-_PAGE_CFG_DIR = (
-    _ENGINE_ROOT / "channels_config" / "principles_of_wealth_finance_economics"
-)
+_PAGE_CFG_DIR = _ENGINE_ROOT / "channels_config" / CHANNEL_ID
 
 _YT_TITLE_MAX = 100
 
@@ -119,7 +119,7 @@ def _load_page_config() -> Any:
 
     path = _PAGE_CFG_DIR / "page_config.py"
     spec = importlib.util.spec_from_file_location(
-        "channels_config.principles_of_wealth_finance_economics.page_config",
+        f"channels_config.{CHANNEL_ID}.page_config",
         path,
     )
     if spec is None or spec.loader is None:

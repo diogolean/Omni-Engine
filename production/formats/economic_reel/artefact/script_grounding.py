@@ -2,6 +2,8 @@
 """The hook has to name this episode, and the land has to match the place."""
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page, flag
+
 import re
 
 _FOLD = str.maketrans({
@@ -205,7 +207,9 @@ def grounding_problem(script: str, topic: str, *, channel: str = "") -> str:
     """Why this narration cannot be filmed, or "" when it can."""
     if not hook_names_topic(script, topic):
         return "hook does not name the topic"
-    if (channel or "").strip().lower() in {"", "ancient_knowledge"}:
+    slug = (channel or "").strip().lower()
+    documentary = (not slug) or flag(slug, "DOCUMENTARY_PIPELINE")
+    if documentary:
         camera = camera_direction_problem(script)
         if camera:
             return camera
@@ -213,11 +217,11 @@ def grounding_problem(script: str, topic: str, *, channel: str = "") -> str:
         if tone:
             return tone
     geography = ""
-    if (channel or "").strip().lower() in {"", "ancient_knowledge"}:
+    if documentary:
         try:
             from production.formats.economic_reel.shot_planner.entities import entity_for_line, load_entities
 
-            rows = load_entities(channel or "ancient_knowledge")
+            rows = load_entities(coalesce_page(channel, "DOCUMENTARY_PIPELINE"))
             entity = entity_for_line(topic, rows, topic=topic)
             geography = entity.geography if entity is not None else ""
         except Exception:  # noqa: BLE001

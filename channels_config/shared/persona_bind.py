@@ -23,10 +23,10 @@ def resolve_master_dna(channel: str, root: Path) -> Path | None:
     """Find DNA for ``channel`` under ``root``.
 
     Order: ``channels_config/<channel>/master_dna.json``, then the legacy
-    ``pages_config/`` folder, then ``agents.media/master_dna.json`` for
-    ``anna_protocol`` only (that path is returned even when the file is
-    absent, matching the previous import-time loader). Any other missing
-    channel returns None so the caller can use the stub.
+    ``pages_config/`` folder, then ``agents.media/master_dna.json`` when
+    the channel sets ``LEGACY_MEDIA_DNA`` (that path is returned even when
+    the file is absent, matching the previous import-time loader). Any
+    other missing channel returns None so the caller can use the stub.
     """
     candidate = root / "channels_config" / channel / "master_dna.json"
     legacy = root / "pages_config" / channel / "master_dna.json"
@@ -34,7 +34,9 @@ def resolve_master_dna(channel: str, root: Path) -> Path | None:
         return candidate
     if legacy.is_file():
         return legacy
-    if channel == "anna_protocol":
+    from shared.channel_flags import flag
+
+    if flag(channel, "LEGACY_MEDIA_DNA"):
         return root / "agents.media" / "master_dna.json"
     return None
 

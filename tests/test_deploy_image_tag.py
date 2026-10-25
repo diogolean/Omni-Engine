@@ -63,6 +63,7 @@ def _run(
     tag: str,
     *,
     fail_pull: bool = False,
+    channel_dirs: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
@@ -70,6 +71,8 @@ def _run(
     env["IMAGE_TAG"] = tag
     env["DEPLOY_CALLS"] = str(calls)
     env["FAIL_PULL"] = "1" if fail_pull else "0"
+    if channel_dirs is not None:
+        env["CHANNEL_DIRS"] = channel_dirs
     return subprocess.run(
         ["bash", str(_SCRIPT)],
         cwd=root,
@@ -126,3 +129,54 @@ def test_remote_deploy_rejects_a_short_sha(tmp_path: Path) -> None:
     assert "Refusing image tag" in result.stderr
     assert env_file.read_text(encoding="utf-8") == "OMNI_IMAGE_TAG=old\n"
     assert calls.read_text(encoding="utf-8") == ""
+
+
+def test_remote_deploy_mkdir_rejects_paths_outside_the_channel_regex(
+    tmp_path: Path,
+) -> None:
+    script = _SCRIPT.read_text(encoding="utf-8")
+    pattern = r"^(channels_config|state)/[a-z0-9_]+(/store)?$"
+    assert pattern in script
+    assert script.index(pattern) < script.index('mkdir -p "$rel"')
+    assert "mkdir -p ${CHANNEL_DIRS}" not in script
+
+    root = tmp_path / "opt"
+    root.mkdir()
+    env_file = root / ".env"
+    env_file.write_text("OMNI_IMAGE_TAG=old\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls"
+    _docker_stub(bin_dir, calls)
+
+    bad = _run(
+        root,
+        bin_dir,
+        calls,
+        _SHA,
+        channel_dirs="channels_config/anna_protocol ../etc",
+    )
+    assert bad.returncode != 0
+    assert "Refusing channel path" in bad.stderr
+    assert not (root / "channels_config").exists()
+    assert not (root / "etc").exists()
+    assert env_file.read_text(encoding="utf-8") == "OMNI_IMAGE_TAG=old\n"
+    assert calls.read_text(encoding="utf-8") == ""
+
+    calls.write_text("", encoding="utf-8")
+    ok = _run(
+        root,
+        bin_dir,
+        calls,
+        _SHA,
+        channel_dirs=(
+            "channels_config/anna_protocol "
+            "channels_config/ancient_knowledge "
+            "state/ancient_knowledge/store"
+        ),
+    )
+    assert ok.returncode == 0, ok.stderr
+    assert (root / "channels_config" / "anna_protocol").is_dir()
+    assert (root / "channels_config" / "ancient_knowledge").is_dir()
+    assert (root / "state" / "ancient_knowledge" / "store").is_dir()
+    assert "OMNI_IMAGE_TAG=" + _SHA in env_file.read_text(encoding="utf-8")

@@ -41,6 +41,8 @@ from production.pipeline.runtime import (
 from production.pipeline.acts import _looks_like_upstream_api_failure, _silence_noisy_http_loggers  # noqa: E402
 from production.pipeline.orchestrator import produce, run_test_images_debug_mode  # noqa: E402
 from production.pipeline.reporting import _emit_clean_api_error, _preflight_gemini_image_batch_cost, _print_production_summary, _print_test_footer, _snapshot_verified_models  # noqa: E402
+from production.pipeline.channel_flags import flag as _channel_flag
+from production.pipeline.channel_flags import sole_page as _sole_page
 from production.pipeline.cli_parser import _together_cli_image_model
 from production.pipeline.log import _LOG
 
@@ -53,7 +55,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         os.environ["REEL_HOOK_PARALLAX"] = "1"
     if getattr(args, "deepinfra_flux2dev", False):
         os.environ["LOFI_FLUX_BACKEND"] = "flux2-dev"
-    # True CLI value before page locks (master_mei/anna) mutate args.avatar.
+    # True CLI value before page locks mutate args.avatar.
     _avatar_from_cli: str | None = args.avatar
     if getattr(args, "debug", False):
         os.environ["ENGINE_DEBUG"] = "true"
@@ -109,10 +111,10 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         )
         return
 
-    # ── PERMANENT WONDER_FEED STYLE LOCK ───────────────────────────────────
-    # Fires BEFORE any config lookups so no legacy format bucket can override.
-    # Idempotent — the later guard at runtime still runs for belt-and-suspenders.
-    if getattr(args, "page", "").lower() == "wonder_feed":
+    # Style locks fire BEFORE any config lookups so no legacy format bucket
+    # can override. Each lock is a page_config flag, not a channel name.
+    _lock_page = getattr(args, "page", "") or ""
+    if _channel_flag(_lock_page, "GRAPHITE_STYLE_LOCK"):
         _wf_pt = getattr(args, "post_type", "").upper()
         if _wf_pt in ("SMART_BAIT", "LONG_CAPTION_IMAGE", "ECONOMIC_REEL"):
             args.draw_style = "SKETCH"
@@ -123,8 +125,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
             args.post_format = "DYNAMIC_REEL"
             args.draw_style = "SKETCH"
 
-    # Isolated channel (ancient_knowledge): visual rules + format come from
-    # the adapter — never the hardcoded page_id sketch/photoreal branch.
+    # Isolated channel: visual rules + format come from the adapter.
     _boot_channel = ChannelFactory.from_env()
     if ChannelFactory.is_isolated(_boot_channel.channel_id):
         _ak_pt = getattr(args, "post_type", "").upper()
@@ -134,9 +135,8 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
             (_boot_channel.get_visual_rules() or {}).get("draw_style") or "NATURAL"
         )
 
-    # ── MASTER_MEI (SUPER) STYLE & FORMAT LOCK ─────────────────────────────
-    # Cinematic martial photorealism + avatar ON; sequence reel for ECONOMIC_REEL.
-    if getattr(args, "page", "").lower() == "master_mei":
+    # Cinematic photorealism + avatar ON; sequence reel for ECONOMIC_REEL.
+    if _channel_flag(_lock_page, "MEI_PIPELINE"):
         _mm_pt = getattr(args, "post_type", "").upper()
         if _mm_pt == "ECONOMIC_REEL":
             args.post_format = "DYNAMIC_REEL"
@@ -145,9 +145,8 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         if getattr(args, "avatar", None) is None:
             args.avatar = "ON"
 
-    # ── MOMMA_CIRCLE FORMAT LOCK ────────────────────────────────────────────
     # Reference-based pipeline by default; ECONOMIC_REEL_LOFI is an explicit escape hatch.
-    if getattr(args, "page", "").lower() == "momma_circle":
+    if _channel_flag(_lock_page, "REFERENCE_REEL_LOCK"):
         _mc_pt = getattr(args, "post_type", "").upper()
         if _mc_pt == "ECONOMIC_REEL_LOFI":
             args.post_format = "DYNAMIC_REEL"
@@ -157,17 +156,16 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
             args.post_format = "REFERENCE_BASED_REELS"
             args.draw_style = "NATURAL"
 
-    # ── ANNA_PROTOCOL STYLE LOCK ───────────────────────────────────────────
     # Photoreal stills (factory --draw-style default is SKETCH).
-    # --avatar ON defaults to Flash Image 1K, not Gemini Pro.
-    if getattr(args, "page", "").lower() == "anna_protocol":
+    if _channel_flag(_lock_page, "NATURAL_DRAW_LOCK"):
         args.draw_style = "NATURAL"
 
     if getattr(args, "post_type", "").upper() == "CTA_CAPTION_IMAGE":
-        if getattr(args, "page", "").lower() != "anna_protocol":
+        if not _channel_flag(_lock_page, "ALLOWS_CTA_CAPTION_IMAGE"):
+            _cta_page = _sole_page("ALLOWS_CTA_CAPTION_IMAGE")
             raise SystemExit(
-                "CTA_CAPTION_IMAGE is only available for --page anna_protocol. "
-                "Example: python main.py --page anna_protocol "
+                f"CTA_CAPTION_IMAGE is only available for --page {_cta_page}. "
+                f"Example: python main.py --page {_cta_page} "
                 "--post-type CTA_CAPTION_IMAGE --quantity 1"
             )
 
@@ -319,7 +317,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
     econ_resolved = economic_choice if economic_choice is not None else app_config.ECONOMIC_BRAIN_MODE
     # Page-level override: respect ECONOMIC_BRAIN_MODE from page_config.py when
     # the CLI did not explicitly pass --economic or --premium.
-    # This ensures that ancient_knowledge (ECONOMIC_BRAIN_MODE=True) always gets
+    # This ensures that a page with ECONOMIC_BRAIN_MODE=True always gets
     # the nano/flash image model, regardless of the global app_config default.
     if economic_choice is None and _tmp_page_cfg.get("ECONOMIC_BRAIN_MODE") is not None:
         econ_resolved = bool(_tmp_page_cfg["ECONOMIC_BRAIN_MODE"])
@@ -430,12 +428,12 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
     if topic_raw is None and args.test:
         topic_raw = input("Topic (optional, press Enter to rely on scaffold placeholder): ").strip() or ""
 
-    # For wonder_feed graphite post types, force the draw_style to SKETCH regardless
+    # For graphite-locked post types, force the draw_style to SKETCH regardless
     # of what the user passed on the CLI — the page's BASE_GRAPHITE_PROMPT is the
     # single source of truth, and SKETCH is the only correct flag for that pipeline.
     _active_post_type = args.post_type.upper() if hasattr(args, "post_type") else ""
     if (
-        args.page.lower() == "wonder_feed"
+        _channel_flag(args.page, "GRAPHITE_STYLE_LOCK")
         and _active_post_type in ("SMART_BAIT", "LONG_CAPTION_IMAGE", "ECONOMIC_REEL", "WAN_REEL", "CAROUSEL")
     ):
         args.draw_style = "SKETCH"

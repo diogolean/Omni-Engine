@@ -183,3 +183,39 @@ TOPIC_POOL: list = [
     "How high empathy becomes a vulnerability that attracts narcissists",
     "The moment self-respect becomes more important than being loved",
 ]
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+GRAPHITE_STYLE_LOCK: bool = True
+POOL_TOPIC_LOCK: bool = True
+QUOTES_WORKBOOK: str = (
+    "channels_config/wonder_feed/Quotes_reference/@REDES REF SOURCE FONTE.xlsx"
+)
+LOFI_ENABLED: bool = True
+LOFI_MODULES: tuple = ("relationship", "parenting")
+LOFI_ASSEMBLY_FALLBACK: bool = True
+BRAND_GRADIENT: tuple = ((10, 18, 35), (22, 38, 62))
+BRAND_ACCENT_COLORS: tuple = (
+    (180, 210, 240),
+    (230, 180, 195),
+    (245, 230, 200),
+    (200, 220, 245),
+    (240, 200, 215),
+)
+LOFI_DUST_OVERLAY: str = (
+    "channels_config/wonder_feed/overlays/overlay film grain.mp4"
+)
+LOFI_BGM_DIR: str = "channels_config/wonder_feed/audio/bgm"
+QUOTE_FONT: str = "Fonts/Covered_By_Your_Grace/CoveredByYourGrace-Regular.ttf"
+QUOTE_FONT_BIG: str = "Fonts/Caveat/Caveat-VariableFont_wght.ttf"
+LOFI_ASSEMBLY: dict = {
+    "logo_candidates": [
+        "channels_config/wonder_feed/logo/logo.png",
+    ],
+    "watermark_handle": "@Wonder Feed",
+    "logo_position": "bottom_center",
+    "logo_opacity": 0.95,
+    "logo_scale": 0.224,
+    "logo_bottom_px": 389,
+    "caption_color": (255, 255, 255),
+    "use_text_watermark": False,
+}

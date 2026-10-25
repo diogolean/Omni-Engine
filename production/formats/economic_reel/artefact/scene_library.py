@@ -21,6 +21,8 @@ new image). ``REEL_SCENE_LIBRARY=0`` turns it off.
 """
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page, sole_page
+
 import hashlib
 import json
 import logging
@@ -57,7 +59,7 @@ def library_dir(channel: str) -> Path:
     override = (os.getenv("REEL_SCENE_LIBRARY_DIR") or "").strip()
     if override:
         return Path(override)
-    name = (channel or "ancient_knowledge").strip() or "ancient_knowledge"
+    name = coalesce_page(channel, "DOCUMENTARY_PIPELINE")
     return _FACTORY / "channels_config" / name / "store" / "scene_library"
 
 
@@ -111,7 +113,7 @@ def _float(name: str, default: float) -> float:
         return default
 
 
-def start_reel(channel: str = "ancient_knowledge") -> None:
+def start_reel(channel: str = sole_page("DOCUMENTARY_PIPELINE")) -> None:
     """Count one reel for the cooldown and clear this reel's used set."""
     with _LOCK:
         _REEL_USED.clear()

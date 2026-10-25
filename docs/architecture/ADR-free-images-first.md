@@ -31,13 +31,7 @@ Channel policy is `image_source_policy` / `IMAGE_SOURCE_POLICY`:
 | `free_only` | Licensed photo or no image. The generator is not called |
 | `ai_only` | Skip the search. Existing generator or owned assets |
 
-Defaults:
-
-| Channel | Policy |
-|---|---|
-| `ancient_knowledge`, `amazing_feed`, `anna_protocol` (Anna's Garden / `annas_garden`), `wonder_feed` | `free_first` |
-| `aiwake`, `endless_summer_paradise`, `master_mei` | `ai_only` |
-| Any other channel | `ai_only` until its page config says otherwise |
+Defaults come from `IMAGE_SOURCE_POLICY` on each channel folder (`production/providers/image/free/policy.py` rebuilds the map from that flag). A folder with no flag, and any slug that is not a channel folder, stays `ai_only`. Legacy slugs that are not folders stay in that module: `amazing_feed` and `annas_garden` are `free_first`, `aiwake` is `ai_only`. Anna's Garden aliases resolve to the channel that sets `NATURAL_DRAW_LOCK`.
 
 `aiwake`, Endless Summer Paradise, and Master Mei keep their own pipelines. The shared still hook returns the original generator immediately for `ai_only`, and their packages are not rewritten. The lofi / riso illustration pipeline is also left on Flux: those stills have to pass a drawn-style gate, so a photograph would not be a valid substitute.
 

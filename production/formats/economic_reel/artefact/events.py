@@ -2,6 +2,8 @@
 """Archival photographs for an event beat, before any generated scene."""
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page
+
 import io
 import json
 import logging
@@ -197,7 +199,9 @@ def acquire_event_photo(
     if entity is None or (not _queries(entity) and not _categories(entity)):
         return None
     http = client or RequestsClient(timeout=20.0)
-    cache = artefact_cache_dir(channel or "ancient_knowledge", entity.id)
+    cache = artefact_cache_dir(
+        coalesce_page(channel, "DOCUMENTARY_PIPELINE"), entity.id
+    )
     folder = cache / "events"
     folder.mkdir(parents=True, exist_ok=True)
     object_keys = _object_photo_keys(cache)

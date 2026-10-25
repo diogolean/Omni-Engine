@@ -18,6 +18,11 @@ Add a new channel DNA in ~5 lines by appending to ``CHANNEL_DNA_SEED``:
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
+_MEI_PAGE = sole_page("MEI_PIPELINE")
+_DOC_PAGE = sole_page("DOCUMENTARY_PIPELINE")
+
 import hashlib
 import json
 import logging
@@ -42,7 +47,7 @@ _JSON_STORE: Path = config.AGENT_ROOT / "channel_dna_store.json"
 # Seed DNA — add a new channel here (5 lines of rules is enough)
 # ---------------------------------------------------------------------------
 CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
-    "master_mei": {
+    _MEI_PAGE: {
         "forbidden_tokens": [
             "Gossip Goblin",
             "fitness model",
@@ -143,14 +148,14 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
             ),
         },
         "prompt_file_overrides": {
-            "scene_01": "channels_config/master_mei/prompts/scene_01_hook_meditation.txt",
-            "scene_03": "channels_config/master_mei/prompts/scene_03_biomechanical_slaves.txt",
-            "scene_07": "channels_config/master_mei/prompts/scene_07_human_cyborg_closeup.txt",
-            "scene_final": "channels_config/master_mei/prompts/scene_final_hook.txt",
-            "mei_anchor": "channels_config/master_mei/prompts/master_mei_base_anchor.txt",
-            "penultimate": "channels_config/master_mei/prompts/penultimate_frame.txt",
-            "qa_rules": "channels_config/master_mei/prompts/visual_qa_rules.txt",
-            "music_prompt": "channels_config/master_mei/prompts/music_prompt_directive.txt",
+            "scene_01": f"channels_config/{_MEI_PAGE}/prompts/scene_01_hook_meditation.txt",
+            "scene_03": f"channels_config/{_MEI_PAGE}/prompts/scene_03_biomechanical_slaves.txt",
+            "scene_07": f"channels_config/{_MEI_PAGE}/prompts/scene_07_human_cyborg_closeup.txt",
+            "scene_final": f"channels_config/{_MEI_PAGE}/prompts/scene_final_hook.txt",
+            "mei_anchor": f"channels_config/{_MEI_PAGE}/prompts/master_mei_base_anchor.txt",
+            "penultimate": f"channels_config/{_MEI_PAGE}/prompts/penultimate_frame.txt",
+            "qa_rules": f"channels_config/{_MEI_PAGE}/prompts/visual_qa_rules.txt",
+            "music_prompt": f"channels_config/{_MEI_PAGE}/prompts/music_prompt_directive.txt",
         },
         "golden_prompt_anchor": (
             "Cyberpunk dystopian Earth, attention monopoly era: natural FLUX sentences "
@@ -279,7 +284,7 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
             "parenting": "warm caregiving moments, soft ordinary chaos, no exploitation",
         },
     },
-    "ancient_knowledge": {
+    _DOC_PAGE: {
         "critic_profile": "ancient_mystery",
         "quality_threshold": 5.5,
         "forbidden_tokens": [
@@ -411,7 +416,7 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
             "cta": (
                 "CTA is a dedicated final act, generated as a separate audio "
                 "block with a mandatory 1.0 s silence gap before it (see "
-                "video-pipeline rule 2). Fixed text for ancient_knowledge: "
+                f"video-pipeline rule 2). Fixed text for {_DOC_PAGE}: "
                 "'Follow Ancient Knowledge for more hidden mysteries.' "
                 "NEVER embed the CTA phrase inside the narration script "
                 "itself — the compile step stitches it after the narration "
@@ -467,7 +472,7 @@ CHANNEL_DNA_SEED: dict[str, dict[str, Any]] = {
                 "acts still need the same variety, just held longer."
             ),
             "post_fx_toggles": (
-                "ancient_knowledge defaults: ENABLE_FLICKER=True (torch "
+                f"{_DOC_PAGE} defaults: ENABLE_FLICKER=True (torch "
                 "brightness oscillation), ENABLE_LIGHT_RAYS=True (volumetric "
                 "warm-gold beam), ENABLE_DUST_PARTICLES=True (55-particle "
                 "upward drift), ENABLE_LIGHT_REFRACTION=False (only enabled "

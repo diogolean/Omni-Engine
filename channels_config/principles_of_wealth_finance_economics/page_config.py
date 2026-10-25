@@ -200,3 +200,9 @@ NICHE_DISCLAIMER: str = (
     "macroeconomics. Not financial advice. "
     "Tone: clear, structured, professional, high-RPM finance education."
 )
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+WEALTH_CATALOG: bool = True
+YOUTUBE_PRESERVE_RAW_TITLE: bool = True
+YOUTUBE_RAW_TITLE_FALLBACK: str = "Principles of Wealth"
+YOUTUBE_CHANNEL_HINT: str = "Principles of Wealth"

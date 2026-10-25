@@ -2,6 +2,8 @@
 """Per-reel manifest of approved stills and the TTS chunks that match them."""
 from __future__ import annotations
 
+from shared.channel_flags import coalesce_page
+
 import hashlib
 import json
 import os
@@ -59,7 +61,9 @@ class ReelCheckpoint:
     def for_reel(cls, channel: str, reel_id: str) -> ReelCheckpoint:
         from shared.paths import channel_store_dir
 
-        root = channel_store_dir(channel or "ancient_knowledge", create=True)
+        root = channel_store_dir(
+            coalesce_page(channel, "DOCUMENTARY_PIPELINE"), create=True
+        )
         folder = root / "reel_checkpoints" / _slug(reel_id)
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "manifest.json"

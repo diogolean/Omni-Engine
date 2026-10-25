@@ -5,7 +5,7 @@ LOFI caption typography — selectable font library.
 DEFAULT: ``caveat`` — Caveat-VariableFont_wght
   Fonts/Caveat/Caveat-VariableFont_wght.ttf
 
-Library (kept for easy swaps on wonder_feed + momma_circle):
+Library (kept for easy swaps on lofi-enabled channels):
   - playwrite_nz_basic — PlaywriteNZBasic-VariableFont_wght
   - more_sugar_thin   — More Sugar Thin (prior default)
   - lora_italic       — Lora Italic

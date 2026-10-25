@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from shared.channel_flags import sole_page
+
 
 class QAStatus(str, Enum):
     PENDING = "pending"
@@ -58,7 +60,7 @@ class PipelineState(BaseModel):
     """
 
     # Identity
-    channel_id: str = "ancient_knowledge"
+    channel_id: str = sole_page("DOCUMENTARY_PIPELINE")
     post_index: int = 0
     seed_topic: str = ""
     post_type: str = "SMART_BAIT"

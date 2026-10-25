@@ -47,7 +47,7 @@ def should_use_agentic_pipeline(
     Auto-enable for Ancient Knowledge static image posts.
 
     ``flag=False`` always disables. ``flag=True`` enables for any page.
-    ``flag=None`` (CLI default) enables only for ``ancient_knowledge``
+    ``flag=None`` (CLI default) enables only for the documentary pipeline
     non-reel post types.
     """
     if flag is False:
@@ -57,7 +57,9 @@ def should_use_agentic_pipeline(
         return False
     if flag is True:
         return True
-    return (page_id or "").lower().strip() == CHANNEL_ID
+    from shared.channel_flags import flag
+
+    return flag(page_id, "DOCUMENTARY_PIPELINE")
 
 
 class PipelineOrchestrator:

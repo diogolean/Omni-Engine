@@ -485,7 +485,7 @@ def normalize_image_model_id(raw: str | None) -> str:
     Normalize image model IDs.
 
     Together / FLUX IDs pass through. Explicit Gemini image SKUs stay Gemini
-    (used by anna_protocol IMAGE_PRIMARY and ``--image-primary``). Imagen IDs
+    (used by a channel IMAGE_PRIMARY and ``--image-primary``). Imagen IDs
     still remap to FLUX because this project cannot call Imagen.
     """
     flux = "black-forest-labs/FLUX.1-schnell"

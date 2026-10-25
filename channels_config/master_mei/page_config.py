@@ -273,6 +273,9 @@ AMBIENT_SFX_GAIN_MUL: float = 1.0    # no extra mul — volumes are absolute
 AMBIENT_DUCK_RATIO: float = 0.85     # light duck only — keep tension audible
 MASTER_AUDIO_GAIN: float = 1.0       # unity master (avoid clipping)
 USE_MUSIC_V2_BED: bool = True        # prefer music_v2 composition plan over local pad
+AMBIENT_MUSIC_STYLE: str = "warrior"
+AMBIENT_VOLUME_MIN: float = 0.10
+AMBIENT_VOLUME_MAX: float = 0.55
 MUSIC_V2_MIN_SECONDS: float = 40.0   # ElevenLabs BGM minimum generation length
 ATMOSPHERE_SFX_MIN_SECONDS: float = 10.0  # single 10s drone tile (looped 100%)
 DISABLE_IMPACT_SFX: bool = True      # hard off — percussion comes from BGM track
@@ -423,4 +426,47 @@ NICHE_DISCLAIMER: str = (
     "VISUAL: cinematic wide angle / extreme long shot / full body / epic scope only — "
     "BAN close-up, tight shot, face zoom, macro, single monk portrait, sweating close-up. "
     "FORBIDDEN: emotion tags (except allowed break pauses), wellness fluff, hustle-bro clichés."
+)
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+MEI_PIPELINE: bool = True
+POOL_TOPIC_LOCK: bool = True
+USE_APPROVED_CTA: bool = True
+USE_NARRATION_WORD_CAP: bool = True
+YOUTUBE_CHANNEL_HINT: str = "Master Mei"
+YOUTUBE_PLAYLIST_FORCE_DESCRIPTION: bool = True
+# Used only when a caller creates a playlist with an empty description.
+# The resolved upload path uses YOUTUBE_PLAYLIST_DESCRIPTION above.
+YOUTUBE_PLAYLIST_EMPTY_DESCRIPTION: str = (
+    "Welcome to the official Master Mei playlist on Stoic discipline, financial clarity, "
+    "and executive mindset. In this series, Master Mei breaks down ancient Stoic philosophy "
+    "to help you build unbreakable mental toughness, eliminate distractions, control your "
+    "emotions, and make strategic financial decisions. Learn how to master self-discipline, "
+    "build long-term wealth, and lead with quiet power in business and life. "
+    "Subscribe to Master Mei | Mind Control for daily wisdom on Stoicism, business strategy, "
+    "and personal mastery."
+)
+YOUTUBE_DEPRECATED_PLAYLISTS: tuple = (
+    "master mei — warrior discipline",
+    "master mei - warrior discipline",
+    "warrior discipline",
+)
+YOUTUBE_TITLE_STRIP_PATTERNS: tuple = (
+    r"(?i)\bMASTER\s*MEI\b",
+    r"(?i)\bMaster\s*Mei\b",
+    r"(?i)\|\s*Mind\s*Control\b",
+    r"(?i)\bMind\s*Control\b",
+)
+YOUTUBE_TITLE_REJECT_SUBSTRINGS: tuple = ("warrior discipline",)
+YOUTUBE_TITLE_REJECT_REPLACEMENT: str = "Stoic Financial Freedom"
+YOUTUBE_DESCRIPTION_REPLACEMENTS: tuple = (("Unified Multi-Page Factory", ""),)
+YOUTUBE_DESCRIPTION_REGEX: tuple = (
+    (r"(?i)warrior\s+discipline", "Stoic discipline"),
+)
+YOUTUBE_DROP_TAG_SUBSTRINGS: tuple = ("warrior discipline",)
+YOUTUBE_DROP_TAG_EXACT: tuple = ("warrior mindset",)
+YOUTUBE_CLI_DESCRIPTION: str = (
+    "Subscribe to Master Mei | Mind Control for cold discipline, classical strategy, "
+    "and true wealth sovereignty.\n"
+    "#Shorts #MasterMei #Stoicism #FinancialFreedom #Discipline #SunTzu #WealthMindset"
 )

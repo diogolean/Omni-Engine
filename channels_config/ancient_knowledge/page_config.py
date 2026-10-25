@@ -345,3 +345,24 @@ NICHE_DISCLAIMER: str = (
     "the artefact that defies its era, or the alien/advanced-technology influence. "
     "This anchor → impossibility structure maximises curiosity and scroll-stopping engagement."
 )
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+DOCUMENTARY_PIPELINE: bool = True
+WAN_REEL: bool = True
+VISUAL_GROUNDING: bool = True
+ANGLE_MEMORY: bool = True
+ARTICLE_LINK_REQUIRED: bool = True
+TTS_SPEED_LOCK: float = 1.0
+TTS_NETWORK_RETRIES: int = 3
+USE_NARRATION_WORD_CAP: bool = True
+SEQUENCE_CAPTION_SCALE: float = 1.5
+VM_ENSURE_CHANNEL_DIR: bool = True
+VM_STATE_MOUNT: bool = True
+YOUTUBE_PLAYLIST_TITLE: str = "Ancient Mysteries & Forbidden History"
+YOUTUBE_CHANNEL_HINT: str = "Ancient Knowledge"
+YOUTUBE_DEFAULT_TAGS: list = [
+    "ancient knowledge",
+    "ancient mysteries",
+    "forbidden history",
+    "shorts",
+]

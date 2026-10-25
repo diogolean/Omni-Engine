@@ -18,7 +18,7 @@ Usage
 -----
     from production.cost.cost_tracker import CostTracker
 
-    tracker = CostTracker(page_id="ancient_knowledge", cost_tier="nano")
+    tracker = CostTracker(page_id="<channel>", cost_tier="nano")
 
     tracker.track_image("image_nano")
     tracker.track_text("text_gemini_flash", token_count=4000)
@@ -208,7 +208,7 @@ class CostTracker:
     Parameters
     ----------
     page_id:
-        The active page slug (e.g. ``ancient_knowledge``).
+        The active page slug (a channel folder name).
     cost_tier:
         ``"nano"`` | ``"economic"`` | ``"premium"``.
         Controls which default pricing keys are used when callers omit

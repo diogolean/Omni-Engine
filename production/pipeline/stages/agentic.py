@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+from shared.channel_flags import sole_page
 
 from production.pipeline.runtime import (
     Any,
@@ -122,7 +123,7 @@ def _produce_agentic(
     if _track_on:
         try:
             _cost_tracker = CostTracker(
-                page_id=page_id or "ancient_knowledge",
+                page_id=page_id or sole_page("DOCUMENTARY_PIPELINE"),
                 cost_tier=(page_ctx.cost_tier if page_ctx else "nano"),
             )
         except Exception as cost_init_exc:  # noqa: BLE001
@@ -130,7 +131,7 @@ def _produce_agentic(
             _cost_tracker = None
 
     orch = PipelineOrchestrator(
-        channel_id=page_id or "ancient_knowledge",
+        channel_id=page_id or sole_page("DOCUMENTARY_PIPELINE"),
         output_dir=out_dir,
         max_retries=_AK_MAX_RETRIES,
         max_workers=min(3, max(1, qty)),
@@ -232,7 +233,7 @@ def _produce_agentic(
             _img = row.get("local_image_path") or row.get("image_path") or ""
             if _img and _qa == "approved":
                 register_generated_asset(
-                    channel=str(page_id or "ancient_knowledge"),
+                    channel=str(page_id or sole_page("DOCUMENTARY_PIPELINE")),
                     post_type=str(post_type or "LONG_CAPTION_IMAGE"),
                     local_path=str(_img),
                     remote_url=str(row.get("imgbb_url") or ""),

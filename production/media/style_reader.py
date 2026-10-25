@@ -7,6 +7,8 @@ slaves, full torso coverage, and visceral tech-into-flesh integration.
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import logging
 import os
 import re
@@ -123,7 +125,9 @@ def default_master_mei_ref_folder(engine_root: "str | Path | None" = None) -> Pa
             root = Path(__file__).resolve().parents[2]
     else:
         root = Path(engine_root)
-    return (root / "channels_config" / "master_mei" / "style_reference").resolve()
+    return (
+        root / "channels_config" / sole_page("MEI_PIPELINE") / "style_reference"
+    ).resolve()
 
 
 _mime_for = image_mime_for

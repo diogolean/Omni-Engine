@@ -18,10 +18,22 @@ if [[ ! "${IMAGE_TAG:-}" =~ ^(latest|[0-9a-f]{40})$ ]]; then
   exit 1
 fi
 
-mkdir -p credentials outputs \
-  channels_config/ancient_knowledge \
-  channels_config/anna_protocol \
-  state/ancient_knowledge/store
+mkdir -p credentials outputs
+# CHANNEL_DIRS is computed on the runner from VM_ENSURE_CHANNEL_DIR and
+# VM_STATE_MOUNT. The VM does not import the app to discover them.
+# Re-check every path before creating anything, and pass each one quoted.
+if [[ -n "${CHANNEL_DIRS:-}" ]]; then
+  read -r -a _channel_paths <<< "${CHANNEL_DIRS}"
+  for rel in "${_channel_paths[@]}"; do
+    if ! [[ "$rel" =~ ^(channels_config|state)/[a-z0-9_]+(/store)?$ ]]; then
+      echo "Refusing channel path: ${rel}" >&2
+      exit 1
+    fi
+  done
+  for rel in "${_channel_paths[@]}"; do
+    mkdir -p "$rel"
+  done
+fi
 
 # Deploy starts the engine only. The scheduler publishes pins, so it stays
 # stopped unless SCHEDULER_ENABLED is exactly 1/true/yes/on in .env.

@@ -83,3 +83,18 @@ TOPIC_POOL: list = [
 # ---------------------------------------------------------------------------
 LOGO_SIZE_SCALE: float = 0.30      # 30 % of canvas width — raised for brand visibility
 LOGO_POSITION: str = "bottom_right"
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+NATURAL_DRAW_LOCK: bool = True
+ALLOWS_CTA_CAPTION_IMAGE: bool = True
+VM_ENSURE_CHANNEL_DIR: bool = True
+LEGACY_SHARED_LEDGER: bool = True
+LEGACY_MEDIA_DNA: bool = True
+BRAND_GRADIENT: tuple = ((14, 10, 6), (30, 22, 12))
+BRAND_ACCENT_COLORS: tuple = (
+    (255, 220, 100),
+    (255, 235, 160),
+    (255, 200, 80),
+    (240, 215, 140),
+    (255, 230, 130),
+)

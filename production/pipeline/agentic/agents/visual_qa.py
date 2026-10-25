@@ -45,13 +45,15 @@ class VisualQAAgent(BaseAgent):
         *,
         master_criteria: Sequence[str] | None = None,
         quality_threshold: float | None = None,
-        channel_name: str = "ancient_knowledge",
+        channel_name: str | None = None,
     ) -> None:
         self.master_criteria = tuple(master_criteria or MASTER_CRITERIA)
         self.quality_threshold = float(
             quality_threshold if quality_threshold is not None else QUALITY_THRESHOLD
         )
-        self.channel_name = channel_name
+        from shared.channel_flags import sole_page
+
+        self.channel_name = channel_name or sole_page("DOCUMENTARY_PIPELINE")
 
     def run(self, state: PipelineState) -> PipelineState:
         state.last_node = self.name

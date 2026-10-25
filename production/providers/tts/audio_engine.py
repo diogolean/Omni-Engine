@@ -13,6 +13,8 @@ See docs/elevenlabs_tts.md.
 """
 from __future__ import annotations
 
+from shared.channel_flags import sole_page
+
 import json
 import logging
 import os
@@ -140,7 +142,7 @@ def should_route_tts_to_remote_f5(
 ) -> bool:
     """Remote F5 only when enabled AND a usable voice reference exists.
 
-    ancient_knowledge ships without a ``.wav``/``.mp3`` reference. Routing it
+    The documentary channel ships without a ``.wav``/``.mp3`` reference. Routing it
     to F5 raises ``RemoteGPUError`` and historically compiled silent reels
     because callers swallowed the exception.
     """
@@ -300,17 +302,19 @@ MUSIC_PROMPT_MYSTERY_SYSTEM_DIRECTIVE: str = (
     "CONSTRAINT: Keep each section line/prompt concise, descriptive, and "
     "strictly under 150 characters."
 )
+_MEI_PAGE = sole_page("MEI_PIPELINE")
+_DOC_PAGE = sole_page("DOCUMENTARY_PIPELINE")
 _MUSIC_PROMPT_DIRECTIVE_FILE: Path = (
     Path(__file__).resolve().parents[3]
     / "channels_config"
-    / "master_mei"
+    / _MEI_PAGE
     / "prompts"
     / "music_prompt_directive.txt"
 )
 _MUSIC_PROMPT_MYSTERY_DIRECTIVE_FILE: Path = (
     Path(__file__).resolve().parents[3]
     / "channels_config"
-    / "ancient_knowledge"
+    / _DOC_PAGE
     / "prompts"
     / "music_prompt_directive.txt"
 )
@@ -1225,7 +1229,7 @@ def generate_ambient_track(
 
     # Fallback: prefer cinematic pad; NEVER prefer legacy rain/martial rain loops
     for _rel in (
-        Path("assets") / "master_mei" / "audio" / "ambient_cinematic_pad.mp3",
+        Path("assets") / _MEI_PAGE / "audio" / "ambient_cinematic_pad.mp3",
         Path("assets") / "audio" / "ambient_mystery_loop.mp3",
     ):
         _local = app_config.ENGINE_ROOT / _rel
@@ -1235,7 +1239,7 @@ def generate_ambient_track(
 
     logger.warning(
         "Ambient audio unavailable — reel will use procedural cinematic drone. "
-        "Drop a pad into assets/master_mei/audio/ambient_cinematic_pad.mp3 "
+        f"Drop a pad into assets/{_MEI_PAGE}/audio/ambient_cinematic_pad.mp3 "
         "to add background music without an API call."
     )
     return None
@@ -1415,9 +1419,9 @@ def _is_unprocessable_entity(exc: BaseException) -> bool:
 def _local_music_failsafe(output_path: Path | None = None) -> "Path | None":
     """Return a local ambient pad path so the reel pipeline never aborts."""
     for _rel in (
-        Path("assets") / "master_mei" / "audio" / "ambient_cinematic_pad.mp3",
+        Path("assets") / _MEI_PAGE / "audio" / "ambient_cinematic_pad.mp3",
         Path("assets") / "audio" / "ambient_mystery_loop.mp3",
-        Path("assets") / "master_mei" / "audio",
+        Path("assets") / _MEI_PAGE / "audio",
     ):
         _local = app_config.ENGINE_ROOT / _rel
         if _local.is_file():
@@ -1578,7 +1582,7 @@ def generate_dynamic_music_prompt(
     LLM ``music_prompt`` task — unique ElevenLabs prompt per video.
 
     ``style_profile``:
-      - ``warrior`` — industrial cyberpunk percussion (master_mei)
+      - ``warrior`` — industrial cyberpunk percussion (warrior pipeline)
       - ``mystery`` — cinematic dark ancient mystery (hook suspense → heavier mid/end)
     Falls back to a deterministic unique prompt if Gemini is unavailable.
     """
@@ -2176,7 +2180,7 @@ def generate_master_mei_soundscape(
     """
     Generate music_v2 BGM bed (≥40s) + optional impact.
 
-    Used by master_mei (warrior) and ancient_knowledge (mystery) three-channel mix.
+    Used by the warrior pipeline and the documentary pipeline three-channel mix.
     Atmosphere drone is generated separately via ``generate_ambient_track``.
 
     Returns ``(music_bed_path, impact_sfx_path|None)``.
@@ -2209,21 +2213,21 @@ def generate_master_mei_soundscape(
 _DEFAULT_CTA_CACHE: Path = (
     Path(__file__).resolve().parents[3]
     / "channels_config"
-    / "master_mei"
+    / _MEI_PAGE
     / "audio"
     / "cta_cache.mp3"
 )
 _DEFAULT_BGM_DIR: Path = (
     Path(__file__).resolve().parents[3]
     / "channels_config"
-    / "master_mei"
+    / _MEI_PAGE
     / "audio"
     / "bgm"
 )
 _DEFAULT_SFX_LOOP: Path = (
     Path(__file__).resolve().parents[3]
     / "channels_config"
-    / "master_mei"
+    / _MEI_PAGE
     / "audio"
     / "sfx"
     / "dark_atmosphere_loop.wav"
