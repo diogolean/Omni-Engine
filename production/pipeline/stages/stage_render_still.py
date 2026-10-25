@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Still-image render for a text quote."""
 from __future__ import annotations
+from shared.channel_flags import sole_page
 
 from production.pipeline.channel_flags import enabled as _channel_enabled
 
@@ -138,12 +139,12 @@ def _stage_render_still_02(state: VariantState) -> None:
                 state._ix = state._lo.find(state._jt.lower())
         state._scene_desc = state._re_scene.sub('[ \\t]{2,}', ' ', state._sd).strip(' ,.')
         state.image_prompt = f'{state._wf_il}. {state._wf_ch}. Scene Concept: {state._scene_desc}. CRITICAL COMPLIANCE: Do NOT draw any objects from the text literal. Absolutely NO bookshelves, NO open books, NO coffee cups, NO desks, NO armchairs, NO windows. The frame must only feature the expressive dark azure pencil art couple. Full-bleed, full-screen canvas.'
-        _LOG.info('wonder_feed IMAGE PROMPT LOCK | hard-override applied | scene: %s', state._scene_desc[:80])
+        _LOG.info('%s IMAGE PROMPT LOCK | hard-override applied | scene: %s', state.page_ctx.page_id if state.page_ctx else sole_page('GRAPHITE_STYLE_LOCK'), state._scene_desc[:80])
     if state._isolated_channel:
         _LOG.info('%s IMAGE PROMPT | adapter compose_image_prompt: %s', state.page_ctx.page_id if state.page_ctx else 'isolated', state.image_prompt[:180])
     elif state._mm_image_prompt_override:
         state.image_prompt = state._mm_image_prompt_override
-        _LOG.info('master_mei IMAGE PROMPT LOCK | hard-override applied: %s', state.image_prompt[:180])
+        _LOG.info('%s IMAGE PROMPT LOCK | hard-override applied: %s', state.page_ctx.page_id if state.page_ctx else sole_page('MEI_PIPELINE'), state.image_prompt[:180])
     if state.post_type in ('LONG_CAPTION_IMAGE', 'CAROUSEL') and (not state._mm_image_prompt_override):
         from production.providers.image.scene_prompt_generator import apply_topic_visual_lock as _tvl
         state._tvl = _tvl
@@ -192,8 +193,8 @@ def _stage_render_still_02(state: VariantState) -> None:
     state._WINDOWS_FACTORY_ROOT = _WINDOWS_FACTORY_ROOT
     state._wf_style_name = 'Screenshot 2026-06-01 183244.png'
     state._wf_style_env = (state._os.getenv('WONDER_FEED_STYLE_REFERENCE') or '').strip().strip('"').strip("'")
-    state._wf_style_repo = REPO_ROOT / 'channels_config' / 'wonder_feed' / 'style_reference' / state._wf_style_name
-    state._wf_style_windows = state._WINDOWS_FACTORY_ROOT / 'channels_config' / 'wonder_feed' / 'style_reference' / state._wf_style_name
+    state._wf_style_repo = REPO_ROOT / 'channels_config' / sole_page("GRAPHITE_STYLE_LOCK") / 'style_reference' / state._wf_style_name
+    state._wf_style_windows = state._WINDOWS_FACTORY_ROOT / 'channels_config' / sole_page("GRAPHITE_STYLE_LOCK") / 'style_reference' / state._wf_style_name
     if state._wf_style_env:
         state._WF_STYLE_REF = Path(state._wf_style_env).expanduser()
     elif state._wf_style_windows.is_file():
@@ -210,10 +211,10 @@ def _stage_render_still_02(state: VariantState) -> None:
             state._style_ref_path = state._WF_STYLE_REF
             state._style_ref_paths = [state._WF_STYLE_REF]
             print('[DEBUG_STYLE_ENGINE] Verification PASSED — style reference loaded.')
-            logging.info('wonder_feed STYLE REF LOCK | pinned → %s', state._WF_STYLE_REF.name)
+            logging.info('%s STYLE REF LOCK | pinned → %s', state.page_ctx.page_id, state._WF_STYLE_REF.name)
         else:
             print(f'[ERROR_STYLE_ENGINE] Verification Failed. Path missing: {state._WF_STYLE_REF_STR}')
-            logging.warning('wonder_feed style reference not found at expected path: %s', state._WF_STYLE_REF)
+            logging.warning('%s style reference not found at expected path: %s', state.page_ctx.page_id, state._WF_STYLE_REF)
     elif state.page_ctx:
         state._style_ref_paths = state.page_ctx.resolve_style_reference_images()
         state._style_ref_weight = state.page_ctx.style_reference_weight
@@ -272,7 +273,7 @@ def _stage_render_still_02(state: VariantState) -> None:
             if state.post_type in ('LONG_CAPTION_IMAGE', 'CAROUSEL'):
                 from production.qa.reel_visual_qa import generate_and_gate as _still_gate
                 state._still_gate = _still_gate
-                state.img_path_display, state._topic_gate_extra = state._still_gate(state.adapter.generate, prompt=state.image_prompt, chunk_text=state.resolved_subject or state.visual_subject or '', output_stem=state.stem, output_directory=state.subject_assets, channel=state.page_ctx.page_id if state.page_ctx else 'ancient_knowledge', search_dirs=[state.subject_assets] if state.subject_assets else [], generate_kwargs=state._gen_kwargs, banned_subjects=list(state._topic_lock.get('banned_subjects') or []) if state._topic_lock else None, domain_anchors=str((state._topic_lock or {}).get('domain_anchors') or ''), prefer_stem=state.stem)
+                state.img_path_display, state._topic_gate_extra = state._still_gate(state.adapter.generate, prompt=state.image_prompt, chunk_text=state.resolved_subject or state.visual_subject or '', output_stem=state.stem, output_directory=state.subject_assets, channel=state.page_ctx.page_id if state.page_ctx else sole_page("DOCUMENTARY_PIPELINE"), search_dirs=[state.subject_assets] if state.subject_assets else [], generate_kwargs=state._gen_kwargs, banned_subjects=list(state._topic_lock.get('banned_subjects') or []) if state._topic_lock else None, domain_anchors=str((state._topic_lock or {}).get('domain_anchors') or ''), prefer_stem=state.stem)
             else:
                 state.img_path_display = state.adapter.generate(state.image_prompt, output_stem=state.stem, **state._gen_kwargs)
         state.img_used = state.adapter.last_gemini_image_model_used or state.bm.image_primary_id

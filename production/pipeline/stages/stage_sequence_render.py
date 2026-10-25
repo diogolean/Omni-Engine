@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Master Mei and sequence still render, including QA gates."""
 from __future__ import annotations
+from shared.channel_flags import sole_page
 
 from production.pipeline.channel_flags import enabled as _channel_enabled
 
@@ -242,10 +243,10 @@ def _stage_sequence_render_02(state: VariantState) -> None:
         state._rung_names = _rung_names
         from production.formats.economic_reel.artefact.policy import artefact_images_enabled as _ladder_flag
         state._ladder_flag = _ladder_flag
-        state._ladder_pages = {part.strip().lower() for part in (os.getenv('REEL_ARTIFACT_IMAGES_CHANNELS') or 'ancient_knowledge').split(',') if part.strip()}
+        state._ladder_pages = {part.strip().lower() for part in (os.getenv('REEL_ARTIFACT_IMAGES_CHANNELS') or sole_page("DOCUMENTARY_PIPELINE")).split(',') if part.strip()}
         state._ladder_on = bool(state._ladder_flag()) and str((state.page_ctx.page_id if state.page_ctx else '') or '').strip().lower() in state._ladder_pages
         if state._ladder_on:
-            state._reel_checkpoint = state._ReelCkpt.for_reel(str((state.page_ctx.page_id if state.page_ctx else '') or 'ancient_knowledge'), state.stem)
+            state._reel_checkpoint = state._ReelCkpt.for_reel(str((state.page_ctx.page_id if state.page_ctx else '') or sole_page("DOCUMENTARY_PIPELINE")), state.stem)
             _LOG.info('LADDER | checkpoint=%s | rungs=%s | beat_usd=%.2f | reel_usd=%.2f | nano_cap=%s', state._reel_checkpoint.path, ','.join(state._rung_names()), state._beat_usd(), state._reel_usd(), state._nano_cap())
     except Exception as _ladder_exc:
         state._ladder_exc = _ladder_exc
@@ -365,9 +366,9 @@ def _stage_sequence_render_03(state: VariantState) -> None:
         elif state._ladder_on:
             from production.formats.economic_reel.artefact.orchestrate import make_climb_job as _make_climb_job
             state._make_climb_job = _make_climb_job
-            state._sr_act_jobs[state._act_i] = state._make_climb_job(beat_index=state._act_i, narration=state._snippet, prompt=state._act_prompt, output_directory=state._reel_img_dir, stem=f'{state.stem}_act{state._act_i + 1:02d}', channel=str((state.page_ctx.page_id if state.page_ctx else '') or 'ancient_knowledge'), flux_generate=state.adapter.generate, shot=state._plan_shot, checkpoint=state._reel_checkpoint, generate_kwargs={'negative_prompt': state._act_neg, 'visual_role': state._doc_role}, episode_subject=str(state.resolved_subject or state.resolved_subject_for_beat or ''), banned_subjects=list(state._act_banned or []) or None, is_cta=bool(state._sr_act_meta[state._act_i]['is_cta']), n_beats=int(state._seq_n))
+            state._sr_act_jobs[state._act_i] = state._make_climb_job(beat_index=state._act_i, narration=state._snippet, prompt=state._act_prompt, output_directory=state._reel_img_dir, stem=f'{state.stem}_act{state._act_i + 1:02d}', channel=str((state.page_ctx.page_id if state.page_ctx else '') or sole_page("DOCUMENTARY_PIPELINE")), flux_generate=state.adapter.generate, shot=state._plan_shot, checkpoint=state._reel_checkpoint, generate_kwargs={'negative_prompt': state._act_neg, 'visual_role': state._doc_role}, episode_subject=str(state.resolved_subject or state.resolved_subject_for_beat or ''), banned_subjects=list(state._act_banned or []) or None, is_cta=bool(state._sr_act_meta[state._act_i]['is_cta']), n_beats=int(state._seq_n))
         else:
-            state._sr_act_jobs[state._act_i] = functools.partial(state._qwen_gate, state._gen, prompt=state._act_prompt, chunk_text=state._snippet, output_stem=state._act_stem, output_directory=state._reel_img_dir, channel=state.page_ctx.page_id or 'ancient_knowledge', search_dirs=[state._reel_img_dir, *([state.subject_assets] if state.subject_assets else [])], generate_kwargs={'avatar_mode': 'OFF', 'visual_role': state._doc_role, 'negative_prompt': state._act_neg, 'free_image_sentence': state._snippet, 'free_image_entity': str(state.resolved_subject_for_beat or state.resolved_subject or ''), **state._art_kwargs}, banned_subjects=list(state._act_banned or []) or None, domain_anchors=str(state._act_anchors or ''), prefer_stem=state.stem, episode_subject=str(state.resolved_subject_for_beat or state.resolved_subject or ''))
+            state._sr_act_jobs[state._act_i] = functools.partial(state._qwen_gate, state._gen, prompt=state._act_prompt, chunk_text=state._snippet, output_stem=state._act_stem, output_directory=state._reel_img_dir, channel=state.page_ctx.page_id or sole_page("DOCUMENTARY_PIPELINE"), search_dirs=[state._reel_img_dir, *([state.subject_assets] if state.subject_assets else [])], generate_kwargs={'avatar_mode': 'OFF', 'visual_role': state._doc_role, 'negative_prompt': state._act_neg, 'free_image_sentence': state._snippet, 'free_image_entity': str(state.resolved_subject_for_beat or state.resolved_subject or ''), **state._art_kwargs}, banned_subjects=list(state._act_banned or []) or None, domain_anchors=str(state._act_anchors or ''), prefer_stem=state.stem, episode_subject=str(state.resolved_subject_for_beat or state.resolved_subject or ''))
     state._gpu_baseline = 0.0
     try:
         from production.providers.image.remote_gpu_manager import get_manager as _get_rgpu, is_remote_gpu_enabled as _rgpu_on
@@ -561,7 +562,7 @@ def _stage_sequence_render_04(state: VariantState) -> None:
                 if isinstance(state._cached_miss, state.StillGateResult):
                     _accept_gate(state._cached_miss, state._act_i, state._snippet)
                     continue
-            state._regen = state._qwen_gate(state._meta.get('generate_fn') or state.adapter.generate, prompt=str(state._meta.get('prompt') or state._snippet), chunk_text=state._snippet, output_stem=f'{state._meta.get('stem') or 'act'}_r01', output_directory=state._reel_img_dir, channel=state.page_ctx.page_id or 'ancient_knowledge', generate_kwargs={'avatar_mode': 'OFF', 'negative_prompt': state._meta.get('negative_prompt'), 'free_image_sentence': state._snippet, 'free_image_entity': str(state._meta.get('episode_subject') or state.resolved_subject or ''), **dict(state._meta.get('artefact_kwargs') or {})}, banned_subjects=list(state._meta.get('banned_subjects') or []) or None, domain_anchors=str(state._meta.get('domain_anchors') or ''), episode_subject=str(state._meta.get('episode_subject') or state.resolved_subject or ''))
+            state._regen = state._qwen_gate(state._meta.get('generate_fn') or state.adapter.generate, prompt=str(state._meta.get('prompt') or state._snippet), chunk_text=state._snippet, output_stem=f'{state._meta.get('stem') or 'act'}_r01', output_directory=state._reel_img_dir, channel=state.page_ctx.page_id or sole_page("DOCUMENTARY_PIPELINE"), generate_kwargs={'avatar_mode': 'OFF', 'negative_prompt': state._meta.get('negative_prompt'), 'free_image_sentence': state._snippet, 'free_image_entity': str(state._meta.get('episode_subject') or state.resolved_subject or ''), **dict(state._meta.get('artefact_kwargs') or {})}, banned_subjects=list(state._meta.get('banned_subjects') or []) or None, domain_anchors=str(state._meta.get('domain_anchors') or ''), episode_subject=str(state._meta.get('episode_subject') or state.resolved_subject or ''))
             _accept_gate(state._regen, state._act_i, state._snippet)
             continue
         state._result = state._sr_act_results.get(state._act_i)

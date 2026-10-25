@@ -431,6 +431,8 @@ NICHE_DISCLAIMER: str = (
 # Engine flags. The pipeline reads these; it does not test the channel name.
 MEI_PIPELINE: bool = True
 POOL_TOPIC_LOCK: bool = True
+USE_APPROVED_CTA: bool = True
+USE_NARRATION_WORD_CAP: bool = True
 YOUTUBE_CHANNEL_HINT: str = "Master Mei"
 YOUTUBE_PLAYLIST_FORCE_DESCRIPTION: bool = True
 # Used only when a caller creates a playlist with an empty description.

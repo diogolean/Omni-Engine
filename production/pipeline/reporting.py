@@ -342,9 +342,9 @@ def _snapshot_verified_models(
         model_override=img_override,
         log=True,
     )
-    _ak_page = bool(
-        page_ctx and (page_ctx.page_id or "").strip().lower() == "ancient_knowledge"
-    )
+    from shared.channel_flags import enabled as _channel_enabled
+
+    _ak_page = _channel_enabled(page_ctx, "DOCUMENTARY_PIPELINE")
     if _ak_page:
         humanizer = "Ancient Knowledge narration (live text provider)"
     else:

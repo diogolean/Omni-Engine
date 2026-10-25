@@ -15,24 +15,14 @@ Each channel lives in an isolated directory and carries its own:
 
 Supported channels
 ---------------
-  anna_protocol   Holistic Legacy — ancestral wellness, natural remedies, avatar ON
-  master_mei      SUPER channel — Stoic financial freedom / wealth mindset (US), avatar ON
-  wonder_feed     Emotional intelligence, attachment science, avatar OFF (default)
-  down_dirty      Matrix escape, financial sovereignty, raw mindset, avatar OFF (default)
-  ancient_knowledge  Ancient history, conspiracies, mysteries, photorealistic style, avatar OFF
-  momma_circle    Parenting / PARENTAL_CONTENTS — reference-clip reels, warm lullaby audio, avatar OFF
-  principles_of_wealth_finance_economics
-                  Educational / Financial Curation — library ingest of the
-                  Principles of Wealth production drive (wealth_main.py)
-  endless_summer_paradise
-                  1950s surreal architecture library ingest — local source/
-                  + factory_settings.json (esp_main.py; duration > 40s)
+Each folder under ``channels_config/`` that owns a ``page_config.py``.
+The loader discovers them. It does not keep a name list in this module.
 
 Usage
 -----
     from production.pipeline.channel_context import load_page_context, PageContext
 
-    ctx = load_page_context("anna_protocol", avatar_mode="ON", post_format="IMAGE_AVATAR")
+    ctx = load_page_context("your_channel", avatar_mode="ON", post_format="IMAGE_AVATAR")
     print(ctx.page_dir)
     print(ctx.avatar_on)
     print(ctx.atmosphere_style)
@@ -137,7 +127,7 @@ VALID_FORMATS: tuple[str, ...] = (
     "TEXT_QUOTE",         # brand-colour solid backdrop + text only (no Gemini image call)
     "DYNAMIC_REEL",       # ECONOMIC_REEL: single image → MP4 via video_engine
     "SEQUENCE_REEL",      # multi-image 80-second reel via core.reel_sequence_engine
-    "REFERENCE_BASED_REELS",  # raw footage clip + hook overlay + lullaby audio (momma_circle)
+    "REFERENCE_BASED_REELS",  # raw footage clip + hook overlay + lullaby audio
 )
 
 _ENGINE_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -168,7 +158,7 @@ class PageContext:
     Attributes
     ----------
     page_id:
-        Slug identifying the active page (e.g. 'anna_protocol').
+        Slug identifying the active page (the channel folder name).
     avatar_mode:
         'ON' — include human subject + reference image in image generation.
         'OFF' — bypass avatar pipeline; generate purely atmospheric imagery.
@@ -674,21 +664,21 @@ class PageContext:
 
     @property
     def subtitle_fontsize(self) -> int:
-        """ECONOMIC_REEL subtitle size — inherited from master_mei chrome."""
+        """ECONOMIC_REEL subtitle size — inherited from the Mei chrome module."""
         from production.formats.mei.mei_chrome import SUBTITLE_FONTSIZE
 
         return max(20, int(SUBTITLE_FONTSIZE))
 
     @property
     def subtitle_y_position(self) -> "int | None":
-        """Lower-third Y — inherited from master_mei chrome."""
+        """Lower-third Y — inherited from the Mei chrome module."""
         from production.formats.mei.mei_chrome import SUBTITLE_Y_POSITION
 
         return max(0, int(SUBTITLE_Y_POSITION))
 
     @property
     def cta_subtitle_y_position(self) -> "int | None":
-        """Follow/CTA overlay Y — inherited from master_mei chrome."""
+        """Follow/CTA overlay Y — inherited from the Mei chrome module."""
         from production.formats.mei.mei_chrome import CTA_SUBTITLE_Y_POSITION
 
         return max(0, int(CTA_SUBTITLE_Y_POSITION))
@@ -1067,7 +1057,7 @@ class PageContext:
         When False the headline/hook text is NOT burned into the top of the frame.
         Only lower-third word subtitles and the logo remain.
         Sourced from ENABLE_TOP_HOOK_TEXT in page_config.py; defaults to True
-        for backward compatibility with wonder_feed and other pages.
+        when the page does not set the flag.
         """
         return bool(self.page_cfg.get("ENABLE_TOP_HOOK_TEXT", True))
 
@@ -1194,7 +1184,7 @@ class PageContext:
 
     @property
     def ambient_music_style(self) -> str:
-        """``warrior`` (mei) or ``mystery`` (ancient_knowledge) music_prompt profile."""
+        """Music-prompt profile from AMBIENT_MUSIC_STYLE (warrior or mystery)."""
         raw = str(self.page_cfg.get("AMBIENT_MUSIC_STYLE", "") or "").strip().lower()
         return raw or "mystery"
 
@@ -1458,7 +1448,7 @@ class PageContext:
     def reel_tail_pad_s(self) -> float:
         """
         Extra seconds appended after final audio so CTA/subtitles never clip.
-        Sourced from REEL_TAIL_PAD_S; defaults to 1.0 (ancient_knowledge buffer).
+        Sourced from REEL_TAIL_PAD_S; defaults to 1.0.
         """
         try:
             return max(0.0, float(self.page_cfg.get("REEL_TAIL_PAD_S", 1.0)))
@@ -1597,8 +1587,8 @@ class PageContext:
     def prompt_negative_terms(self) -> list:
         """
         List of words / phrases to strip from inherited atmosphere prompts.
-        Used to prevent cross-page style contamination (e.g. 'graphite' leaking
-        into ancient_knowledge's photorealistic prompts).
+        Used to prevent cross-page style contamination (for example a graphite
+        term leaking into a photorealistic prompt).
         Sourced from PROMPT_NEGATIVE_TERMS in page_config.py; defaults to [].
         """
         raw = self.page_cfg.get("PROMPT_NEGATIVE_TERMS", [])
@@ -1637,7 +1627,7 @@ def load_page_context(
     Parameters
     ----------
     page_id:
-        One of: anna_protocol, master_mei, wonder_feed, down_dirty.
+        Channel folder slug under channels_config/.
     avatar_mode:
         'ON' or 'OFF'.
     post_format:

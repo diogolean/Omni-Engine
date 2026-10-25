@@ -88,4 +88,6 @@ LOGO_POSITION: str = "bottom_right"
 NATURAL_DRAW_LOCK: bool = True
 ALLOWS_CTA_CAPTION_IMAGE: bool = True
 VM_ENSURE_CHANNEL_DIR: bool = True
+LEGACY_SHARED_LEDGER: bool = True
+LEGACY_MEDIA_DNA: bool = True
 BRAND_GRADIENT: tuple = ((14, 10, 6), (30, 22, 12))

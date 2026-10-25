@@ -187,6 +187,9 @@ TOPIC_POOL: list = [
 # Engine flags. The pipeline reads these; it does not test the channel name.
 GRAPHITE_STYLE_LOCK: bool = True
 POOL_TOPIC_LOCK: bool = True
+QUOTES_WORKBOOK: str = (
+    "channels_config/wonder_feed/Quotes_reference/@REDES REF SOURCE FONTE.xlsx"
+)
 LOFI_ENABLED: bool = True
 LOFI_MODULES: tuple = ("relationship", "parenting")
 LOFI_ASSEMBLY_FALLBACK: bool = True

@@ -42,6 +42,7 @@ from production.pipeline.acts import _looks_like_upstream_api_failure, _silence_
 from production.pipeline.orchestrator import produce, run_test_images_debug_mode  # noqa: E402
 from production.pipeline.reporting import _emit_clean_api_error, _preflight_gemini_image_batch_cost, _print_production_summary, _print_test_footer, _snapshot_verified_models  # noqa: E402
 from production.pipeline.channel_flags import flag as _channel_flag
+from production.pipeline.channel_flags import sole_page as _sole_page
 from production.pipeline.cli_parser import _together_cli_image_model
 from production.pipeline.log import _LOG
 
@@ -54,7 +55,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         os.environ["REEL_HOOK_PARALLAX"] = "1"
     if getattr(args, "deepinfra_flux2dev", False):
         os.environ["LOFI_FLUX_BACKEND"] = "flux2-dev"
-    # True CLI value before page locks (master_mei/anna) mutate args.avatar.
+    # True CLI value before page locks mutate args.avatar.
     _avatar_from_cli: str | None = args.avatar
     if getattr(args, "debug", False):
         os.environ["ENGINE_DEBUG"] = "true"
@@ -161,9 +162,10 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
 
     if getattr(args, "post_type", "").upper() == "CTA_CAPTION_IMAGE":
         if not _channel_flag(_lock_page, "ALLOWS_CTA_CAPTION_IMAGE"):
+            _cta_page = _sole_page("ALLOWS_CTA_CAPTION_IMAGE")
             raise SystemExit(
-                "CTA_CAPTION_IMAGE is only available for --page anna_protocol. "
-                "Example: python main.py --page anna_protocol "
+                f"CTA_CAPTION_IMAGE is only available for --page {_cta_page}. "
+                f"Example: python main.py --page {_cta_page} "
                 "--post-type CTA_CAPTION_IMAGE --quantity 1"
             )
 
@@ -315,7 +317,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
     econ_resolved = economic_choice if economic_choice is not None else app_config.ECONOMIC_BRAIN_MODE
     # Page-level override: respect ECONOMIC_BRAIN_MODE from page_config.py when
     # the CLI did not explicitly pass --economic or --premium.
-    # This ensures that ancient_knowledge (ECONOMIC_BRAIN_MODE=True) always gets
+    # This ensures that a page with ECONOMIC_BRAIN_MODE=True always gets
     # the nano/flash image model, regardless of the global app_config default.
     if economic_choice is None and _tmp_page_cfg.get("ECONOMIC_BRAIN_MODE") is not None:
         econ_resolved = bool(_tmp_page_cfg["ECONOMIC_BRAIN_MODE"])
@@ -426,7 +428,7 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
     if topic_raw is None and args.test:
         topic_raw = input("Topic (optional, press Enter to rely on scaffold placeholder): ").strip() or ""
 
-    # For wonder_feed graphite post types, force the draw_style to SKETCH regardless
+    # For graphite-locked post types, force the draw_style to SKETCH regardless
     # of what the user passed on the CLI — the page's BASE_GRAPHITE_PROMPT is the
     # single source of truth, and SKETCH is the only correct flag for that pipeline.
     _active_post_type = args.post_type.upper() if hasattr(args, "post_type") else ""

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Topic, batch angle, sketch lock, and horror override."""
 from __future__ import annotations
+from shared.channel_flags import sole_page
 
 from production.pipeline.channel_flags import enabled as _channel_enabled
 
@@ -134,7 +135,7 @@ def _stage_setup_01(state: VariantState) -> None:
     if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
         from production.formats.economic_reel.artefact.provider_health import preflight_text as _preflight_text
         state._preflight_text = _preflight_text
-        state._preflight_text('ancient_knowledge')
+        state._preflight_text(sole_page("DOCUMENTARY_PIPELINE"))
     state.cta_kw = contextual_cta_keyword(state.resolved_subject)
     state.humanizer_notes = state.bm.humanizer_summary
     state.caption = '(skipped)'
@@ -284,7 +285,7 @@ def _stage_setup_02(state: VariantState) -> None:
         state._re_mod = _re_mod
         state._clean = state._re_mod.sub('[ \\t]{2,}', ' ', state._clean).strip(' ,.')
         state.effective_atmosphere = state._WF_SKETCH_PREFIX + state._clean
-        _LOG.info('wonder_feed PROMPT LOCK | use_style_ref=%s | compiled: %s', state.page_ctx.use_style_reference, state.effective_atmosphere[:160])
+        _LOG.info('%s PROMPT LOCK | use_style_ref=%s | compiled: %s', state.page_ctx.page_id, state.page_ctx.use_style_reference, state.effective_atmosphere[:160])
     state._mm_image_prompt_override = ''
     state._isolated_channel = ChannelFactory.is_isolated((state.page_ctx.page_id or '').lower() if state.page_ctx else '')
     if state.page_ctx and _channel_enabled(state.page_ctx, 'MEI_PIPELINE') and (not state._isolated_channel):
@@ -303,7 +304,7 @@ def _stage_setup_02(state: VariantState) -> None:
         state._mm_dna_clean = state._re_mm.sub('\\b(?:cyber|bionic|neon|vr|headset|neural|wire|cable|implant|biomechanical)\\w*\\b', '', state._mm_dna_clean, flags=state._re_mm.IGNORECASE)
         state._mm_dna_clean = state._re_mm.sub('\\s{2,}', ' ', state._mm_dna_clean).strip(' ,.')
         state.effective_atmosphere = state._mm_image_prompt_override
-        _LOG.info('master_mei | purged graphite path | Scene1 FLUX lock: %s', state._mm_image_prompt_override[:120])
+        _LOG.info('%s | purged graphite path | Scene1 FLUX lock: %s', state.page_ctx.page_id, state._mm_image_prompt_override[:120])
     state.adapter = None
     state._carousel_image_paths = []
     state._carousel_imgbb = []
@@ -349,7 +350,7 @@ def _stage_setup_02(state: VariantState) -> None:
             try:
                 from production.qa.reel_visual_qa import generate_and_gate as _slide_gate
                 state._slide_gate = _slide_gate
-                state._slide_img, state._slide_extra = state._slide_gate(state.adapter.generate, prompt=state._slide_prompt, chunk_text=f'{state.resolved_subject} {state._facet}', output_stem=f'{state.stem}_slide_{state._slide_num:02d}', output_directory=state.subject_assets, channel=state._pid or 'ancient_knowledge', search_dirs=[state.subject_assets] if state.subject_assets else [], generate_kwargs={'reference_image_path': state.effective_ref_path if state.image_avatar_mode == 'ON' else None, 'avatar_mode': state.image_avatar_mode, 'negative_prompt': str(state._slide_lock.get('negative_prompt') or '') if state._slide_lock else None}, banned_subjects=list(state._slide_lock.get('banned_subjects') or []) if state._slide_lock else None, domain_anchors=str((state._slide_lock or {}).get('domain_anchors') or ''), prefer_stem=state.stem)
+                state._slide_img, state._slide_extra = state._slide_gate(state.adapter.generate, prompt=state._slide_prompt, chunk_text=f'{state.resolved_subject} {state._facet}', output_stem=f'{state.stem}_slide_{state._slide_num:02d}', output_directory=state.subject_assets, channel=state._pid or sole_page("DOCUMENTARY_PIPELINE"), search_dirs=[state.subject_assets] if state.subject_assets else [], generate_kwargs={'reference_image_path': state.effective_ref_path if state.image_avatar_mode == 'ON' else None, 'avatar_mode': state.image_avatar_mode, 'negative_prompt': str(state._slide_lock.get('negative_prompt') or '') if state._slide_lock else None}, banned_subjects=list(state._slide_lock.get('banned_subjects') or []) if state._slide_lock else None, domain_anchors=str((state._slide_lock or {}).get('domain_anchors') or ''), prefer_stem=state.stem)
                 state._carousel_image_paths.append(str(state._slide_img))
                 state._images_generated_this_variant += _track_adapter_image(state.cost_tracker, state.adapter)
                 state._images_generated_this_variant += max(0, int(state._slide_extra or 0))
@@ -406,7 +407,7 @@ def _stage_setup_02(state: VariantState) -> None:
     try:
         from production.formats.economic_reel.artefact.scene_library import start_reel as _scene_lib_start
         state._scene_lib_start = _scene_lib_start
-        state._scene_lib_start((state.page_ctx.page_id if state.page_ctx else '') or 'ancient_knowledge')
+        state._scene_lib_start((state.page_ctx.page_id if state.page_ctx else '') or sole_page("DOCUMENTARY_PIPELINE"))
     except Exception:
         pass
     state._qa_report = None

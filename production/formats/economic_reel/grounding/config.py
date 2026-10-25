@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from shared.channel_flags import flag, pages_with
+
 
 def _on(name: str, default: bool) -> bool:
     raw = (os.getenv(name) or "").strip().lower()
@@ -25,8 +27,11 @@ def grounding_enabled_for(channel: str) -> bool:
     """
     if not grounding_enabled():
         return False
-    raw = os.getenv("REEL_VISUAL_GROUNDING_CHANNELS") or "ancient_knowledge"
-    allowed = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    raw = os.getenv("REEL_VISUAL_GROUNDING_CHANNELS")
+    if raw is None or not str(raw).strip():
+        allowed = set(pages_with("VISUAL_GROUNDING"))
+    else:
+        allowed = {part.strip().lower() for part in str(raw).split(",") if part.strip()}
     return (channel or "").strip().lower() in allowed
 
 
@@ -52,4 +57,4 @@ def angle_memory_for(channel_id: str, narrative_mode: str = "") -> bool:
         return False
     if (narrative_mode or "").strip().lower() == "warrior_discipline":
         return False
-    return (channel_id or "").strip().lower() == "ancient_knowledge"
+    return flag(channel_id, "ANGLE_MEMORY")

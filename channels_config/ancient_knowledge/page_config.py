@@ -349,6 +349,12 @@ NICHE_DISCLAIMER: str = (
 # Engine flags. The pipeline reads these; it does not test the channel name.
 DOCUMENTARY_PIPELINE: bool = True
 WAN_REEL: bool = True
+VISUAL_GROUNDING: bool = True
+ANGLE_MEMORY: bool = True
+ARTICLE_LINK_REQUIRED: bool = True
+TTS_SPEED_LOCK: float = 1.0
+TTS_NETWORK_RETRIES: int = 3
+USE_NARRATION_WORD_CAP: bool = True
 VM_ENSURE_CHANNEL_DIR: bool = True
 VM_STATE_MOUNT: bool = True
 YOUTUBE_PLAYLIST_TITLE: str = "Ancient Mysteries & Forbidden History"

@@ -70,7 +70,9 @@ class ChannelFactory:
 
     @staticmethod
     def create(channel_id: str | None = None) -> BaseChannelConfig:
-        cid = (channel_id or os.environ.get("ACTIVE_PAGE") or "anna_protocol").strip()
+        from shared.channel_flags import default_page
+
+        cid = (channel_id or os.environ.get("ACTIVE_PAGE") or default_page()).strip()
         adapter_cls = _adapter_class(cid)
         if adapter_cls is not None:
             return adapter_cls()

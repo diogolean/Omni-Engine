@@ -23,9 +23,15 @@ _SYSTEM = (
 )
 
 
+def _documentary_page() -> str:
+    from shared.channel_flags import sole_page
+
+    return sole_page("DOCUMENTARY_PIPELINE")
+
+
 def _topic_pool() -> list[str]:
     try:
-        _pc = Symbol('channels_config.ancient_knowledge', 'page_config')
+        _pc = Symbol(f"channels_config.{_documentary_page()}", "page_config")
 
         pool = list(getattr(_pc, "TOPIC_POOL", []) or [])
         if pool:
@@ -49,7 +55,10 @@ class ThemeCuratorAgent(BaseAgent):
         self._bind_cost_tracker(state)
         pool = _topic_pool()
         try:
-            AncientKnowledgeAdapter = Symbol('channels_config.ancient_knowledge.channel_adapter', 'AncientKnowledgeAdapter')
+            AncientKnowledgeAdapter = Symbol(
+                f"channels_config.{_documentary_page()}.channel_adapter",
+                "AncientKnowledgeAdapter",
+            )
 
             adapter = AncientKnowledgeAdapter()
             pool = adapter.get_niche_topics() or pool

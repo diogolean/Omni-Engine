@@ -198,7 +198,7 @@ def resolve_channel_outputs_dir(channel_id: str) -> Path:
        history, a library, or content_library.json
     3. ``data/<channel_id>/`` when that tree has inventory/history
     4. Legacy shared ``outputs/`` only for channels that do **not** have
-       their own library tree (preserves anna_protocol root ledger)
+       their own library tree (preserves the legacy shared root ledger)
     5. Fresh isolated ``outputs/<channel_id>/``
     """
     from shared.paths import coerce_outputs_path, outputs_root, page_outputs_dir
@@ -213,9 +213,11 @@ def resolve_channel_outputs_dir(channel_id: str) -> Path:
 
     outputs_chan = page_outputs_dir(cid)
     root_outputs = outputs_root()
-    # Preserve the original anna_protocol ledger at outputs/ until that
+    # Preserve the original shared ledger at outputs/ until that
     # channel gets its own isolated inventory/history files.
-    if cid == "anna_protocol":
+    from shared.channel_flags import flag
+
+    if flag(cid, "LEGACY_SHARED_LEDGER"):
         chan_has_inventory = (
             (outputs_chan / "master_inventory.json").is_file()
             or (outputs_chan / "scheduled_history.txt").is_file()
@@ -226,7 +228,7 @@ def resolve_channel_outputs_dir(channel_id: str) -> Path:
         )
         if root_has_state and not chan_has_inventory:
             logger.info(
-                "Channel 'anna_protocol': using legacy shared outputs/ ledger."
+                "Channel '%s': using legacy shared outputs/ ledger.", cid
             )
             return root_outputs
     data_chan = ENGINE_ROOT / "data" / cid

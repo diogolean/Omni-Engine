@@ -83,7 +83,7 @@ def _keyword_cta_instruction_block(
 ) -> str:
     """Mandatory comment-keyword CTA rule for Anna-style caption prompts.
 
-    Isolated channels (ancient_knowledge) use their own curiosity close and
+    Isolated documentary channels use their own curiosity close and
     never receive this block. Wellness / Holistic Legacy pages pick a
     brand keyword from Call_To_Action_Inventory (PROTOCOL, RESTORE, …).
     """
@@ -958,7 +958,7 @@ def build_reel_narration_prompt(
         ).strip()
 
     if _mode == "investigative":
-        # ── INVESTIGATIVE / DOCUMENTARY niche structure (ancient_knowledge etc.) ──
+        # ── INVESTIGATIVE / DOCUMENTARY niche structure ──
         return dedent(
             f"""
             You are writing voice narration for a short-form investigative documentary reel
@@ -1025,7 +1025,7 @@ def build_reel_narration_prompt(
             """
         ).strip()
     else:
-        # ── RELATIONSHIP PSYCHOLOGY niche structure (wonder_feed etc.) ──
+        # ── RELATIONSHIP PSYCHOLOGY niche structure ──
         return dedent(
             f"""
             You are writing voice narration for a 30-second vertical relationship psychology reel
@@ -1198,7 +1198,7 @@ def build_long_caption_prompt(
     """
     Build a long-form LLM prompt for LONG_CAPTION_IMAGE.
 
-    Isolated channels (ancient_knowledge) get investigative 3-paragraph copy
+    Isolated documentary channels get investigative 3-paragraph copy
     with Pinterest metadata — never relationship-psychology archetypes.
     """
     _sig = (signature or "").strip()
@@ -1855,7 +1855,9 @@ class CaptionEngine:
 
     def _is_ancient_knowledge(self) -> bool:
         try:
-            return str(getattr(self._channel, "channel_id", "") or "") == "ancient_knowledge"
+            from shared.channel_flags import flag
+
+            return flag(str(getattr(self._channel, "channel_id", "") or ""), "DOCUMENTARY_PIPELINE")
         except Exception:  # noqa: BLE001
             return False
 
@@ -2217,7 +2219,9 @@ class CaptionEngine:
         # not retry. Warrior / Master Mei stays on Gemini.
         raw = ""
         self._last_script_error = None
-        if _rag_channel_name == "ancient_knowledge" and not _warrior:
+        from shared.channel_flags import flag as _doc_flag
+
+        if _doc_flag(_rag_channel_name, "DOCUMENTARY_PIPELINE") and not _warrior:
             def _gemini_script(_body: str) -> str:
                 return _try_gemini(attempt=1, raise_errors=True)
 
@@ -2230,7 +2234,7 @@ class CaptionEngine:
 
                 spoken = strip_spoken_cta(_metrics_script(extract_narration(text)))
                 return repair_hook_if_only_miss(
-                    spoken, topic, channel="ancient_knowledge",
+                    spoken, topic, channel=_rag_channel_name,
                 )
 
             def _accept_script(text: str) -> bool:
@@ -2243,7 +2247,7 @@ class CaptionEngine:
                 if _word_count(spoken) < 40 or not script_is_usable(spoken, topic):
                     return False
                 problem = grounding_problem(
-                    spoken, topic, channel="ancient_knowledge",
+                    spoken, topic, channel=_rag_channel_name,
                 )
                 if problem:
                     logger.info("AK text grounding | %s", problem)
@@ -2318,7 +2322,7 @@ class CaptionEngine:
 
             clean = ensure_topic_date(clean, topic)
             # Soft ceiling only. No rewrite, and no cut inside a sentence.
-            if _rag_channel_name == "ancient_knowledge":
+            if _doc_flag(_rag_channel_name, "DOCUMENTARY_PIPELINE"):
                 from production.formats.economic_reel.artefact.script_grounding import strip_spoken_cta
 
                 clean = strip_spoken_cta(clean)

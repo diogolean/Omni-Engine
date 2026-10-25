@@ -15,6 +15,8 @@ from production.pipeline.runtime import (
     logging,
 )
 from production.pipeline.log import _LOG
+from shared.channel_flags import flag as _channel_flag
+from shared.channel_flags import value as _channel_value
 from production.pipeline.bootstrap import REPO_ROOT
 def _is_sequence_video_post(post_type: str) -> bool:
     return str(post_type or "").strip().upper() in _SEQUENCE_VIDEO_POST_TYPES
@@ -45,9 +47,10 @@ def _load_engagement_bait_examples(page_ctx: "Any | None" = None) -> str:
     except ImportError:
         return ""
 
-    _XLSX_REL = (
-        "channels_config/wonder_feed/Quotes_reference/@REDES REF SOURCE FONTE.xlsx"
-    )
+    _page = getattr(page_ctx, "page_id", "") if page_ctx is not None else ""
+    _XLSX_REL = str(_channel_value(_page, "QUOTES_WORKBOOK", "") or "")
+    if not _XLSX_REL:
+        return ""
     try:
         _xl_abs = REPO_ROOT / _XLSX_REL
         if not _xl_abs.exists():
@@ -198,8 +201,7 @@ def _build_reel_act_descriptors(subject: str, n_acts: int, page_id: str = "") ->
     Extreme / ground-level close-ups are intentionally avoided; medium-wide
     framing is the minimum for any detail shot.
     """
-    # master_mei uses _build_master_mei_script_act_prompts() for dynamic matching.
-    if (page_id or "").lower() == "master_mei":
+    if _channel_flag(page_id, "MEI_PIPELINE"):
         return [
             f"MASTER MEI ACT {i + 1} — {subject}."
             for i in range(n_acts)

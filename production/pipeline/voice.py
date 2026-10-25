@@ -12,6 +12,8 @@ from production.pipeline.runtime import (
     generate_voiceover_with_timestamps,
 )
 from production.pipeline.log import _LOG
+from shared.channel_flags import flag as _channel_flag
+from shared.channel_flags import value as _channel_value
 def _trim_script_to_word_limit(script: str, max_words: int = 140) -> str:
     """Trim a voiceover script to *max_words* while always preserving:
       • the opening hook (first sentence)
@@ -172,8 +174,8 @@ def _synthesize_sequence_voice_track(
     from production.providers.tts.audio_engine import _audio_file_duration_s
 
     page_id = (page_ctx.page_id if page_ctx else "").lower()
-    is_ak = page_id == "ancient_knowledge"
-    is_mei = page_id == "master_mei"
+    is_ak = _channel_flag(page_id, "DOCUMENTARY_PIPELINE")
+    is_mei = _channel_flag(page_id, "MEI_PIPELINE")
     _expressive = bool(
         getattr(page_ctx, "tts_expressive_mode", False) or is_mei
     )
@@ -182,14 +184,19 @@ def _synthesize_sequence_voice_track(
         page_ctx.reel_narration_max_words if page_ctx
         else app_config.words_for_duration(90.0)
     )
-    speed = 1.0 if is_ak else (page_ctx.tts_narration_speed if page_ctx else None)
+    _speed_lock = _channel_value(page_id, "TTS_SPEED_LOCK", None)
+    speed = (
+        float(_speed_lock)
+        if _speed_lock is not None
+        else (page_ctx.tts_narration_speed if page_ctx else None)
+    )
     vs = dict(page_ctx.elevenlabs_voice_settings if page_ctx else {})
-    if is_ak:
-        vs["speed"] = 1.0
+    if _speed_lock is not None:
+        vs["speed"] = float(_speed_lock)
     voice_id = page_ctx.elevenlabs_voice_id if page_ctx else None
     model_id = page_ctx.elevenlabs_model if page_ctx else "eleven_multilingual_v2"
     cta_text = (page_ctx.reel_cta_text if page_ctx else "") or ""
-    if is_mei:
+    if _channel_flag(page_id, "USE_APPROVED_CTA"):
         from production.writers.mei_narrative import approved_cta_text
         cta_text = approved_cta_text()
     if page_ctx is None or page_ctx.strip_audio_tags_before_tts:
@@ -206,7 +213,7 @@ def _synthesize_sequence_voice_track(
 
         _mark_tts_resumed(False)
         if _voice_flag() and is_ak:
-            _tts_ckpt = _VoiceCkpt.for_reel(page_id or "ancient_knowledge", stem)
+            _tts_ckpt = _VoiceCkpt.for_reel(page_id, stem)
             _saved_voice = _tts_ckpt.load_tts(script or "")
             if _saved_voice is not None:
                 _mark_tts_resumed(True)
@@ -322,7 +329,7 @@ def _synthesize_sequence_voice_track(
     # Ancient Knowledge retries a DNS failure. Master Mei stays one attempt.
     current = script or ""
     voice_only_1, narr_wts, narr_dur = None, [], 0.0
-    _tts_tries = 3 if is_ak else 1
+    _tts_tries = int(_channel_value(page_id, "TTS_NETWORK_RETRIES", 1) or 1)
     for _tts_try in range(1, _tts_tries + 1):
         voice_only_1, narr_wts, narr_dur = _synth_narr(current, attempt_label=_tts_try)
         if voice_only_1 is not None:
