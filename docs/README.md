@@ -7,9 +7,9 @@ One index. The root [README](../README.md) is the short reviewer page.
 | Doc | What it answers |
 |---|---|
 | [architecture/overview.md](architecture/overview.md) | Where the factory runs, and how a reel reaches Facebook, Pinterest, and YouTube |
-| [architecture/diagrams.md](architecture/diagrams.md) | Content-flow and deployment diagrams |
+| [architecture/diagrams.md](architecture/diagrams.md) | Architecture, reel and pin pipelines, workers, and the Validate-then-Deploy flow |
 | [architecture/REPO_LAYOUT.md](architecture/REPO_LAYOUT.md) | What may live at the repo root, and what stays out of git |
-| [architecture/main-module-map.md](architecture/main-module-map.md) | Where `main.py` hands off into `engine/` |
+| [architecture/main-module-map.md](architecture/main-module-map.md) | Where `main.py` hands off into `production/pipeline/` |
 | [setup.md](setup.md) | Python, ffmpeg, `.env` |
 | [deploy.md](deploy.md) | Oracle VM, GHCR, rollback, Ancient Knowledge store mount |
 | [COMMAND_REFERENCE.md](COMMAND_REFERENCE.md) | CLI flags and copy-paste commands |
@@ -36,6 +36,9 @@ Records in [architecture/decisions/](architecture/decisions/):
 | [0006](architecture/decisions/0006-central-supermemory.md) | Supermemory on the VM |
 | [0006 reel grounding](architecture/decisions/0006-reel-beat-image-grounding.md) | Beat image grounding |
 | [0007](architecture/decisions/0007-google-drive-library-source.md) | Google Drive library |
+| [0008](architecture/decisions/0008-target-architecture.md) | Target layers: production, distribution, animation, products |
 | [ADR: free images first](architecture/ADR-free-images-first.md) | Free images before generated stills |
 
 Showcase posters live in `portfolio_showcase/`, not here. See [architecture/DEPRECATED.md](architecture/DEPRECATED.md).
+
+The pre-move agent writeup is [archive/AGENT_ARCHITECTURE.md](archive/AGENT_ARCHITECTURE.md). It names the old folders. Those imports are deprecated shims until M14.

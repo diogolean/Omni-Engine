@@ -11,14 +11,14 @@ Import order is load-bearing. `ACTIVE_PAGE` is set before `production.pipeline.r
 | Bootstrap | `production/pipeline/bootstrap.py` (`_preparse_active_page`) | env only, before `config` |
 | Imports and page rebind | `production/pipeline/runtime.py` | `config.py`, `channel_loader.py`, media stack |
 | Variant orchestration | `production/pipeline/orchestrator.py` re-exports `produce`, `run_pipeline`, `_produce_variant_worker` | `production/pipeline/stages/` |
-| Script and voice | `production/pipeline/voice.py` | `agents/writer/caption_engine.py`, `agents/media/audio_engine.py` |
-| Still planning | `production/pipeline/acts.py` | `agents/media/prompt_alignment.py`, `modules/reel_qa/beats.py` |
-| Image jobs | `production/pipeline/stills.py` | image adapter, `modules/reel_visual_qa.py` |
-| Compile | `production/pipeline/stages/stage_compile_reel.py` | `core/reel_sequence_engine.py`, `agents/media/video_engine.py` |
-| QA seal | after compile, still inside the compile stage | `modules/reel_qa/pipeline.py` |
+| Script and voice | `production/pipeline/voice.py` | `production/writers/caption_engine.py`, `production/providers/tts/audio_engine.py` |
+| Still planning | `production/pipeline/acts.py` | `production/providers/image/prompt_alignment.py`, `production/qa/beats.py` |
+| Image jobs | `production/pipeline/stills.py` | image adapter, `production/qa/reel_visual_qa.py` |
+| Compile | `production/pipeline/stages/stage_compile_reel.py` | `production/media/reel_sequence_engine.py`, `production/media/video_engine.py` |
+| QA seal | after compile, still inside the compile stage | `production/qa/pipeline.py` |
 | Reporting | `production/pipeline/reporting.py` | cost tracker |
 | Publish | `production/pipeline/stages/stage_publish.py`; YouTube block in `production/pipeline/cli_run.py` | `distribution/publishers/export/post_planner.py`, `distribution/publishers/api/youtube.py` (old paths are shims) |
-| Agentic stills | `production/pipeline/stages/agentic.py` (`_produce_agentic`, `_persist_agentic_postplanner`) | `agents/orchestrator/` |
+| Agentic stills | `production/pipeline/stages/agentic.py` (`_produce_agentic`, `_persist_agentic_postplanner`) | `production/pipeline/agentic/` |
 | CLI | `production/pipeline/cli.py` calls `production/pipeline/cli_parser.py` then `production/pipeline/cli_run.py` | the modules above |
 
 `production/pipeline/__init__.py` imports nothing. Importing the package does not load the media stack. `production/pipeline/stages/__init__.py` is the same: import a stage module, or `production.pipeline.orchestrator`, to load the worker.
@@ -51,15 +51,15 @@ Early post types leave `cli` before `produce`:
 
 ## What stayed put
 
-QA lives in `production/qa/` (`modules/reel_qa/` is a shim). Publishers live in `distribution/publishers/`. The variant worker sequences the stage modules above; it does not grow a second copy of QA or publish. `agents/orchestrator/` is a shim for `production/pipeline/agentic/`.
+QA lives in `production/qa/`. Publishers live in `distribution/publishers/`. The variant worker sequences the stage modules above. `agents/orchestrator/` is a deprecated shim for `production/pipeline/agentic/`. `modules/reel_qa/` is a deprecated shim for `production/qa/`.
 
 These modules are still large and were not split in the same change. They are cohesive libraries of functions that call each other:
 
 - `production/formats/lofi/visual_identity.py`
 - `production/formats/lofi/pipeline.py`
-- `core/animator/factory/one_shot_factory.py` (Aiwake harness; the parametric engine is `animation/parametric/`)
-- `agents/writer/script_agent.py`
-- `core/animator/vision/head_analyzer.py`
-- `core/reel_sequence_engine.py`
+- `products/aiwake/animator/factory/one_shot_factory.py` (Aiwake harness; the parametric engine is `animation/parametric/`)
+- `production/writers/script_agent.py`
+- `products/aiwake/animator/vision/head_analyzer.py`
+- `production/media/reel_sequence_engine.py`
 
 A reel still traces: `cli` → `_produce_variant_worker` → `refine_reel_beats` → `generate_and_gate` → compile → `seal_compiled_reel` → `planner_row_allowed` / `row_publishable`.
