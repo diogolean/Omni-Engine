@@ -14,6 +14,26 @@ from production.providers.image.free.models import Attribution
 _CREDITS: dict[str, str] = {}
 
 
+_CREDIT_REQUIRED = frozenset({"cc_by", "cc_by_sa"})
+_UNKNOWN_AUTHOR = frozenset({"", "unknown", "unknown author", "anonymous"})
+_CREDIT_LIMIT = 80
+
+
+def credit_required(license_name: str) -> bool:
+    return (license_name or "").strip() in _CREDIT_REQUIRED
+
+
+def author_missing(value: str) -> bool:
+    """True when the credit names no real person or organization."""
+    text = (value or "").strip()
+    if not text:
+        return True
+    from production.providers.image.free.providers import clean_credit_name
+
+    head = clean_credit_name(text.split(",")[0], limit=80).lower()
+    return head in _UNKNOWN_AUTHOR
+
+
 def credit_line(
     *,
     title: str,
@@ -21,17 +41,26 @@ def credit_line(
     license_name: str,
     source_url: str = "",
 ) -> str:
-    shown_title = (title or "").strip() or "Untitled"
-    from production.providers.image.free.providers import clean_author
+    """Author and license short name. The work title and URL stay in the sidecar.
 
-    shown_author = clean_author(author) or "Unknown"
+    HTML and extra languages are not copied into the line. A missing CC BY
+    author becomes the single placeholder ``Unknown author``, which pin
+    posting treats as a missing credit and refuses.
+    """
+    del title, source_url
+    from production.providers.image.free.providers import clean_credit_name
+
+    shown_author = clean_credit_name(author, limit=60)
     shown_license = display_license(license_name) if license_name in {
         "public_domain", "cc0", "cc_by", "cc_by_sa", "pexels", "unsplash",
     } else ((license_name or "").strip() or "see source")
-    line = f'Photo: "{shown_title}" by {shown_author}, {shown_license}'
-    url = (source_url or "").strip()
-    if url:
-        line += f" — {url}"
+    if shown_author.lower() in _UNKNOWN_AUTHOR:
+        # Reels still name the placeholder once. Pin posting treats it as missing.
+        line = f"Unknown author, {shown_license}" if credit_required(license_name) else shown_license
+    else:
+        line = f"{shown_author}, {shown_license}"
+    if len(line) > _CREDIT_LIMIT:
+        line = line[:_CREDIT_LIMIT].rsplit(" ", 1)[0].rstrip(" ,;")
     return line
 
 

@@ -286,7 +286,9 @@
     "commons_search": [
       "Nazca Lines"
     ],
-    "commons_titles": []
+    "commons_titles": [],
+    "search_query": "nazca lines",
+    "pin_scene": "Geoglyphs etched into the pale Nazca desert floor, seen from above in daylight."
   },
   {
     "id": "gobekli_tepe",
@@ -316,7 +318,9 @@
       "Göbekli Tepe pillars",
       "Göbekli Tepe enclosure"
     ],
-    "commons_titles": []
+    "commons_titles": [],
+    "search_query": "gobekli tepe",
+    "pin_scene": "T-shaped limestone pillars standing in a circular stone enclosure, outdoors in daylight."
   },
   {
     "id": "saqqara_bird",
@@ -346,7 +350,9 @@
     "id": "dendera_relief",
     "name": "Dendera relief",
     "aliases": [
-      "dendera"
+      "dendera",
+      "dendera light",
+      "dendera relief"
     ],
     "kind": "artifact",
     "canonical_visual": "a carved wall relief at Dendera, the motif cut into stone",
@@ -364,7 +370,9 @@
     "commons_search": [
       "Dendera relief"
     ],
-    "commons_titles": []
+    "commons_titles": [],
+    "search_query": "dendera temple",
+    "pin_scene": "A carved stone wall relief inside the Dendera temple, the motif cut into the stone under ordinary indoor light."
   },
   {
     "id": "baghdad_battery",
@@ -408,7 +416,8 @@
     "name": "Easter Island moai",
     "aliases": [
       "moai",
-      "easter island"
+      "easter island",
+      "easter island moai"
     ],
     "kind": "place",
     "canonical_visual": "monolithic stone moai standing on the Easter Island slope",
@@ -425,7 +434,9 @@
     "commons_search": [
       "Easter Island moai"
     ],
-    "commons_titles": []
+    "commons_titles": [],
+    "search_query": "easter island moai",
+    "pin_scene": "Stone moai statues standing outdoors on a grassy hillside, natural daylight."
   },
   {
     "id": "baalbek_trilithon",
@@ -449,7 +460,9 @@
     "commons_search": [
       "Baalbek trilithon"
     ],
-    "commons_titles": []
+    "commons_titles": [],
+    "search_query": "baalbek trilithon",
+    "pin_scene": "Three enormous limestone blocks in the Baalbek stone podium, outdoors in daylight."
   },
   {
     "id": "puma_punku",
@@ -474,5 +487,255 @@
       "Puma Punku"
     ],
     "commons_titles": []
+  },
+  {
+    "id": "voynich_manuscript",
+    "name": "Voynich Manuscript",
+    "aliases": [
+      "voynich",
+      "voynich manuscript"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "an open old vellum manuscript with botanical drawings",
+    "era": "early 15th century",
+    "setting": "a wooden desk",
+    "confusions": [
+      "printed modern book",
+      "computer screen"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "an open vellum book with ink botanical drawings",
+    "commons_search": [
+      "Voynich manuscript"
+    ],
+    "commons_titles": [],
+    "search_query": "voynich manuscript",
+    "required_terms": ["voynich"],
+    "allow_illustration": true,
+    "pin_scene": "An open old vellum manuscript with botanical drawings lying on a wooden desk."
+  },
+  {
+    "id": "crystal_skulls",
+    "name": "Crystal skulls",
+    "aliases": [
+      "crystal skull",
+      "crystal skulls"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "a clear quartz crystal skull on a museum stand",
+    "era": "museum collection",
+    "setting": "museum stand",
+    "confusions": [
+      "human skull in a tomb",
+      "glowing gem"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "a clear quartz skull",
+    "commons_search": [
+      "crystal skull"
+    ],
+    "commons_titles": [],
+    "search_query": "crystal skull",
+    "pin_scene": "A clear quartz crystal skull sitting on a museum stand."
+  },
+  {
+    "id": "paititi",
+    "name": "Paititi",
+    "aliases": [
+      "paititi"
+    ],
+    "kind": "place",
+    "canonical_visual": "dense Peruvian jungle with overgrown stone ruins",
+    "era": "Andes and Amazon",
+    "setting": "Peruvian jungle",
+    "confusions": [
+      "desert pyramid",
+      "city street"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "stone ruins under jungle canopy",
+    "commons_search": [
+      "Paititi Peru"
+    ],
+    "commons_titles": [],
+    "search_query": "Paititi Peru",
+    "required_terms": ["paititi"],
+    "required_any": ["ruins", "inca", "stone", "city", "jungle"],
+    "reject_terms": [
+      "capitol",
+      "washington",
+      "species",
+      "frog",
+      "animal",
+      "bird",
+      "insect",
+      "plant"
+    ],
+    "pin_scene": "Dense Peruvian jungle with overgrown stone ruins."
+  },
+  {
+    "id": "giants",
+    "name": "Giants",
+    "aliases": [
+      "giants",
+      "giant bones"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "human bones beside a stone grave that is too small for them",
+    "era": "megalithic burials",
+    "setting": "an archaeological site in daylight",
+    "confusions": [
+      "fantasy giant",
+      "city of London"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "large human bones next to a small stone burial chamber",
+    "commons_search": [
+      "megalithic tomb"
+    ],
+    "commons_titles": [],
+    "search_query": "megalithic tomb",
+    "pin_scene": "Human bones laid beside a stone burial chamber on an archaeological site, daylight."
+  },
+  {
+    "id": "atlantis",
+    "name": "Atlantis",
+    "aliases": [
+      "atlantis"
+    ],
+    "kind": "place",
+    "canonical_visual": "stone ruins on a shallow sandy seabed",
+    "era": "legend of a drowned city",
+    "setting": "shallow clear water",
+    "confusions": [
+      "glowing futuristic city",
+      "spaceship"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "drowned stone walls on a sandy seabed",
+    "commons_search": [
+      "submerged ruins"
+    ],
+    "commons_titles": [],
+    "search_query": "submerged ruins",
+    "pin_scene": "Stone ruins on a shallow sandy seabed, seen through clear water in daylight."
+  },
+  {
+    "id": "oak_island",
+    "name": "Oak Island",
+    "aliases": [
+      "oak island",
+      "oak-island"
+    ],
+    "kind": "place",
+    "canonical_visual": "a wooded island with a dug shaft and earthworks",
+    "era": "Nova Scotia",
+    "setting": "a small wooded island",
+    "confusions": [
+      "desert",
+      "pyramid"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "a timbered pit on a wooded island",
+    "commons_search": [
+      "Oak Island Nova Scotia"
+    ],
+    "commons_titles": [],
+    "search_query": "Oak Island Nova Scotia",
+    "required_terms": ["nova scotia"],
+    "reject_terms": ["north carolina"],
+    "pin_scene": "A wooded island with a dug earth shaft and timber, photographed in daylight."
+  },
+  {
+    "id": "sumerian_tablets",
+    "name": "Sumerian tablets",
+    "aliases": [
+      "sumerian",
+      "sumerian tablets",
+      "cuneiform"
+    ],
+    "kind": "artifact",
+    "canonical_visual": "clay cuneiform tablets on a museum table",
+    "era": "ancient Mesopotamia",
+    "setting": "museum table",
+    "confusions": [
+      "printed book",
+      "computer"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "small clay tablets with wedge-shaped writing",
+    "commons_search": [
+      "Sumerian cuneiform tablet"
+    ],
+    "commons_titles": [],
+    "search_query": "sumerian tablet",
+    "pin_scene": "Clay cuneiform tablets lying on a museum table, even daylight."
+  },
+  {
+    "id": "tartaria",
+    "name": "Tartaria",
+    "aliases": [
+      "tartaria",
+      "tartary"
+    ],
+    "kind": "place",
+    "canonical_visual": "an old masonry building with ornate brickwork on a city street",
+    "era": "historical maps and buildings",
+    "setting": "a city street",
+    "confusions": [
+      "fantasy map glow",
+      "spaceship"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "ornate brick masonry on a standing building",
+    "commons_search": [
+      "ornate brick building"
+    ],
+    "commons_titles": [],
+    "search_query": "ornate brick building",
+    "pin_scene": "An old masonry building with ornate brickwork on a city street, ordinary daylight."
+  },
+  {
+    "id": "underwater_cities",
+    "name": "Underwater cities",
+    "aliases": [
+      "underwater cities",
+      "underwater city",
+      "sunken city"
+    ],
+    "kind": "place",
+    "canonical_visual": "submerged stone foundations and walls in shallow coastal water",
+    "era": "drowned coastal sites",
+    "setting": "shallow coastal water",
+    "confusions": [
+      "modern scuba portrait",
+      "glowing city"
+    ],
+    "channels": [
+      "ancient_knowledge"
+    ],
+    "canonical_shape": "stone walls standing underwater",
+    "commons_search": [
+      "sunken city ruins"
+    ],
+    "commons_titles": [],
+    "search_query": "sunken city ruins",
+    "pin_scene": "Submerged stone foundations and walls in shallow coastal water, daylight from above."
   }
 ]

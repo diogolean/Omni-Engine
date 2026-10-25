@@ -25,7 +25,8 @@ from production.providers.image.free.quality import (
     prepare_portrait,
     rank_candidates,
 )
-from production.providers.image.free.query import build_query
+from production.providers.image.free.query import query_variants
+from production.providers.image.free.relevance import select_relevant
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,12 @@ def resolve_image_source(
     vision_check=None,
     allowlist: frozenset[str] | set[str] | None = None,
     producer: str = "",
+    required_terms: list[str] | tuple[str, ...] | None = None,
+    reject_terms: list[str] | tuple[str, ...] | None = None,
+    required_any: list[str] | tuple[str, ...] | None = None,
+    allow_illustration: bool = False,
+    allow_biological: bool = False,
+    relevance_judge=None,
 ) -> SourceDecision:
     """Find one usable photograph. Does not call Flux.
 
@@ -57,27 +64,47 @@ def resolve_image_source(
     Search metadata is cached per query.
     """
     chosen_policy = policy or resolve_policy(channel, page_cfg)
-    query = build_query(topic=topic, entity=entity, sentence=sentence)
+    variants = query_variants(topic=topic, entity=entity, sentence=sentence)
+    query = variants[0] if variants else ""
+    subject = (entity or topic or query).strip()
     if chosen_policy == "ai_only":
         return SourceDecision(policy=chosen_policy, query=query, reason="ai_only")
     if not query:
         return SourceDecision(policy=chosen_policy, query="", reason="empty_query")
 
     with _DOWNLOAD_LOCK:
-        return _resolve_locked(
-            channel=channel,
-            dest=Path(dest),
-            query=query,
-            policy=chosen_policy,
-            providers=providers,
-            client=client,
-            cache_dir=cache_dir,
-            min_short_side=min_short_side,
-            allow_smart_crop=allow_smart_crop,
-            vision_check=vision_check,
-            allowlist=allowlist,
-            producer=producer,
-        )
+        last: SourceDecision | None = None
+        for index, variant in enumerate(variants):
+            decision = _resolve_locked(
+                channel=channel,
+                dest=Path(dest),
+                query=variant,
+                policy=chosen_policy,
+                providers=providers,
+                client=client,
+                cache_dir=cache_dir,
+                min_short_side=min_short_side,
+                allow_smart_crop=allow_smart_crop,
+                vision_check=vision_check,
+                allowlist=allowlist,
+                producer=producer,
+                subject=subject,
+                required_terms=tuple(required_terms or ()),
+                reject_terms=tuple(reject_terms or ()),
+                required_any=tuple(required_any or ()),
+                allow_illustration=allow_illustration,
+                allow_biological=allow_biological,
+                relevance_judge=relevance_judge,
+            )
+            last = decision
+            if decision.hit is not None or decision.reason != "no_hits":
+                return decision
+            if index < len(variants) - 1:
+                logger.info(
+                    "Free image query %r had no hits; broadening the subject.",
+                    variant,
+                )
+        return last or SourceDecision(policy=chosen_policy, query=query, reason="no_hits")
 
 
 def _resolve_locked(
@@ -94,6 +121,13 @@ def _resolve_locked(
     vision_check,
     allowlist,
     producer: str,
+    subject: str = "",
+    required_terms: tuple[str, ...] = (),
+    reject_terms: tuple[str, ...] = (),
+    required_any: tuple[str, ...] = (),
+    allow_illustration: bool = False,
+    allow_biological: bool = False,
+    relevance_judge=None,
 ) -> SourceDecision:
     short_side = min_short_side if min_short_side is not None else _min_short_side()
     active = list(providers) if providers is not None else default_providers()
@@ -135,6 +169,23 @@ def _resolve_locked(
     clip = optional_clip_scorer()
     if clip is not None and ranked:
         ranked = _rerank_with_clip(ranked[:5], query, http, clip) + ranked[5:]
+
+    if not candidates:
+        return SourceDecision(policy=policy, query=query, reason="no_hits")
+
+    ranked = select_relevant(
+        ranked,
+        subject=subject or query,
+        required_terms=required_terms,
+        reject_terms=reject_terms,
+        required_any=required_any,
+        allow_illustration=allow_illustration,
+        allow_biological=allow_biological,
+        judge=relevance_judge,
+    )
+    if not ranked:
+        # Nothing matched the subject. The pin caller falls through to Flux.
+        return SourceDecision(policy=policy, query=query, reason="no_hits")
 
     for candidate in ranked:
         hit = _download_one(
@@ -227,21 +278,33 @@ def _download_one(
     canonical = license_allowed(candidate.license_raw, allowlist)
     if canonical is None:
         return None
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    portrait.save(dest, format="JPEG", quality=92, optimize=True)
-    attribution = Attribution(
-        title=candidate.title,
-        author=candidate.author,
-        license=canonical,
-        source_url=candidate.source_url,
-        license_url=candidate.license_url,
-        provider=candidate.provider,
+    from production.providers.image.free.attribution import (  # noqa: PLC0415
+        author_missing,
+        credit_required,
     )
+
     credit = credit_line(
         title=candidate.title,
         author=candidate.author,
         license_name=canonical,
         source_url=candidate.source_url,
+    )
+    if credit_required(canonical) and author_missing(candidate.author):
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    portrait.save(dest, format="JPEG", quality=92, optimize=True)
+    from production.providers.image.free.providers import (  # noqa: PLC0415
+        clean_credit_name,
+        clean_stored_title,
+    )
+
+    attribution = Attribution(
+        title=clean_stored_title(candidate.title),
+        author=clean_credit_name(candidate.author),
+        license=canonical,
+        source_url=candidate.source_url,
+        license_url=candidate.license_url,
+        provider=candidate.provider,
     )
     sidecar = write_sidecar(
         dest,
@@ -319,9 +382,40 @@ def _min_short_side() -> int:
         return 1000
 
 
+def _dry_run_requested() -> bool:
+    raw = (os.getenv("PIN_DRY_RUN") or os.getenv("FREE_IMAGE_DRY_RUN") or "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
+
+def free_image_cache_dir(channel: str, *, dry_run: bool = False) -> Path | None:
+    """Cache directory for search metadata.
+
+    ``FREE_IMAGE_CACHE_DIR`` wins. A dry run stays out of the Drive outputs
+    tree and uses the system temp directory. ``None`` means the normal
+    per-channel scratch cache.
+    """
+    override = (os.getenv("FREE_IMAGE_CACHE_DIR") or "").strip()
+    if override:
+        return Path(override)
+    if dry_run or _dry_run_requested():
+        import tempfile
+
+        slug = _cache_slug(channel)
+        return Path(tempfile.gettempdir()) / "omni-free-image-cache" / slug
+    return None
+
+
+def _cache_slug(channel: str) -> str:
+    text = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (channel or "shared"))
+    return text.strip("_") or "shared"
+
+
 def _cache_dir(channel: str, explicit: Path | None) -> Path:
     if explicit is not None:
         return Path(explicit)
+    override = free_image_cache_dir(channel, dry_run=_dry_run_requested())
+    if override is not None:
+        return override
     from shared.paths import temp_path
 
     return temp_path(channel or "shared", "free_images", "cache")

@@ -88,6 +88,12 @@ ILLUSTRATION_STYLE: str = (
     "NO illustration, NO sketch, NO CGI, NO flat lighting, NO modern elements."
 )
 
+# Pin photographs. Neutral documentary light. Pins do not use ATMOSPHERE_STYLE.
+PIN_IMAGE_STYLE: str = (
+    "Documentary photograph, natural daylight, realistic color, "
+    "ordinary photographic detail."
+)
+
 # ---------------------------------------------------------------------------
 # Negative prompt terms — strip lifestyle/relationship terms from inherited prompts
 # ---------------------------------------------------------------------------

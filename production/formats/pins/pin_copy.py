@@ -52,6 +52,16 @@ def _topic_already_named(title: str, topic: str) -> bool:
     return bool(words) and all(word in title_l for word in words)
 
 
+def _collapse_repeated_title(text: str) -> str:
+    """Drop a repeated colon clause, including one already cut at 100 characters."""
+    from shared.pin_text import dedupe_pin_title  # noqa: PLC0415
+
+    return dedupe_pin_title(text)
+
+
+_CAPTION_LIMIT = 500
+
+
 def keyword_first_title(title: str, topic: str) -> str:
     """Search title, subject first, at most 100 characters. No template suffix.
 
@@ -60,32 +70,49 @@ def keyword_first_title(title: str, topic: str) -> str:
     """
     from shared.pin_text import sanitize_pin_title, title_case_phrase  # noqa: PLC0415
 
-    cleaned = sanitize_pin_title(title)
+    cleaned = sanitize_pin_title(_collapse_repeated_title(title))
     subject = sanitize_pin_title(title_case_phrase(topic))
     if not cleaned:
-        return subject
+        return _collapse_repeated_title(subject)
     if _topic_already_named(cleaned, subject):
-        return cleaned
+        return _collapse_repeated_title(cleaned)
     head = ""
     for word in re.split(r"[^A-Za-z0-9']+", subject.lower()):
         if len(word) > 2 and word not in _TITLE_STOPWORDS:
             head = word
             break
     if head and head not in cleaned.lower():
-        cleaned = sanitize_pin_title(f"{subject}: {cleaned}")
-    return cleaned
+        if cleaned.lower() not in subject.lower():
+            cleaned = sanitize_pin_title(f"{subject}: {cleaned}")
+        elif subject:
+            cleaned = subject
+    return _collapse_repeated_title(cleaned)
 
 
 _HOOK_WORD_LIMIT = 8
 _GENERIC_HOOK = re.compile(r"^what the records leave out about\b", re.IGNORECASE)
+_DANGLING_HOOK = frozenset(
+    {
+        "a", "an", "the", "of", "in", "on", "to", "for", "and", "or", "with",
+        "from", "by", "at", "into", "over",
+    }
+)
+
+
+def trim_dangling_hook(text: str) -> str:
+    """Drop a trailing preposition so the hook does not stop mid-phrase."""
+    words = (text or "").split()
+    while len(words) > 1 and words[-1].lower().strip(".,;:!?\"'") in _DANGLING_HOOK:
+        words.pop()
+    return " ".join(words)
 
 
 def short_hook(text: str, *, max_words: int = _HOOK_WORD_LIMIT) -> str:
-    """At most ``max_words`` words. The card renderer also caps this at 3 lines."""
+    """At most ``max_words`` words, ending on a whole phrase."""
     from shared.pin_text import normalize_pin_text  # noqa: PLC0415
 
-    words = normalize_pin_text(text).split()
-    return " ".join(words[:max_words])
+    words = normalize_pin_text(text).split()[:max_words]
+    return trim_dangling_hook(" ".join(words))
 
 
 def card_hook_text(record: dict) -> str:
@@ -164,23 +191,80 @@ def build_pin_description(record: dict) -> str:
     if url:
         closer = polish_pin_text(_fill(closer_template, title=title, topic=topic, url=url))
     if not closer:
-        return lead[:_DESCRIPTION_LIMIT]
+        return _with_credit(lead[:_DESCRIPTION_LIMIT], record)
     separator = "\n"
     budget = _DESCRIPTION_LIMIT - len(closer) - len(separator)
     if budget < 1 or len(closer) >= _DESCRIPTION_LIMIT:
-        return closer
+        return _with_credit(closer, record)
     if len(lead) > budget:
         trimmed = lead[:budget].rsplit(" ", 1)[0].rstrip(" ,;:-—")
         lead = trimmed or lead[:budget].rstrip()
     if not lead:
-        return closer
-    return f"{lead}{separator}{closer}"
+        body = closer
+    else:
+        body = f"{lead}{separator}{closer}"
+    return _with_credit(body, record)
+
+
+def _with_credit(body: str, record: dict) -> str:
+    """Append the short attribution. A description with no credit stays within 220."""
+    credit = str(record.get("image_credit") or "").strip()
+    if not credit or credit in body:
+        return body
+    combined = f"{body}\n{credit}" if body else credit
+    if len(combined) <= 500:
+        return combined
+    room = 500 - len(credit) - 1
+    if room < 1:
+        return credit[:500]
+    trimmed = body[:room].rsplit(" ", 1)[0].rstrip(" ,;:-—")
+    return f"{trimmed}\n{credit}" if trimmed else credit[:500]
+
+
+def missing_required_credit(record: dict) -> bool:
+    """True when a CC BY or CC BY-SA image has no real author and license line."""
+    from production.providers.image.free.attribution import author_missing  # noqa: PLC0415
+
+    license_name = str(record.get("image_license") or "").strip()
+    required = bool(record.get("image_credit_required")) or license_name in {
+        "cc_by",
+        "cc_by_sa",
+    }
+    if not required:
+        return False
+    return author_missing(str(record.get("image_credit") or ""))
+
+
+def trim_pin_caption(text: str, limit: int = _CAPTION_LIMIT) -> str:
+    """Pin captions stay within the Pinterest 500-character description limit.
+
+    A caption that already fits is left unchanged, including its line breaks.
+    """
+    raw = text or ""
+    if len(raw) <= limit:
+        return raw
+    from shared.pin_text import fit_pin_title, polish_pin_text  # noqa: PLC0415
+
+    return fit_pin_title(polish_pin_text(raw), limit)
+
+
+def polish_stored_pin_copy(entry: dict) -> None:
+    """Collapse a repeated title and trim an over-long caption on a stored pin."""
+    title = _collapse_repeated_title(str(entry.get("pinterest_title") or ""))
+    if title:
+        entry["pinterest_title"] = title
+    caption = str(entry.get("pinterest_caption") or "")
+    if caption:
+        entry["pinterest_caption"] = trim_pin_caption(caption)
 
 
 def finalize_pin_copy(entry: dict) -> None:
     """Apply the config title and hook onto one inventory entry."""
     topic = str(entry.get("topic") or "")
     entry["pinterest_title"] = keyword_first_title(str(entry.get("pinterest_title") or ""), topic)
+    caption = str(entry.get("pinterest_caption") or "")
+    if caption:
+        entry["pinterest_caption"] = trim_pin_caption(caption)
     hook = card_hook_text(entry)
     if hook:
         entry["visual_hook"] = hook

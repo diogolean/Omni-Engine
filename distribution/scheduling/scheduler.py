@@ -629,6 +629,10 @@ class PinterestScheduler:
 
             if ensure_writer_pin_copy(entry, use_ai=True) and not self.dry_run:
                 inv.save(data)
+            polish_stored_pin_copy = Symbol(
+                'production.formats.pins.pin_copy', 'polish_stored_pin_copy'
+            )  # noqa: PLC0415
+            polish_stored_pin_copy(entry)
             post_id = entry["post_id"]
             topic = entry.get("topic", "?")
             title = entry.get("pinterest_title", topic)
@@ -725,6 +729,18 @@ class PinterestScheduler:
                 entry["local_image_path"] = str(image_path)
             if source_hash and ledger.seen(post_id=post_id, title=title, source_hash=source_hash):
                 log.info("  Skipping %s — source image already pinned.", post_id)
+                if delete_after and image_path is not None:
+                    image_path.unlink(missing_ok=True)
+                stats["skipped"] += 1
+                continue
+
+            missing_required_credit = Symbol(
+                'production.formats.pins.pin_copy', 'missing_required_credit'
+            )  # noqa: PLC0415
+            if missing_required_credit(entry):
+                log.warning(
+                    "  Skipping %s — CC BY attribution is missing.", post_id,
+                )
                 if delete_after and image_path is not None:
                     image_path.unlink(missing_ok=True)
                 stats["skipped"] += 1
@@ -1055,6 +1071,9 @@ class PinterestScheduler:
         free_path = self._free_license_photo(entry, channel)
         if free_path is not None:
             return free_path, True
+        entry["image_credit"] = ""
+        entry["image_license"] = ""
+        entry["image_credit_required"] = False
         generated = ensure_flux_photo(
             entry,
             outputs_dir=self.outputs_dir,
@@ -1075,19 +1094,47 @@ class PinterestScheduler:
         policy = resolve_policy(channel)
         if policy == "ai_only":
             return None
+        search_subject = Symbol('production.formats.pins.scene_prompt', 'search_subject')  # noqa: PLC0415
+        free_image_cache_dir = Symbol(
+            'production.providers.image.free.sourcer', 'free_image_cache_dir'
+        )  # noqa: PLC0415
         stem = str(entry.get("subject_slug") or entry.get("post_id") or "pin").strip() or "pin"
         dest = temp_path(channel or "pinterest", "free_images", "pins", f"{stem}.jpg")
+        search_constraints = Symbol(
+            'production.formats.pins.scene_prompt', 'search_constraints'
+        )  # noqa: PLC0415
+        explicit_entity = str(entry.get("entity") or entry.get("named_entity") or "").strip()
+        try:
+            constraints = search_constraints(channel, entry)
+        except Exception as exc:  # noqa: BLE001
+            log.info("Pin subject lookup skipped (%s).", type(exc).__name__)
+            try:
+                subject = explicit_entity or search_subject(channel, entry)
+            except Exception:  # noqa: BLE001
+                subject = explicit_entity
+            constraints = {
+                "subject": subject,
+                "required_terms": (),
+                "required_any": (),
+                "reject_terms": (),
+                "allow_illustration": False,
+                "allow_biological": False,
+            }
         try:
             decision = resolve_image_source(
                 channel=channel,
                 dest=dest,
-                topic=str(entry.get("topic") or entry.get("pinterest_title") or ""),
-                entity=str(entry.get("entity") or entry.get("named_entity") or ""),
-                sentence=str(
-                    entry.get("original_caption") or entry.get("humanized_caption") or ""
-                ),
+                topic=str(entry.get("pinterest_title") or entry.get("topic") or ""),
+                entity=str(constraints.get("subject") or ""),
+                sentence="",
                 policy=policy,
                 producer="pinterest_card",
+                cache_dir=free_image_cache_dir(channel, dry_run=bool(self.dry_run)),
+                required_terms=constraints.get("required_terms") or (),
+                required_any=constraints.get("required_any") or (),
+                reject_terms=constraints.get("reject_terms") or (),
+                allow_illustration=bool(constraints.get("allow_illustration")),
+                allow_biological=bool(constraints.get("allow_biological")),
             )
         except B2DailyCapError:
             raise
@@ -1097,9 +1144,24 @@ class PinterestScheduler:
         hit = decision.hit
         if hit is None or not dest.is_file():
             return None
+        credit_required = Symbol(
+            'production.providers.image.free.attribution', 'credit_required'
+        )  # noqa: PLC0415
+        author_missing = Symbol(
+            'production.providers.image.free.attribution', 'author_missing'
+        )  # noqa: PLC0415
+        license_name = str(hit.attribution.license or "")
         entry["image_credit"] = hit.credit_line
         entry["image_source"] = "free_license"
         entry["image_attribution"] = hit.attribution.to_json()
+        entry["image_license"] = license_name
+        entry["image_credit_required"] = bool(credit_required(license_name))
+        if entry["image_credit_required"] and author_missing(str(hit.credit_line or "")):
+            log.warning("Free image dropped — CC BY attribution is missing.")
+            dest.unlink(missing_ok=True)
+            entry["image_credit_required"] = False
+            entry["image_source"] = ""
+            return None
         return dest
 
     # ------------------------------------------------------------------

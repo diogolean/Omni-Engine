@@ -129,15 +129,30 @@ def test_channel_page_configs_match_defaults() -> None:
 
 
 def test_query_prefers_the_named_entity() -> None:
+    from production.providers.image.free.query import query_variants
+
     query = build_query(
         topic="ancient quarry",
         entity="Baalbek",
         sentence="A cinematic photograph of dramatic lighting at the temple",
     )
-    assert query.startswith("baalbek")
+    assert query == "baalbek"
     assert "cinematic" not in query
     assert "lighting" not in query
-    assert "quarry" in query
+    assert "quarry" not in query
+    noisy = build_query(
+        topic="Voynich Manuscript world's most mysterious book",
+        sentence="polish american researchers debate the pages",
+    )
+    assert noisy == "voynich manuscript"
+    assert "polish" not in noisy
+    assert "mysterious" not in noisy
+    variants = query_variants(
+        entity="Easter Island moai",
+        sentence="world's most mysterious statues polish american",
+    )
+    assert variants == ["easter island moai", "easter island"]
+    assert query_variants(entity="Oak Island Nova Scotia") == ["oak island nova scotia"]
 
 
 def test_rank_prefers_title_match_and_resolution() -> None:
@@ -506,7 +521,9 @@ def test_credit_line_is_reusable() -> None:
         license_name="cc_by",
         source_url="https://example.test/a",
     )
-    assert line == 'Photo: "Baalbek stones" by Ada, CC BY — https://example.test/a'
+    assert line == "Ada, CC BY"
+    assert "Baalbek" not in line
+    assert "https://" not in line
     assert append_credit("A short caption.", line).endswith(line)
     long_caption = "word " * 200
     fitted = append_credit(long_caption, line, limit=120)
@@ -599,5 +616,301 @@ def test_load_card_source_records_credit(
     image = load_card_source(record, tmp_path)
     assert image is not None
     assert image.size[1] > image.size[0]
-    assert "Herb garden" in record["image_credit"]
+    assert record["image_credit"] == "Ada Lovelace, CC BY"
+    assert "Herb garden" not in record["image_credit"]
     assert credit_for_image(tmp_path / "herb_free_source.jpg") == record["image_credit"]
+
+
+def test_short_query_broadens_when_the_first_search_is_empty(tmp_path: Path) -> None:
+    url = "https://cdn.example/moai.jpg"
+    seen: list[str] = []
+
+    class _Selective:
+        name = "fake"
+
+        def enabled(self) -> bool:
+            return True
+
+        def search(self, query, client, *, limit=10):
+            del client, limit
+            seen.append(query)
+            if query == "easter island":
+                return [_candidate(title="Moai", download_url=url)]
+            return []
+
+    client = _MapClient({url: (200, _jpeg(1400, 2000))})
+    decision = resolve_image_source(
+        channel="ancient_knowledge",
+        dest=tmp_path / "moai.jpg",
+        entity="Easter Island moai",
+        sentence="world's most mysterious statues polish american",
+        policy="free_first",
+        providers=[_Selective()],
+        client=client,
+        cache_dir=tmp_path / "cache",
+    )
+    assert seen == ["easter island moai", "easter island"]
+    assert decision.reason == "free_image"
+    assert decision.query == "easter island"
+
+
+def test_missing_stock_keys_are_logged_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    from production.providers.image.free import providers as providers_mod
+
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    monkeypatch.delenv("UNSPLASH_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("SMITHSONIAN_API_KEY", raising=False)
+    providers_mod._MISSING_KEY_LOGGED.clear()
+    with caplog.at_level(logging.INFO, logger=providers_mod.logger.name):
+        default_providers()
+        default_providers()
+        assert PexelsProvider().search("moai", None) == []
+        assert UnsplashProvider().search("moai", None) == []
+        assert SmithsonianProvider().search("moai", None) == []
+    logs = [record.message for record in caplog.records if "API key is not set" in record.message]
+    assert logs.count("Skipping image provider pexels — API key is not set.") == 1
+    assert logs.count("Skipping image provider unsplash — API key is not set.") == 1
+    assert logs.count("Skipping image provider smithsonian — API key is not set.") == 1
+
+
+def test_free_image_cache_stays_out_of_drive_outputs_on_dry_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from production.providers.image.free.sourcer import _cache_dir, free_image_cache_dir
+
+    monkeypatch.delenv("FREE_IMAGE_CACHE_DIR", raising=False)
+    monkeypatch.delenv("PIN_DRY_RUN", raising=False)
+    drive = tmp_path / "outputs" / "ancient_knowledge"
+    monkeypatch.setenv("OUTPUT_PATH", str(tmp_path / "outputs"))
+    live = _cache_dir("ancient_knowledge", None)
+    assert "outputs" in live.parts
+    dry = free_image_cache_dir("ancient_knowledge", dry_run=True)
+    assert dry is not None
+    assert "outputs" not in dry.parts
+    monkeypatch.setenv("FREE_IMAGE_CACHE_DIR", str(tmp_path / "local-cache"))
+    chosen = free_image_cache_dir("ancient_knowledge", dry_run=True)
+    assert chosen == tmp_path / "local-cache"
+    assert drive.is_dir() is False or "local-cache" not in drive.parts
+
+
+def test_relevance_rejects_the_wrong_place_and_book_scans() -> None:
+    from production.providers.image.free.relevance import relevance_verdict, select_relevant
+
+    capitol = _candidate(
+        title="The United States Capitol",
+        description="Illustration from a 1917 book of the capitol building in Washington",
+    )
+    assert relevance_verdict(
+        capitol,
+        subject="Paititi Peru",
+        required_terms=("paititi",),
+        reject_terms=("capitol", "washington"),
+    ) == "reject"
+    carolina = _candidate(
+        title="Oak Island, North Carolina",
+        description="A beach town in North Carolina",
+    )
+    assert relevance_verdict(
+        carolina,
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        reject_terms=("north carolina",),
+    ) == "reject"
+    scotia = _candidate(
+        title="Oak Island, Nova Scotia",
+        description="The money pit on Oak Island, Nova Scotia",
+    )
+    assert relevance_verdict(
+        scotia,
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        reject_terms=("north carolina",),
+    ) == "accept"
+    engraving = _candidate(
+        title="Paititi",
+        description="An engraving of a stone city",
+    )
+    assert relevance_verdict(
+        engraving,
+        subject="Paititi",
+        required_terms=("paititi",),
+    ) == "reject"
+    page = _candidate(
+        title="Voynich manuscript",
+        description="A scanned page of botanical drawings",
+    )
+    assert relevance_verdict(
+        page,
+        subject="Voynich manuscript",
+        required_terms=("voynich",),
+        allow_illustration=True,
+    ) == "accept"
+
+    calls = {"n": 0}
+
+    def judge(subject, candidate):
+        del subject, candidate
+        calls["n"] += 1
+        return True
+
+    ambiguous = _candidate(
+        title="Oak Island lighthouse",
+        description="A wooden lighthouse on the shore",
+    )
+    assert relevance_verdict(
+        ambiguous,
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+    ) == "ambiguous"
+    judged = select_relevant(
+        [ambiguous],
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        judge=judge,
+    )
+    assert calls["n"] == 1
+    assert judged == [ambiguous]
+    calls["n"] = 0
+    kept = select_relevant(
+        [scotia, carolina, capitol],
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        reject_terms=("north carolina", "capitol"),
+        judge=judge,
+    )
+    assert calls["n"] == 0
+    assert kept == [scotia]
+
+    frog = _candidate(
+        title="Scinax granulatus (Hensel, 1867) at Reserva Natural Paititi",
+        description="A frog species photographed at the reserve",
+    )
+    paititi_terms = {
+        "subject": "Paititi",
+        "required_terms": ("paititi",),
+        "required_any": ("ruins", "inca", "stone", "city", "jungle"),
+        "reject_terms": ("species", "frog", "animal", "bird", "insect", "plant"),
+    }
+    assert relevance_verdict(frog, **paititi_terms) == "reject"
+    binomial = _candidate(
+        title="Scinax granulatus at Reserva Natural Paititi",
+        description="Reserva Natural Paititi",
+    )
+    assert relevance_verdict(
+        binomial,
+        subject="Paititi",
+        required_terms=("paititi",),
+    ) == "reject"
+    ruins = _candidate(
+        title="Stone ruins in the jungle near Paititi",
+        description="Inca stone city under the canopy",
+    )
+    assert relevance_verdict(ruins, **paititi_terms) == "accept"
+    calls["n"] = 0
+    rejected = select_relevant([frog, binomial], judge=judge, **paititi_terms)
+    assert calls["n"] == 0
+    assert rejected == []
+    living = relevance_verdict(
+        binomial,
+        subject="Scinax granulatus",
+        allow_biological=True,
+    )
+    assert living == "accept"
+
+
+def test_unrelated_hit_is_not_downloaded(tmp_path: Path) -> None:
+    url = "https://cdn.example/capitol.jpg"
+    provider = _Provider(
+        [
+            _candidate(
+                title="Capitol building",
+                description="1917 book illustration of the capitol in Washington",
+                download_url=url,
+            )
+        ]
+    )
+    client = _MapClient({url: (200, _jpeg(1600, 2200))})
+    decision = resolve_image_source(
+        channel="ancient_knowledge",
+        dest=tmp_path / "paititi.jpg",
+        entity="Paititi Peru",
+        required_terms=("paititi",),
+        reject_terms=("capitol", "washington"),
+        policy="free_only",
+        providers=[provider],
+        client=client,
+        cache_dir=tmp_path / "cache",
+        relevance_judge=False,
+    )
+    assert decision.hit is None
+    assert decision.reason == "no_hits"
+    assert client.calls == []
+
+    frog_url = "https://cdn.example/frog.jpg"
+    frog_provider = _Provider(
+        [
+            _candidate(
+                title="Scinax granulatus (Hensel, 1867) at Reserva Natural Paititi",
+                description="A frog species at the reserve",
+                download_url=frog_url,
+            )
+        ]
+    )
+    frog_client = _MapClient({frog_url: (200, _jpeg(1600, 2200))})
+    frog_decision = resolve_image_source(
+        channel="ancient_knowledge",
+        dest=tmp_path / "paititi-frog.jpg",
+        entity="Paititi",
+        required_terms=("paititi",),
+        required_any=("ruins", "inca", "stone", "city", "jungle"),
+        reject_terms=("species", "frog", "animal", "bird", "insect", "plant"),
+        policy="free_only",
+        providers=[frog_provider],
+        client=frog_client,
+        cache_dir=tmp_path / "frog-cache",
+        relevance_judge=False,
+    )
+    assert frog_decision.hit is None
+    assert frog_decision.reason == "no_hits"
+    assert frog_client.calls == []
+
+
+def test_credit_line_drops_html_and_extra_languages() -> None:
+    huge = (
+        "English: Voynich Manuscript / Français: Manuscrit de Voynich / "
+        "Deutsch: Voynich-Manuskript " * 8
+    )
+    line = credit_line(
+        title=f"<b>{huge}</b>",
+        author="English: Wilfrid Voynich / Français: Wilfrid Voynich",
+        license_name="cc_by_sa",
+    )
+    assert line == "Wilfrid Voynich, CC BY-SA"
+    assert "<" not in line
+    assert "Français" not in line
+    assert len(line) <= 80
+    unknown = credit_line(title=huge, author="Unknown author Unknown author", license_name="cc_by")
+    assert unknown == "Unknown author, CC BY"
+    assert unknown.count("Unknown author") == 1
+    assert credit_line(title="Stones", author="", license_name="public_domain") == "Public Domain"
+    yale = credit_line(
+        title="Yale University Library : Home page – Source – Image",
+        author="Yale University Library : Home page – Source – Image",
+        license_name="public_domain",
+    )
+    assert yale == "Yale University Library, Public Domain"
+    assert "Home page" not in yale
+    assert "Source" not in yale
+    from production.providers.image.free.providers import clean_stored_title
+
+    stored = clean_stored_title(huge)
+    assert stored == "Voynich Manuscript"
+    assert "Français" not in stored
+    assert "<" not in stored
+    assert len(stored) <= 80
+    labeled = clean_stored_title("Yale University Library : Home page – Source – Image")
+    assert labeled == "Yale University Library"

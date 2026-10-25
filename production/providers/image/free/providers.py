@@ -19,6 +19,15 @@ from production.providers.image.free.models import Candidate
 logger = logging.getLogger(__name__)
 
 _TAG = re.compile(r"<[^>]+>")
+_MISSING_KEY_LOGGED: set[str] = set()
+
+
+def note_missing_key(name: str) -> None:
+    """Log a missing provider key once per process."""
+    if name in _MISSING_KEY_LOGGED:
+        return
+    _MISSING_KEY_LOGGED.add(name)
+    logger.info("Skipping image provider %s — API key is not set.", name)
 
 
 def _plain(value: Any) -> str:
@@ -30,6 +39,55 @@ def _meta_value(block: Any) -> str:
     if isinstance(block, dict):
         return _plain(block.get("value") or "")
     return _plain(block)
+
+
+_LANG_MARK = re.compile(
+    r"(?:^|[\n|/])\s*(?:english|en|français|francais|french|fr|deutsch|german|de|"
+    r"español|espanol|spanish|es|italiano|italian|it|português|portugues|portuguese|pt|"
+    r"polski|pl|русский|nederlands|nl|svenska|sv|中文|日本語)\s*[:：]\s*",
+    re.IGNORECASE,
+)
+
+
+_JUNK_LABEL = re.compile(
+    r"^(?:home\s*page|source|image|file|description|wikimedia\s+commons)$",
+    re.IGNORECASE,
+)
+
+
+def _without_link_labels(text: str) -> str:
+    """Keep the institution or author. Drop ``Home page``, ``Source``, and ``Image``."""
+    parts = re.split(r"\s*(?::|–|—|\|)\s*|\s+-\s+", text or "")
+    kept = [
+        part.strip(" -–—|/")
+        for part in parts
+        if part.strip(" -–—|/") and not _JUNK_LABEL.match(part.strip(" -–—|/"))
+    ]
+    return kept[0] if kept else ""
+
+
+def clean_stored_title(value: str, *, limit: int = 80) -> str:
+    """One short work title. HTML, extra languages, and link labels are dropped."""
+    return clean_credit_name(value, limit=limit)
+
+
+def clean_credit_name(value: str, *, limit: int = 72) -> str:
+    """One short name or title. HTML, extra languages, and link labels are dropped."""
+    text = _plain(value)
+    parts = [
+        _without_link_labels(part)
+        for part in _LANG_MARK.split(text)
+    ]
+    parts = [part for part in parts if part]
+    if not parts and text:
+        named = _without_link_labels(text)
+        parts = [named] if named else []
+    short = [part for part in parts if 1 <= len(part.split()) <= 8 and len(part) <= limit]
+    chosen = clean_author(short[0] if short else (parts[0] if parts else ""))
+    if len(chosen) > limit:
+        trimmed = chosen[:limit].rsplit(" ", 1)[0].strip(" ,;:-—")
+        chosen = trimmed or chosen[:limit].rstrip()
+    return chosen
 
 
 def clean_author(author: str) -> str:
@@ -95,13 +153,13 @@ def parse_wikimedia(payload: Any) -> list[Candidate]:
         info = info_rows[0] if info_rows and isinstance(info_rows[0], dict) else {}
         meta = info.get("extmetadata") or {}
         title = _meta_value(meta.get("ObjectName")) or _plain(page.get("title"))
-        title = title.replace("File:", "").strip()
+        title = clean_stored_title(title.replace("File:", ""))
         found.append(
             Candidate(
                 provider="wikimedia",
                 title=title,
                 description=_meta_value(meta.get("ImageDescription")),
-                author=clean_author(
+                author=clean_credit_name(
                     _meta_value(meta.get("Artist")) or _meta_value(meta.get("Credit"))
                 ),
                 license_raw=_meta_value(meta.get("LicenseShortName")),
@@ -324,6 +382,7 @@ class SmithsonianProvider:
     def search(self, query: str, client: HttpClient, *, limit: int = 10) -> list[Candidate]:
         key = _env("SMITHSONIAN_API_KEY")
         if not key:
+            note_missing_key(self.name)
             return []
         response = client.get(
             self.endpoint,
@@ -402,6 +461,7 @@ class PexelsProvider:
     def search(self, query: str, client: HttpClient, *, limit: int = 10) -> list[Candidate]:
         key = _env("PEXELS_API_KEY")
         if not key:
+            note_missing_key(self.name)
             return []
         response = client.get(
             self.endpoint,
@@ -451,6 +511,7 @@ class UnsplashProvider:
     def search(self, query: str, client: HttpClient, *, limit: int = 10) -> list[Candidate]:
         key = _env("UNSPLASH_ACCESS_KEY")
         if not key:
+            note_missing_key(self.name)
             return []
         response = client.get(
             self.endpoint,
@@ -514,7 +575,7 @@ def default_providers() -> list:
         if provider.enabled():
             enabled.append(provider)
         else:
-            logger.info("Skipping image provider %s — API key is not set.", provider.name)
+            note_missing_key(provider.name)
     return enabled
 
 
