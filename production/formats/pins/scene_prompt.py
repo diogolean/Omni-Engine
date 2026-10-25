@@ -86,10 +86,10 @@ def composition_line(key: str) -> str:
     return _COMPOSITIONS[digest % len(_COMPOSITIONS)]
 
 
-def _blob(topic: str, title: str, article: str) -> str:
+def _blob(*parts: str) -> str:
     return " ".join(
         part.replace("-", " ").replace("_", " ")
-        for part in (topic, title, article)
+        for part in parts
         if part
     )
 
@@ -109,20 +109,19 @@ def entity_pin_scene(channel_id: str, topic: str, title: str, article: str) -> s
     return (hits[0].pin_scene or "").strip()
 
 
-def search_subject(channel: str, entry: dict) -> str:
-    """Two or three search words: an explicit entity, else the catalogue subject."""
-    explicit = str(entry.get("entity") or entry.get("named_entity") or "").strip()
-    if explicit:
-        return explicit
+def matched_pin_entity(channel: str, entry: dict):
+    """The entity named by the pin, when the channel catalogue has one."""
     if not channel:
-        return ""
+        return None
     from production.formats.economic_reel.shot_planner.entities import (  # noqa: PLC0415
         entities_in_text,
         load_entities,
     )
 
     entities = load_entities(channel)
+    explicit = str(entry.get("entity") or entry.get("named_entity") or "").strip()
     primary = _blob(
+        explicit,
         str(entry.get("topic") or ""),
         str(entry.get("pinterest_title") or ""),
         " ".join(
@@ -133,10 +132,38 @@ def search_subject(channel: str, entry: dict) -> str:
     hits = entities_in_text(primary, entities)
     if not hits:
         hits = entities_in_text(str(entry.get("original_caption") or ""), entities)
-    if not hits:
+    return hits[0] if hits else None
+
+
+def search_subject(channel: str, entry: dict) -> str:
+    """Search words: an explicit entity, else the catalogue subject."""
+    explicit = str(entry.get("entity") or entry.get("named_entity") or "").strip()
+    if explicit:
+        return explicit
+    entity = matched_pin_entity(channel, entry)
+    if entity is None:
         return ""
-    entity = hits[0]
     return (entity.search_query or entity.name).strip()
+
+
+def search_constraints(channel: str, entry: dict) -> dict:
+    """Subject plus the terms that keep a free-photo hit on the right place."""
+    entity = matched_pin_entity(channel, entry)
+    explicit = str(entry.get("entity") or entry.get("named_entity") or "").strip()
+    if entity is None:
+        return {
+            "subject": explicit,
+            "required_terms": (),
+            "reject_terms": (),
+            "allow_illustration": False,
+        }
+    subject = explicit or (entity.search_query or entity.name).strip()
+    return {
+        "subject": subject,
+        "required_terms": entity.required_terms,
+        "reject_terms": entity.reject_terms,
+        "allow_illustration": entity.allow_illustration,
+    }
 
 
 def _parse_scene(raw: str) -> str:

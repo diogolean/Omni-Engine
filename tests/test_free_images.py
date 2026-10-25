@@ -152,6 +152,7 @@ def test_query_prefers_the_named_entity() -> None:
         sentence="world's most mysterious statues polish american",
     )
     assert variants == ["easter island moai", "easter island"]
+    assert query_variants(entity="Oak Island Nova Scotia") == ["oak island nova scotia"]
 
 
 def test_rank_prefers_title_match_and_resolution() -> None:
@@ -520,7 +521,9 @@ def test_credit_line_is_reusable() -> None:
         license_name="cc_by",
         source_url="https://example.test/a",
     )
-    assert line == 'Photo: "Baalbek stones" by Ada, CC BY — https://example.test/a'
+    assert line == "Ada, CC BY"
+    assert "Baalbek" not in line
+    assert "https://" not in line
     assert append_credit("A short caption.", line).endswith(line)
     long_caption = "word " * 200
     fitted = append_credit(long_caption, line, limit=120)
@@ -613,7 +616,8 @@ def test_load_card_source_records_credit(
     image = load_card_source(record, tmp_path)
     assert image is not None
     assert image.size[1] > image.size[0]
-    assert "Herb garden" in record["image_credit"]
+    assert record["image_credit"] == "Ada Lovelace, CC BY"
+    assert "Herb garden" not in record["image_credit"]
     assert credit_for_image(tmp_path / "herb_free_source.jpg") == record["image_credit"]
 
 
@@ -691,3 +695,141 @@ def test_free_image_cache_stays_out_of_drive_outputs_on_dry_run(
     chosen = free_image_cache_dir("ancient_knowledge", dry_run=True)
     assert chosen == tmp_path / "local-cache"
     assert drive.is_dir() is False or "local-cache" not in drive.parts
+
+
+def test_relevance_rejects_the_wrong_place_and_book_scans() -> None:
+    from production.providers.image.free.relevance import relevance_verdict, select_relevant
+
+    capitol = _candidate(
+        title="The United States Capitol",
+        description="Illustration from a 1917 book of the capitol building in Washington",
+    )
+    assert relevance_verdict(
+        capitol,
+        subject="Paititi Peru",
+        required_terms=("paititi",),
+        reject_terms=("capitol", "washington"),
+    ) == "reject"
+    carolina = _candidate(
+        title="Oak Island, North Carolina",
+        description="A beach town in North Carolina",
+    )
+    assert relevance_verdict(
+        carolina,
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        reject_terms=("north carolina",),
+    ) == "reject"
+    scotia = _candidate(
+        title="Oak Island, Nova Scotia",
+        description="The money pit on Oak Island, Nova Scotia",
+    )
+    assert relevance_verdict(
+        scotia,
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        reject_terms=("north carolina",),
+    ) == "accept"
+    engraving = _candidate(
+        title="Paititi",
+        description="An engraving of a stone city",
+    )
+    assert relevance_verdict(
+        engraving,
+        subject="Paititi",
+        required_terms=("paititi",),
+    ) == "reject"
+    page = _candidate(
+        title="Voynich manuscript",
+        description="A scanned page of botanical drawings",
+    )
+    assert relevance_verdict(
+        page,
+        subject="Voynich manuscript",
+        required_terms=("voynich",),
+        allow_illustration=True,
+    ) == "accept"
+
+    calls = {"n": 0}
+
+    def judge(subject, candidate):
+        del subject, candidate
+        calls["n"] += 1
+        return True
+
+    ambiguous = _candidate(
+        title="Oak Island lighthouse",
+        description="A wooden lighthouse on the shore",
+    )
+    assert relevance_verdict(
+        ambiguous,
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+    ) == "ambiguous"
+    judged = select_relevant(
+        [ambiguous],
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        judge=judge,
+    )
+    assert calls["n"] == 1
+    assert judged == [ambiguous]
+    calls["n"] = 0
+    kept = select_relevant(
+        [scotia, carolina, capitol],
+        subject="Oak Island Nova Scotia",
+        required_terms=("nova scotia",),
+        reject_terms=("north carolina", "capitol"),
+        judge=judge,
+    )
+    assert calls["n"] == 0
+    assert kept == [scotia]
+
+
+def test_unrelated_hit_is_not_downloaded(tmp_path: Path) -> None:
+    url = "https://cdn.example/capitol.jpg"
+    provider = _Provider(
+        [
+            _candidate(
+                title="Capitol building",
+                description="1917 book illustration of the capitol in Washington",
+                download_url=url,
+            )
+        ]
+    )
+    client = _MapClient({url: (200, _jpeg(1600, 2200))})
+    decision = resolve_image_source(
+        channel="ancient_knowledge",
+        dest=tmp_path / "paititi.jpg",
+        entity="Paititi Peru",
+        required_terms=("paititi",),
+        reject_terms=("capitol", "washington"),
+        policy="free_only",
+        providers=[provider],
+        client=client,
+        cache_dir=tmp_path / "cache",
+        relevance_judge=False,
+    )
+    assert decision.hit is None
+    assert decision.reason == "no_hits"
+    assert client.calls == []
+
+
+def test_credit_line_drops_html_and_extra_languages() -> None:
+    huge = (
+        "English: Voynich Manuscript / Français: Manuscrit de Voynich / "
+        "Deutsch: Voynich-Manuskript " * 8
+    )
+    line = credit_line(
+        title=f"<b>{huge}</b>",
+        author="English: Wilfrid Voynich / Français: Wilfrid Voynich",
+        license_name="cc_by_sa",
+    )
+    assert line == "Wilfrid Voynich, CC BY-SA"
+    assert "<" not in line
+    assert "Français" not in line
+    assert len(line) <= 80
+    unknown = credit_line(title=huge, author="Unknown author Unknown author", license_name="cc_by")
+    assert unknown == "Unknown author, CC BY"
+    assert unknown.count("Unknown author") == 1
+    assert credit_line(title="Stones", author="", license_name="public_domain") == "Public Domain"

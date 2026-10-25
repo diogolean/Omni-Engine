@@ -1115,6 +1115,37 @@ def test_publish_sends_alt_text_and_does_not_patch(
     assert len(captured["description"]) <= 220
 
 
+def test_publish_blocks_a_by_image_with_no_credit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from distribution.publishers.api.pinterest import PinterestPublisher
+
+    def _capture(self, payload):
+        del self, payload
+        raise AssertionError("a CC BY pin with no credit must not be posted")
+
+    monkeypatch.setattr(PinterestPublisher, "_post_with_retry", _capture)
+    publisher = PinterestPublisher(
+        access_token="tok",
+        board_id="board-1",
+        require_board=False,
+    )
+    result = publisher.publish(
+        {
+            "post_id": "post_oak",
+            "topic": "Oak Island",
+            "pinterest_title": "Oak Island",
+            "pinterest_caption": "The money pit is still open.",
+            "image_license": "cc_by",
+            "image_credit_required": True,
+            "image_credit": "",
+            "publication_status": {"posted_on_pinterest": False},
+        },
+        b"jpeg-bytes",
+    )
+    assert result is None
+
+
 def _sheet_rows(path: Path) -> list[tuple]:
     from openpyxl import load_workbook
 

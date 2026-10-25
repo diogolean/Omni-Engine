@@ -53,21 +53,51 @@ def _topic_already_named(title: str, topic: str) -> bool:
 
 
 def _collapse_repeated_title(text: str) -> str:
-    """``Giants: Giants`` and ``Giants Giants`` become ``Giants``."""
+    """Drop a second copy of the same title, including one already cut at 100 characters.
+
+    ``Giants: Giants`` becomes ``Giants``. A doubled clause such as
+    ``Giants in History: Myths, Fossils and Viral Hoaxes`` repeated, then
+    sliced mid-phrase, keeps the first copy only.
+    """
     raw = (text or "").strip()
+    if not raw:
+        return ""
+    spans = list(re.finditer(r"[A-Za-z0-9']+", raw))
+    folded = [span.group(0).lower() for span in spans]
+    count = len(folded)
+    best_cut = 0
+    if count >= 4:
+        for start in range(3, count):
+            remain = count - start
+            if remain < 3 or remain > start:
+                continue
+            left = folded[:remain]
+            right = folded[start : start + remain]
+            same = left == right
+            clipped = (
+                left[:-1] == right[:-1]
+                and len(right[-1]) >= 3
+                and left[-1].startswith(right[-1])
+            )
+            if (same or clipped) and start > best_cut:
+                best_cut = start
+    if best_cut:
+        return raw[: spans[best_cut - 1].end()].strip(" ,;:|-—–")
     parts = re.split(r"\s*[:|—–\-]\s*", raw, maxsplit=1)
     if len(parts) == 2:
         left, right = parts[0].strip(), parts[1].strip()
         if left and left.lower() == right.lower():
             return left
         if left and right.lower().startswith(left.lower()):
-            rest = right[len(left):].strip(" :-")
+            rest = right[len(left) :].strip(" :-")
             return f"{left} {rest}".strip() if rest else left
     words = raw.split()
     if len(words) >= 2 and len(words) % 2 == 0:
         half = len(words) // 2
-        if [word.lower() for word in words[:half]] == [word.lower() for word in words[half:]]:
-            return " ".join(words[:half])
+        if [word.lower().strip(":,;") for word in words[:half]] == [
+            word.lower().strip(":,;") for word in words[half:]
+        ]:
+            return " ".join(words[:half]).strip(" ,;:|-—–")
     return raw
 
 
@@ -82,7 +112,7 @@ def keyword_first_title(title: str, topic: str) -> str:
     """
     from shared.pin_text import sanitize_pin_title, title_case_phrase  # noqa: PLC0415
 
-    cleaned = sanitize_pin_title(title)
+    cleaned = sanitize_pin_title(_collapse_repeated_title(title))
     subject = sanitize_pin_title(title_case_phrase(topic))
     if not cleaned:
         return _collapse_repeated_title(subject)
@@ -103,14 +133,28 @@ def keyword_first_title(title: str, topic: str) -> str:
 
 _HOOK_WORD_LIMIT = 8
 _GENERIC_HOOK = re.compile(r"^what the records leave out about\b", re.IGNORECASE)
+_DANGLING_HOOK = frozenset(
+    {
+        "a", "an", "the", "of", "in", "on", "to", "for", "and", "or", "with",
+        "from", "by", "at", "into", "over",
+    }
+)
+
+
+def trim_dangling_hook(text: str) -> str:
+    """Drop a trailing preposition so the hook does not stop mid-phrase."""
+    words = (text or "").split()
+    while len(words) > 1 and words[-1].lower().strip(".,;:!?\"'") in _DANGLING_HOOK:
+        words.pop()
+    return " ".join(words)
 
 
 def short_hook(text: str, *, max_words: int = _HOOK_WORD_LIMIT) -> str:
-    """At most ``max_words`` words. The card renderer also caps this at 3 lines."""
+    """At most ``max_words`` words, ending on a whole phrase."""
     from shared.pin_text import normalize_pin_text  # noqa: PLC0415
 
-    words = normalize_pin_text(text).split()
-    return " ".join(words[:max_words])
+    words = normalize_pin_text(text).split()[:max_words]
+    return trim_dangling_hook(" ".join(words))
 
 
 def card_hook_text(record: dict) -> str:
@@ -189,17 +233,48 @@ def build_pin_description(record: dict) -> str:
     if url:
         closer = polish_pin_text(_fill(closer_template, title=title, topic=topic, url=url))
     if not closer:
-        return lead[:_DESCRIPTION_LIMIT]
+        return _with_credit(lead[:_DESCRIPTION_LIMIT], record)
     separator = "\n"
     budget = _DESCRIPTION_LIMIT - len(closer) - len(separator)
     if budget < 1 or len(closer) >= _DESCRIPTION_LIMIT:
-        return closer
+        return _with_credit(closer, record)
     if len(lead) > budget:
         trimmed = lead[:budget].rsplit(" ", 1)[0].rstrip(" ,;:-—")
         lead = trimmed or lead[:budget].rstrip()
     if not lead:
-        return closer
-    return f"{lead}{separator}{closer}"
+        body = closer
+    else:
+        body = f"{lead}{separator}{closer}"
+    return _with_credit(body, record)
+
+
+def _with_credit(body: str, record: dict) -> str:
+    """Append the short attribution. A description with no credit stays within 220."""
+    credit = str(record.get("image_credit") or "").strip()
+    if not credit or credit in body:
+        return body
+    combined = f"{body}\n{credit}" if body else credit
+    if len(combined) <= 500:
+        return combined
+    room = 500 - len(credit) - 1
+    if room < 1:
+        return credit[:500]
+    trimmed = body[:room].rsplit(" ", 1)[0].rstrip(" ,;:-—")
+    return f"{trimmed}\n{credit}" if trimmed else credit[:500]
+
+
+def missing_required_credit(record: dict) -> bool:
+    """True when a CC BY or CC BY-SA image has no real author and license line."""
+    from production.providers.image.free.attribution import author_missing  # noqa: PLC0415
+
+    license_name = str(record.get("image_license") or "").strip()
+    required = bool(record.get("image_credit_required")) or license_name in {
+        "cc_by",
+        "cc_by_sa",
+    }
+    if not required:
+        return False
+    return author_missing(str(record.get("image_credit") or ""))
 
 
 def trim_pin_caption(text: str, limit: int = _CAPTION_LIMIT) -> str:

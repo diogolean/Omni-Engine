@@ -75,8 +75,14 @@ class Entity:
     # Pin photograph. A concrete sentence of what the subject looks like.
     # When set, the pin Flux prompt uses this and does not call the text model.
     pin_scene: str = ""
-    # Two or three search words for Commons and Openverse. Empty uses the name.
+    # Two to five search words for Commons and Openverse. Empty uses the name.
     search_query: str = ""
+    # Phrases the title or description must contain, such as "nova scotia".
+    required_terms: tuple[str, ...] = ()
+    # Phrases that mean this is the wrong subject.
+    reject_terms: tuple[str, ...] = ()
+    # Book scans are acceptable only when the subject is itself a document.
+    allow_illustration: bool = False
 
 
 def repo_root() -> Path:
@@ -183,6 +189,9 @@ def load_entities(channel: str) -> list[Entity]:
             usable_photos=_count(row.get("usable_photos")),
             pin_scene=str(row.get("pin_scene") or "").strip(),
             search_query=str(row.get("search_query") or "").strip(),
+            required_terms=_texts("required_terms"),
+            reject_terms=_texts("reject_terms"),
+            allow_illustration=bool(row.get("allow_illustration")),
         ))
     return found
 

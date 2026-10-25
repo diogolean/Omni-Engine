@@ -206,24 +206,84 @@ _HOOK_MAX_LINES = 3
 _DOMAIN_FONT_SIZE = 36
 
 
+def _text_width(text: str, font) -> int:
+    if hasattr(font, "getlength"):
+        return int(font.getlength(text))
+    bbox = font.getbbox(text) if hasattr(font, "getbbox") else (0, 0, len(text) * 8, 10)
+    return int(bbox[2] - bbox[0])
+
+
 def _hook_lines(hook_text: str) -> list[str]:
-    """At most 8 words and 3 lines, so the hook cannot cover the subject."""
-    from production.formats.pins.pin_copy import short_hook  # noqa: PLC0415
+    """At most 8 words and 3 lines, wrapped to the card width on whole words."""
+    from production.formats.pins.pin_copy import short_hook, trim_dangling_hook  # noqa: PLC0415
 
     words = short_hook(hook_text).upper().split()
     if not words:
         return []
-    if len(words) <= 3:
-        return [" ".join(words)]
-    if len(words) <= 6:
-        mid = (len(words) + 1) // 2
-        return [" ".join(words[:mid]), " ".join(words[mid:])]
-    chunk = (len(words) + _HOOK_MAX_LINES - 1) // _HOOK_MAX_LINES
-    lines = [
-        " ".join(words[index : index + chunk])
-        for index in range(0, len(words), chunk)
-    ]
-    return [line for line in lines if line][:_HOOK_MAX_LINES]
+    font = _find_font(_SERIF_CANDIDATES, 54)
+    max_w = PIN_W - 80
+    rows: list[list[str]] = [[]]
+    for word in words:
+        trial = rows[-1] + [word]
+        overflows = bool(rows[-1]) and _text_width(" ".join(trial), font) > max_w
+        if overflows:
+            if len(rows) >= _HOOK_MAX_LINES:
+                break
+            rows.append([word])
+        else:
+            rows[-1].append(word)
+    lines = [" ".join(row) for row in rows if row]
+    if lines:
+        lines[-1] = trim_dangling_hook(lines[-1])
+        lines = [line for line in lines if line]
+    return lines[:_HOOK_MAX_LINES]
+
+
+def _record_credit(record: dict) -> str:
+    text = str(record.get("image_credit") or "").strip()
+    if text:
+        return text
+    path = str(record.get("local_image_path") or "").strip()
+    if not path:
+        return ""
+    try:
+        from production.providers.image.free.attribution import credit_for_image  # noqa: PLC0415
+
+        return credit_for_image(path)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _draw_credit_footer(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    credit: str,
+    *,
+    bottom: int,
+) -> int:
+    """Small author and license line just above the CTA bar."""
+    text = (credit or "").strip()
+    if not text:
+        return 0
+    zone_h = 28
+    top = max(0, bottom - zone_h)
+    bar = Image.new("RGBA", (PIN_W, zone_h), (8, 10, 12, 220))
+    canvas.paste(bar, (0, top), bar)
+    max_w = PIN_W - 48
+    size = 18
+    font = _find_font(_SANS_CANDIDATES, size)
+    while size > 12 and _text_width(text, font) > max_w:
+        size -= 1
+        font = _find_font(_SANS_CANDIDATES, size)
+    shown = text
+    while shown and _text_width(shown, font) > max_w and " " in shown:
+        shown = shown.rsplit(" ", 1)[0]
+    if not shown:
+        shown = text[:48]
+    bbox = draw.textbbox((0, 0), shown, font=font)
+    text_w = bbox[2] - bbox[0]
+    draw.text(((PIN_W - text_w) // 2, top + 4), shown, font=font, fill=(232, 228, 216))
+    return zone_h
 
 
 def _focal_in_upper_band(image: Image.Image) -> bool:
@@ -449,7 +509,7 @@ class PinTransformer:
             log.warning("No source image for: %s v%s", topic, variant)
             return None
 
-        pin = self._compose(source, visual_hook)
+        pin = self._compose(source, visual_hook, credit=_record_credit(record))
 
         filename = f"{subject_slug}_v{variant:02d}_pin.jpg"
         out_path = self.pins_dir / filename
@@ -493,7 +553,7 @@ class PinTransformer:
         if source is None:
             return None
 
-        pin = self._compose(source, visual_hook)
+        pin = self._compose(source, visual_hook, credit=_record_credit(record))
         buf = io.BytesIO()
         pin.save(buf, format="JPEG", quality=92, optimize=True)
         return buf.getvalue()
@@ -559,13 +619,27 @@ class PinTransformer:
             log.info("Free card source skipped (%s)", type(exc).__name__)
             return None
 
-    def _compose(self, source: Image.Image, visual_hook: str) -> Image.Image:
+    def _compose(
+        self,
+        source: Image.Image,
+        visual_hook: str,
+        credit: str = "",
+    ) -> Image.Image:
         """Assemble the final 1000x1500 canvas."""
         anchor = "bottom" if _focal_in_upper_band(source) else "top"
-        _label, _url, footer_h = _footer_content()
+        _label, _url, button_h = _footer_content()
+        credit_h = 28 if (credit or "").strip() else 0
+        footer_h = button_h + credit_h
         if self.method == "cover":
             canvas = _center_crop_to_size(source, PIN_W, PIN_H).convert("RGBA")
             _draw_cover_hook(canvas, visual_hook, anchor=anchor, footer_h=footer_h)
+            if credit_h:
+                _draw_credit_footer(
+                    canvas,
+                    ImageDraw.Draw(canvas),
+                    credit,
+                    bottom=PIN_H - button_h,
+                )
             _draw_button_zone(canvas, ImageDraw.Draw(canvas))
             return canvas.convert("RGB")
 
@@ -578,6 +652,8 @@ class PinTransformer:
         draw = ImageDraw.Draw(canvas)
 
         _draw_hook_zone(canvas, draw, visual_hook, anchor=anchor, footer_h=footer_h)
+        if credit_h:
+            _draw_credit_footer(canvas, draw, credit, bottom=PIN_H - button_h)
         _draw_button_zone(canvas, draw)
 
         return canvas.convert("RGB")

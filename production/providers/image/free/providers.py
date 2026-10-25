@@ -41,6 +41,32 @@ def _meta_value(block: Any) -> str:
     return _plain(block)
 
 
+_LANG_MARK = re.compile(
+    r"(?:^|[\n|/])\s*(?:english|en|français|francais|french|fr|deutsch|german|de|"
+    r"español|espanol|spanish|es|italiano|italian|it|português|portugues|portuguese|pt|"
+    r"polski|pl|русский|nederlands|nl|svenska|sv|中文|日本語)\s*[:：]\s*",
+    re.IGNORECASE,
+)
+
+
+def clean_credit_name(value: str, *, limit: int = 72) -> str:
+    """One short name or title. HTML and extra languages are dropped."""
+    text = _plain(value)
+    parts = [
+        part.strip(" -–—|/")
+        for part in _LANG_MARK.split(text)
+        if part and part.strip(" -–—|/")
+    ]
+    if not parts and text:
+        parts = [text]
+    short = [part for part in parts if 1 <= len(part.split()) <= 8 and len(part) <= limit]
+    chosen = clean_author(short[0] if short else (parts[0] if parts else ""))
+    if len(chosen) > limit:
+        trimmed = chosen[:limit].rsplit(" ", 1)[0].strip(" ,;:-—")
+        chosen = trimmed or chosen[:limit].rstrip()
+    return chosen
+
+
 def clean_author(author: str) -> str:
     """Collapse a doubled credit such as ``Unknown author Unknown author``."""
     text = re.sub(r"\s+", " ", str(author or "").replace("\xa0", " ")).strip(" ,;")

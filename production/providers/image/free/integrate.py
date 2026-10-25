@@ -115,16 +115,27 @@ def load_card_source(
     topic = str(record.get("topic") or record.get("visual_hook") or "")
     entity = str(record.get("entity") or record.get("named_entity") or "")
     sentence = str(record.get("original_caption") or record.get("humanized_caption") or "")
+    constraints: dict = {}
+    if channel:
+        try:
+            from production.formats.pins.scene_prompt import search_constraints
+
+            constraints = search_constraints(channel, record)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Card subject lookup skipped (%s).", type(exc).__name__)
     slug = str(record.get("subject_slug") or "card").strip() or "card"
     dest = Path(work_dir) / f"{slug}_free_source.jpg"
     decision = resolve_image_source(
         channel=channel,
         dest=dest,
         topic=topic,
-        entity=entity,
+        entity=str(constraints.get("subject") or entity),
         sentence=sentence,
         policy=policy,
         producer=str(record.get("producer") or "pinterest_card"),
+        required_terms=constraints.get("required_terms") or (),
+        reject_terms=constraints.get("reject_terms") or (),
+        allow_illustration=bool(constraints.get("allow_illustration")),
     )
     if decision.hit is None and policy == "free_first" and allow_flux:
         fallback_path = _flux_fallback(topic or sentence or entity, dest)
@@ -140,9 +151,18 @@ def load_card_source(
     if path is None or not Path(path).is_file():
         return None
     if decision.hit is not None:
+        from production.providers.image.free.attribution import credit_required
+
+        license_name = str(decision.hit.attribution.license or "")
         record["image_credit"] = decision.hit.credit_line
         record["image_source"] = "free_license"
         record["image_attribution"] = decision.hit.attribution.to_json()
+        record["image_license"] = license_name
+        record["image_credit_required"] = credit_required(license_name)
+    elif decision.used_fallback:
+        record["image_credit"] = ""
+        record["image_license"] = ""
+        record["image_credit_required"] = False
     try:
         with Image.open(path) as raw:
             return raw.convert("RGB")

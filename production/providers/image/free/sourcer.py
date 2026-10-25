@@ -26,6 +26,7 @@ from production.providers.image.free.quality import (
     rank_candidates,
 )
 from production.providers.image.free.query import query_variants
+from production.providers.image.free.relevance import select_relevant
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ def resolve_image_source(
     vision_check=None,
     allowlist: frozenset[str] | set[str] | None = None,
     producer: str = "",
+    required_terms: list[str] | tuple[str, ...] | None = None,
+    reject_terms: list[str] | tuple[str, ...] | None = None,
+    allow_illustration: bool = False,
+    relevance_judge=None,
 ) -> SourceDecision:
     """Find one usable photograph. Does not call Flux.
 
@@ -59,6 +64,7 @@ def resolve_image_source(
     chosen_policy = policy or resolve_policy(channel, page_cfg)
     variants = query_variants(topic=topic, entity=entity, sentence=sentence)
     query = variants[0] if variants else ""
+    subject = (entity or topic or query).strip()
     if chosen_policy == "ai_only":
         return SourceDecision(policy=chosen_policy, query=query, reason="ai_only")
     if not query:
@@ -80,6 +86,11 @@ def resolve_image_source(
                 vision_check=vision_check,
                 allowlist=allowlist,
                 producer=producer,
+                subject=subject,
+                required_terms=tuple(required_terms or ()),
+                reject_terms=tuple(reject_terms or ()),
+                allow_illustration=allow_illustration,
+                relevance_judge=relevance_judge,
             )
             last = decision
             if decision.hit is not None or decision.reason != "no_hits":
@@ -106,6 +117,11 @@ def _resolve_locked(
     vision_check,
     allowlist,
     producer: str,
+    subject: str = "",
+    required_terms: tuple[str, ...] = (),
+    reject_terms: tuple[str, ...] = (),
+    allow_illustration: bool = False,
+    relevance_judge=None,
 ) -> SourceDecision:
     short_side = min_short_side if min_short_side is not None else _min_short_side()
     active = list(providers) if providers is not None else default_providers()
@@ -149,6 +165,17 @@ def _resolve_locked(
         ranked = _rerank_with_clip(ranked[:5], query, http, clip) + ranked[5:]
 
     if not candidates:
+        return SourceDecision(policy=policy, query=query, reason="no_hits")
+
+    ranked = select_relevant(
+        ranked,
+        subject=subject or query,
+        required_terms=required_terms,
+        reject_terms=reject_terms,
+        allow_illustration=allow_illustration,
+        judge=relevance_judge,
+    )
+    if not ranked:
         return SourceDecision(policy=policy, query=query, reason="no_hits")
 
     for candidate in ranked:
@@ -242,6 +269,19 @@ def _download_one(
     canonical = license_allowed(candidate.license_raw, allowlist)
     if canonical is None:
         return None
+    from production.providers.image.free.attribution import (  # noqa: PLC0415
+        author_missing,
+        credit_required,
+    )
+
+    credit = credit_line(
+        title=candidate.title,
+        author=candidate.author,
+        license_name=canonical,
+        source_url=candidate.source_url,
+    )
+    if credit_required(canonical) and author_missing(candidate.author):
+        return None
     dest.parent.mkdir(parents=True, exist_ok=True)
     portrait.save(dest, format="JPEG", quality=92, optimize=True)
     attribution = Attribution(
@@ -251,12 +291,6 @@ def _download_one(
         source_url=candidate.source_url,
         license_url=candidate.license_url,
         provider=candidate.provider,
-    )
-    credit = credit_line(
-        title=candidate.title,
-        author=candidate.author,
-        license_name=canonical,
-        source_url=candidate.source_url,
     )
     sidecar = write_sidecar(
         dest,

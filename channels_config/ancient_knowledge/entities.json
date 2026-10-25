@@ -512,6 +512,8 @@
     ],
     "commons_titles": [],
     "search_query": "voynich manuscript",
+    "required_terms": ["voynich"],
+    "allow_illustration": true,
     "pin_scene": "An open old vellum manuscript with botanical drawings lying on a wooden desk."
   },
   {
@@ -559,10 +561,12 @@
     ],
     "canonical_shape": "stone ruins under jungle canopy",
     "commons_search": [
-      "Peruvian jungle ruins"
+      "Paititi Peru"
     ],
     "commons_titles": [],
-    "search_query": "peruvian jungle ruins",
+    "search_query": "Paititi Peru",
+    "required_terms": ["paititi"],
+    "reject_terms": ["capitol", "washington"],
     "pin_scene": "Dense Peruvian jungle with overgrown stone ruins."
   },
   {
@@ -639,7 +643,9 @@
       "Oak Island Nova Scotia"
     ],
     "commons_titles": [],
-    "search_query": "oak island",
+    "search_query": "Oak Island Nova Scotia",
+    "required_terms": ["nova scotia"],
+    "reject_terms": ["north carolina"],
     "pin_scene": "A wooded island with a dug earth shaft and timber, photographed in daylight."
   },
   {

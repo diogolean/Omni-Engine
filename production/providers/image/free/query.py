@@ -51,10 +51,13 @@ def tokenize(text: str) -> list[str]:
 
 
 def _subject_tokens(entity: str, topic: str, cap: int) -> list[str]:
-    """Entity words first. The title is used only when the entity adds none."""
-    tokens = tokenize(entity)[:cap] if (entity or "").strip() else []
-    if not tokens:
-        tokens = tokenize(topic)[:cap]
+    """Entity words first. A curated place name keeps its disambiguation."""
+    tokens = tokenize(entity) if (entity or "").strip() else []
+    if tokens:
+        if len(tokens) <= 5:
+            return tokens
+        return tokens[:cap]
+    tokens = tokenize(topic)[:cap]
     while len(tokens) > 2 and tokens[-1] in _TRAILING_GENERIC:
         tokens.pop()
     return tokens
@@ -78,7 +81,9 @@ def query_variants(
     if not tokens:
         return []
     variants = [" ".join(tokens)]
-    if len(tokens) > 2:
+    # A four- or five-word subject is already disambiguated ("oak island nova
+    # scotia"). Dropping the tail would search the ambiguous name.
+    if len(tokens) == 3:
         broader = " ".join(tokens[:2])
         if broader not in variants:
             variants.append(broader)

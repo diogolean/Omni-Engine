@@ -163,6 +163,16 @@ class PinterestPublisher:
         Existing board pins are never edited. A new article link is only
         sent on this create call. There is no relink or update path.
         """
+        missing_required_credit = Symbol(
+            'production.formats.pins.pin_copy', 'missing_required_credit'
+        )  # noqa: PLC0415
+        if missing_required_credit(record):
+            log.warning(
+                "Skipping %s — CC BY attribution is missing.",
+                record.get("post_id", "?"),
+            )
+            return None
+
         # Guard: never double-post
         if record.get("publication_status", {}).get("posted_on_pinterest"):
             log.warning(
@@ -188,10 +198,12 @@ class PinterestPublisher:
 
         cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
-        title = (
-            record.get("pinterest_title")
-            or record.get("topic")
-            or cfg.DEFAULT_TOPIC
+        keyword_first_title = Symbol(
+            'production.formats.pins.pin_copy', 'keyword_first_title'
+        )  # noqa: PLC0415
+        title = keyword_first_title(
+            str(record.get("pinterest_title") or record.get("topic") or cfg.DEFAULT_TOPIC),
+            str(record.get("topic") or ""),
         )[:100]
         video_path = (record.get("local_video_path") or "").strip()
         if not pin_image_bytes:
@@ -560,10 +572,12 @@ class PinterestPublisher:
             return None
 
         cfg = Port('production.formats.pins.config')  # noqa: PLC0415
-        title = (
-            record.get("pinterest_title")
-            or record.get("topic")
-            or cfg.DEFAULT_TOPIC
+        keyword_first_title = Symbol(
+            'production.formats.pins.pin_copy', 'keyword_first_title'
+        )  # noqa: PLC0415
+        title = keyword_first_title(
+            str(record.get("pinterest_title") or record.get("topic") or cfg.DEFAULT_TOPIC),
+            str(record.get("topic") or ""),
         )[:100]
         media_source: dict = {
             "source_type": "video_id",
