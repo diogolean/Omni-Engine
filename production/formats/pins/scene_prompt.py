@@ -154,15 +154,19 @@ def search_constraints(channel: str, entry: dict) -> dict:
         return {
             "subject": explicit,
             "required_terms": (),
+            "required_any": (),
             "reject_terms": (),
             "allow_illustration": False,
+            "allow_biological": False,
         }
     subject = explicit or (entity.search_query or entity.name).strip()
     return {
         "subject": subject,
         "required_terms": entity.required_terms,
+        "required_any": entity.required_any,
         "reject_terms": entity.reject_terms,
         "allow_illustration": entity.allow_illustration,
+        "allow_biological": entity.allow_biological,
     }
 
 

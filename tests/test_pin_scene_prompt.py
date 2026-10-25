@@ -159,6 +159,28 @@ def test_giants_title_is_not_repeated_and_captions_fit() -> None:
         collapsed = keyword_first_title(cut, "Giants")
         assert collapsed.lower().count("giants in history") == 1
         assert "viral hoaxes: giants" not in collapsed.lower()
+    exact = (
+        "Were There Ever Giants? Myths, Fossils and Viral Hoaxes: "
+        "Giants in History: Myths, Fossils and Viral"
+    )
+    assert len(exact) == 100
+    collapsed = keyword_first_title(exact, "Giants")
+    assert collapsed == (
+        "Were There Ever Giants? Myths, Fossils and Viral Hoaxes: Giants in History"
+    )
+    assert "viral hoaxes: giants in history: myths, fossils and viral" not in collapsed.lower()
+    assert collapsed.split()[-1].lower() not in {"and", "of", "in", "the", "viral"}
+    from shared.pin_text import fit_pin_title
+
+    assert sanitize_pin_title(exact) == collapsed
+    joined = keyword_first_title(
+        "Giants in History: Myths, Fossils and Viral Hoaxes",
+        "Were There Ever Giants? Myths, Fossils and Viral Hoaxes",
+    )
+    assert joined.lower().count("myths, fossils and viral") == 1
+    assert "viral hoaxes: giants in history: myths" not in joined.lower()
+    cut_on_and = fit_pin_title("Stone ruins of the city and UnbrokenTail", 28)
+    assert cut_on_and == "Stone ruins of the city"
 
 
 def test_search_terms_keep_oak_island_and_paititi_specific() -> None:
@@ -170,6 +192,10 @@ def test_search_terms_keep_oak_island_and_paititi_specific() -> None:
     assert "paititi" in paititi["subject"].lower()
     assert "paititi" in paititi["required_terms"]
     assert "capitol" in paititi["reject_terms"]
+    assert "frog" in paititi["reject_terms"]
+    assert "ruins" in paititi["required_any"]
+    assert "jungle" in paititi["required_any"]
+    assert paititi["allow_biological"] is False
     voynich = search_constraints(_CHANNEL, {"subject_slug": "voynich", "topic": "Voynich"})
     assert voynich["allow_illustration"] is True
     assert "voynich" in voynich["required_terms"]
@@ -236,7 +262,7 @@ def test_credit_is_on_the_card_and_in_the_description_and_blocks_when_missing(
     assert raw
     credit_bits = [size for text, size in drawn if text == "Ada, CC BY"]
     assert credit_bits
-    assert max(credit_bits) <= 22
+    assert 32 <= max(credit_bits) <= 40
     description = build_pin_description(record)
     assert "Ada, CC BY" in description
     assert record["target_url"] in description

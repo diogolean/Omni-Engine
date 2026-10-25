@@ -49,16 +49,39 @@ _LANG_MARK = re.compile(
 )
 
 
+_JUNK_LABEL = re.compile(
+    r"^(?:home\s*page|source|image|file|description|wikimedia\s+commons)$",
+    re.IGNORECASE,
+)
+
+
+def _without_link_labels(text: str) -> str:
+    """Keep the institution or author. Drop ``Home page``, ``Source``, and ``Image``."""
+    parts = re.split(r"\s*(?::|–|—|\|)\s*|\s+-\s+", text or "")
+    kept = [
+        part.strip(" -–—|/")
+        for part in parts
+        if part.strip(" -–—|/") and not _JUNK_LABEL.match(part.strip(" -–—|/"))
+    ]
+    return kept[0] if kept else ""
+
+
+def clean_stored_title(value: str, *, limit: int = 80) -> str:
+    """One short work title. HTML, extra languages, and link labels are dropped."""
+    return clean_credit_name(value, limit=limit)
+
+
 def clean_credit_name(value: str, *, limit: int = 72) -> str:
-    """One short name or title. HTML and extra languages are dropped."""
+    """One short name or title. HTML, extra languages, and link labels are dropped."""
     text = _plain(value)
     parts = [
-        part.strip(" -–—|/")
+        _without_link_labels(part)
         for part in _LANG_MARK.split(text)
-        if part and part.strip(" -–—|/")
     ]
+    parts = [part for part in parts if part]
     if not parts and text:
-        parts = [text]
+        named = _without_link_labels(text)
+        parts = [named] if named else []
     short = [part for part in parts if 1 <= len(part.split()) <= 8 and len(part) <= limit]
     chosen = clean_author(short[0] if short else (parts[0] if parts else ""))
     if len(chosen) > limit:
@@ -130,13 +153,13 @@ def parse_wikimedia(payload: Any) -> list[Candidate]:
         info = info_rows[0] if info_rows and isinstance(info_rows[0], dict) else {}
         meta = info.get("extmetadata") or {}
         title = _meta_value(meta.get("ObjectName")) or _plain(page.get("title"))
-        title = title.replace("File:", "").strip()
+        title = clean_stored_title(title.replace("File:", ""))
         found.append(
             Candidate(
                 provider="wikimedia",
                 title=title,
                 description=_meta_value(meta.get("ImageDescription")),
-                author=clean_author(
+                author=clean_credit_name(
                     _meta_value(meta.get("Artist")) or _meta_value(meta.get("Credit"))
                 ),
                 license_raw=_meta_value(meta.get("LicenseShortName")),

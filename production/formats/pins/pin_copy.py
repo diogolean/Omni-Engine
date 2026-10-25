@@ -53,52 +53,10 @@ def _topic_already_named(title: str, topic: str) -> bool:
 
 
 def _collapse_repeated_title(text: str) -> str:
-    """Drop a second copy of the same title, including one already cut at 100 characters.
+    """Drop a repeated colon clause, including one already cut at 100 characters."""
+    from shared.pin_text import dedupe_pin_title  # noqa: PLC0415
 
-    ``Giants: Giants`` becomes ``Giants``. A doubled clause such as
-    ``Giants in History: Myths, Fossils and Viral Hoaxes`` repeated, then
-    sliced mid-phrase, keeps the first copy only.
-    """
-    raw = (text or "").strip()
-    if not raw:
-        return ""
-    spans = list(re.finditer(r"[A-Za-z0-9']+", raw))
-    folded = [span.group(0).lower() for span in spans]
-    count = len(folded)
-    best_cut = 0
-    if count >= 4:
-        for start in range(3, count):
-            remain = count - start
-            if remain < 3 or remain > start:
-                continue
-            left = folded[:remain]
-            right = folded[start : start + remain]
-            same = left == right
-            clipped = (
-                left[:-1] == right[:-1]
-                and len(right[-1]) >= 3
-                and left[-1].startswith(right[-1])
-            )
-            if (same or clipped) and start > best_cut:
-                best_cut = start
-    if best_cut:
-        return raw[: spans[best_cut - 1].end()].strip(" ,;:|-—–")
-    parts = re.split(r"\s*[:|—–\-]\s*", raw, maxsplit=1)
-    if len(parts) == 2:
-        left, right = parts[0].strip(), parts[1].strip()
-        if left and left.lower() == right.lower():
-            return left
-        if left and right.lower().startswith(left.lower()):
-            rest = right[len(left) :].strip(" :-")
-            return f"{left} {rest}".strip() if rest else left
-    words = raw.split()
-    if len(words) >= 2 and len(words) % 2 == 0:
-        half = len(words) // 2
-        if [word.lower().strip(":,;") for word in words[:half]] == [
-            word.lower().strip(":,;") for word in words[half:]
-        ]:
-            return " ".join(words[:half]).strip(" ,;:|-—–")
-    return raw
+    return dedupe_pin_title(text)
 
 
 _CAPTION_LIMIT = 500

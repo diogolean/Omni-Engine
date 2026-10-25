@@ -33,6 +33,34 @@ _ILLUSTRATION = re.compile(
     re.IGNORECASE,
 )
 
+_BIO_WORD = re.compile(
+    r"\b(?:species|frogs?|animals?|birds?|insects?|plants?|genus|taxa|taxon|"
+    r"taxonomy|holotypes?|specimens?)\b",
+    re.IGNORECASE,
+)
+
+# Genus + species, not "Stone ruins" or "The money pit". The epithet has to
+# look Latin (granulatus) or the line has to cite an author and year.
+_BINOMIAL = re.compile(r"\b[A-Z][a-z]{2,}\s+([a-z]{4,})\b")
+_LATIN_EPITHET = re.compile(
+    r"(?:ensis|ianus|iana|atus|atum|oides|orum|arum)$",
+    re.IGNORECASE,
+)
+_TAXON_CITE = re.compile(r"\([A-Z][A-Za-z.-]+,\s*\d{3,4}\)")
+_BINOMIAL_STOP = frozenset(
+    {
+        "ruins", "ruin", "stone", "stones", "city", "cities", "island", "islands",
+        "jungle", "temple", "history", "photo", "image", "north", "south", "east",
+        "west", "building", "museum", "library", "page", "source", "home", "from",
+        "with", "near", "national", "reserve", "natural", "park", "peru", "scotia",
+        "carolina", "ancient", "lost", "giant", "giants", "inca", "gold", "site",
+        "place", "view", "river", "coast", "forest", "valley", "mountain", "tomb",
+        "bones", "manuscript", "book", "tablet", "skull", "moai", "statue", "lines",
+        "hill", "hills", "water", "beach", "town", "village", "quarry", "garden",
+        "trilithon", "money", "focus", "campus", "status", "genius", "bonus",
+    }
+)
+
 _JUDGE_SYSTEM = (
     "You check whether image-search metadata is the named subject. "
     "A different place that shares part of the name is not relevant. "
@@ -49,20 +77,43 @@ def is_illustration(candidate: Candidate) -> bool:
     return bool(_ILLUSTRATION.search(candidate_text(candidate)))
 
 
+def is_taxonomic(candidate: Candidate) -> bool:
+    """A species page or a Latin binomial, not a place photograph."""
+    text = candidate_text(candidate)
+    if _BIO_WORD.search(text):
+        return True
+    if _TAXON_CITE.search(text):
+        return True
+    for match in _BINOMIAL.finditer(text):
+        epithet = match.group(1)
+        if epithet.lower() in _BINOMIAL_STOP:
+            continue
+        if _LATIN_EPITHET.search(epithet):
+            return True
+    return False
+
+
 def relevance_verdict(
     candidate: Candidate,
     *,
     subject: str,
     required_terms: list[str] | tuple[str, ...] = (),
     reject_terms: list[str] | tuple[str, ...] = (),
+    required_any: list[str] | tuple[str, ...] = (),
     allow_illustration: bool = False,
+    allow_biological: bool = False,
 ) -> str:
     """``accept``, ``reject``, or ``ambiguous``."""
     blob = candidate_text(candidate).lower()
     for term in reject_terms:
         if term and term.lower() in blob:
             return "reject"
+    if is_taxonomic(candidate) and not allow_biological:
+        return "reject"
     if is_illustration(candidate) and not allow_illustration:
+        return "reject"
+    any_needed = [term for term in required_any if term]
+    if any_needed and not any(term.lower() in blob for term in any_needed):
         return "reject"
     title_tokens = set(tokenize(blob))
     distinctive = [token for token in tokenize(subject) if token not in _GENERIC]
@@ -121,7 +172,9 @@ def select_relevant(
     subject: str,
     required_terms: list[str] | tuple[str, ...] = (),
     reject_terms: list[str] | tuple[str, ...] = (),
+    required_any: list[str] | tuple[str, ...] = (),
     allow_illustration: bool = False,
+    allow_biological: bool = False,
     judge=None,
 ) -> list[Candidate]:
     """Photographs that match the subject. The judge sees ambiguous rows only."""
@@ -133,7 +186,9 @@ def select_relevant(
             subject=subject,
             required_terms=required_terms,
             reject_terms=reject_terms,
+            required_any=required_any,
             allow_illustration=allow_illustration,
+            allow_biological=allow_biological,
         )
         if verdict == "accept":
             accepted.append(candidate)

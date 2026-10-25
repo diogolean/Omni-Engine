@@ -1115,8 +1115,10 @@ class PinterestScheduler:
             constraints = {
                 "subject": subject,
                 "required_terms": (),
+                "required_any": (),
                 "reject_terms": (),
                 "allow_illustration": False,
+                "allow_biological": False,
             }
         try:
             decision = resolve_image_source(
@@ -1129,8 +1131,10 @@ class PinterestScheduler:
                 producer="pinterest_card",
                 cache_dir=free_image_cache_dir(channel, dry_run=bool(self.dry_run)),
                 required_terms=constraints.get("required_terms") or (),
+                required_any=constraints.get("required_any") or (),
                 reject_terms=constraints.get("reject_terms") or (),
                 allow_illustration=bool(constraints.get("allow_illustration")),
+                allow_biological=bool(constraints.get("allow_biological")),
             )
         except B2DailyCapError:
             raise

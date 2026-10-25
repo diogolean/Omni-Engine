@@ -53,7 +53,9 @@ def resolve_image_source(
     producer: str = "",
     required_terms: list[str] | tuple[str, ...] | None = None,
     reject_terms: list[str] | tuple[str, ...] | None = None,
+    required_any: list[str] | tuple[str, ...] | None = None,
     allow_illustration: bool = False,
+    allow_biological: bool = False,
     relevance_judge=None,
 ) -> SourceDecision:
     """Find one usable photograph. Does not call Flux.
@@ -89,7 +91,9 @@ def resolve_image_source(
                 subject=subject,
                 required_terms=tuple(required_terms or ()),
                 reject_terms=tuple(reject_terms or ()),
+                required_any=tuple(required_any or ()),
                 allow_illustration=allow_illustration,
+                allow_biological=allow_biological,
                 relevance_judge=relevance_judge,
             )
             last = decision
@@ -120,7 +124,9 @@ def _resolve_locked(
     subject: str = "",
     required_terms: tuple[str, ...] = (),
     reject_terms: tuple[str, ...] = (),
+    required_any: tuple[str, ...] = (),
     allow_illustration: bool = False,
+    allow_biological: bool = False,
     relevance_judge=None,
 ) -> SourceDecision:
     short_side = min_short_side if min_short_side is not None else _min_short_side()
@@ -172,10 +178,13 @@ def _resolve_locked(
         subject=subject or query,
         required_terms=required_terms,
         reject_terms=reject_terms,
+        required_any=required_any,
         allow_illustration=allow_illustration,
+        allow_biological=allow_biological,
         judge=relevance_judge,
     )
     if not ranked:
+        # Nothing matched the subject. The pin caller falls through to Flux.
         return SourceDecision(policy=policy, query=query, reason="no_hits")
 
     for candidate in ranked:
@@ -284,9 +293,14 @@ def _download_one(
         return None
     dest.parent.mkdir(parents=True, exist_ok=True)
     portrait.save(dest, format="JPEG", quality=92, optimize=True)
+    from production.providers.image.free.providers import (  # noqa: PLC0415
+        clean_credit_name,
+        clean_stored_title,
+    )
+
     attribution = Attribution(
-        title=candidate.title,
-        author=candidate.author,
+        title=clean_stored_title(candidate.title),
+        author=clean_credit_name(candidate.author),
         license=canonical,
         source_url=candidate.source_url,
         license_url=candidate.license_url,

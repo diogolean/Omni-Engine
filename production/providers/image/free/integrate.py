@@ -134,8 +134,10 @@ def load_card_source(
         policy=policy,
         producer=str(record.get("producer") or "pinterest_card"),
         required_terms=constraints.get("required_terms") or (),
+        required_any=constraints.get("required_any") or (),
         reject_terms=constraints.get("reject_terms") or (),
         allow_illustration=bool(constraints.get("allow_illustration")),
+        allow_biological=bool(constraints.get("allow_biological")),
     )
     if decision.hit is None and policy == "free_first" and allow_flux:
         fallback_path = _flux_fallback(topic or sentence or entity, dest)

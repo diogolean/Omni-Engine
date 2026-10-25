@@ -79,10 +79,14 @@ class Entity:
     search_query: str = ""
     # Phrases the title or description must contain, such as "nova scotia".
     required_terms: tuple[str, ...] = ()
+    # At least one of these must appear. A name-only hit is not enough.
+    required_any: tuple[str, ...] = ()
     # Phrases that mean this is the wrong subject.
     reject_terms: tuple[str, ...] = ()
     # Book scans are acceptable only when the subject is itself a document.
     allow_illustration: bool = False
+    # Species pages and Latin binomials are acceptable only for a living subject.
+    allow_biological: bool = False
 
 
 def repo_root() -> Path:
@@ -190,8 +194,12 @@ def load_entities(channel: str) -> list[Entity]:
             pin_scene=str(row.get("pin_scene") or "").strip(),
             search_query=str(row.get("search_query") or "").strip(),
             required_terms=_texts("required_terms"),
+            required_any=_texts("required_any"),
             reject_terms=_texts("reject_terms"),
             allow_illustration=bool(row.get("allow_illustration")),
+            allow_biological=bool(row.get("allow_biological"))
+            or str(row.get("kind") or "").strip().lower()
+            in {"species", "organism", "animal", "plant", "biological", "taxon"},
         ))
     return found
 

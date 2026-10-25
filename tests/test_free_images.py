@@ -785,6 +785,42 @@ def test_relevance_rejects_the_wrong_place_and_book_scans() -> None:
     assert calls["n"] == 0
     assert kept == [scotia]
 
+    frog = _candidate(
+        title="Scinax granulatus (Hensel, 1867) at Reserva Natural Paititi",
+        description="A frog species photographed at the reserve",
+    )
+    paititi_terms = {
+        "subject": "Paititi",
+        "required_terms": ("paititi",),
+        "required_any": ("ruins", "inca", "stone", "city", "jungle"),
+        "reject_terms": ("species", "frog", "animal", "bird", "insect", "plant"),
+    }
+    assert relevance_verdict(frog, **paititi_terms) == "reject"
+    binomial = _candidate(
+        title="Scinax granulatus at Reserva Natural Paititi",
+        description="Reserva Natural Paititi",
+    )
+    assert relevance_verdict(
+        binomial,
+        subject="Paititi",
+        required_terms=("paititi",),
+    ) == "reject"
+    ruins = _candidate(
+        title="Stone ruins in the jungle near Paititi",
+        description="Inca stone city under the canopy",
+    )
+    assert relevance_verdict(ruins, **paititi_terms) == "accept"
+    calls["n"] = 0
+    rejected = select_relevant([frog, binomial], judge=judge, **paititi_terms)
+    assert calls["n"] == 0
+    assert rejected == []
+    living = relevance_verdict(
+        binomial,
+        subject="Scinax granulatus",
+        allow_biological=True,
+    )
+    assert living == "accept"
+
 
 def test_unrelated_hit_is_not_downloaded(tmp_path: Path) -> None:
     url = "https://cdn.example/capitol.jpg"
@@ -814,6 +850,34 @@ def test_unrelated_hit_is_not_downloaded(tmp_path: Path) -> None:
     assert decision.reason == "no_hits"
     assert client.calls == []
 
+    frog_url = "https://cdn.example/frog.jpg"
+    frog_provider = _Provider(
+        [
+            _candidate(
+                title="Scinax granulatus (Hensel, 1867) at Reserva Natural Paititi",
+                description="A frog species at the reserve",
+                download_url=frog_url,
+            )
+        ]
+    )
+    frog_client = _MapClient({frog_url: (200, _jpeg(1600, 2200))})
+    frog_decision = resolve_image_source(
+        channel="ancient_knowledge",
+        dest=tmp_path / "paititi-frog.jpg",
+        entity="Paititi",
+        required_terms=("paititi",),
+        required_any=("ruins", "inca", "stone", "city", "jungle"),
+        reject_terms=("species", "frog", "animal", "bird", "insect", "plant"),
+        policy="free_only",
+        providers=[frog_provider],
+        client=frog_client,
+        cache_dir=tmp_path / "frog-cache",
+        relevance_judge=False,
+    )
+    assert frog_decision.hit is None
+    assert frog_decision.reason == "no_hits"
+    assert frog_client.calls == []
+
 
 def test_credit_line_drops_html_and_extra_languages() -> None:
     huge = (
@@ -833,3 +897,20 @@ def test_credit_line_drops_html_and_extra_languages() -> None:
     assert unknown == "Unknown author, CC BY"
     assert unknown.count("Unknown author") == 1
     assert credit_line(title="Stones", author="", license_name="public_domain") == "Public Domain"
+    yale = credit_line(
+        title="Yale University Library : Home page – Source – Image",
+        author="Yale University Library : Home page – Source – Image",
+        license_name="public_domain",
+    )
+    assert yale == "Yale University Library, Public Domain"
+    assert "Home page" not in yale
+    assert "Source" not in yale
+    from production.providers.image.free.providers import clean_stored_title
+
+    stored = clean_stored_title(huge)
+    assert stored == "Voynich Manuscript"
+    assert "Français" not in stored
+    assert "<" not in stored
+    assert len(stored) <= 80
+    labeled = clean_stored_title("Yale University Library : Home page – Source – Image")
+    assert labeled == "Yale University Library"

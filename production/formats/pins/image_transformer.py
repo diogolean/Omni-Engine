@@ -31,6 +31,10 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 PIN_W = 1000
 PIN_H = 1500
+# Credit sits above the button. About twice the old 18px, still a footer.
+CREDIT_FONT_SIZE = 36
+CREDIT_FONT_FLOOR = 28
+CREDIT_BAR_HEIGHT = 52
 
 # Colour palette (earth-toned, clinical-clean). Channel pin_theme overrides these.
 _DEFAULT_THEME = {
@@ -265,14 +269,14 @@ def _draw_credit_footer(
     text = (credit or "").strip()
     if not text:
         return 0
-    zone_h = 28
+    zone_h = CREDIT_BAR_HEIGHT
     top = max(0, bottom - zone_h)
     bar = Image.new("RGBA", (PIN_W, zone_h), (8, 10, 12, 220))
     canvas.paste(bar, (0, top), bar)
     max_w = PIN_W - 48
-    size = 18
+    size = CREDIT_FONT_SIZE
     font = _find_font(_SANS_CANDIDATES, size)
-    while size > 12 and _text_width(text, font) > max_w:
+    while size > CREDIT_FONT_FLOOR and _text_width(text, font) > max_w:
         size -= 1
         font = _find_font(_SANS_CANDIDATES, size)
     shown = text
@@ -282,7 +286,7 @@ def _draw_credit_footer(
         shown = text[:48]
     bbox = draw.textbbox((0, 0), shown, font=font)
     text_w = bbox[2] - bbox[0]
-    draw.text(((PIN_W - text_w) // 2, top + 4), shown, font=font, fill=(232, 228, 216))
+    draw.text(((PIN_W - text_w) // 2, top + 8), shown, font=font, fill=(232, 228, 216))
     return zone_h
 
 
@@ -628,7 +632,7 @@ class PinTransformer:
         """Assemble the final 1000x1500 canvas."""
         anchor = "bottom" if _focal_in_upper_band(source) else "top"
         _label, _url, button_h = _footer_content()
-        credit_h = 28 if (credit or "").strip() else 0
+        credit_h = CREDIT_BAR_HEIGHT if (credit or "").strip() else 0
         footer_h = button_h + credit_h
         if self.method == "cover":
             canvas = _center_crop_to_size(source, PIN_W, PIN_H).convert("RGBA")

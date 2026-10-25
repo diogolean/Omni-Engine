@@ -566,7 +566,17 @@
     "commons_titles": [],
     "search_query": "Paititi Peru",
     "required_terms": ["paititi"],
-    "reject_terms": ["capitol", "washington"],
+    "required_any": ["ruins", "inca", "stone", "city", "jungle"],
+    "reject_terms": [
+      "capitol",
+      "washington",
+      "species",
+      "frog",
+      "animal",
+      "bird",
+      "insect",
+      "plant"
+    ],
     "pin_scene": "Dense Peruvian jungle with overgrown stone ruins."
   },
   {
