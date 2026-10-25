@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -940,10 +941,12 @@ def test_ledger_and_board_titles_block_a_repeat(
     assert "pinterest/ledger/ancient_knowledge.jsonl" not in fresh.objects
 
 
-def test_flux_fallback_replaces_a_missing_or_title_graphic(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_paid_fallback_off_skips_a_title_graphic(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """A title graphic is not replaced with Flux when paid images are off."""
     _prepare_channel(monkeypatch, tmp_path)
+    monkeypatch.setenv("REEL_SCENE_LIBRARY_DIR", str(tmp_path / "empty-scene"))
     record_key = "ancient_knowledge/library/post_puma.json"
     graphic_key = "ancient_knowledge/library/images/puma-title.jpg"
     client = FakeS3(
@@ -971,28 +974,50 @@ def test_flux_fallback_replaces_a_missing_or_title_graphic(
         fake_flux,
     )
     monkeypatch.setattr(
+        "production.formats.pins.flux_photo.ensure_flux_photo",
+        lambda *_args, **_kwargs: calls.append("ensure") or None,
+    )
+    monkeypatch.setattr(
         "agents.media.free_images.sourcer.resolve_image_source",
         _no_free,
     )
-    stats = publish_account(
-        _ancient(),
-        pins=1,
-        dry_run=True,
-        client=client,
-        catalog=[
-            Article(
-                url=f"{_SITE}/puma-punku",
-                topic="Puma Punku",
-                body="The stones.",
-                slug="puma-punku",
-            )
-        ],
+    monkeypatch.setattr(
+        "production.providers.image.free.sourcer.resolve_image_source",
+        _no_free,
     )
-    assert stats["published"] == 1
-    assert calls
-    uploaded = [key for key in client.objects if key.endswith("puma-punku.jpg")]
-    assert uploaded
+    monkeypatch.setattr(
+        "production.providers.image.free.integrate.load_card_source",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "production.providers.image.free.sourcer.resolve_image_source",
+        _no_free,
+    )
+    monkeypatch.setattr(
+        "production.providers.image.free.integrate.load_card_source",
+        lambda *_args, **_kwargs: None,
+    )
+    with caplog.at_level(logging.INFO):
+        stats = publish_account(
+            _ancient(),
+            pins=1,
+            dry_run=True,
+            client=client,
+            catalog=[
+                Article(
+                    url=f"{_SITE}/puma-punku",
+                    topic="Puma Punku",
+                    body="The stones.",
+                    slug="puma-punku",
+                )
+            ],
+        )
+    assert stats["published"] == 0
+    assert stats["skipped"] >= 1
+    assert calls == []
+    assert not any(key.endswith("puma-punku.jpg") for key in client.objects)
     assert client.deletes == []
+    assert "no free image" in caplog.text
 
 
 def test_missing_photo_uses_a_free_license_source_before_flux(
@@ -1068,6 +1093,10 @@ def test_flux_asks_for_a_portrait_frame(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setattr(
         "agents.media.providers.image_provider.get_image_adapter",
         lambda **_kwargs: _Adapter(),
+    )
+    monkeypatch.setattr(
+        "production.formats.pins.spend.spend_cap_usd",
+        lambda _channel: None,
     )
     path = generate_flux_photo(
         topic="Baalbek",
