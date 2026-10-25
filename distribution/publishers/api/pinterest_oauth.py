@@ -340,7 +340,7 @@ def main():
         print("No boards returned (or token lacks boards:read scope).")
 
     print("\nDone. Run the readiness check next:")
-    print("  python agents/posting/pinterest_main.py check-readiness\n")
+    print("  python tools/pinterest_cli.py check-readiness\n")
 
 
 if __name__ == "__main__":

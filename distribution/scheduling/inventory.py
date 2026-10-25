@@ -15,7 +15,7 @@ Every entry carries:
   - Resolved local_image_path (workspace-relative path repair)
   - channel_id (with legacy page_id read fallback)
 
-This module is imported by scheduler.py, publisher.py, and pinterest_main.py.
+This module is imported by scheduler.py, publisher.py, and tools/pinterest_cli.py.
 """
 from __future__ import annotations
 from shared.layer_bridge import Port, Symbol

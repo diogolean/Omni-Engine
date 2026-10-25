@@ -170,7 +170,7 @@ def test_pinterest_cli_still_accepts_channel(tmp_path: Path) -> None:
     proc = subprocess.run(
         [
             sys.executable,
-            "agents/posting/pinterest_main.py",
+            "tools/pinterest_cli.py",
             "schedule",
             "--help",
         ],

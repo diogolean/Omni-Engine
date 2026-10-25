@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""One CLI takes the channel. The old *_main paths stay as shims."""
+"""One CLI takes the channel. The old *_main entry points are gone."""
 from __future__ import annotations
 
 import os
@@ -30,8 +30,19 @@ def test_channel_cli_help_names_the_channel() -> None:
     assert "--channel" in proc.stdout
 
 
-def test_pinterest_shim_still_accepts_channel() -> None:
-    proc = _run(["agents/posting/pinterest_main.py", "schedule", "--help"])
+def test_entry_point_shims_are_gone() -> None:
+    assert not (_REPO / "agents" / "posting" / "pinterest_main.py").exists()
+    assert not (_REPO / "channels_config" / "endless_summer_paradise" / "esp_main.py").exists()
+    assert not (
+        _REPO
+        / "channels_config"
+        / "principles_of_wealth_finance_economics"
+        / "wealth_main.py"
+    ).exists()
+
+
+def test_pinterest_cli_accepts_schedule_help() -> None:
+    proc = _run(["tools/pinterest_cli.py", "schedule", "--help"])
     assert proc.returncode == 0, proc.stderr
     assert "--channel" in proc.stdout
 
@@ -55,7 +66,15 @@ def test_channel_cli_runs_the_folder_cli() -> None:
     assert "scan" in wealth.stdout
     assert "publish" in wealth.stdout
 
-    esp = _run(["channels_config/endless_summer_paradise/esp_main.py", "scan", "--help"])
+    esp = _run(
+        [
+            "tools/channel_cli.py",
+            "--channel",
+            "endless_summer_paradise",
+            "scan",
+            "--help",
+        ]
+    )
     assert esp.returncode == 0, esp.stderr
     assert "--source-dir" in esp.stdout
 

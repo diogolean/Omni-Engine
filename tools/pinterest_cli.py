@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-pinterest_main.py
+pinterest_cli.py
 -----------------
 Agnostic multi-channel Pinterest CLI.
 
@@ -18,11 +18,11 @@ is unchanged: ``--channel`` still selects a single account and its ``.env``.
 
 QUICK START:
     python tools/channel_cli.py --channel anna_protocol status
-    python agents/posting/pinterest_main.py status --channel anna_protocol
-    python agents/posting/pinterest_main.py schedule --channel anna_protocol --quantity 5
-    python agents/posting/pinterest_main.py schedule --channel ancient_knowledge --quantity 20
-    python agents/posting/pinterest_main.py status --channel ancient_knowledge
-    python agents/posting/pinterest_main.py status --inventory-dir outputs --env .env
+    python tools/pinterest_cli.py status --channel anna_protocol
+    python tools/pinterest_cli.py schedule --channel anna_protocol --quantity 5
+    python tools/pinterest_cli.py schedule --channel ancient_knowledge --quantity 20
+    python tools/pinterest_cli.py status --channel ancient_knowledge
+    python tools/pinterest_cli.py status --inventory-dir outputs --env .env
 """
 from __future__ import annotations
 
@@ -216,7 +216,7 @@ def cmd_schedule(args: argparse.Namespace) -> None:
             "\nACTION REQUIRED:\n"
             "  1. Go to https://developers.pinterest.com/ and generate a new token.\n"
             "  2. Update PINTEREST_ACCESS_TOKEN in the active .env file.\n"
-            "  3. Re-run: python agents/posting/pinterest_main.py schedule --channel <id>\n"
+            "  3. Re-run: python tools/pinterest_cli.py schedule --channel <id>\n"
         )
         sys.exit(2)
 
@@ -238,7 +238,7 @@ def cmd_transform(args: argparse.Namespace) -> None:
     data = inv.load()
 
     if not data.get("entries"):
-        print("master_inventory.json is empty. Run: python agents/posting/pinterest_main.py sync --channel <id>")
+        print("master_inventory.json is empty. Run: python tools/pinterest_cli.py sync --channel <id>")
         sys.exit(1)
 
     if args.post_id:
@@ -382,7 +382,7 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="pinterest_main",
+        prog="tools/pinterest_cli.py",
         description="Agnostic multi-channel Pinterest posting & scheduling CLI.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
