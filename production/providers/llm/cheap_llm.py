@@ -125,6 +125,9 @@ def available(kind: str = "text") -> bool:
 
 
 def price(provider: str, model: str) -> tuple[float, float]:
+    """USD per 1M tokens. A model id containing ``:free`` costs nothing."""
+    if ":free" in (model or "").lower():
+        return (0.0, 0.0)
     return PRICES.get(f"{provider}:{model}", _UNKNOWN_PRICE)
 
 
@@ -273,7 +276,9 @@ def complete(
         in_tok = int(usage.get("prompt_tokens") or in_est)
         out_tok = int(usage.get("completion_tokens") or max(1, len(text) // 4))
         billed = usage.get("cost", usage.get("estimated_cost"))
-        if isinstance(billed, (int, float)):
+        if ":free" in model.lower():
+            cost = 0.0
+        elif isinstance(billed, (int, float)):
             cost = float(billed)
         else:
             cost = estimate_usd(provider, model, in_tok, out_tok)

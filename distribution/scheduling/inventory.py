@@ -741,15 +741,7 @@ def _generate_deepseek(
     return {}
 
 
-def _generate_cheap(
-    topic: str,
-    caption: str,
-    fact_sheet: str,
-    variant_idx: int,
-) -> dict:
-    """Pin copy through ``text_model`` Writer_Primary on DeepInfra. No Claude."""
-    del variant_idx
-    complete_writer_primary = Symbol('production.providers.llm.text_model', 'complete_writer_primary')  # noqa: PLC0415
+def _pin_copy_messages(topic: str, caption: str, fact_sheet: str) -> tuple[str, str]:
     cfg = Port('production.formats.pins.config')  # noqa: PLC0415
 
     source = caption if caption not in ("PENDING_CAPTION", "") else fact_sheet[:500]
@@ -764,32 +756,105 @@ def _generate_cheap(
         "You write Pinterest pin copy from the article text. "
         "Never use a filename as the title."
     )
-    try:
-        result = complete_writer_primary(
-            user_msg,
-            system=system,
-            json_mode=True,
-            max_tokens=900,
-            temperature=0.4,
-        )
-        data = _parse_pin_json(result.text)
-    except Exception as exc:  # noqa: BLE001
-        if type(exc).__name__ == "SpendCapExceeded":
-            raise
-        log.warning("Writer pin copy failed for '%s': %s", topic, type(exc).__name__)
-        return {}
+    return user_msg, system
+
+
+def _parsed_pin_copy(data: dict, provider: str, model: str) -> dict:
     parsed = {
         "pinterest_title": sanitize_pin_title(str(data.get("pinterest_title", ""))),
         "pinterest_caption": polish_pin_text(str(data.get("pinterest_caption", ""))),
         "visual_hook": normalize_pin_text(str(data.get("visual_hook", ""))),
     }
     if parsed.get("pinterest_title") and parsed.get("pinterest_caption"):
-        parsed.update(
-            _copy_stamp(
-                str(getattr(result, "provider", "") or "deepinfra"),
-                str(getattr(result, "model", "") or "deepseek-ai/DeepSeek-V4-Flash"),
-            )
+        parsed.update(_copy_stamp(provider, model))
+        return parsed
+    return {}
+
+
+def _complete_pinned_model(
+    topic: str,
+    user_msg: str,
+    system: str,
+    spec: tuple[str, str],
+) -> dict:
+    """One flagged model. A failure returns nothing and does not call another model."""
+    complete = Symbol('production.providers.llm.cheap_llm', 'complete')  # noqa: PLC0415
+
+    provider, model = spec
+    try:
+        result = complete(
+            user_msg,
+            system=system,
+            json_mode=True,
+            max_tokens=900,
+            temperature=0.4,
+            source="pin_copy",
+            chain=[(provider, model)],
         )
+        data = _parse_pin_json(result.text)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Pin text model failed for '%s' (%s). Template fallback.",
+            topic,
+            type(exc).__name__,
+        )
+        return {}
+    parsed = _parsed_pin_copy(
+        data,
+        str(getattr(result, "provider", "") or provider),
+        str(getattr(result, "model", "") or model),
+    )
+    if parsed:
+        return parsed
+    log.warning("Pin text model incomplete for '%s'", topic)
+    return {}
+
+
+def _generate_cheap(
+    topic: str,
+    caption: str,
+    fact_sheet: str,
+    variant_idx: int,
+    channel: str = "",
+) -> dict:
+    """Pin copy. A channel ``PIN_TEXT_MODEL`` replaces Writer_Primary.
+
+    The flagged model is the only call. A failure, including a pin spend
+    cap, fills nothing so the caller can use the template. With the flag
+    unset, Writer_Primary on DeepInfra stays the path and a reel-cap refusal
+    still propagates.
+    """
+    del variant_idx
+    complete_writer_primary = Symbol('production.providers.llm.text_model', 'complete_writer_primary')  # noqa: PLC0415
+    text_model = Symbol('production.formats.pins.spend', 'text_model')  # noqa: PLC0415
+    pin_scope = Symbol('production.formats.pins.spend', 'pin_scope')  # noqa: PLC0415
+    pin_cap_usd = Symbol('production.cost.spend_ledger', 'pin_cap_usd')  # noqa: PLC0415
+
+    user_msg, system = _pin_copy_messages(topic, caption, fact_sheet)
+    spec = text_model(channel)
+    with pin_scope(channel):
+        if spec is not None:
+            return _complete_pinned_model(topic, user_msg, system, spec)
+        try:
+            result = complete_writer_primary(
+                user_msg,
+                system=system,
+                json_mode=True,
+                max_tokens=900,
+                temperature=0.4,
+            )
+            data = _parse_pin_json(result.text)
+        except Exception as exc:  # noqa: BLE001
+            if type(exc).__name__ == "SpendCapExceeded" and pin_cap_usd() is None:
+                raise
+            log.warning("Writer pin copy failed for '%s': %s", topic, type(exc).__name__)
+            return {}
+    parsed = _parsed_pin_copy(
+        data,
+        str(getattr(result, "provider", "") or "deepinfra"),
+        str(getattr(result, "model", "") or "deepseek-ai/DeepSeek-V4-Flash"),
+    )
+    if parsed:
         return parsed
     log.warning("Writer pin copy incomplete for '%s'", topic)
     return {}
@@ -815,7 +880,15 @@ def ensure_writer_pin_copy(
         variant = int(entry.get("variant_index") or 0)
     except (TypeError, ValueError):
         variant = 0
-    ai_result = _generate_cheap(topic, source, fact, variant) if use_ai else {}
+    channel = str(
+        entry.get("channel_id") or entry.get("account_id") or ""
+    ).strip()
+    if not channel:
+        cfg = Port('production.formats.pins.config')  # noqa: PLC0415
+        channel = str(cfg.CHANNEL_ID or "").strip()
+    ai_result = (
+        _generate_cheap(topic, source, fact, variant, channel) if use_ai else {}
+    )
     if ai_result:
         entry.update(ai_result)
     else:

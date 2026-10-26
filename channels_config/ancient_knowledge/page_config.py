@@ -94,6 +94,14 @@ PIN_IMAGE_STYLE: str = (
     "ordinary photographic detail."
 )
 
+# Pins stay at $0. A missing free photo is skipped and retried, never drawn.
+PIN_PAID_IMAGE_FALLBACK: bool = False
+# OpenRouter ":free" model. A failure uses the local template.
+# DeepSeek Flash is opt-in: "deepinfra:deepseek-ai/DeepSeek-V4-Flash"
+PIN_TEXT_MODEL: str = "openrouter:meta-llama/llama-3.3-70b-instruct:free"
+# Hard cap for one pin. Any paid call is refused before the request.
+PIN_SPEND_CAP_USD: float = 0.0
+
 # ---------------------------------------------------------------------------
 # Negative prompt terms — strip lifestyle/relationship terms from inherited prompts
 # ---------------------------------------------------------------------------

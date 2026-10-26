@@ -388,6 +388,7 @@ def test_rebuild_keeps_a_saved_article_url(
     from production.formats.pins import config as cfg
 
     _clear_opt_in(monkeypatch)
+    monkeypatch.setattr(cfg, "CHANNEL_ID", cfg.CHANNEL_ID, raising=False)
     cfg.configure(channel_id="ancient_knowledge", inventory_dir=tmp_path)
 
     def _writer_off(*_args: object, **_kwargs: object) -> TextResult:
