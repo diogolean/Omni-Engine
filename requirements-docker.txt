@@ -1,12 +1,14 @@
 # Runtime image for linux/arm64.
-# Same pins as requirements.txt, minus packages with no aarch64 wheel or no
-# headless use on the Oracle VM:
-#   mediapipe  — no manylinux aarch64 wheel; imported only by the puppet factory
-#   pyautogui  — needs a desktop; Facebook file dialogs stay off the VM
+# Same pins as requirements.txt, minus packages the VM process does not import:
+#   mediapipe    — no manylinux aarch64 wheel; puppet face mesh only
+#   pyautogui    — needs a desktop; Facebook file dialogs stay off the VM
+#   playwright   — PC Chrome CDP publishers; this image does not launch a browser
+#   skia-python  — Aiwake mouth sprites; the scheduler does not import them
 google-genai>=1.0.0
 anthropic>=0.39.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0,<12.0
+numpy>=1.26.0
 openpyxl>=3.1.0
 pypdf>=5.0.0
 requests>=2.31.0
@@ -29,6 +31,9 @@ gspread>=6.0.0
 pyperclip>=1.8.2
 edge-tts>=6.1.9
 PyYAML>=6.0
+rich>=13.0.0
+huggingface_hub>=0.26.0
+tokenizers>=0.20.0
 # v3 API. The 5.x SDK speaks /ns/{namespace} and does not work with server 0.0.8.
 supermemory==3.62.0
 psutil>=5.9.0
