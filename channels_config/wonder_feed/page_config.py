@@ -184,6 +184,14 @@ TOPIC_POOL: list = [
     "The moment self-respect becomes more important than being loved",
 ]
 
+# YouTube snippet tags. Moved out of the publisher's channel-name map.
+YOUTUBE_DEFAULT_TAGS: list = [
+    "wonder feed",
+    "amazing facts",
+    "shorts",
+    "mindblowing",
+]
+
 # Engine flags. The pipeline reads these; it does not test the channel name.
 GRAPHITE_STYLE_LOCK: bool = True
 POOL_TOPIC_LOCK: bool = True

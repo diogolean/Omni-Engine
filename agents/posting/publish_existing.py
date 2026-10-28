@@ -202,19 +202,19 @@ def resolve_video_paths(raw_paths: list[str]) -> list[Path]:
     return resolved
 
 
+def _page_default_tags(page: str) -> list[str]:
+    """``YOUTUBE_DEFAULT_TAGS`` from the channel folder. Missing list → shorts."""
+    from shared.channel_flags import value
+
+    configured = value((page or "").strip().lower(), "YOUTUBE_DEFAULT_TAGS", None)
+    if isinstance(configured, (list, tuple)) and configured:
+        return [str(tag) for tag in configured]
+    return ["shorts"]
+
+
 def build_tags(tags_raw: list[str], page: str, extra: list[str] | None = None) -> list[str]:
-    """Merge CLI tags with page-level defaults and library-extracted hashtags."""
-    defaults = {
-        "ancient_knowledge": ["ancient knowledge", "ancient mysteries", "shorts", "history", "conspiracy"],
-        "master_mei":        [
-            "master mei", "mind control", "stoicism", "financial freedom",
-            "wealth mindset", "business strategy", "self discipline", "shorts",
-        ],
-        "wonder_feed":       ["wonder feed", "amazing facts", "shorts", "mindblowing"],
-        "anna_protocol":     ["relationship advice", "self-growth", "shorts"],
-    }
-    base = defaults.get(page.lower(), ["shorts"])
-    all_tags: list[str] = list(base)
+    """Merge CLI tags with the page's YOUTUBE_DEFAULT_TAGS and library hashtags."""
+    all_tags: list[str] = list(_page_default_tags(page))
     for t in (extra or []) + tags_raw:
         if t and t not in all_tags:
             all_tags.append(t)
