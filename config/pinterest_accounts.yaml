@@ -53,3 +53,22 @@ accounts:
     refresh_token_env: PINTEREST_REFRESH_TOKEN_ANNA_PROTOCOL
     app_id_env: PINTEREST_APP_ID_ANNA_PROTOCOL
     app_secret_env: PINTEREST_APP_SECRET_ANNA_PROTOCOL
+
+  # Inactive until a site URL exists. active: false keeps the scheduler off
+  # this row. TODO site and board are skipped by the drip if it is turned on.
+  - channel_id: enigmas_do_universo
+    active: false
+    display_name: Enigmas do Universo
+    niche: astronomy mysteries
+    site_url: TODO
+    b2_prefix: enigmas_do_universo/library/
+    runner: both
+    use_featured_image: false
+    facebook_postplanner: false
+    facebook_page_name: Enigmas do Universo
+    board_name: TODO
+    board_id_env: PINTEREST_BOARD_ID_ENIGMAS_DO_UNIVERSO
+    access_token_env: PINTEREST_ACCESS_TOKEN_ENIGMAS_DO_UNIVERSO
+    refresh_token_env: PINTEREST_REFRESH_TOKEN_ENIGMAS_DO_UNIVERSO
+    app_id_env: PINTEREST_APP_ID_ENIGMAS_DO_UNIVERSO
+    app_secret_env: PINTEREST_APP_SECRET_ENIGMAS_DO_UNIVERSO

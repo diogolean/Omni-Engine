@@ -45,9 +45,16 @@ _HISTORICAL = (
 
 
 def test_discover_pages_matches_the_historical_order() -> None:
-    """Flag order stays historical. The CLI list is the sorted folder walk."""
-    assert discover_pages() == _HISTORICAL
-    assert set(VALID_PAGES) == set(_HISTORICAL)
+    """Historical folders keep their order. Later folders sort after that prefix.
+
+    A new channel is a folder. It is not added to ``_KNOWN_ORDER``.
+    """
+    found = discover_pages()
+    assert found[: len(_HISTORICAL)] == _HISTORICAL
+    extra = found[len(_HISTORICAL) :]
+    assert extra == tuple(sorted(extra))
+    assert "enigmas_do_universo" in extra
+    assert set(VALID_PAGES) == set(found)
     assert list(VALID_PAGES) == sorted(VALID_PAGES)
 
 
@@ -244,7 +251,7 @@ def test_engine_source_has_no_channel_id_literals() -> None:
     import re
     import tokenize
 
-    names = "|".join(re.escape(name) for name in _HISTORICAL)
+    names = "|".join(re.escape(name) for name in discover_pages())
     word = re.compile(rf"\b(?:{names})\b")
     literal_types = {tokenize.STRING, tokenize.FSTRING_MIDDLE}
     hits: list[str] = []
