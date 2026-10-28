@@ -136,9 +136,10 @@ def finalize_longform(
             _LOG.error("Shorts failed: %s", exc)
     short_probes = [probe_media(clip.path) for clip in clips] if require_media else []
 
+    silent_turns = transcript.metadata.get("render_silent_turns") or ()
     problems = [
         *episode_problems(end_reason=result.end_reason, episode=episode),
-        *(voice_problems(transcript.utterances, audio_by_turn) if require_media else []),
+        *(voice_problems(transcript.utterances, audio_by_turn, silent_turns=silent_turns) if require_media else []),
         *chapter_problems(chapters, duration_s=duration_s),
     ]
     warnings = episode_warnings(episode, max_hook_gap_s=_hook_gap(beats, starts))

@@ -449,7 +449,10 @@ def _regenerate(
     skin: str,
     work_dir: Path,
 ) -> None:
-    """Render the window's lines again as a native 9:16 clip."""
+    """Render the window's lines again as a native 9:16 clip.
+
+    Raises when a line came out silent, so the caller cuts the master instead.
+    """
     from products.aiwake.animator_bridge import render_debate_animation  # noqa: PLC0415
 
     preset = settings.long_format
@@ -461,6 +464,7 @@ def _regenerate(
     stem = destination.stem
     metadata = dict(transcript.metadata)
     metadata["post_type"] = "short_clip"
+    metadata.pop("render_silent_turns", None)
     window = transcript.model_copy(
         update={
             "session_id": f"{transcript.session_id}_{stem}",
@@ -486,6 +490,9 @@ def _regenerate(
             scene=str(transcript.metadata.get("render_scene") or "random"),
             stage_mode="shot_reverse_shot",
         )
+        silent = window.metadata.get("render_silent_turns")
+        if silent:
+            raise RuntimeError(f"the re-render played turns {silent} as silence")
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(rendered), str(destination))
     finally:

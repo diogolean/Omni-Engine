@@ -4,11 +4,12 @@
 Failures block publishing:
 
 * the long file is missing, outside the duration window for its target, has
-  no audio stream, or is not 1920x1080;
-* the debate stopped before the verdict exchange, or a line has no voice;
+  no audio stream or a silent one, or is not 1920x1080;
+* the debate stopped before the verdict exchange, a line has no voice track,
+  or the renderer could not decode one;
 * YouTube would drop the chapters;
 * there are not 2-3 Shorts, or a Short is under 15 s, over the Shorts cap,
-  silent, or not vertical.
+  without sound, or not vertical.
 
 Warnings do not block: a hook gap over the limit, a hook that did not land,
 lines that shipped on their last try with a soft miss, a finale that never
@@ -17,10 +18,11 @@ came, a Short cut from the master instead of re-rendered.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -29,9 +31,15 @@ from shared.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 
 from .ffmpeg_guard import run_bounded
 
+_LOG = logging.getLogger("aiwake.longform")
 _PROBE_TIMEOUT_S = 20.0
+# Reading the level decodes the whole audio stream, far faster than real time.
+_LEVEL_TIMEOUT_PER_S = 0.25
 _SHORT_SLACK_S = 1.0
+# volumedetect reads digital silence as -91 dB; a real voice peaks near 0.
+_SILENT_PEAK_DB = -60.0
 _FRAME_SIZE = re.compile(r"Video:.*?,\s*(\d{2,5})x(\d{2,5})")
+_MAX_VOLUME = re.compile(r"max_volume:\s*(-?\d+(?:\.\d+)?) dB")
 
 
 @dataclass(frozen=True)
@@ -42,6 +50,7 @@ class MediaProbe:
     width: int
     height: int
     error: str = ""
+    peak_db: float | None = None
 
 
 @dataclass
@@ -143,19 +152,36 @@ def episode_warnings(episode: Mapping[str, Any] | None, *, max_hook_gap_s: float
     return warnings
 
 
-def voice_problems(utterances: Sequence[Any], audio_by_turn: Mapping[int, Any] | None) -> list[str]:
-    """A spoken line with no voice track plays as silence under its subtitle."""
+def voice_problems(
+    utterances: Sequence[Any],
+    audio_by_turn: Mapping[int, Any] | None,
+    *,
+    silent_turns: Sequence[int] = (),
+) -> list[str]:
+    """Spoken lines that play as silence under their subtitle.
+
+    A line has no voice track when TTS gave up on it or the run used the
+    silent engine (``--no-audio``), whose placeholder has no file. A voice
+    file the renderer could not decode is listed in ``silent_turns``.
+    """
     if audio_by_turn is None:
         return []
-    missing = [item.turn_index for item in utterances if item.turn_index not in audio_by_turn]
-    if not missing:
-        return []
-    listed = ", ".join(str(turn) for turn in missing[:8])
-    return [f"{len(missing)} of {len(utterances)} lines have no voice track (turns {listed})"]
+    problems: list[str] = []
+    missing = [item.turn_index for item in utterances if not _has_voice_file(audio_by_turn.get(item.turn_index))]
+    if missing:
+        problems.append(f"{len(missing)} of {len(utterances)} lines have no voice track (turns {_listed(missing)})")
+    spoken = {item.turn_index for item in utterances} - set(missing)
+    undecoded = [turn for turn in silent_turns if turn in spoken]
+    if undecoded:
+        problems.append(
+            f"{len(undecoded)} of {len(utterances)} voice tracks could not be decoded and play as silence "
+            f"(turns {_listed(undecoded)})"
+        )
+    return problems
 
 
 def probe_media(path: Path) -> MediaProbe:
-    """Read duration, audio presence, and frame size. The probe itself is timed."""
+    """Read duration, audio presence, frame size, and the audio's peak level. Each read is timed."""
     path = Path(path)
     if not path.is_file():
         return MediaProbe(str(path), None, False, 0, 0, "missing")
@@ -166,12 +192,16 @@ def probe_media(path: Path) -> MediaProbe:
     ffprobe = resolve_ffprobe(ffmpeg) if ffmpeg else shutil.which("ffprobe")
     try:
         if ffprobe:
-            return _probe_with_ffprobe(path, ffprobe)
-        if ffmpeg:
-            return _probe_with_ffmpeg(path, ffmpeg)
+            probe = _probe_with_ffprobe(path, ffprobe)
+        elif ffmpeg:
+            probe = _probe_with_ffmpeg(path, ffmpeg)
+        else:
+            return MediaProbe(str(path), None, False, 0, 0, "neither ffprobe nor ffmpeg was found")
     except (subprocess.TimeoutExpired, OSError) as exc:
         return MediaProbe(str(path), None, False, 0, 0, f"probe failed: {exc}")
-    return MediaProbe(str(path), None, False, 0, 0, "neither ffprobe nor ffmpeg was found")
+    if probe.has_audio and ffmpeg:
+        probe = replace(probe, peak_db=_peak_db(path, ffmpeg, probe.duration_s))
+    return probe
 
 
 def _long_failures(probe: MediaProbe | None, preset: LongFormatPreset, target_s: float) -> list[str]:
@@ -187,6 +217,8 @@ def _long_failures(probe: MediaProbe | None, preset: LongFormatPreset, target_s:
         )
     if not probe.has_audio:
         failures.append("long video has no audio stream")
+    elif _silent(probe):
+        failures.append(f"long video audio is silent (peak {probe.peak_db:.0f} dB)")
     wanted_w, wanted_h = preset.resolution
     if (probe.width, probe.height) != (wanted_w, wanted_h):
         failures.append(f"long video is {probe.width}x{probe.height}, wanted {wanted_w}x{wanted_h}")
@@ -210,6 +242,8 @@ def _short_failures(probes: Sequence[MediaProbe], preset: LongFormatPreset, expe
             failures.append(f"{name} is {probe.duration_s:.1f}s, over {preset.shorts_max_s:.0f}s")
         if not probe.has_audio:
             failures.append(f"{name} has no audio stream")
+        elif _silent(probe):
+            failures.append(f"{name} audio is silent (peak {probe.peak_db:.0f} dB)")
         if probe.width >= probe.height:
             failures.append(f"{name} is not vertical ({probe.width}x{probe.height})")
     return failures
@@ -263,6 +297,34 @@ def _probe_with_ffmpeg(path: Path, ffmpeg: str) -> MediaProbe:
     return MediaProbe(str(path), duration, "Audio:" in stderr, width, height)
 
 
+def _peak_db(path: Path, ffmpeg: str, duration_s: float | None) -> float | None:
+    """Loudest sample of the first audio stream in dBFS, or None when it cannot be read."""
+    try:
+        completed = run_bounded(
+            [ffmpeg, "-hide_banner", "-nostats", "-i", str(path), "-map", "0:a:0", "-af", "volumedetect", "-f", "null", "-"],
+            timeout=max(_PROBE_TIMEOUT_S, float(duration_s or 0.0) * _LEVEL_TIMEOUT_PER_S),
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        _LOG.warning("could not read the audio level of %s: %s", path.name, exc)
+        return None
+    found = _MAX_VOLUME.findall(_text(completed.stderr))
+    return float(found[-1]) if completed.returncode == 0 and found else None
+
+
+def _silent(probe: MediaProbe) -> bool:
+    return probe.peak_db is not None and probe.peak_db <= _SILENT_PEAK_DB
+
+
+def _has_voice_file(asset: Any) -> bool:
+    path = getattr(asset, "path", None)
+    return path is not None and Path(path).is_file()
+
+
+def _listed(turns: Sequence[int]) -> str:
+    return ", ".join(str(turn) for turn in turns[:8])
+
+
 def _text(value: object) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", "replace")
@@ -296,6 +358,7 @@ def _probe_dict(probe: MediaProbe | None) -> dict[str, object] | None:
         "has_audio": probe.has_audio,
         "width": probe.width,
         "height": probe.height,
+        "peak_db": None if probe.peak_db is None else round(probe.peak_db, 1),
         "error": probe.error,
     }
 

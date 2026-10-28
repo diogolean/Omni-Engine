@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import json
 import shutil
+import wave
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from products.aiwake.contracts import SpeakerRole, Utterance
@@ -48,6 +50,7 @@ from products.aiwake.longform.qa import (
 )
 from products.aiwake.longform.seats import ExpensiveModelRefused, longform_roster, resolve_longform_seats
 from products.aiwake.longform.shorts import Line, choose_highlights, cut_master, line_timeline, pick_quotes
+from products.aiwake.media.audio import AudioAsset
 from products.aiwake.pipeline import matchup_is_legal
 from products.aiwake.settings import AiwakeSettings, LongFormatPreset, load_settings
 
@@ -69,12 +72,25 @@ def _with_long_format(settings: AiwakeSettings, **changes: object) -> AiwakeSett
     return settings.model_copy(update={"long_format": settings.long_format.model_copy(update=changes)})
 
 
-def _probe(name: str, seconds: float, *, audio: bool = True, size: tuple[int, int] = (1080, 1920)) -> MediaProbe:
-    return MediaProbe(name, seconds, audio, size[0], size[1])
+def _probe(
+    name: str,
+    seconds: float,
+    *,
+    audio: bool = True,
+    size: tuple[int, int] = (1080, 1920),
+    peak_db: float | None = None,
+) -> MediaProbe:
+    return MediaProbe(name, seconds, audio, size[0], size[1], peak_db=peak_db)
 
 
 def _utterance(turn: int, role: SpeakerRole, text: str) -> Utterance:
     return Utterance(turn_index=turn, role=role, speaker_name=role.value, text=text)
+
+
+def _voice(path: Path, *, voice: str = "en-US-GuyNeural") -> AudioAsset:
+    """A voice asset whose file exists. The gate checks the file, never its sound."""
+    path.write_bytes(b"\xff\xfb" + bytes(1024))
+    return AudioAsset(path=path, duration_s=2.0, voice=voice)
 
 
 # -- Title, description, tags, hashtags -----------------------------------------
@@ -709,12 +725,76 @@ def test_episode_warnings_flag_retention_and_script_misses() -> None:
     assert episode_warnings(None) == []
 
 
-def test_a_line_without_a_voice_blocks_the_package() -> None:
+def test_a_line_without_a_voice_blocks_the_package(tmp_path: Path) -> None:
     lines = [_utterance(turn, SpeakerRole.ORCHESTRATOR, f"Line {turn}.") for turn in range(4)]
-    voiced = {turn: object() for turn in range(4)}
+    voiced = {turn: _voice(tmp_path / f"turn_{turn}.mp3") for turn in range(4)}
     assert voice_problems(lines, None) == []
     assert voice_problems(lines, voiced) == []
-    assert voice_problems(lines, {0: object(), 2: object()}) == ["2 of 4 lines have no voice track (turns 1, 3)"]
+    assert voice_problems(lines, {0: voiced[0], 2: voiced[2]}) == ["2 of 4 lines have no voice track (turns 1, 3)"]
+    placeholder = AudioAsset(path=tmp_path / "turn_3_silent.mp3", duration_s=2.0, voice="silent", estimated=True)
+    assert voice_problems(lines, {**voiced, 3: placeholder}) == ["1 of 4 lines have no voice track (turns 3)"]
+
+
+def test_a_voice_the_renderer_could_not_decode_blocks_the_package(tmp_path: Path) -> None:
+    lines = [_utterance(turn, SpeakerRole.ORCHESTRATOR, f"Line {turn}.") for turn in range(4)]
+    voiced = {turn: _voice(tmp_path / f"turn_{turn}.mp3") for turn in range(3)}
+    assert voice_problems(lines, voiced, silent_turns=[1, 2, 3, 9]) == [
+        "1 of 4 lines have no voice track (turns 3)",
+        "2 of 4 voice tracks could not be decoded and play as silence (turns 1, 2)",
+    ]
+
+
+def test_a_silent_track_blocks_the_package() -> None:
+    report = evaluate_package(
+        long_probe=_probe("episode.mp4", 372.0, size=(1920, 1080), peak_db=-91.0),
+        short_probes=[_probe("short_01.mp4", 36.0, peak_db=-91.0), _probe("short_02.mp4", 41.0, peak_db=-1.2)],
+        preset=_preset(),
+        target_s=360,
+        shorts_expected=2,
+    )
+    assert report.failures == [
+        "long video audio is silent (peak -91 dB)",
+        "short_01.mp4 audio is silent (peak -91 dB)",
+    ]
+    assert report.to_dict()["long"]["peak_db"] == -91.0
+    assert report.to_dict()["shorts"][1]["peak_db"] == -1.2
+
+
+def _wav(path: Path, samples: np.ndarray, rate: int = 24000) -> Path:
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes((np.clip(samples, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+    return path
+
+
+def test_the_bridge_lists_voice_files_that_play_as_silence(tmp_path: Path) -> None:
+    from products.aiwake.animator_bridge import build_session_audio
+    from products.aiwake.contracts import DebateTranscript
+
+    roles = [SpeakerRole.ORCHESTRATOR, SpeakerRole.TARGET] * 2
+    transcript = DebateTranscript(
+        topic="Silence check",
+        session_id="silence_check",
+        utterances=[_utterance(turn, role, f"Line number {turn} is spoken aloud.") for turn, role in enumerate(roles)],
+    )
+    second = np.arange(24000) / 24000
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not audio " * 200)
+    audio = {
+        0: AudioAsset(path=_wav(tmp_path / "tone.wav", 0.5 * np.sin(2 * np.pi * 220 * second)), duration_s=1.0, voice="a"),
+        1: AudioAsset(path=broken, duration_s=1.0, voice="b"),
+        2: AudioAsset(path=tmp_path / "turn_2_silent.mp3", duration_s=1.0, voice="silent", estimated=True),
+        3: AudioAsset(path=_wav(tmp_path / "hush.wav", np.zeros_like(second)), duration_s=1.0, voice="b"),
+    }
+    build_session_audio(
+        transcript,
+        audio,
+        destination=tmp_path / "mix.wav",
+        audio_config=SimpleNamespace(bgm=None, send_sfx=None),
+    )
+    assert transcript.metadata["render_silent_turns"] == [1, 3]
 
 
 def test_probe_media_reports_a_missing_file(tmp_path: Path) -> None:
@@ -722,11 +802,12 @@ def test_probe_media_reports_a_missing_file(tmp_path: Path) -> None:
     assert (probe.duration_s, probe.has_audio, probe.error) == (None, False, "missing")
 
 
-def _clip(path: Path, *, seconds: float, size: str, audio: bool) -> Path:
+def _clip(path: Path, *, seconds: float, size: str, audio: bool, muted: bool = False) -> Path:
     cmd = [ffmpeg_binary(), "-y", "-hide_banner", "-loglevel", "error"]
     cmd += ["-f", "lavfi", "-i", f"testsrc2=size={size}:rate=10:d={seconds}"]
     if audio:
-        cmd += ["-f", "lavfi", "-i", f"sine=frequency=330:sample_rate=44100:duration={seconds}"]
+        source = f"anullsrc=r=44100:cl=mono:d={seconds}" if muted else f"sine=frequency=330:sample_rate=44100:duration={seconds}"
+        cmd += ["-f", "lavfi", "-i", source]
     cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
     if audio:
         cmd += ["-c:a", "aac", "-shortest"]
@@ -735,17 +816,23 @@ def _clip(path: Path, *, seconds: float, size: str, audio: bool) -> Path:
 
 
 @needs_ffmpeg
-def test_probe_media_reads_duration_audio_and_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_media_reads_duration_audio_size_and_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     voiced = _clip(tmp_path / "voiced.mp4", seconds=2, size="320x180", audio=True)
-    silent = _clip(tmp_path / "silent.mp4", seconds=2, size="180x320", audio=False)
+    mute = _clip(tmp_path / "mute.mp4", seconds=2, size="320x180", audio=True, muted=True)
+    no_track = _clip(tmp_path / "no_track.mp4", seconds=2, size="180x320", audio=False)
     probe = probe_media(voiced)
     assert probe.has_audio and (probe.width, probe.height) == (320, 180)
     assert probe.duration_s == pytest.approx(2.0, abs=0.2)
-    assert probe_media(silent).has_audio is False
+    assert probe.peak_db is not None and -30.0 < probe.peak_db <= 0.0
+    muted = probe_media(mute)
+    assert muted.has_audio and muted.peak_db is not None and muted.peak_db <= -60
+    assert probe_media(no_track).has_audio is False
+    assert probe_media(no_track).peak_db is None
     monkeypatch.setattr("products.aiwake.longform.qa.resolve_ffprobe", lambda _ffmpeg: None)
     header = probe_media(voiced)
     assert header.has_audio and (header.width, header.height) == (320, 180)
     assert header.duration_s == pytest.approx(2.0, abs=0.2)
+    assert header.peak_db == pytest.approx(probe.peak_db)
 
 
 # -- Shorts ---------------------------------------------------------------------
@@ -971,11 +1058,13 @@ def rendered_episode(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespac
         seed=transcript.session_id,
     )
     assert plan.to_dict() == transcript.metadata["episode_plan"]
+    voice = _voice(root / "voice.mp3")
     return SimpleNamespace(
         result=replace(result, video_path=master, metadata_path=render),
         plan=plan,
         settings=settings,
         timestamps=timestamps,
+        voices={item.turn_index: voice for item in transcript.utterances},
     )
 
 
@@ -989,8 +1078,7 @@ def _finalize(
 ):
     from products.aiwake.longform.publish import finalize_longform
 
-    voiced = {item.turn_index: object() for item in episode.result.transcript.utterances}
-    kwargs.setdefault("audio_by_turn", voiced)
+    kwargs.setdefault("audio_by_turn", episode.voices)
     return finalize_longform(
         result or episode.result,
         episode.plan,
@@ -1066,6 +1154,41 @@ def test_a_failed_re_render_falls_back_to_a_cut(
     assert [short["mode"] for short in payload["shorts"]] == ["cut", "cut"]
 
 
+def test_a_re_render_that_plays_a_line_as_silence_falls_back_to_a_cut(
+    rendered_episode: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _mute_first_line(window: object, *, output_dir: Path, output_name: str, **_kwargs: object) -> Path:
+        window.metadata["render_silent_turns"] = [window.utterances[0].turn_index]
+        rendered = Path(output_dir) / output_name
+        rendered.write_bytes(b"render without a voice")
+        return rendered
+
+    monkeypatch.setattr("products.aiwake.animator_bridge.render_debate_animation", _mute_first_line)
+    settings = _with_long_format(rendered_episode.settings, shorts_mode="regenerate")
+    final = _finalize(rendered_episode, tmp_path, settings, shorts_count=2, work_root=tmp_path / "work")
+    assert final.qa_passed is True, final.qa_failures
+    payload = json.loads(final.metadata_path.read_text(encoding="utf-8"))
+    assert [short["mode"] for short in payload["shorts"]] == ["cut", "cut"]
+    assert all(probe_media(path).has_audio for path in final.shorts)
+
+
+def test_a_master_with_undecoded_voices_is_blocked(rendered_episode: SimpleNamespace, tmp_path: Path) -> None:
+    transcript = rendered_episode.result.transcript
+    muted = transcript.model_copy(update={"metadata": {**transcript.metadata, "render_silent_turns": [1, 2]}})
+    final = _finalize(
+        rendered_episode,
+        tmp_path,
+        _with_long_format(rendered_episode.settings, shorts_mode="cut"),
+        result=replace(rendered_episode.result, transcript=muted),
+        shorts_count=2,
+    )
+    lines = len(transcript.utterances)
+    assert final.qa_passed is False
+    assert final.qa_failures == (f"2 of {lines} voice tracks could not be decoded and play as silence (turns 1, 2)",)
+
+
 def test_no_timeline_and_a_silent_line_block_the_package(rendered_episode: SimpleNamespace, tmp_path: Path) -> None:
     bare = tmp_path / "render.json"
     bare.write_text(json.dumps({"duration_s": 360.0}), encoding="utf-8")
@@ -1074,7 +1197,7 @@ def test_no_timeline_and_a_silent_line_block_the_package(rendered_episode: Simpl
         tmp_path / "out",
         rendered_episode.settings,
         result=replace(rendered_episode.result, metadata_path=bare),
-        audio_by_turn={0: object()},
+        audio_by_turn={0: rendered_episode.voices[0]},
     )
     lines = len(rendered_episode.result.transcript.utterances)
     assert final.qa_passed is False

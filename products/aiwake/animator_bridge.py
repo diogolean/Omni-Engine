@@ -510,6 +510,11 @@ def build_session_audio(
     track is peak-normalized and written as explicit 16-bit PCM — bit-depth
     truncation from an unspecified/mismatched subtype is what turns a
     perfectly good waveform into "broken"-sounding audio after muxing.
+
+    A line whose voice file exists but plays as silence (the file cannot be
+    decoded, or holds no sound) is listed in
+    ``transcript.metadata["render_silent_turns"]``, so the long-form gate can
+    refuse the video.
     """
     seats = character_map or DEFAULT_CHARACTER_MAP
     audio_by_turn = audio_by_turn or {}
@@ -561,12 +566,14 @@ def build_session_audio(
             )
         )
     )
+    silent_turns: list[int] = []
     for utterance in utterance_list:
         asset = audio_by_turn.get(utterance.turn_index)
         samples: np.ndarray | None = None
         duration: float | None = None
+        voice_file = asset is not None and Path(asset.path).is_file()
 
-        if asset is not None and Path(asset.path).is_file():
+        if voice_file:
             try:
                 mono, sr, duration = load_mono_waveform(Path(asset.path))
                 samples = _resample(mono, sr, sample_rate)
@@ -578,6 +585,8 @@ def build_session_audio(
             duration = (asset.duration_s if asset is not None else None) or _estimate_duration_for(utterance.text)
             duration = max(0.3, float(duration))
             samples = np.zeros(int(duration * sample_rate), dtype=np.float32)
+        if voice_file and not np.any(samples):
+            silent_turns.append(utterance.turn_index)
 
         turn_wav: Path | None = None
         if np.any(samples):
@@ -717,6 +726,7 @@ def build_session_audio(
         cursor = speech_start + duration
         prior_intent = intent
         prior_text = str(utterance.text or "")
+    transcript.metadata["render_silent_turns"] = silent_turns
 
     final_target_finish = bool(
         turns

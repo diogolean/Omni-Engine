@@ -29,7 +29,7 @@ The live run is the same command without `--offline`. It seats **DeepSeek Chat**
 
 When the run ends, the CLI prints the video, metadata, and Shorts paths, the `cost estimate` and `cost actual` lines, and a `qa` line that reads `pass` or `FAIL`, followed by one line per failure and per warning. A failed gate exits with code 1.
 
-Useful flags: `--target-duration 300..600`, `--shorts 2|3`, `--topic "..."`, `--orchestrator` / `--target` (aliases), `--random-matchups` (draws from `cheap_roster` only), `--quantity N`, `--no-audio`, `--no-video` (transcript, plan, and metadata only; skips the media checks), `--preview`. `python tools/channel_cli.py --channel aiwake longform --help` lists them all.
+Useful flags: `--target-duration 300..600`, `--shorts 2|3`, `--topic "..."`, `--orchestrator` / `--target` (aliases), `--random-matchups` (draws from `cheap_roster` only), `--quantity N`, `--no-audio` (a voiceless preview, which the gate always fails), `--no-video` (transcript, plan, and metadata only; skips the media checks), `--preview`. `python tools/channel_cli.py --channel aiwake longform --help` lists them all.
 
 ## Cost per episode
 
@@ -116,7 +116,7 @@ Every line gets `generation_attempts` (3) tries. The last try only has to meet t
 
 `choose_highlights` scores every run of whole exchanges that opens on a host line and closes on a guest answer. The score rewards the hook that opens the run, the strongest guest stance inside it (a crack, then a counter-punch), and the chokehold round. It keeps 2 or 3 windows that do not overlap, from different chapters first. The verdict exchange stays out of every Short, so the long video keeps its ending.
 
-`shorts_mode: regenerate` (the default) renders each window again at 1080x1920, with the same puppets, arena, skin, and voice files as the episode. When a re-render fails, or with `shorts_mode: cut`, the Short is a bounded slice of the master laid over a blurred copy of itself, so both fighters and the subtitles stay in frame.
+`shorts_mode: regenerate` (the default) renders each window again at 1080x1920, with the same puppets, arena, skin, and voice files as the episode. When a re-render fails or plays a line as silence, or with `shorts_mode: cut`, the Short is a bounded slice of the master laid over a blurred copy of itself, so both fighters and the subtitles stay in frame.
 
 Each Short gets its own quote title (never the same quote as the long title), a description, three hashtags, and this CTA line:
 
@@ -128,11 +128,11 @@ Full debate on the channel: "<quote>" | DeepSeek vs Llama (Full Debate)
 
 `qa.py` blocks publishing when:
 
-- the long file is missing, has no audio stream, is not 1920x1080, or runs outside `[max(300, target - 120), min(600, target + 120)]` seconds (about 300-480 s for a 6-minute target);
+- the long file is missing, is not 1920x1080, runs outside `[max(300, target - 120), min(600, target + 120)]` seconds (about 300-480 s for a 6-minute target), or has no audio stream or a silent one (its loudest sample at or under -60 dBFS);
 - the debate stopped early or never finished the verdict exchange;
-- a spoken line has no voice track;
+- a spoken line has no voice track (TTS gave up on it, or the run used `--no-audio`), or the renderer could not decode its voice file and played silence under the subtitle;
 - YouTube would drop the chapters;
-- there are not 2 or 3 Shorts, or a Short is under 15 s, over 59 s, silent, or not vertical.
+- there are not 2 or 3 Shorts, or a Short is under 15 s, over 59 s, without sound, or not vertical.
 
 Warnings do not block publishing: the longest gap between hooks went over 45 s on the rendered timeline, a hook did not land, a line shipped on its last try with a soft miss, the episode reached the verdict without the chokehold, or a Short was cut from the master because its re-render failed.
 
