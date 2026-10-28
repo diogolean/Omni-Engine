@@ -32,9 +32,10 @@ import os
 import re as _re
 import shutil
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 _LOG = logging.getLogger(__name__)
 
@@ -43,6 +44,10 @@ from shared.youtube_errors import YouTubeQuotaExceededError
 
 class YouTubeChannelMismatchError(RuntimeError):
     """Raised when the OAuth token is authorized for the wrong Brand Account."""
+
+
+class YouTubeResumableUploadError(RuntimeError):
+    """HTTP 500-504 persisted past the resumable upload retry cap."""
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +61,13 @@ _SCOPES = [
     "https://www.googleapis.com/auth/youtube",
 ]
 _CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB resumable chunk
+
+# videos.insert may answer 500/502/503/504 while a chunk is in flight.
+# Retry that streak this many times, then raise. A chunk that completes
+# starts the count over, so one blip does not exhaust the whole upload.
+_RESUMABLE_TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
+_RESUMABLE_TRANSIENT_RETRIES = 5
+_RESUMABLE_TRANSIENT_BACKOFF_S = 2.0
 
 _ENGINE_ROOT: Path = Path(__file__).resolve().parents[3]
 _CREDENTIALS_DIR: Path = _ENGINE_ROOT / "credentials"
@@ -229,6 +241,92 @@ def _is_upload_limit_error(exc: BaseException) -> bool:
     if any(reason.lower() in msg_low for reason in _UPLOAD_LIMIT_REASONS):
         return True
     return any(phrase in msg_low for phrase in _UPLOAD_LIMIT_PHRASES)
+
+
+def _raise_upload_quota(exc: BaseException, *, video_name: str, page_slug: str) -> None:
+    """Quota and the daily upload cap are not transient. Callers queue the rest."""
+    _LOG.warning(
+        "[YouTube] Daily upload limit (20 videos) reached for this channel."
+    )
+    raise YouTubeQuotaExceededError(
+        f"YouTube daily upload limit reached while uploading "
+        f"'{video_name}' (page={page_slug}): {exc}"
+    ) from exc
+
+
+def _resumable_backoff_seconds(retry_number: int) -> float:
+    """Seconds to wait before transient retry ``retry_number`` (1-based)."""
+    return _RESUMABLE_TRANSIENT_BACKOFF_S * (2 ** (retry_number - 1))
+
+
+def _finish_resumable_upload(
+    request,
+    *,
+    http_error: type[BaseException],
+    on_http_error: Callable[[BaseException], Any],
+    file_bytes: int,
+    video_name: str,
+    page_slug: str,
+    sleeper: Optional[Callable[[float], None]] = None,
+):
+    """Pull chunks until the resumable request returns a video resource.
+
+    ``on_http_error`` handles one-shot payload retries. Return a replacement
+    request to continue immediately, or ``None`` to apply the status policy.
+    HTTP 500, 502, 503, and 504 sleep with exponential backoff and try the
+    same request again. After ``_RESUMABLE_TRANSIENT_RETRIES`` of those in a
+    row this raises :class:`YouTubeResumableUploadError`. A completed chunk
+    starts that count over. Quota errors raise
+    :class:`YouTubeQuotaExceededError`.
+    """
+    sleep = time.sleep if sleeper is None else sleeper
+    response = None
+    last_pct = -1
+    transient_retries = 0
+    limit = _RESUMABLE_TRANSIENT_RETRIES
+
+    while response is None:
+        try:
+            status_chunk, response = request.next_chunk()
+        except http_error as exc:
+            replacement = on_http_error(exc)
+            if replacement is not None:
+                request = replacement
+                continue
+            if _is_upload_limit_error(exc):
+                _raise_upload_quota(exc, video_name=video_name, page_slug=page_slug)
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            if status in _RESUMABLE_TRANSIENT_STATUSES:
+                transient_retries += 1
+                if transient_retries > limit:
+                    raise YouTubeResumableUploadError(
+                        f"YouTube resumable upload stopped after {limit} "
+                        f"retries on HTTP {status} for '{video_name}' "
+                        f"(page={page_slug}): {exc}"
+                    ) from exc
+                delay = _resumable_backoff_seconds(transient_retries)
+                _LOG.warning(
+                    "YouTube transient error (%s) — retry %d/%d in %.1fs",
+                    status,
+                    transient_retries,
+                    limit,
+                    delay,
+                )
+                sleep(delay)
+                continue
+            raise
+        except Exception as exc:  # noqa: BLE001 — covers non-HttpError upload errors
+            if _is_upload_limit_error(exc):
+                _raise_upload_quota(exc, video_name=video_name, page_slug=page_slug)
+            raise
+        transient_retries = 0
+        if status_chunk:
+            pct = int(status_chunk.resumable_progress / file_bytes * 100)
+            if pct != last_pct:
+                print(f"[YouTube] Upload progress: {pct}% ...", end="\r", flush=True)
+                last_pct = pct
+
+    return response
 
 
 def _resolve_client_secrets(path: Optional[str | Path] = None) -> Path:
@@ -1644,66 +1742,42 @@ def upload_short(
         )
 
     request = _insert(youtube, body)
-    response = None
-    last_pct = -1
     file_bytes = video_path.stat().st_size
     _synthetic_retried = False
 
-    while response is None:
-        try:
-            status_chunk, response = request.next_chunk()
-        except HttpError as exc:
-            # Older API surfaces may reject containsSyntheticMedia — retry once without it
-            err_txt = str(exc).lower()
-            if not _synthetic_retried and (
-                "containssyntheticmedia" in err_txt
-                or ("synthetic" in err_txt and "invalid" in err_txt)
-            ):
-                _synthetic_retried = True
-                status_body.pop("containsSyntheticMedia", None)
-                _LOG.warning(
-                    "containsSyntheticMedia rejected by API — retrying upload without it."
-                )
-                request = _insert(youtube, body)
-                continue
-            if related_video_id and "relatedvideoid" in err_txt:
-                snippet_body.pop("relatedVideoId", None)
-                related_video_id = None
-                _LOG.warning(
-                    "relatedVideoId rejected by API — retrying upload without it "
-                    "(long-form URL remains in the description)."
-                )
-                request = _insert(youtube, body)
-                continue
-            if _is_upload_limit_error(exc):
-                _LOG.warning(
-                    "[YouTube] Daily upload limit (20 videos) reached for this channel."
-                )
-                raise YouTubeQuotaExceededError(
-                    f"YouTube daily upload limit reached while uploading "
-                    f"'{video_path.name}' (page={page_slug}): {exc}"
-                ) from exc
-            if exc.resp.status in (500, 502, 503, 504):
-                _LOG.warning(
-                    "YouTube transient error (%s) — retrying …", exc.resp.status
-                )
-                continue
-            raise
-        except Exception as exc:  # noqa: BLE001 — covers non-HttpError upload errors
-            if _is_upload_limit_error(exc):
-                _LOG.warning(
-                    "[YouTube] Daily upload limit (20 videos) reached for this channel."
-                )
-                raise YouTubeQuotaExceededError(
-                    f"YouTube daily upload limit reached while uploading "
-                    f"'{video_path.name}' (page={page_slug}): {exc}"
-                ) from exc
-            raise
-        if status_chunk:
-            pct = int(status_chunk.resumable_progress / file_bytes * 100)
-            if pct != last_pct:
-                print(f"[YouTube] Upload progress: {pct}% ...", end="\r", flush=True)
-                last_pct = pct
+    def _retry_rejected_field(exc: BaseException):
+        """One-shot payload retries. Unchanged: no backoff, not part of the cap."""
+        nonlocal _synthetic_retried, related_video_id
+        err_txt = str(exc).lower()
+        # Older API surfaces may reject containsSyntheticMedia — retry once without it
+        if not _synthetic_retried and (
+            "containssyntheticmedia" in err_txt
+            or ("synthetic" in err_txt and "invalid" in err_txt)
+        ):
+            _synthetic_retried = True
+            status_body.pop("containsSyntheticMedia", None)
+            _LOG.warning(
+                "containsSyntheticMedia rejected by API — retrying upload without it."
+            )
+            return _insert(youtube, body)
+        if related_video_id and "relatedvideoid" in err_txt:
+            snippet_body.pop("relatedVideoId", None)
+            related_video_id = None
+            _LOG.warning(
+                "relatedVideoId rejected by API — retrying upload without it "
+                "(long-form URL remains in the description)."
+            )
+            return _insert(youtube, body)
+        return None
+
+    response = _finish_resumable_upload(
+        request,
+        http_error=HttpError,
+        on_http_error=_retry_rejected_field,
+        file_bytes=file_bytes,
+        video_name=video_path.name,
+        page_slug=page_slug,
+    )
 
     print()
     video_id = response.get("id", "")
