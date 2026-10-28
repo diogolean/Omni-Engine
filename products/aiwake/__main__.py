@@ -139,6 +139,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate the versus thumbnail (enabled by the long-format preset).",
     )
     parser.add_argument(
+        "--shorts",
+        type=int,
+        choices=(2, 3),
+        help="Vertical teasers to cut from a long-form episode (default: 3).",
+    )
+    parser.add_argument(
         "--provocation-focus",
         choices=(
             "mixed",
@@ -412,6 +418,8 @@ def main(argv: list[str] | None = None) -> int:
         effective_mode = "cornered"
     if args.random_matchups and (args.orchestrator or args.target):
         parser.error("--random-matchups cannot be combined with fixed seat overrides")
+    seat_orchestrator = args.orchestrator
+    seat_target = args.target
     if args.random_matchups and args.quantity == 1:
         random_left, random_right = random_matchup_schedule(
             1,
@@ -421,19 +429,22 @@ def main(argv: list[str] | None = None) -> int:
         settings = settings.with_model_override("target", random_right)
         args.left_puppet = BATCH_PUPPET_BY_MODEL[random_left]
         args.right_puppet = BATCH_PUPPET_BY_MODEL[random_right]
+        seat_orchestrator = random_left
+        seat_target = random_right
     if dynamic_animation and not args.offline and not args.random_matchups:
-        if not args.orchestrator or not args.target:
-            parser.error("dynamic animation requires --orchestrator and --target; there is no default model")
-        from .avatars import character_map_for
+        if args.orchestrator and args.target:
+            from .avatars import character_map_for
 
-        seated = character_map_for(
-            args.orchestrator,
-            args.target,
-            left_puppet=args.left_puppet,
-            right_puppet=args.right_puppet,
-        )
-        args.left_puppet = seated["orchestrator"]
-        args.right_puppet = seated["target"]
+            seated = character_map_for(
+                args.orchestrator,
+                args.target,
+                left_puppet=args.left_puppet,
+                right_puppet=args.right_puppet,
+            )
+            args.left_puppet = seated["orchestrator"]
+            args.right_puppet = seated["target"]
+        elif not long_form:
+            parser.error("dynamic animation requires --orchestrator and --target; there is no default model")
 
     pipeline_kwargs = {
         "topic": args.topic,
@@ -463,16 +474,24 @@ def main(argv: list[str] | None = None) -> int:
         "resolution": args.resolution,
         "target_duration_s": args.target_duration,
         "generate_thumbnail": args.generate_thumbnail,
+        "shorts_count": args.shorts,
     }
+    if long_form:
+        pipeline_kwargs["orchestrator_model"] = seat_orchestrator
+        pipeline_kwargs["target_model"] = seat_target
 
     if args.quantity > 1:
         print(f"Aiwake bulk production: {args.quantity} original video(s)")
-        batch = run_bulk_pipeline(
-            quantity=args.quantity,
-            random_matchups=args.random_matchups,
-            matchup_seed=args.matchup_seed,
-            **pipeline_kwargs,
-        )
+        try:
+            batch = run_bulk_pipeline(
+                quantity=args.quantity,
+                random_matchups=args.random_matchups,
+                matchup_seed=args.matchup_seed,
+                **pipeline_kwargs,
+            )
+        except ValueError as exc:
+            print(str(exc))
+            return 2
         print(f"bulk requested : {batch.requested}")
         print(f"bulk succeeded : {batch.succeeded}")
         print(f"bulk skipped   : {batch.skipped_duplicates} (repeated script)")
@@ -485,7 +504,11 @@ def main(argv: list[str] | None = None) -> int:
             print("some filenames collided!")
         return 0 if batch.complete else 1
 
-    result = run_pipeline(**pipeline_kwargs)
+    try:
+        result = run_pipeline(**pipeline_kwargs)
+    except ValueError as exc:
+        print(str(exc))
+        return 2
 
     print(f"exchanges     : {result.exchanges}")
     print(f"run status    : {result.end_reason}")
@@ -496,6 +519,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"thumbnail     : {result.thumbnail_path}")
     if result.metadata_path:
         print(f"metadata      : {result.metadata_path}")
+    if result.cost_estimate_usd is not None:
+        print(f"cost estimate : ${result.cost_estimate_usd:.4f}")
+    for short_path in result.shorts:
+        print(f"short         : {short_path}")
+    if result.qa_passed is not None:
+        print(f"qa            : {'pass' if result.qa_passed else 'FAIL'}")
+        for failure in result.qa_failures:
+            print(f"qa failure    : {failure}")
     if dynamic_animation and args.duration is not None:
         from .media.audio import (  # noqa: PLC0415
             DEEPSEEK_CANONICAL_VOICE,
@@ -509,6 +540,8 @@ def main(argv: list[str] | None = None) -> int:
         print("deepseek rig  : harmonic head/body scale, shoulders>=850, body_y=1920")
         print("body masks    : no dilation, gradient, fade, or translucent fill")
 
+    if long_form and result.qa_passed is False:
+        return 1
     return 0 if result.succeeded else 1
 
 

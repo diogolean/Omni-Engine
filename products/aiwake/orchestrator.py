@@ -124,12 +124,14 @@ class Provocateur:
         room: DebateRoom | None = None,
         memory_bridge: object | None = None,
         long_form: bool = False,
+        episode_plan: object | None = None,
     ) -> None:
         self.settings = settings or cached_settings()
         self.memory = memory or DebateMemory(self.settings.memory)
         self.room = room or DebateRoom(self.settings)
         self._memory_bridge = memory_bridge
         self._long_form = bool(long_form)
+        self._episode_plan = episode_plan
         self._opening_dna: OpeningDNA | None = None
         self._focus: ProvocationFocus | None = None
         self._provocation_tags: list[dict[str, object]] = []
@@ -246,6 +248,18 @@ class Provocateur:
         )
 
     def _long_form_brief(self, exchange: int, last_answer: Utterance | None) -> str:
+        plan = self._episode_plan
+        if plan is not None:
+            from .longform.plan import pacing_brief
+
+            callback = ""
+            segment = plan.segment_for(exchange)
+            if last_answer is not None and segment.kind in {"round", "outro"}:
+                callback = self.memory.contradiction_brief(
+                    last_answer.text,
+                    before_turn=last_answer.turn_index,
+                )
+            return pacing_brief(plan, exchange, callback=callback)
         act, label, objective = self._long_form_act(exchange)
         lines = [
             f"LONG-FORM ACT {act}: {label}. Do not speak this label.",
@@ -942,6 +956,8 @@ class Provocateur:
         self.room.transcript.metadata["post_type"] = (
             "long_format" if self._long_form else "short_clip"
         )
+        if self._episode_plan is not None:
+            self.room.transcript.metadata["episode_plan"] = self._episode_plan.to_dict()
         if topic:
             self._opening_dna = None
             self.room.topic = topic

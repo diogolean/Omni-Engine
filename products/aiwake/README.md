@@ -32,9 +32,8 @@ python -m products.aiwake --turns 4 --no-audio --no-video
 # Bulk: N original videos. Scripts are never reused across the batch or later runs.
 python -m products.aiwake --quantity 5
 
-# Long-form YouTube arena (20 exchanges by default, isolated outputs)
-python -m products.aiwake --mode longform --resolution 1920x1080 \
-  --target-duration 360 --random-matchups --generate-thumbnail
+# Long-form 16:9 episode plus 2-3 vertical Shorts. See longform/README.md.
+python tools/channel_cli.py --channel aiwake longform --offline --target-duration 360
 
 python -m products.aiwake --list-models      # alias table + current seats
 python -m products.aiwake --list-providers
@@ -44,10 +43,10 @@ python -m pytest products/aiwake -q
 ```
 
 Long-form artifacts are written under
-`outputs/aiwake/animation_clips/long_format/{session_id}/`: the episode MP4,
-session thumbnail, `thumbnail_1920x1080.png`, and `metadata.json`. Omitting
-`--long-format`, `--post-type long_format`, and `--mode longform` preserves the
-approved vertical pipeline.
+`outputs/aiwake/animation_clips/long_format/{session_id}/`: the 1920x1080 episode,
+chapter metadata, and `shorts/`. The operator command and the cost note live in
+`products/aiwake/longform/README.md`. Omitting `--long-format`, `--post-type long_format`,
+and `--mode longform` preserves the approved vertical pipeline.
 
 Or from Python:
 

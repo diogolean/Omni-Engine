@@ -298,23 +298,73 @@ class MemoryConfig(_Frozen):
     store_filename: str = "aiwake_memory.json"
 
 
+class ModelTokenRate(_Frozen):
+    """Planning rate in USD per one million tokens. Not an invoice."""
+
+    input_usd_per_million: float = Field(default=0.0, ge=0.0)
+    output_usd_per_million: float = Field(default=0.0, ge=0.0)
+
+
+def _default_longform_rates() -> dict[str, ModelTokenRate]:
+    """Cheap seats stay near zero. Claude and the other opt-in seats do not."""
+    return {
+        "deepseek-chat": ModelTokenRate(input_usd_per_million=0.27, output_usd_per_million=1.10),
+        "llama-70b": ModelTokenRate(input_usd_per_million=0.12, output_usd_per_million=0.30),
+        "gemini-flash": ModelTokenRate(input_usd_per_million=0.15, output_usd_per_million=0.60),
+        "offline": ModelTokenRate(),
+        "claude-sonnet": ModelTokenRate(input_usd_per_million=3.0, output_usd_per_million=15.0),
+        "gpt4o": ModelTokenRate(input_usd_per_million=2.5, output_usd_per_million=10.0),
+        "gemini-pro": ModelTokenRate(input_usd_per_million=1.25, output_usd_per_million=10.0),
+        "deepseek-r1": ModelTokenRate(input_usd_per_million=0.55, output_usd_per_million=2.19),
+    }
+
+
 class LongFormatPreset(_Frozen):
-    """Isolated defaults for widescreen YouTube episodes."""
+    """Isolated defaults for widescreen YouTube episodes.
+
+    The cheap pair is the default. Expensive aliases render only when
+    ``allow_expensive`` is set in this channel's config.
+    """
 
     resolution: tuple[int, int] = (1920, 1080)
     aspect_ratio: Literal["16:9"] = "16:9"
     target_duration_s: float = Field(default=360.0, ge=300.0, le=600.0)
-    min_turns: int = Field(default=16, ge=16, le=24)
-    max_turns: int = Field(default=24, ge=16, le=24)
-    default_turns: int = Field(default=20, ge=16, le=24)
+    min_turns: int = Field(default=16, ge=12, le=40)
+    max_turns: int = Field(default=32, ge=16, le=40)
+    default_turns: int = Field(default=20, ge=12, le=40)
     stage_mode: Literal["dual_presence"] = "dual_presence"
     generate_thumbnail: bool = True
     output_subdir: str = "long_format"
+    chapters: int = Field(default=3, ge=2, le=6)
+    words_per_minute: float = Field(default=165.0, ge=80.0, le=220.0)
+    exchange_gap_s: float = Field(default=0.9, ge=0.0, le=3.0)
+    qa_slack_s: float = Field(default=120.0, ge=0.0, le=180.0)
+    min_duration_s: float = Field(default=300.0, ge=60.0, le=600.0)
+    max_duration_s: float = Field(default=600.0, ge=300.0, le=900.0)
+    default_orchestrator: str = "deepseek-chat"
+    default_target: str = "llama-70b"
+    allow_expensive: bool = False
+    expensive_aliases: tuple[str, ...] = (
+        "claude-sonnet",
+        "gpt4o",
+        "gemini-pro",
+        "deepseek-r1",
+    )
+    shorts_count: int = Field(default=3, ge=2, le=3)
+    shorts_min_s: float = Field(default=15.0, ge=15.0, le=59.0)
+    shorts_target_s: float = Field(default=36.0, ge=15.0, le=59.0)
+    shorts_width: int = Field(default=1080, ge=256, le=2160)
+    shorts_height: int = Field(default=1920, ge=256, le=3840)
+    model_rates: dict[str, ModelTokenRate] = Field(default_factory=_default_longform_rates)
 
     @model_validator(mode="after")
     def _ordered_turn_limits(self) -> "LongFormatPreset":
         if not self.min_turns <= self.default_turns <= self.max_turns:
             raise ValueError("long-format turn limits must contain default_turns")
+        if self.shorts_target_s < self.shorts_min_s:
+            raise ValueError("shorts_target_s must be at least shorts_min_s")
+        if self.min_duration_s > self.max_duration_s:
+            raise ValueError("long-format duration window is inverted")
         return self
 
 

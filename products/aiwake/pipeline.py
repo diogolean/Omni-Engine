@@ -19,7 +19,7 @@ import random
 import shutil
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -185,6 +185,10 @@ class PipelineResult:
     dialogue_end_reason: str
     thumbnail_path: Path | None = None
     metadata_path: Path | None = None
+    shorts: tuple[Path, ...] = ()
+    qa_passed: bool | None = None
+    qa_failures: tuple[str, ...] = ()
+    cost_estimate_usd: float | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -353,6 +357,8 @@ def run_pipeline(
     resolution: tuple[int, int] | None = None,
     target_duration_s: float | None = None,
     generate_thumbnail: bool | None = None,
+    episode_plan: object | None = None,
+    shorts_count: int | None = None,
 ) -> PipelineResult:
     """Run a debate and (optionally) produce the video.
 
@@ -405,11 +411,6 @@ def run_pipeline(
     if long_form:
         preset = cfg.long_format
         dynamic_animation = True
-        turns = turns or preset.default_turns
-        if not preset.min_turns <= int(turns) <= preset.max_turns:
-            raise ValueError(
-                f"long_format requires {preset.min_turns}-{preset.max_turns} exchanges"
-            )
         resolution = resolution or preset.resolution
         target_duration_s = target_duration_s or preset.target_duration_s
         generate_thumbnail = (
@@ -418,6 +419,17 @@ def run_pipeline(
             else generate_thumbnail
         )
         enable_cta = False
+        from .longform.plan import build_episode_plan
+
+        if episode_plan is None:
+            episode_plan = build_episode_plan(
+                preset,
+                target_duration_s=target_duration_s,
+                turns=turns,
+            )
+        turns = episode_plan.turns
+        target_duration_s = episode_plan.target_duration_s
+        resolution = resolution or episode_plan.resolution
     else:
         resolution = resolution or (1080, 1920)
         generate_thumbnail = bool(generate_thumbnail)
@@ -433,11 +445,23 @@ def run_pipeline(
     pipeline_t0 = time.perf_counter()
     # Seat overrides first: force_offline() reads the resolved routing, so
     # swapping a brain and then dropping to the stub must not resurrect the
-    # configured model.
-    if orchestrator_model:
-        cfg = cfg.with_model_override("orchestrator", orchestrator_model)
-    if target_model:
-        cfg = cfg.with_model_override("target", target_model)
+    # configured model. Long-form ignores the short-form yaml seats and
+    # uses the cheap pair unless the caller named a seat.
+    if long_form:
+        from .longform.seats import resolve_longform_seats
+
+        left_name, right_name = resolve_longform_seats(
+            cfg,
+            orchestrator=orchestrator_model,
+            target=target_model,
+        )
+        cfg = cfg.with_model_override("orchestrator", left_name)
+        cfg = cfg.with_model_override("target", right_name)
+    else:
+        if orchestrator_model:
+            cfg = cfg.with_model_override("orchestrator", orchestrator_model)
+        if target_model:
+            cfg = cfg.with_model_override("target", target_model)
     if offline:
         cfg = force_offline(cfg)
     if dynamic_animation and not offline and not matchup_is_legal(
@@ -539,11 +563,16 @@ def run_pipeline(
     if not quiet:
         room.subscribe(ConsoleObserver(verbose=True))
 
+    if offline and long_form:
+        from .models.offline import reset_long_form_cursor
+
+        reset_long_form_cursor()
     provocateur = Provocateur(
         cfg,
         memory=memory,
         room=room,
         long_form=long_form,
+        episode_plan=episode_plan if long_form else None,
     )
     video_path: Path | None = None
     thumbnail_path: Path | None = None
@@ -718,6 +747,33 @@ def run_pipeline(
             thumbnail_path=thumbnail_path if thumbnail_path and thumbnail_path.is_file() else None,
             metadata_path=metadata_path if metadata_path and metadata_path.is_file() else None,
         )
+        if long_form and episode_plan is not None:
+            from .longform.publish import finalize_longform
+
+            package_dir = (
+                video_path.parent
+                if video_path is not None
+                else media_dir / "animation_clips" / cfg.long_format.output_subdir / room.session_id
+            )
+            try:
+                pipeline_result = finalize_longform(
+                    pipeline_result,
+                    episode_plan,
+                    cfg,
+                    offline=offline,
+                    output_dir=package_dir,
+                    orchestrator=cfg.spec_for("orchestrator").model,
+                    target=cfg.spec_for("target").model,
+                    shorts_count=shorts_count,
+                    require_media=with_video,
+                )
+            except Exception as exc:  # noqa: BLE001 — keep the episode if packaging fails
+                _LOG.error("long-form package failed: %s", exc)
+                pipeline_result = replace(
+                    pipeline_result,
+                    qa_passed=False,
+                    qa_failures=(str(exc),),
+                )
         if record_script:
             _record_produced_script(memory, _transcript_script(pipeline_result))
         return pipeline_result
@@ -767,6 +823,7 @@ def run_bulk_pipeline(
     resolution: tuple[int, int] | None = None,
     target_duration_s: float | None = None,
     generate_thumbnail: bool | None = None,
+    shorts_count: int | None = None,
 ) -> BulkPipelineResult:
     """Produce ``quantity`` original videos. Never reprints a prior script.
 
@@ -792,6 +849,30 @@ def run_bulk_pipeline(
         if random_matchups
         else ()
     )
+    bulk_post = post_type if isinstance(post_type, PostType) else PostType(str(post_type))
+    if bulk_post is PostType.LONG_FORMAT and random_matchups and not cfg.long_format.allow_expensive:
+        from .longform.seats import is_expensive
+
+        cheap_roster = [
+            (orchestrator, target)
+            for orchestrator in BATCH_MODEL_ROSTER
+            for target in BATCH_MODEL_ROSTER
+            if matchup_is_legal(orchestrator, target)
+            and not is_expensive(orchestrator, cfg.long_format)
+            and not is_expensive(target, cfg.long_format)
+        ]
+        if not cheap_roster:
+            raise ValueError(
+                "long-form random matchups found no cheap pairs. "
+                "Set long_format.allow_expensive: true to seat Claude or another opt-in model."
+            )
+        rng = random.Random(matchup_seed)
+        filled: list[tuple[str, str]] = []
+        while len(filled) < qty:
+            cycle = list(cheap_roster)
+            rng.shuffle(cycle)
+            filled.extend(cycle)
+        matchup_schedule = tuple(filled[:qty])
     topics_by_target: dict[str, list[str]] = {}
 
     def _used_topics_for(model_alias: str | None) -> list[str]:
@@ -833,6 +914,7 @@ def run_bulk_pipeline(
         "resolution": resolution,
         "target_duration_s": target_duration_s,
         "generate_thumbnail": generate_thumbnail,
+        "shorts_count": shorts_count,
     }
 
     for index in range(qty):
