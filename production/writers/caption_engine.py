@@ -2743,9 +2743,9 @@ class CaptionEngine:
             )
             _data = _json.loads(_clean)
             caption = str(_data.get("caption_body", "")).strip()
-            self.last_pinterest_title = str(
-                _data.get("pinterest_title") or ""
-            ).strip()[:100]
+            from shared.pin_text import fit_pin_title  # noqa: PLC0415
+
+            self.last_pinterest_title = fit_pin_title(str(_data.get("pinterest_title") or ""))
             self.last_pinterest_description = str(
                 _data.get("pinterest_description") or ""
             ).strip()
@@ -2764,7 +2764,11 @@ class CaptionEngine:
 
         if _is_isolated_channel(self._channel):
             if not self.last_pinterest_title:
-                self.last_pinterest_title = (topic or page_display_name or "Ancient Mystery")[:100]
+                from shared.pin_text import fit_pin_title  # noqa: PLC0415
+
+                self.last_pinterest_title = fit_pin_title(
+                    topic or page_display_name or "Ancient Mystery"
+                )
             if not self.last_pinterest_description:
                 self.last_pinterest_description = (caption.split("\n\n")[0] if caption else topic)[:500]
 

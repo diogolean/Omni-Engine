@@ -201,10 +201,12 @@ class PinterestPublisher:
         keyword_first_title = Symbol(
             'production.formats.pins.pin_copy', 'keyword_first_title'
         )  # noqa: PLC0415
-        title = keyword_first_title(
+        from shared.pin_text import fit_pin_title  # noqa: PLC0415
+
+        title = fit_pin_title(keyword_first_title(
             str(record.get("pinterest_title") or record.get("topic") or cfg.DEFAULT_TOPIC),
             str(record.get("topic") or ""),
-        )[:100]
+        ))
         video_path = (record.get("local_video_path") or "").strip()
         if not pin_image_bytes:
             if video_path and Path(video_path).suffix.lower() in _VIDEO_EXTS:
@@ -575,10 +577,12 @@ class PinterestPublisher:
         keyword_first_title = Symbol(
             'production.formats.pins.pin_copy', 'keyword_first_title'
         )  # noqa: PLC0415
-        title = keyword_first_title(
+        from shared.pin_text import fit_pin_title  # noqa: PLC0415
+
+        title = fit_pin_title(keyword_first_title(
             str(record.get("pinterest_title") or record.get("topic") or cfg.DEFAULT_TOPIC),
             str(record.get("topic") or ""),
-        )[:100]
+        ))
         media_source: dict = {
             "source_type": "video_id",
             "media_id": media_id,
