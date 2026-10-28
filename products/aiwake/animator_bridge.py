@@ -1049,6 +1049,7 @@ def render_debate_animation(
         character_map=character_map,
     )
     transcript.metadata["render_manifest"] = manifest
+    transcript.metadata["render_puppets"] = dict(seats)
     ensure_skin_registry_file(DEFAULT_PUPPETS_DIR)
     styles = build_speaker_styles(seats, labels=hud_labels)
 
@@ -1114,6 +1115,7 @@ def render_debate_animation(
 
         selected_scene = resolve_scene_panorama(scene)
         scene_arg = selected_scene.stem
+    transcript.metadata["render_scene"] = scene_arg or ""
 
     stats = render_dynamic_animation(
         turns=turns,

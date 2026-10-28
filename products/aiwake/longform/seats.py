@@ -28,6 +28,27 @@ def is_expensive(name: str, preset: LongFormatPreset) -> bool:
     return False
 
 
+def longform_roster(preset: LongFormatPreset) -> tuple[str, ...]:
+    """Models ``--random-matchups`` may seat in a long episode.
+
+    The channel's ``cheap_roster``. Opt-in models listed there are dropped
+    unless ``allow_expensive`` is true.
+
+    Raises:
+        ValueError: Nothing is left to seat.
+    """
+    roster = tuple(
+        name.strip()
+        for name in preset.cheap_roster
+        if name.strip() and (preset.allow_expensive or not is_expensive(name, preset))
+    )
+    if len(roster) < 2:
+        raise ValueError(
+            "long_format.cheap_roster needs at least two seatable models for --random-matchups"
+        )
+    return roster
+
+
 def resolve_longform_seats(
     settings: AiwakeSettings,
     *,

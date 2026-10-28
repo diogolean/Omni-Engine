@@ -45,6 +45,19 @@ def build_parser() -> argparse.ArgumentParser:
     longform.add_argument("--offline", action="store_true", help="Deterministic stub. No model bill.")
     longform.add_argument("--orchestrator", help="Seat alias. Default is the cheap orchestrator in config.")
     longform.add_argument("--target", help="Seat alias. Default is the cheap target in config.")
+    longform.add_argument(
+        "--quantity",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Episodes to render one after another. Default 1.",
+    )
+    longform.add_argument(
+        "--random-matchups",
+        action="store_true",
+        help="Draw each pair from long_format.cheap_roster instead of the default seats.",
+    )
+    longform.add_argument("--matchup-seed", type=int, help="Reproducible seed for --random-matchups.")
     longform.add_argument("--no-audio", action="store_true")
     longform.add_argument("--no-video", action="store_true", help="Transcript and chapter plan only. Skips the QA gate.")
     longform.add_argument("--preview", action="store_true")
@@ -87,6 +100,12 @@ def _forward(args: argparse.Namespace) -> list[str]:
         forwarded.extend(["--orchestrator", args.orchestrator])
     if args.target:
         forwarded.extend(["--target", args.target])
+    if args.quantity != 1:
+        forwarded.extend(["--quantity", str(args.quantity)])
+    if args.random_matchups:
+        forwarded.append("--random-matchups")
+    if args.matchup_seed is not None:
+        forwarded.extend(["--matchup-seed", str(args.matchup_seed)])
     if args.no_audio:
         forwarded.append("--no-audio")
     if args.no_video:
