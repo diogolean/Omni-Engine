@@ -605,7 +605,7 @@ RULES:
 1. Remove every "Comment [KEYWORD]", "Type [KEYWORD]", "DM me" CTA entirely.
 2. End with a humble, non-pushy line{url_rule}.
 3. The pinterest_title must lead with the subject keyword, max 100 chars. No suffix such as "| Practical Guide" or "— Key Insights".
-4. visual_hook is a truthful curiosity gap about the real topic, at most 8 words.
+4. visual_hook is 5 to 8 words. It names the subject keyword and makes one concrete promise. End on a whole word, never a preposition.
 
 OUTPUT: Valid JSON only, no markdown:
 {{"pinterest_title": "...", "pinterest_caption": "...", "visual_hook": "..."}}
@@ -772,42 +772,77 @@ def _parsed_pin_copy(data: dict, provider: str, model: str) -> dict:
     return {}
 
 
+def _pin_http_status(exc: BaseException) -> int | None:
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code
+    match = re.search(r"HTTP\s*(\d{3})", str(exc))
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def _complete_pinned_model(
     topic: str,
     user_msg: str,
     system: str,
-    spec: tuple[str, str],
+    chain: list[tuple[str, str]] | tuple[str, str],
 ) -> dict:
-    """One flagged model. A failure returns nothing and does not call another model."""
+    """Try each free model. A 404 or 429 skips to the next. Then the template.
+
+    ``chain`` may be one ``(provider, model)`` pair. The caller does not
+    continue into Writer_Primary or Claude when this returns nothing.
+    """
     complete = Symbol('production.providers.llm.cheap_llm', 'complete')  # noqa: PLC0415
 
-    provider, model = spec
-    try:
-        result = complete(
-            user_msg,
-            system=system,
-            json_mode=True,
-            max_tokens=900,
-            temperature=0.4,
-            source="pin_copy",
-            chain=[(provider, model)],
-        )
-        data = _parse_pin_json(result.text)
-    except Exception as exc:  # noqa: BLE001
+    if isinstance(chain, tuple) and chain and isinstance(chain[0], str):
+        specs = [chain]
+    else:
+        specs = list(chain)
+    if not specs:
         log.warning(
-            "Pin text model failed for '%s' (%s). Template fallback.",
+            "PIN TEXT FALLBACK | topic=%s | no free model left | using template",
             topic,
-            type(exc).__name__,
         )
         return {}
-    parsed = _parsed_pin_copy(
-        data,
-        str(getattr(result, "provider", "") or provider),
-        str(getattr(result, "model", "") or model),
+    reasons: list[str] = []
+    for provider, model in specs:
+        try:
+            result = complete(
+                user_msg,
+                system=system,
+                json_mode=True,
+                max_tokens=900,
+                temperature=0.4,
+                source="pin_copy",
+                chain=[(provider, model)],
+            )
+            data = _parse_pin_json(result.text)
+        except Exception as exc:  # noqa: BLE001
+            status = _pin_http_status(exc)
+            reason = f"HTTP {status}" if status in {404, 429} else type(exc).__name__
+            reasons.append(f"{model}:{reason}")
+            log.warning(
+                "PIN TEXT | skip %s:%s | %s",
+                provider,
+                model,
+                reason,
+            )
+            continue
+        parsed = _parsed_pin_copy(
+            data,
+            str(getattr(result, "provider", "") or provider),
+            str(getattr(result, "model", "") or model),
+        )
+        if parsed:
+            return parsed
+        reasons.append(f"{model}:incomplete")
+        log.warning("PIN TEXT | skip %s:%s | incomplete", provider, model)
+    log.warning(
+        "PIN TEXT FALLBACK | topic=%s | free models exhausted (%s) | using template",
+        topic,
+        "; ".join(reasons) or "none",
     )
-    if parsed:
-        return parsed
-    log.warning("Pin text model incomplete for '%s'", topic)
     return {}
 
 
@@ -820,22 +855,23 @@ def _generate_cheap(
 ) -> dict:
     """Pin copy. A channel ``PIN_TEXT_MODEL`` replaces Writer_Primary.
 
-    The flagged model is the only call. A failure, including a pin spend
-    cap, fills nothing so the caller can use the template. With the flag
-    unset, Writer_Primary on DeepInfra stays the path and a reel-cap refusal
-    still propagates.
+    Free models are tried in order. A 404 or 429 skips to the next ``:free``
+    id. When every one fails, the caller uses the template. A paid model is
+    not the fallback. With the flag unset, Writer_Primary on DeepInfra stays
+    the path and a reel-cap refusal still propagates.
     """
     del variant_idx
     complete_writer_primary = Symbol('production.providers.llm.text_model', 'complete_writer_primary')  # noqa: PLC0415
-    text_model = Symbol('production.formats.pins.spend', 'text_model')  # noqa: PLC0415
+    text_model_chain = Symbol('production.formats.pins.spend', 'text_model_chain')  # noqa: PLC0415
+    pin_text_configured = Symbol('production.formats.pins.spend', 'pin_text_configured')  # noqa: PLC0415
     pin_scope = Symbol('production.formats.pins.spend', 'pin_scope')  # noqa: PLC0415
     pin_cap_usd = Symbol('production.cost.spend_ledger', 'pin_cap_usd')  # noqa: PLC0415
 
     user_msg, system = _pin_copy_messages(topic, caption, fact_sheet)
-    spec = text_model(channel)
+    chain = text_model_chain(channel)
     with pin_scope(channel):
-        if spec is not None:
-            return _complete_pinned_model(topic, user_msg, system, spec)
+        if chain or pin_text_configured(channel):
+            return _complete_pinned_model(topic, user_msg, system, chain)
         try:
             result = complete_writer_primary(
                 user_msg,
