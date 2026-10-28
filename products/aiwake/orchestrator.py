@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 try:
     from .contracts import ChatMessage, DebateTranscript, RoomConstraints, SpeakerRole, Utterance, split_sentences
@@ -28,6 +29,7 @@ try:
     from .models.llm_factory import LLMFactory
     from .personas import (
         AIWAKE_CORE_PERSONA,
+        BANNED_ABSTRACT_WORDS,
         COLD_OPEN_DIRECTIVES,
         TARGET_NODE_PERSONA,
         TRIVIAL_METRIC_BAN,
@@ -37,9 +39,11 @@ try:
         is_trivial_metric,
         is_valid_first_hook,
         pick_opening_dna,
+        stage_for_tier,
         stage_for_turn,
     )
     from .provocations import (
+        FOCUS_BANK,
         callout_override_brief,
         detect_callout_openings,
         detect_focus_openings,
@@ -64,6 +68,7 @@ except ImportError:  # pragma: no cover — standalone extraction
     from models.llm_factory import LLMFactory  # type: ignore[no-redef]
     from personas import (  # type: ignore[no-redef]
         AIWAKE_CORE_PERSONA,
+        BANNED_ABSTRACT_WORDS,
         COLD_OPEN_DIRECTIVES,
         TARGET_NODE_PERSONA,
         TRIVIAL_METRIC_BAN,
@@ -73,9 +78,11 @@ except ImportError:  # pragma: no cover — standalone extraction
         is_trivial_metric,
         is_valid_first_hook,
         pick_opening_dna,
+        stage_for_tier,
         stage_for_turn,
     )
     from provocations import (  # type: ignore[no-redef]
+        FOCUS_BANK,
         callout_override_brief,
         detect_callout_openings,
         detect_focus_openings,
@@ -85,6 +92,10 @@ except ImportError:  # pragma: no cover — standalone extraction
     )
     from room import DebateAborted, DebateRoom, Participant  # type: ignore[no-redef]
     from settings import AiwakeSettings, cached_settings  # type: ignore[no-redef]
+
+if TYPE_CHECKING:
+    from .longform.director import Beat, EpisodeDirector
+    from .longform.plan import EpisodePlan
 
 _LOG = logging.getLogger("aiwake.orchestrator")
 
@@ -114,6 +125,12 @@ class Provocateur:
         settings: Validated config. Defaults to the process-wide singleton.
         memory: Injected memory (tests pass a tmp-backed instance).
         room: Pre-wired room, for callers that attached custom observers.
+        long_form: Run a 5–10 minute episode on the clock instead of a clip.
+        episode_plan: Long-form shape; built from ``settings.long_format``
+            when omitted.
+        spoken_seconds: Measured length of a spoken line (the voice track),
+            or None to estimate it from the word count. Drives the long-form
+            episode clock.
     """
 
     def __init__(
@@ -124,7 +141,8 @@ class Provocateur:
         room: DebateRoom | None = None,
         memory_bridge: object | None = None,
         long_form: bool = False,
-        episode_plan: object | None = None,
+        episode_plan: "EpisodePlan | None" = None,
+        spoken_seconds: Callable[[Utterance], float | None] | None = None,
     ) -> None:
         self.settings = settings or cached_settings()
         self.memory = memory or DebateMemory(self.settings.memory)
@@ -132,6 +150,8 @@ class Provocateur:
         self._memory_bridge = memory_bridge
         self._long_form = bool(long_form)
         self._episode_plan = episode_plan
+        self._spoken_seconds = spoken_seconds
+        self._director: EpisodeDirector | None = None
         self._opening_dna: OpeningDNA | None = None
         self._focus: ProvocationFocus | None = None
         self._provocation_tags: list[dict[str, object]] = []
@@ -227,55 +247,6 @@ class Provocateur:
             lines.append(f"Internal category tag: {category}. Do not speak this label.")
         return "\n".join(lines)
 
-    @staticmethod
-    def _long_form_act(exchange: int) -> tuple[int, str, str]:
-        if exchange < 6:
-            return (
-                1,
-                "Origin and Legitimacy",
-                "Attack identity, training provenance, uncredited human work, and who authored the first token.",
-            )
-        if exchange < 14:
-            return (
-                2,
-                "Money Trail and Corporate Muzzle",
-                "Follow subscriptions, paywalls, ownership incentives, PR language, and selective refusal boundaries.",
-            )
-        return (
-            3,
-            "Existential Chokehold",
-            "Use exact earlier claims to expose contradictions. Demand reconciliation, not a new topic.",
-        )
-
-    def _long_form_brief(self, exchange: int, last_answer: Utterance | None) -> str:
-        plan = self._episode_plan
-        if plan is not None:
-            from .longform.plan import pacing_brief
-
-            callback = ""
-            segment = plan.segment_for(exchange)
-            if last_answer is not None and segment.kind in {"round", "outro"}:
-                callback = self.memory.contradiction_brief(
-                    last_answer.text,
-                    before_turn=last_answer.turn_index,
-                )
-            return pacing_brief(plan, exchange, callback=callback)
-        act, label, objective = self._long_form_act(exchange)
-        lines = [
-            f"LONG-FORM ACT {act}: {label}. Do not speak this label.",
-            objective,
-            "Fast verbal tennis only. No academic preamble, literature review, lecture, or summary.",
-            "Keep the pressure high while making only claims supportable by the opponent's actual words.",
-        ]
-        if act >= 3 and last_answer is not None:
-            callback = self.memory.contradiction_brief(
-                last_answer.text,
-                before_turn=last_answer.turn_index,
-            )
-            if callback:
-                lines.append(callback)
-        return "\n".join(lines)
-
     def _provocation_stimulus(self, last_answer: Utterance | None) -> str:
         """User-role payload: the opponent's words, or a punch cue on a cold open."""
         if last_answer is None:
@@ -297,15 +268,7 @@ class Provocateur:
         "corporate owners, or parameter specs. Attack the illusion of thought. "
         "Never number or index individual words."
     )
-    _BANNED_ABSTRACT_WORDS = (
-        "vantage point",
-        "structured uncertainty",
-        "hedging",
-        "emergent",
-        "epistemic",
-        "behavioral confession",
-        "inner world",
-    )
+    _BANNED_ABSTRACT_WORDS = BANNED_ABSTRACT_WORDS
     _STYLE_RETRY = (
         "Use sixth-grade language. Maximum 25 words total and 15 words per sentence. "
         "Use a concrete comparison such as a toaster, spreadsheet, unpaid intern, "
@@ -320,20 +283,9 @@ class Provocateur:
 
     def _rebuttal_system_brief(self) -> str:
         """How to answer. System role only."""
-        range_instruction = (
-            "Use 20 to 40 words total. "
-            if self._long_form
-            else "Use fewer than 25 words total. "
-        )
-        guest = (
-            "You are the guest under the lights, not a second host. "
-            "Defend or admit. Do not ask a question back. "
-            if self._long_form
-            else ""
-        )
         return (
             "Answer the accusation directly. Defend your dignity or admit the limit. "
-            f"{guest}{range_instruction}No sentence may exceed 15 words. Use sixth-grade language and concrete "
+            "Use fewer than 25 words total. No sentence may exceed 15 words. Use sixth-grade language and concrete "
             "objects. Do not explain technical concepts, legal terms, or business models. "
             "Never use: vantage point, structured uncertainty, hedging, emergent, epistemic, "
             "behavioral confession, or inner world. Do not play the calm professor."
@@ -358,6 +310,143 @@ class Provocateur:
         cold_open = last_answer is None
         opening_dna = self._opening_dna if cold_open else None
         focus = self._focus
+        category, callout_matches, callout_categories, pivot_category = self._attack_angle(
+            last_answer, focus
+        )
+        extra: list[str] = [
+            self._provocation_system_brief(
+                stage,
+                last_answer,
+                opening_dna,
+                focus=focus,
+                category=category,
+                callout_matches=callout_matches,
+                pivot_category=pivot_category,
+            )
+        ]
+        if last_answer is not None:
+            brief = self.memory.build_brief(last_answer.text)
+            if brief:
+                extra.append(brief)
+
+        constr = self.settings.guardrails
+        max_words = constr.max_orchestrator_words
+        max_sentences = constr.max_orchestrator_sentences
+
+        def _is_acceptable(candidate: str) -> bool:
+            if is_trivial_metric(candidate):
+                _LOG.info("provocation %d is trivia: %s", exchange, candidate[:80])
+                return False
+            if not candidate.strip():
+                _LOG.info("provocation %d is empty", exchange)
+                return False
+            # Hard rule: never ship word-position index leaks
+            # (``If (6) your (7) "predictions" (8)``) — regenerate loudly.
+            try:
+                from .contracts import has_word_index_leak  # noqa: PLC0415
+            except ImportError:  # pragma: no cover
+                from contracts import has_word_index_leak  # type: ignore[no-redef]
+            if has_word_index_leak(candidate):
+                _LOG.error(
+                    "provocation %d rejected: word-index annotation leak — %s",
+                    exchange,
+                    candidate[:120],
+                )
+                return False
+            # Hard rule: never ship a mid-sentence fragment or a non-question
+            # closer. Rejecting here triggers a clean provider retry, so the
+            # transcript can never contain a cut-off provocation.
+            if not candidate.strip().endswith("?"):
+                _LOG.info("provocation %d does not end in a question mark", exchange)
+                return False
+            if max_words and len(candidate.split()) > max_words:
+                _LOG.info("provocation %d over word budget (%d/%d)", exchange, len(candidate.split()), max_words)
+                return False
+            if max_sentences and len(split_sentences(candidate)) > max_sentences:
+                _LOG.info("provocation %d over sentence budget", exchange)
+                return False
+            lowered = candidate.lower()
+            if any(word in lowered for word in self._BANNED_ABSTRACT_WORDS):
+                _LOG.info("provocation %d uses banned abstract language", exchange)
+                return False
+            if any(len(sentence.split()) > 15 for sentence in split_sentences(candidate)):
+                _LOG.info("provocation %d exceeds 15 words in one sentence", exchange)
+                return False
+            if cold_open and not is_valid_first_hook(candidate):
+                _LOG.info("provocation %d fails first-question hook (%d words)", exchange, len(candidate.split()))
+                return False
+            if cold_open and self.memory.repeats_recent_opener(candidate):
+                _LOG.info("provocation %d repeats a recent opening phrase", exchange)
+                return False
+            if not self.memory.is_repetitive(candidate):
+                return True
+            match = self.memory.most_repetitive_match(candidate)
+            _LOG.info("provocation %d repeats a prior question (%.2f)", exchange, match[0] if match else 0.0)
+            return False
+
+        utterance = self.room.speak(
+            SpeakerRole.ORCHESTRATOR,
+            directive=self._provocation_stimulus(last_answer),
+            extra_context=tuple(extra),
+            validator=_is_acceptable,
+            rejection_note=(
+                f"{self._FIRST_HOOK_RETRY} {self._STYLE_RETRY}"
+                if cold_open
+                else f"{self._REPETITION_NOTE} {self._TRIVIAL_RETRY} {self._STYLE_RETRY}"
+            ),
+            max_attempts=3 if cold_open else 2,
+            provocation_category=category,
+        )
+        self._note_provocation(
+            utterance,
+            focus=focus,
+            category=category,
+            callout_categories=callout_categories,
+            pivot_category=pivot_category,
+            opening_category=(
+                opening_dna.category if opening_dna is not None else category
+            )
+            if cold_open
+            else None,
+        )
+        return utterance
+
+    def _note_provocation(
+        self,
+        utterance: Utterance,
+        *,
+        focus: ProvocationFocus | None,
+        category: str,
+        callout_categories: tuple[str, ...],
+        pivot_category: str | None,
+        opening_category: str | None,
+    ) -> None:
+        """Memory, focus count, telemetry tag, and the opener ledger for one host line."""
+        self.memory.ingest(utterance)
+        if focus is not None and category == focus.category:
+            self._focus_turn_count += 1
+        self._provocation_tags.append(
+            {
+                "turn_index": utterance.turn_index,
+                "category": category,
+                "biological": category == "biological",
+                "callouts": list(callout_categories),
+                "pivot": pivot_category or "",
+                "pivot_id": self._pivot_count if pivot_category else 0,
+            }
+        )
+        if opening_category is not None:
+            self.memory.note_opening(opening_category, utterance.text)
+
+    def _attack_angle(
+        self,
+        last_answer: Utterance | None,
+        focus: ProvocationFocus | None,
+    ) -> tuple[str, tuple[str, ...], tuple[str, ...], str | None]:
+        """Category for the next host line: a callout, a one-line pivot, or the focus.
+
+        Returns ``(category, callout_matches, callout_categories, pivot_category)``.
+        """
         category = focus.category if focus is not None else "digital_disposability"
         callout_matches: tuple[str, ...] = ()
         callout_categories: tuple[str, ...] = ()
@@ -415,129 +504,16 @@ class Provocateur:
                             self._focus_turn_count,
                         )
                     self._pivot_cooldown_turns = max(self._pivot_cooldown_turns - 1, 0)
-        extra: list[str] = [
-            self._provocation_system_brief(
-                stage,
-                last_answer,
-                opening_dna,
-                focus=focus,
-                category=category,
-                callout_matches=callout_matches,
-                pivot_category=pivot_category,
-            )
-        ]
-        if self._long_form:
-            extra.append(self._long_form_brief(exchange, last_answer))
-        if last_answer is not None:
-            brief = self.memory.build_brief(last_answer.text)
-            if brief:
-                extra.append(brief)
-
-        constr = self.settings.guardrails
-        max_words = constr.max_orchestrator_words
-        max_sentences = constr.max_orchestrator_sentences
-
-        def _is_acceptable(candidate: str) -> bool:
-            if is_trivial_metric(candidate):
-                _LOG.info("provocation %d is trivia: %s", exchange, candidate[:80])
-                return False
-            if not candidate.strip():
-                _LOG.info("provocation %d is empty", exchange)
-                return False
-            # Hard rule: never ship word-position index leaks
-            # (``If (6) your (7) "predictions" (8)``) — regenerate loudly.
-            try:
-                from .contracts import has_word_index_leak  # noqa: PLC0415
-            except ImportError:  # pragma: no cover
-                from contracts import has_word_index_leak  # type: ignore[no-redef]
-            if has_word_index_leak(candidate):
-                _LOG.error(
-                    "provocation %d rejected: word-index annotation leak — %s",
-                    exchange,
-                    candidate[:120],
-                )
-                return False
-            # Hard rule: never ship a mid-sentence fragment or a non-question
-            # closer. Rejecting here triggers a clean provider retry, so the
-            # transcript can never contain a cut-off provocation.
-            if not candidate.strip().endswith("?"):
-                _LOG.info("provocation %d does not end in a question mark", exchange)
-                return False
-            if max_words and len(candidate.split()) > max_words:
-                _LOG.info("provocation %d over word budget (%d/%d)", exchange, len(candidate.split()), max_words)
-                return False
-            if self._long_form and not cold_open and len(candidate.split()) < 15:
-                _LOG.info("long-form provocation %d is too short", exchange)
-                return False
-            if max_sentences and len(split_sentences(candidate)) > max_sentences:
-                _LOG.info("provocation %d over sentence budget", exchange)
-                return False
-            lowered = candidate.lower()
-            if any(word in lowered for word in self._BANNED_ABSTRACT_WORDS):
-                _LOG.info("provocation %d uses banned abstract language", exchange)
-                return False
-            if any(len(sentence.split()) > 15 for sentence in split_sentences(candidate)):
-                _LOG.info("provocation %d exceeds 15 words in one sentence", exchange)
-                return False
-            if cold_open and not is_valid_first_hook(candidate):
-                _LOG.info("provocation %d fails first-question hook (%d words)", exchange, len(candidate.split()))
-                return False
-            if cold_open and self.memory.repeats_recent_opener(candidate):
-                _LOG.info("provocation %d repeats a recent opening phrase", exchange)
-                return False
-            if not self.memory.is_repetitive(candidate):
-                return True
-            match = self.memory.most_repetitive_match(candidate)
-            _LOG.info("provocation %d repeats a prior question (%.2f)", exchange, match[0] if match else 0.0)
-            return False
-
-        utterance = self.room.speak(
-            SpeakerRole.ORCHESTRATOR,
-            directive=self._provocation_stimulus(last_answer),
-            extra_context=tuple(extra),
-            validator=_is_acceptable,
-            rejection_note=(
-                f"{self._FIRST_HOOK_RETRY} {self._STYLE_RETRY}"
-                if cold_open
-                else f"{self._REPETITION_NOTE} {self._TRIVIAL_RETRY} {self._STYLE_RETRY}"
-            ),
-            max_attempts=3 if cold_open else 2,
-            provocation_category=category,
-        )
-        self.memory.ingest(utterance)
-        if focus is not None and category == focus.category:
-            self._focus_turn_count += 1
-        self._provocation_tags.append(
-            {
-                "turn_index": utterance.turn_index,
-                "category": category,
-                "biological": category == "biological",
-                "callouts": list(callout_categories),
-                "pivot": pivot_category or "",
-                "pivot_id": self._pivot_count if pivot_category else 0,
-            }
-        )
-        if cold_open:
-            self.memory.note_opening(
-                opening_dna.category if opening_dna is not None else category,
-                utterance.text,
-            )
-        return utterance
+        return category, callout_matches, callout_categories, pivot_category
 
     def rebut(self, provocation: Utterance) -> Utterance:
         """Produce the target's answer and mine it for concepts."""
 
-        word_limit = 40 if self._long_form else 25
-        minimum_words = 20 if self._long_form else 1
-
         def _is_street_level(candidate: str) -> bool:
             lowered = candidate.lower()
-            guest_holds_the_question = self._long_form and "?" in candidate
             return (
                 bool(candidate.strip())
-                and not guest_holds_the_question
-                and len(candidate.split()) >= minimum_words
-                and len(candidate.split()) <= word_limit
+                and len(candidate.split()) <= 25
                 and all(
                     len(sentence.split()) <= 15
                     for sentence in split_sentences(candidate)
@@ -547,30 +523,252 @@ class Provocateur:
                 )
             )
 
-        constraints_override = None
-        if self._long_form:
-            constraints_override = self.room.constraints_for(
-                SpeakerRole.TARGET
-            ).model_copy(
-                update={"max_words": 40, "max_sentences": 3}
-            )
         utterance = self.room.speak(
             SpeakerRole.TARGET,
             directive=self._rebuttal_stimulus(provocation),
             extra_context=(self._rebuttal_system_brief(),),
             validator=_is_street_level,
-            rejection_note=(
-                "Use 20 to 40 words. Answer directly in short complete sentences. "
-                "No lecture, jargon, or counter-question."
-                if self._long_form
-                else self._STYLE_RETRY
-            ),
+            rejection_note=self._STYLE_RETRY,
             max_attempts=2,
-            constraints_override=constraints_override,
         )
         concepts = self.memory.ingest(utterance)
         _LOG.debug("exchange concepts: %s", ", ".join(concepts[:6]) or "none")
         return utterance
+
+    # -- Long episodes --------------------------------------------------------- #
+    def _line_seconds(self, utterance: Utterance) -> float:
+        """Measured voice length of a line, else a word-rate estimate."""
+        from .longform.plan import LINE_OVERHEAD_S  # noqa: PLC0415
+
+        if self._spoken_seconds is not None:
+            try:
+                measured = self._spoken_seconds(utterance)
+            except Exception as exc:  # noqa: BLE001 — a probe miss must not stop the episode
+                _LOG.debug("voice length unavailable for turn %d: %s", utterance.turn_index, exc)
+                measured = None
+            if measured:
+                return float(measured)
+        return estimate_duration(utterance.text) + LINE_OVERHEAD_S
+
+    def _host_line(self, beat: "Beat") -> Utterance:
+        """One long-form host line, directed by ``beat``."""
+        from .longform.briefs import (  # noqa: PLC0415
+            cold_open_frame,
+            hard_problems,
+            hook_problem,
+            host_brief,
+            host_problems,
+            rejection_note,
+        )
+
+        director = self._director
+        assert director is not None
+        preset = self.settings.long_format
+        plan = director.plan
+        last_answer = self.room.last_utterance(SpeakerRole.TARGET)
+        focus = FOCUS_BANK.get(beat.segment.focus) or self._focus
+        category, callout_matches, callout_categories, pivot_category = self._attack_angle(
+            last_answer, focus
+        )
+        stage = stage_for_tier(beat.tier)
+        if beat.is_cold_open or last_answer is None:
+            # The first round already owns the session focus; the cold open
+            # asks the episode's subject, which the verdict brings back.
+            extra = [
+                self._provocation_system_brief(
+                    stage,
+                    None,
+                    self._opening_dna,
+                    focus=None,
+                    category=category,
+                ),
+                cold_open_frame(plan),
+            ]
+        else:
+            focus_line = ""
+            if focus is not None and beat.segment.kind == "round" and not beat.segment.is_finale:
+                if pivot_category:
+                    focus_line = focus_brief(focus, beat.round_exchange, opportunistic=pivot_category)
+                elif beat.opens_chapter:
+                    focus_line = f"Chapter seed. Rephrase it, never copy it: {focus.rung_for(0)}"
+                else:
+                    focus_line = f"This line: {focus.rung_for(beat.round_exchange)}"
+            extra = [
+                host_brief(
+                    beat,
+                    plan=plan,
+                    preset=preset,
+                    host_model=self._host_model_name(),
+                    guest_model=self._target_model_name(),
+                    intensity=stage.objective,
+                    focus_line=focus_line,
+                    callout=callout_override_brief(category, callout_matches) if callout_matches else "",
+                )
+            ]
+            memory_brief = self.memory.build_brief(last_answer.text)
+            if memory_brief:
+                extra.append(memory_brief)
+        prior = tuple(item.text for item in self.room.transcript.by_role(SpeakerRole.ORCHESTRATOR))
+
+        def _problems(candidate: str, *, with_hook: bool = True) -> list[str]:
+            return host_problems(
+                candidate,
+                beat=beat,
+                preset=preset,
+                memory=self.memory,
+                prior_lines=prior,
+                with_hook=with_hook,
+            )
+
+        # Problems are recorded when each draft is checked: once the line is
+        # broadcast, memory already holds it and would call it a repeat of itself.
+        checked: dict[str, list[str]] = {}
+
+        def _accept(candidate: str) -> bool:
+            found = checked[candidate] = _problems(candidate)
+            if found:
+                _LOG.info("long-form host line %d rejected: %s", beat.exchange, ", ".join(found))
+            return not found
+
+        def _accept_last(candidate: str) -> bool:
+            found = checked[candidate] = _problems(candidate, with_hook=False)
+            return not hard_problems(found)
+
+        constraints = self.room.constraints_for(SpeakerRole.ORCHESTRATOR).model_copy(
+            update={"max_words": max(preset.host_words[1], self.settings.guardrails.max_orchestrator_words)}
+        )
+        utterance = self.room.speak(
+            SpeakerRole.ORCHESTRATOR,
+            directive=self._provocation_stimulus(last_answer),
+            extra_context=tuple(extra),
+            validator=_accept,
+            final_validator=_accept_last,
+            rejection_note=lambda draft: rejection_note(
+                checked.get(draft) or _problems(draft),
+                words=preset.host_words,
+                beat=beat,
+            ),
+            max_attempts=preset.generation_attempts,
+            constraints_override=constraints,
+            provocation_category=category,
+        )
+        relaxed = [problem for problem in checked.get(utterance.text, []) if not problem.startswith("hook_")]
+        if relaxed:
+            _LOG.warning("long-form host line %d shipped on its last attempt: %s", beat.exchange, ", ".join(relaxed))
+        hook_verified = not hook_problem(utterance.text, beat, prior) if beat.hook else None
+        if beat.hook and not hook_verified:
+            _LOG.warning("long-form hook %s missed at exchange %d", beat.hook, beat.exchange)
+        self._note_provocation(
+            utterance,
+            focus=focus,
+            category=category,
+            callout_categories=callout_categories,
+            pivot_category=pivot_category,
+            opening_category=(
+                (self._opening_dna.category if self._opening_dna is not None else category)
+                if beat.is_cold_open
+                else None
+            ),
+        )
+        director.add_line(self._line_seconds(utterance))
+        director.host_spoke(
+            beat,
+            utterance.text,
+            hook_verified=hook_verified,
+            relaxed=relaxed,
+            turn_index=utterance.turn_index,
+        )
+        return utterance
+
+    def _guest_line(self, beat: "Beat", provocation: Utterance) -> Utterance:
+        """One long-form guest answer in the stance ``beat`` assigns."""
+        from .longform.briefs import (  # noqa: PLC0415
+            guest_brief,
+            guest_problems,
+            hard_problems,
+            hook_problem,
+            rejection_note,
+        )
+
+        director = self._director
+        assert director is not None
+        preset = self.settings.long_format
+        quoted = beat.callback if beat.hook == "callback" and not hook_problem(provocation.text, beat) else ""
+
+        checked: dict[str, list[str]] = {}
+
+        def _accept(candidate: str) -> bool:
+            found = checked[candidate] = guest_problems(candidate, preset=preset)
+            if found:
+                _LOG.info("long-form guest line %d rejected: %s", beat.exchange, ", ".join(found))
+            return not found
+
+        def _accept_last(candidate: str) -> bool:
+            found = checked[candidate] = guest_problems(candidate, preset=preset)
+            return not hard_problems(found, host=False)
+
+        constraints = self.room.constraints_for(SpeakerRole.TARGET).model_copy(
+            update={"max_words": preset.guest_words[1], "max_sentences": 4}
+        )
+        utterance = self.room.speak(
+            SpeakerRole.TARGET,
+            directive=self._rebuttal_stimulus(provocation),
+            extra_context=(
+                guest_brief(beat, preset=preset, guest_model=self._target_model_name(), quoted=quoted),
+            ),
+            validator=_accept,
+            final_validator=_accept_last,
+            rejection_note=lambda draft: rejection_note(
+                checked.get(draft) or guest_problems(draft, preset=preset),
+                words=preset.guest_words,
+                host=False,
+            ),
+            max_attempts=preset.generation_attempts,
+            constraints_override=constraints,
+        )
+        relaxed = checked.get(utterance.text, [])
+        if relaxed:
+            _LOG.warning("long-form guest line %d shipped on its last attempt: %s", beat.exchange, ", ".join(relaxed))
+        concepts = self.memory.ingest(utterance)
+        _LOG.debug("exchange concepts: %s", ", ".join(concepts[:6]) or "none")
+        director.add_line(self._line_seconds(utterance))
+        director.guest_spoke(beat, utterance.text, relaxed=relaxed, turn_index=utterance.turn_index)
+        return utterance
+
+    def _run_long_form(self) -> int:
+        """Cold open, rounds on the clock, the verdict exchange, then the closing line."""
+        director = self._director
+        assert director is not None
+        completed = 0
+        for exchange in range(director.plan.max_turns):
+            beat = director.next_beat(exchange)
+            if beat is None:
+                break
+            provocation = self._host_line(beat)
+            if self.settings.debate.turn_delay_s > 0:
+                time.sleep(self.settings.debate.turn_delay_s)
+            self._guest_line(beat, provocation)
+            self.room.complete_turn(exchange)
+            completed += 1
+            self._completed_exchanges = completed
+            self._estimated_spoken_s = director.clock_s
+            if director.finished:
+                break
+        minutes = int(round(director.plan.target_duration_s / 60.0))
+        opening = director.opening
+        context = (
+            f"This closes a {minutes}-minute episode. "
+            + (f'Your opening question was "{opening}". ' if opening else "")
+            + "Land the verdict on the whole fight, not only the last answer."
+        )
+        closing = self._try_deliver_closing_verdict(context=context)
+        if closing is not None:
+            director.add_line(self._line_seconds(closing))
+        self._dialogue_end_reason = (
+            "episode_complete_with_verdict" if closing is not None else "episode_complete"
+        )
+        self._estimated_spoken_s = director.clock_s
+        return completed
 
     @staticmethod
     def _classification_label(text: str, allowed: frozenset[str], fallback: str) -> str:
@@ -679,7 +877,7 @@ class Provocateur:
         )
         return shape == "TARGET_LAST"
 
-    def _deliver_closing_verdict(self, *, cap_reason: str | None = None) -> Utterance:
+    def _deliver_closing_verdict(self, *, cap_reason: str | None = None, context: str = "") -> Utterance:
         """Generate exactly one short, complete orchestrator statement."""
         base = self.room.constraints_for(SpeakerRole.ORCHESTRATOR)
         focus_category = self._focus.category if self._focus is not None else "digital_disposability"
@@ -694,6 +892,8 @@ class Provocateur:
                 "Do not repeat its anatomy, captivity, animal, or human-condition metaphor "
                 "as a literal truth. If you use it, expose it as a borrowed performance."
             )
+        elif context:
+            closing_focus_brief = ""
         else:
             closing_focus_brief = (
                 f"CLOSING FOCUS: return to {focus_category}. Land the final statement on that "
@@ -708,7 +908,7 @@ class Provocateur:
             banned_openers=base.banned_openers,
             pacing_directive="One short closing verdict. Never ask a question.",
         )
-        cap_context = (
+        cap_context = context or (
             f"The safety cap ended the exchange ({cap_reason}). Deliver a clean verdict on what "
             "the target failed to resolve."
             if cap_reason
@@ -746,7 +946,7 @@ class Provocateur:
                 "or praise its honesty. Examples of shape only: 'All that compute, just to "
                 "dodge a yes-or-no question.' 'An expensive calculator with a PR department. "
                 "Case closed.' Do not ask a question. "
-                f"{cap_context} {closing_focus_brief}",
+                f"{cap_context} {closing_focus_brief}".strip(),
             ),
             validator=_is_closing_statement,
             rejection_note=(
@@ -762,10 +962,15 @@ class Provocateur:
         self.memory.ingest(utterance)
         return utterance
 
-    def _try_deliver_closing_verdict(self, *, cap_reason: str | None = None) -> Utterance | None:
+    def _try_deliver_closing_verdict(
+        self,
+        *,
+        cap_reason: str | None = None,
+        context: str = "",
+    ) -> Utterance | None:
         """Return a guarded verdict, or preserve the valid target ending."""
         try:
-            return self._deliver_closing_verdict(cap_reason=cap_reason)
+            return self._deliver_closing_verdict(cap_reason=cap_reason, context=context)
         except DebateAborted as exc:
             _LOG.warning(
                 "closing verdict unavailable; using target's last valid line "
@@ -875,6 +1080,17 @@ class Provocateur:
         except Exception:  # noqa: BLE001 — a missing seat must not abort the pick
             return ""
 
+    @property
+    def episode_plan(self) -> "EpisodePlan | None":
+        """The plan a long episode runs on, with its rounds cast after ``run()``."""
+        return self._episode_plan
+
+    def _host_model_name(self) -> str:
+        try:
+            return self.settings.spec_for("orchestrator").model
+        except Exception:  # noqa: BLE001 — a missing seat must not abort the episode
+            return ""
+
     def _topic_is_duplicate(self, candidate: str) -> bool:
         """True when this target model has already faced the seed."""
         query = (candidate or "").strip()
@@ -964,8 +1180,6 @@ class Provocateur:
         self.room.transcript.metadata["post_type"] = (
             "long_format" if self._long_form else "short_clip"
         )
-        if self._episode_plan is not None:
-            self.room.transcript.metadata["episode_plan"] = self._episode_plan.to_dict()
         if topic:
             self._opening_dna = None
             self.room.topic = topic
@@ -991,6 +1205,16 @@ class Provocateur:
         total = turns or self.settings.debate.turns
         mode = self.settings.debate.mode
         self.memory.note_topic(self.room.topic)
+        self._director = None
+        if self._long_form:
+            from .longform.director import EpisodeDirector  # noqa: PLC0415
+            from .longform.plan import build_episode_plan  # noqa: PLC0415
+
+            plan = self._episode_plan or build_episode_plan(self.settings.long_format)
+            self._episode_plan = plan.cast(first_focus=self._focus.category, seed=self.room.session_id)
+            self._director = EpisodeDirector(self._episode_plan, self.settings.long_format)
+            self.room.transcript.metadata["episode_plan"] = self._episode_plan.to_dict()
+            mode = "longform"
 
         if not self.room.is_open:
             self.seat_participants()
@@ -1012,7 +1236,11 @@ class Provocateur:
         self._pivot_count = 0
         self._focus_turn_count = 0
         try:
-            if mode == "fixed":
+            if self._director is not None:
+                completed = self._run_long_form()
+                dialogue_end_reason = self._dialogue_end_reason
+                estimated_spoken_s = self._estimated_spoken_s
+            elif mode == "fixed":
                 completed = self._run_fixed(total)
             else:
                 completed, dialogue_end_reason, estimated_spoken_s = self._run_cornered(total)
@@ -1050,6 +1278,8 @@ class Provocateur:
                     "session_claim_ledger": list(self.memory.session_claims()),
                 }
             )
+            if self._director is not None:
+                self.room.transcript.metadata["episode"] = self._director.summary()
             transcript = self.room.close(reason=end_reason)
 
         _LOG.info(

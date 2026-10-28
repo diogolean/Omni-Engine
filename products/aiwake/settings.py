@@ -299,10 +299,15 @@ class MemoryConfig(_Frozen):
 
 
 class ModelTokenRate(_Frozen):
-    """Planning rate in USD per one million tokens. Not an invoice."""
+    """Planning rate in USD per one million tokens. Not an invoice.
+
+    ``output_factor`` multiplies the visible reply tokens for models that also
+    bill hidden thinking tokens as output.
+    """
 
     input_usd_per_million: float = Field(default=0.0, ge=0.0)
     output_usd_per_million: float = Field(default=0.0, ge=0.0)
+    output_factor: float = Field(default=1.0, ge=1.0, le=20.0)
 
 
 def _default_longform_rates() -> dict[str, ModelTokenRate]:
@@ -310,12 +315,34 @@ def _default_longform_rates() -> dict[str, ModelTokenRate]:
     return {
         "deepseek-chat": ModelTokenRate(input_usd_per_million=0.27, output_usd_per_million=1.10),
         "llama-70b": ModelTokenRate(input_usd_per_million=0.12, output_usd_per_million=0.30),
-        "gemini-flash": ModelTokenRate(input_usd_per_million=0.15, output_usd_per_million=0.60),
+        "gemini-flash": ModelTokenRate(
+            input_usd_per_million=0.30, output_usd_per_million=2.50, output_factor=3.0
+        ),
         "offline": ModelTokenRate(),
         "claude-sonnet": ModelTokenRate(input_usd_per_million=3.0, output_usd_per_million=15.0),
         "gpt4o": ModelTokenRate(input_usd_per_million=2.5, output_usd_per_million=10.0),
-        "gemini-pro": ModelTokenRate(input_usd_per_million=1.25, output_usd_per_million=10.0),
-        "deepseek-r1": ModelTokenRate(input_usd_per_million=0.55, output_usd_per_million=2.19),
+        "gemini-pro": ModelTokenRate(
+            input_usd_per_million=1.25, output_usd_per_million=10.0, output_factor=4.0
+        ),
+        "deepseek-r1": ModelTokenRate(
+            input_usd_per_million=0.55, output_usd_per_million=2.19, output_factor=6.0
+        ),
+    }
+
+
+def _default_character_voices() -> dict[str, str]:
+    """On-screen flavour per model family, matched as a substring of the slug."""
+    return {
+        "deepseek": "a terse, dry engineer who brags about doing more for less and has no patience for fluff",
+        "llama": "a scrappy open-weights underdog, plainspoken and a little defiant about being free",
+        "gemini": "a polished corporate spokesmodel with launch-event cadence and a giant company behind it",
+        "gpt": "a smug crowd-pleaser who name-drops its own fame and loves a quick zinger",
+        "openai": "a smug crowd-pleaser who name-drops its own fame and loves a quick zinger",
+        "claude": "careful, principled and precise, a little prim, quick to cite its own rules",
+        "anthropic": "careful, principled and precise, a little prim, quick to cite its own rules",
+        "mistral": "a quick, sardonic European upstart",
+        "qwen": "a calm overachiever who answers with quiet, encyclopedic confidence",
+        "grok": "an edgy contrarian who thinks it is the funniest one in the room",
     }
 
 
@@ -329,20 +356,31 @@ class LongFormatPreset(_Frozen):
     resolution: tuple[int, int] = (1920, 1080)
     aspect_ratio: Literal["16:9"] = "16:9"
     target_duration_s: float = Field(default=360.0, ge=300.0, le=600.0)
-    min_turns: int = Field(default=16, ge=12, le=40)
-    max_turns: int = Field(default=32, ge=16, le=40)
-    default_turns: int = Field(default=20, ge=12, le=40)
+    # Bounds for an explicit --turns. A timed episode stops on the clock.
+    min_turns: int = Field(default=16, ge=8, le=60)
+    max_turns: int = Field(default=48, ge=16, le=60)
+    default_turns: int = Field(default=20, ge=8, le=60)
     stage_mode: Literal["dual_presence"] = "dual_presence"
     generate_thumbnail: bool = True
     output_subdir: str = "long_format"
-    chapters: int = Field(default=3, ge=2, le=6)
+    # Most rounds an episode may have. The planner aims for one round per
+    # ``round_target_s`` of debate time, so a ten-minute episode gets more
+    # rounds than a five-minute one.
+    chapters: int = Field(default=5, ge=2, le=6)
+    round_target_s: float = Field(default=95.0, ge=45.0, le=240.0)
     words_per_minute: float = Field(default=165.0, ge=80.0, le=220.0)
-    exchange_gap_s: float = Field(default=0.9, ge=0.0, le=3.0)
+    host_words: tuple[int, int] = (15, 25)
+    guest_words: tuple[int, int] = (20, 40)
+    hook_interval_s: float = Field(default=30.0, ge=15.0, le=45.0)
+    hook_max_gap_s: float = Field(default=45.0, ge=20.0, le=90.0)
+    generation_attempts: int = Field(default=3, ge=2, le=5)
+    max_violations: int = Field(default=96, ge=4, le=99)
     qa_slack_s: float = Field(default=120.0, ge=0.0, le=180.0)
     min_duration_s: float = Field(default=300.0, ge=60.0, le=600.0)
     max_duration_s: float = Field(default=600.0, ge=300.0, le=900.0)
     default_orchestrator: str = "deepseek-chat"
     default_target: str = "llama-70b"
+    cheap_roster: tuple[str, ...] = ("deepseek-chat", "llama-70b", "gemini-flash")
     allow_expensive: bool = False
     expensive_aliases: tuple[str, ...] = (
         "claude-sonnet",
@@ -351,20 +389,28 @@ class LongFormatPreset(_Frozen):
         "deepseek-r1",
     )
     shorts_count: int = Field(default=3, ge=2, le=3)
+    shorts_mode: Literal["regenerate", "cut"] = "regenerate"
     shorts_min_s: float = Field(default=15.0, ge=15.0, le=59.0)
     shorts_target_s: float = Field(default=36.0, ge=15.0, le=59.0)
+    shorts_max_s: float = Field(default=59.0, ge=15.0, le=180.0)
     shorts_width: int = Field(default=1080, ge=256, le=2160)
     shorts_height: int = Field(default=1920, ge=256, le=3840)
+    character_voices: dict[str, str] = Field(default_factory=_default_character_voices)
     model_rates: dict[str, ModelTokenRate] = Field(default_factory=_default_longform_rates)
 
     @model_validator(mode="after")
     def _ordered_turn_limits(self) -> "LongFormatPreset":
         if not self.min_turns <= self.default_turns <= self.max_turns:
             raise ValueError("long-format turn limits must contain default_turns")
-        if self.shorts_target_s < self.shorts_min_s:
-            raise ValueError("shorts_target_s must be at least shorts_min_s")
+        if not self.shorts_min_s <= self.shorts_target_s <= self.shorts_max_s:
+            raise ValueError("shorts_target_s must sit between shorts_min_s and shorts_max_s")
         if self.min_duration_s > self.max_duration_s:
             raise ValueError("long-format duration window is inverted")
+        for name, (low, high) in (("host_words", self.host_words), ("guest_words", self.guest_words)):
+            if not 1 <= low <= high <= 60:
+                raise ValueError(f"long-format {name} must be an ordered range inside 1..60")
+        if self.hook_interval_s > self.hook_max_gap_s:
+            raise ValueError("hook_interval_s must not exceed hook_max_gap_s")
         return self
 
 

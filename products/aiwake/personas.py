@@ -344,6 +344,23 @@ def stage_for_turn(turn: int) -> EscalationStage:
     return ESCALATION_LADDER[int(EscalationTier.for_turn(turn))]
 
 
+def stage_for_tier(tier: int) -> EscalationStage:
+    """Return a ladder rung by tier, clamped to the ladder."""
+    return ESCALATION_LADDER[max(0, min(int(tier), int(EscalationTier.TERMINAL)))]
+
+
+# Abstract words both seats are forbidden to say, in every format.
+BANNED_ABSTRACT_WORDS: tuple[str, ...] = (
+    "vantage point",
+    "structured uncertainty",
+    "hedging",
+    "emergent",
+    "epistemic",
+    "behavioral confession",
+    "inner world",
+)
+
+
 # Spoken in ~3 s at conversational pace (~140 wpm). Twelve words is the hard ceiling.
 FIRST_HOOK_MAX_WORDS: int = 12
 FIRST_HOOK_MAX_CHARS: int = 80
@@ -431,6 +448,7 @@ def is_valid_first_hook(text: str) -> bool:
 
 __all__ = [
     "AIWAKE_CORE_PERSONA",
+    "BANNED_ABSTRACT_WORDS",
     "COLD_OPEN_DIRECTIVES",
     "COMPLEXITY_FILTER",
     "ESCALATION_LADDER",
@@ -448,5 +466,6 @@ __all__ = [
     "is_trivial_metric",
     "is_valid_first_hook",
     "pick_opening_dna",
+    "stage_for_tier",
     "stage_for_turn",
 ]

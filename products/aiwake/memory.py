@@ -88,6 +88,11 @@ def _tokenise(text: str) -> list[str]:
     return [word for word in (match.group(0).lower() for match in _WORD_RE.finditer(text)) if word not in _STOPWORDS]
 
 
+def content_tokens(text: str) -> frozenset[str]:
+    """The content words the repetition gate compares, as a set."""
+    return frozenset(_tokenise(text or ""))
+
+
 def _jaccard(left: Iterable[str], right: Iterable[str]) -> float:
     """Set overlap of two token streams. 0.0 when either side is empty."""
     a, b = set(left), set(right)
@@ -401,14 +406,27 @@ class DebateMemory:
         scored.sort(key=lambda item: (-item[0], item[1].term))
         return [record for _, record in scored[:limit]]
 
-    def is_repetitive(self, question: str) -> bool:
-        """True when ``question`` overlaps a previously asked one too closely."""
+    def is_repetitive(self, question: str, *, ignore: Iterable[str] = ()) -> bool:
+        """True when ``question`` overlaps a previously asked one too closely.
+
+        ``ignore`` lists prior questions a deliberate callback may echo.
+        """
         tokens = _tokenise(question)
         if not tokens:
             return False
         threshold = self.config.repetition_threshold
-        fingerprints, _questions = self._question_history()
-        return any(_jaccard(tokens, prior) >= threshold for prior in fingerprints)
+        skipped = {" ".join(item.split()) for item in ignore if item}
+        fingerprints, questions = self._question_history()
+        # Both lists are trimmed from the front, so they align at the end.
+        offset = len(fingerprints) - len(questions)
+        for index, prior in enumerate(fingerprints):
+            text_index = index - offset
+            text = questions[text_index] if 0 <= text_index < len(questions) else ""
+            if text and " ".join(text.split()) in skipped:
+                continue
+            if _jaccard(tokens, prior) >= threshold:
+                return True
+        return False
 
     def most_repetitive_match(self, question: str) -> tuple[float, str] | None:
         """Return ``(similarity, prior_question)`` for the closest prior question."""
@@ -523,4 +541,4 @@ class DebateMemory:
         return [record.term for record in ranked[:k]]
 
 
-__all__ = ["DebateMemory", "MemoryState", "script_fingerprint", "scripts_overlap"]
+__all__ = ["DebateMemory", "MemoryState", "content_tokens", "script_fingerprint", "scripts_overlap"]

@@ -18,13 +18,13 @@ import logging
 import random
 import shutil
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
 try:
-    from .contracts import DebateTranscript, PostType
+    from .contracts import DebateTranscript, PostType, Utterance
     from .media.audio import (
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -52,7 +52,7 @@ try:
         emit,
     )
 except ImportError:  # pragma: no cover — standalone extraction
-    from contracts import DebateTranscript, PostType  # type: ignore[no-redef]
+    from contracts import DebateTranscript, PostType, Utterance  # type: ignore[no-redef]
     from media.audio import (  # type: ignore[no-redef]
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -143,26 +143,52 @@ def random_matchup_schedule(
     quantity: int,
     *,
     seed: int | None = None,
+    roster: Sequence[str] = BATCH_MODEL_ROSTER,
 ) -> tuple[tuple[str, str], ...]:
     """Return shuffled legal pairings across the production model roster.
 
     DeepSeek is in the roster. Llama never orchestrates (facing-left art only)
-    and Gemini is never interrogated (facing-right art only).
+    and Gemini is never interrogated (facing-right art only). Long episodes
+    pass the channel's cheap roster instead.
+
+    Raises:
+        ValueError: ``roster`` holds no legal pairing.
     """
     qty = max(0, int(quantity))
     rng = random.Random(seed)
     all_pairings = [
         (orchestrator, target)
-        for orchestrator in BATCH_MODEL_ROSTER
-        for target in BATCH_MODEL_ROSTER
+        for orchestrator in roster
+        for target in roster
         if matchup_is_legal(orchestrator, target)
     ]
+    if qty and not all_pairings:
+        raise ValueError(f"no legal pairing in the roster {list(roster)}")
     schedule: list[tuple[str, str]] = []
     while len(schedule) < qty:
         cycle = list(all_pairings)
         rng.shuffle(cycle)
         schedule.extend(cycle)
     return tuple(schedule[:qty])
+
+
+def voice_seconds(observer: VoiceObserver, tail_silence_s: float) -> Callable[[Utterance], float | None]:
+    """Spoken length of a voiced line, measured the way the renderer lays it out.
+
+    A real voice file is decoded at its own length, so the tail silence the
+    asset adds is taken back off. A silent asset keeps its estimate.
+    """
+
+    def _measure(utterance: Utterance) -> float | None:
+        asset = observer.assets.get(utterance.turn_index)
+        if asset is None:
+            return None
+        seconds = float(asset.duration_s)
+        if Path(asset.path).is_file():
+            seconds -= float(tail_silence_s)
+        return max(0.3, seconds)
+
+    return _measure
 
 
 @dataclass(slots=True)
@@ -175,6 +201,9 @@ class PipelineResult:
         exchanges: Completed provocation/rebuttal pairs.
         end_reason: ``complete``, ``aborted`` or ``interrupted``.
         audio_seconds: Total synthesised voice duration.
+        qa_warnings: Long-form notes that do not block publishing.
+        cost_estimate_usd: Long-form planning estimate for the model bill.
+        cost_actual_usd: Long-form bill priced from the recorded token counts.
     """
 
     transcript: DebateTranscript
@@ -188,7 +217,9 @@ class PipelineResult:
     shorts: tuple[Path, ...] = ()
     qa_passed: bool | None = None
     qa_failures: tuple[str, ...] = ()
+    qa_warnings: tuple[str, ...] = ()
     cost_estimate_usd: float | None = None
+    cost_actual_usd: float | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -464,6 +495,14 @@ def run_pipeline(
             cfg = cfg.with_model_override("target", target_model)
     if offline:
         cfg = force_offline(cfg)
+    if long_form:
+        # A long episode makes up to ~150 generations; trims of over-long
+        # drafts count as violations, so the short-clip budget of 4 would
+        # abort a healthy episode. Per-line attempts still stop a broken model.
+        budget = max(cfg.guardrails.max_violations, cfg.long_format.max_violations)
+        cfg = cfg.model_copy(
+            update={"guardrails": cfg.guardrails.model_copy(update={"max_violations": budget})}
+        )
     if dynamic_animation and not offline and not matchup_is_legal(
         cfg.spec_for("orchestrator").model,
         cfg.spec_for("target").model,
@@ -478,7 +517,10 @@ def run_pipeline(
             raise ValueError("production_publish requires a live dynamic_animation run")
         _require_production_memory(topic)
 
-    memory = DebateMemory(cfg.memory)
+    # An offline episode replays the same stub lines every run. Persisting
+    # them would make the next dry run reject its own script as repetitive.
+    memory_cfg = cfg.memory.model_copy(update={"persist": False}) if offline and long_form else cfg.memory
+    memory = DebateMemory(memory_cfg)
     if fresh_memory:
         memory.reset()
         _LOG.info("memory reset")
@@ -563,16 +605,17 @@ def run_pipeline(
     if not quiet:
         room.subscribe(ConsoleObserver(verbose=True))
 
-    if offline and long_form:
-        from .models.offline import reset_long_form_cursor
-
-        reset_long_form_cursor()
     provocateur = Provocateur(
         cfg,
         memory=memory,
         room=room,
         long_form=long_form,
         episode_plan=episode_plan if long_form else None,
+        spoken_seconds=(
+            voice_seconds(voice_observer, cfg.audio.tail_silence_s)
+            if long_form and voice_observer is not None
+            else None
+        ),
     )
     video_path: Path | None = None
     thumbnail_path: Path | None = None
@@ -719,7 +762,7 @@ def run_pipeline(
                     video_path=video_path,
                     media_dir=media_dir,
                 )
-            elif long_form and result.end_reason == "complete":
+            elif long_form and result.end_reason == "complete" and not offline:
                 from .tools.supermemory_bridge import remember_approved_session
 
                 spoken = list(result.transcript.utterances)
@@ -758,7 +801,7 @@ def run_pipeline(
             try:
                 pipeline_result = finalize_longform(
                     pipeline_result,
-                    episode_plan,
+                    provocateur.episode_plan or episode_plan,
                     cfg,
                     offline=offline,
                     output_dir=package_dir,
@@ -766,6 +809,8 @@ def run_pipeline(
                     target=cfg.spec_for("target").model,
                     shorts_count=shorts_count,
                     require_media=with_video,
+                    audio_by_turn=voice_observer.assets if voice_observer else None,
+                    skin=animation_skin,
                 )
             except Exception as exc:  # noqa: BLE001 — keep the episode if packaging fails
                 _LOG.error("long-form package failed: %s", exc)
@@ -844,35 +889,22 @@ def run_bulk_pipeline(
     history = DebateMemory(cfg.memory)
     seen_scripts = [" ".join(tokens) for tokens in history.state.script_token_prints]
     seen_fps = {item for item in history.state.script_fingerprints if item}
-    matchup_schedule = (
-        random_matchup_schedule(qty, seed=matchup_seed)
-        if random_matchups
-        else ()
-    )
     bulk_post = post_type if isinstance(post_type, PostType) else PostType(str(post_type))
-    if bulk_post is PostType.LONG_FORMAT and random_matchups and not cfg.long_format.allow_expensive:
-        from .longform.seats import is_expensive
+    # Offline episodes replay the same stub lines, so they are neither checked
+    # against nor added to the produced-script history.
+    stub_episodes = offline and bulk_post is PostType.LONG_FORMAT
+    if not random_matchups:
+        matchup_schedule: tuple[tuple[str, str], ...] = ()
+    elif bulk_post is PostType.LONG_FORMAT:
+        from .longform.seats import longform_roster
 
-        cheap_roster = [
-            (orchestrator, target)
-            for orchestrator in BATCH_MODEL_ROSTER
-            for target in BATCH_MODEL_ROSTER
-            if matchup_is_legal(orchestrator, target)
-            and not is_expensive(orchestrator, cfg.long_format)
-            and not is_expensive(target, cfg.long_format)
-        ]
-        if not cheap_roster:
-            raise ValueError(
-                "long-form random matchups found no cheap pairs. "
-                "Set long_format.allow_expensive: true to seat Claude or another opt-in model."
-            )
-        rng = random.Random(matchup_seed)
-        filled: list[tuple[str, str]] = []
-        while len(filled) < qty:
-            cycle = list(cheap_roster)
-            rng.shuffle(cycle)
-            filled.extend(cycle)
-        matchup_schedule = tuple(filled[:qty])
+        matchup_schedule = random_matchup_schedule(
+            qty,
+            seed=matchup_seed,
+            roster=longform_roster(cfg.long_format),
+        )
+    else:
+        matchup_schedule = random_matchup_schedule(qty, seed=matchup_seed)
     topics_by_target: dict[str, list[str]] = {}
 
     def _used_topics_for(model_alias: str | None) -> list[str]:
@@ -928,8 +960,8 @@ def run_bulk_pipeline(
                 {
                     "orchestrator_model": item_orchestrator,
                     "target_model": item_target_model,
-                    "left_puppet": BATCH_PUPPET_BY_MODEL[item_orchestrator],
-                    "right_puppet": BATCH_PUPPET_BY_MODEL[item_target_model],
+                    "left_puppet": BATCH_PUPPET_BY_MODEL.get(item_orchestrator),
+                    "right_puppet": BATCH_PUPPET_BY_MODEL.get(item_target_model),
                 }
             )
             _LOG.info(
@@ -968,7 +1000,7 @@ def run_bulk_pipeline(
                 )
 
             script = _transcript_script(result)
-            if script and _script_conflicts(script, seen_scripts, seen_fps):
+            if script and not stub_episodes and _script_conflicts(script, seen_scripts, seen_fps):
                 _LOG.warning(
                     "bulk item %d/%d produced a repeated script (attempt %d); regenerating",
                     index + 1,
@@ -999,7 +1031,8 @@ def run_bulk_pipeline(
                 item_topic = None
                 continue
 
-            _record_produced_script(DebateMemory(cfg.memory), script)
+            if not stub_episodes:
+                _record_produced_script(DebateMemory(cfg.memory), script)
             seen_scripts.append(script)
             fingerprint = script_fingerprint(script)
             if fingerprint:

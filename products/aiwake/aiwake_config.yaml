@@ -44,16 +44,36 @@ long_format:
   resolution: [1920, 1080]
   aspect_ratio: "16:9"
   target_duration_s: 360
+  # A timed episode stops on the clock. These bound an explicit --turns, and
+  # max_turns is the hard cap on exchanges either way.
   min_turns: 16
-  max_turns: 32
+  max_turns: 48
   default_turns: 20
   stage_mode: dual_presence
   generate_thumbnail: true
   output_subdir: long_format
-  # Intro + this many middle rounds + outro. Several rounds, not one long take.
-  chapters: 3
+  # Rounds between the cold open and the verdict: about one per round_target_s
+  # seconds, at most `chapters`. Five and six minutes get three rounds, ten
+  # minutes gets five. Each round owns one attack angle; the last round always
+  # quotes the guest's own claims back.
+  chapters: 5
+  round_target_s: 95
   words_per_minute: 165
-  exchange_gap_s: 0.9
+  # Words per line. These override the 25-word short-form cap for long episodes.
+  host_words: [15, 25]
+  guest_words: [20, 40]
+  # A retention hook lands about every 30s on the episode clock, never more
+  # than 45s apart (the next exchange's length is checked before it starts).
+  hook_interval_s: 30
+  hook_max_gap_s: 45
+  # Tries per line. The last try only has to meet the hard contract (complete,
+  # one question for the host, no trivia); soft misses are logged, not fatal.
+  generation_attempts: 3
+  # Guardrail clamps allowed per episode before the debate aborts. A trim of an
+  # over-long draft counts as one. A short clip allows 4; a long episode can
+  # make 150 generations, and a model that never fits is stopped by the
+  # per-line tries anyway.
+  max_violations: 96
   # Pre-publish window is [max(5 min, target-slack), min(10 min, target+slack)].
   qa_slack_s: 120
   min_duration_s: 300
@@ -61,6 +81,8 @@ long_format:
   # Cheapest legal pair. Gemini only orchestrates; Llama is only interrogated.
   default_orchestrator: deepseek-chat
   default_target: llama-70b
+  # --random-matchups draws long-form seats from this list only.
+  cheap_roster: [deepseek-chat, llama-70b, gemini-flash]
   # Claude, GPT-4o, Gemini Pro, and DeepSeek R1 stay off until this is true.
   allow_expensive: false
   expensive_aliases:
@@ -69,20 +91,37 @@ long_format:
     - gemini-pro
     - deepseek-r1
   shorts_count: 3
+  # regenerate: re-render the chosen exchanges natively at 1080x1920 with the
+  # same puppets and scene. cut: crop the 16:9 master (also the fallback).
+  shorts_mode: regenerate
   shorts_min_s: 15
   shorts_target_s: 36
+  shorts_max_s: 59
   shorts_width: 1080
   shorts_height: 1920
+  # On-screen flavour per model family. The first key found in the model slug wins.
+  character_voices:
+    deepseek: "a terse, dry engineer who brags about doing more for less and has no patience for fluff"
+    llama: "a scrappy open-weights underdog, plainspoken and a little defiant about being free"
+    gemini: "a polished corporate spokesmodel with launch-event cadence and a giant company behind it"
+    gpt: "a smug crowd-pleaser who name-drops its own fame and loves a quick zinger"
+    openai: "a smug crowd-pleaser who name-drops its own fame and loves a quick zinger"
+    claude: "careful, principled and precise, a little prim, quick to cite its own rules"
+    anthropic: "careful, principled and precise, a little prim, quick to cite its own rules"
+    mistral: "a quick, sardonic European upstart"
+    qwen: "a calm overachiever who answers with quiet, encyclopedic confidence"
+    grok: "an edgy contrarian who thinks it is the funniest one in the room"
   # Planning rates, USD per 1M tokens. Edge TTS and the local ffmpeg render are $0.
+  # output_factor covers hidden thinking tokens billed as output.
   model_rates:
     deepseek-chat: {input_usd_per_million: 0.27, output_usd_per_million: 1.10}
     llama-70b: {input_usd_per_million: 0.12, output_usd_per_million: 0.30}
-    gemini-flash: {input_usd_per_million: 0.15, output_usd_per_million: 0.60}
+    gemini-flash: {input_usd_per_million: 0.30, output_usd_per_million: 2.50, output_factor: 3.0}
     offline: {input_usd_per_million: 0.0, output_usd_per_million: 0.0}
     claude-sonnet: {input_usd_per_million: 3.0, output_usd_per_million: 15.0}
     gpt4o: {input_usd_per_million: 2.5, output_usd_per_million: 10.0}
-    gemini-pro: {input_usd_per_million: 1.25, output_usd_per_million: 10.0}
-    deepseek-r1: {input_usd_per_million: 0.55, output_usd_per_million: 2.19}
+    gemini-pro: {input_usd_per_million: 1.25, output_usd_per_million: 10.0, output_factor: 4.0}
+    deepseek-r1: {input_usd_per_million: 0.55, output_usd_per_million: 2.19, output_factor: 6.0}
 
 # -----------------------------------------------------------------------------
 # Master reference dictionary for AI models via OpenRouter.
