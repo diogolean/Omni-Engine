@@ -356,7 +356,7 @@ def test_pin_without_an_article_is_skipped(
     assert not list((tmp_path / "pinterest" / "dryrun").glob("*.jpg"))
 
 
-def test_hook_stays_short_and_off_the_upper_focal_band(
+def test_hook_stays_short_and_in_the_fixed_band(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from PIL import Image, ImageDraw
@@ -401,7 +401,10 @@ def test_hook_stays_short_and_off_the_upper_focal_band(
         monkeypatch.undo()
     assert raw
     assert drawn
-    assert min(drawn) > 900
+    # The channel's band does not move when the photo is busy at the top.
+    from production.formats.pins.image_transformer import PIN_H
+
+    assert max(drawn) < PIN_H // 3
 
 
 def test_worker_dry_run_one_account_does_not_start_the_scheduler(
