@@ -84,8 +84,23 @@ TOPIC_POOL: list = [
 LOGO_SIZE_SCALE: float = 0.30      # 30 % of canvas width — raised for brand visibility
 LOGO_POSITION: str = "bottom_right"
 
+# YouTube snippet tags. The publishers read this list; they do not keep a
+# channel-name map. Niche is holistic longevity, not relationship advice.
+YOUTUBE_DEFAULT_TAGS: list = [
+    "anna protocol",
+    "holistic health",
+    "natural remedies",
+    "ancestral wellness",
+    "herbal medicine",
+    "longevity",
+    "shorts",
+]
+
 # Engine flags. The pipeline reads these; it does not test the channel name.
 NATURAL_DRAW_LOCK: bool = True
+# Botanical film lock. On so this page keeps its current photography.
+# The flag defaults off for every other page.
+PHOTOGRAPHY_STYLE_LOCK: bool = True
 ALLOWS_CTA_CAPTION_IMAGE: bool = True
 VM_ENSURE_CHANNEL_DIR: bool = True
 LEGACY_SHARED_LEDGER: bool = True

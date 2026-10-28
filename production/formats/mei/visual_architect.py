@@ -31,6 +31,7 @@ if str(_ROOT) not in sys.path:
 
 import config as app_config
 from production.writers.persona_dna import ANNA_ACTIONS, CAMERA_ANGLES, ENVIRONMENTS, LEGACY_RULE, TIMES_OF_DAY, visual_style_block
+from shared.channel_flags import flag
 
 
 _QUALITY_SUFFIX = (
@@ -65,10 +66,11 @@ _CARTOON_QUALITY_SUFFIX = (
 
 
 # ---------------------------------------------------------------------------
-# anna_protocol — metaphor → concrete photography + style lock
+# Photography style lock — metaphor → concrete still, gated by page config.
+# PHOTOGRAPHY_STYLE_LOCK defaults off. A page that sets it keeps this lock.
 # ---------------------------------------------------------------------------
 
-_ANNA_STYLE_LOCK = (
+_PHOTOGRAPHY_STYLE_LOCK = (
     "Warm cinematic realistic botanical and nature photography. Earthy tones — "
     "sage green, terracotta, warm amber, cedar wood. Organic storytelling. "
     "Golden-hour window light or forest canopy. Shot on 35mm film. "
@@ -77,7 +79,7 @@ _ANNA_STYLE_LOCK = (
     "morning dew, stone mortar — never a diagram and never a lab render."
 )
 
-_ANNA_NEGATIVE_BAN = (
+_PHOTOGRAPHY_NEGATIVE_BAN = (
     "STRICT BAN: no sci-fi elements, no glowing blue veins, no neon lighting, "
     "no floating anatomical diagrams, no medical cutaways, no x-ray bodies, "
     "no circuit boards, no electrical grids, no holograms, no futuristic UI, "
@@ -112,11 +114,20 @@ _SLIDE_LABEL_RE = re.compile(
 )
 
 
+def _photography_style_locked(page_id: str) -> bool:
+    """True when the page sets PHOTOGRAPHY_STYLE_LOCK.
+
+    The flag defaults off, so a page that does not set it is unchanged.
+    The page that sets it keeps the botanical photography lock.
+    """
+    return flag((page_id or "").strip().lower(), "PHOTOGRAPHY_STYLE_LOCK")
+
+
 def ground_image_concept(text: str, *, page_id: str = "") -> str:
     """Translate copy metaphors into a concrete photographic subject.
 
-    Raw caption / hook language is never a safe image prompt — especially on
-    anna_protocol, where 'electrical grid' and 'adrenal ignition' otherwise
+    Raw caption / hook language is never a safe image prompt. On a page with
+    PHOTOGRAPHY_STYLE_LOCK, 'electrical grid' and 'adrenal ignition' otherwise
     render as sci-fi anatomy. Returns a short scene string with those
     metaphors replaced and leftover sci-fi tokens stripped.
     """
@@ -124,7 +135,7 @@ def ground_image_concept(text: str, *, page_id: str = "") -> str:
     scene = re.sub(r"\s+", " ", scene).strip()
     if not scene:
         return ""
-    if (page_id or "").strip().lower() == "anna_protocol":
+    if _photography_style_locked(page_id):
         for pattern, concrete in _METAPHOR_TO_CONCRETE:
             scene = re.sub(pattern, concrete, scene, flags=re.IGNORECASE)
         scene = _METAPHOR_TOKEN_RE.sub("", scene)
@@ -134,8 +145,8 @@ def ground_image_concept(text: str, *, page_id: str = "") -> str:
     return scene
 
 
-def anna_style_suffix() -> str:
-    return f"{_ANNA_STYLE_LOCK} {_ANNA_NEGATIVE_BAN}"
+def photography_style_suffix() -> str:
+    return f"{_PHOTOGRAPHY_STYLE_LOCK} {_PHOTOGRAPHY_NEGATIVE_BAN}"
 
 
 def build_carousel_slide_prompt(
@@ -158,9 +169,9 @@ def build_carousel_slide_prompt(
         visual_subject or topic, page_id=pid,
     ) or ground_image_concept(topic, page_id=pid)
     style = (atmosphere_style or "").strip()
-    if pid == "anna_protocol":
-        style = style or _ANNA_STYLE_LOCK
-        ban = _ANNA_NEGATIVE_BAN
+    if _photography_style_locked(pid):
+        style = style or _PHOTOGRAPHY_STYLE_LOCK
+        ban = _PHOTOGRAPHY_NEGATIVE_BAN
     else:
         ban = (
             "No text, no letters, no numbers, no slide labels, no captions, "
@@ -209,8 +220,8 @@ class VisualArchitect:
         """
         Build a cinematography-ready image prompt.
 
-        Isolated channels (ancient_knowledge) skip Wild Fields / brightness
-        mandate and return the adapter's native compose_image_prompt().
+        Isolated channels skip the shared portrait path and return the
+        adapter's native compose_image_prompt().
         """
         from production.pipeline.interfaces.factory import ChannelFactory
 
@@ -250,8 +261,8 @@ class VisualArchitect:
                 "No human subjects."
             )
             quality_block = style_suffix if use_cartoon else _ATMOSPHERIC_QUALITY_SUFFIX
-            if page_id == "anna_protocol":
-                quality_block = f"{quality_block}\n{anna_style_suffix()}"
+            if _photography_style_locked(page_id):
+                quality_block = f"{quality_block}\n{photography_style_suffix()}"
             return (
                 f"CINEMATIC ENVIRONMENTAL PHOTOGRAPHY — NO HUMAN SUBJECTS\n\n"
                 f"CONCEPT / THEME: {topic_brief.strip()}\n\n"
@@ -289,8 +300,8 @@ class VisualArchitect:
 
         visual = visual_style_block()
         quality_block = style_suffix if use_cartoon else _QUALITY_SUFFIX
-        if page_id == "anna_protocol":
-            quality_block = f"{quality_block}\n{anna_style_suffix()}"
+        if _photography_style_locked(page_id):
+            quality_block = f"{quality_block}\n{photography_style_suffix()}"
 
         return (
             f"{visual}\n\n"

@@ -58,6 +58,7 @@ def test_pipeline_flags_stay_on_the_channels_that_had_the_name_branch() -> None:
     assert pages_with("WAN_REEL") == ("ancient_knowledge",)
     assert pages_with("REFERENCE_REEL_LOCK") == ("momma_circle",)
     assert pages_with("NATURAL_DRAW_LOCK") == ("anna_protocol",)
+    assert pages_with("PHOTOGRAPHY_STYLE_LOCK") == ("anna_protocol",)
     assert pages_with("ALLOWS_CTA_CAPTION_IMAGE") == ("anna_protocol",)
     assert set(pages_with("LOFI_ENABLED")) == {"wonder_feed", "momma_circle"}
     assert set(pages_with("POOL_TOPIC_LOCK")) == {"wonder_feed", "master_mei"}
