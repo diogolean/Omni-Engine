@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from accounts.brandings import load_brandings
 from accounts.pinterest import (
     account_blockers,
@@ -64,7 +66,20 @@ def test_pin_settings_stay_on_the_free_chain() -> None:
     assert "nasa" in names
 
 
-def test_inactive_todo_account_is_skipped_by_the_drip() -> None:
+def test_inactive_todo_account_is_skipped_by_the_drip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Channel tests sit outside tests/conftest.py. A factory test can leave
+    # the legacy board name in the process. This row is still TODO.
+    monkeypatch.setenv("OMNI_SKIP_DOTENV", "1")
+    for key in (
+        "PINTEREST_BOARD_NAME",
+        "PINTEREST_BOARD_ID",
+        "PINTEREST_BOARD_NAME_ENIGMAS_DO_UNIVERSO",
+        "PINTEREST_BOARD_ID_ENIGMAS_DO_UNIVERSO",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
     account = next(
         item
         for item in load_pinterest_accounts()
