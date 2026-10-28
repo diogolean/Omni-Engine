@@ -19,10 +19,15 @@ from pathlib import Path
 
 import numpy as np
 
+from shared.ffmpeg import resolve_ffmpeg, run_ffmpeg
+
 from .rhubarb import analyze_visemes, cues_to_frames, visemes_from_envelope
 from .animator_types import REST_VISEME, AnalyzedAudio, DialogueTurn
 
 _LOG = logging.getLogger("animator.audio_analyzer")
+
+_DECODE_SAMPLE_RATE = 44100
+_DECODE_TIMEOUT_S = 120.0
 
 # --------------------------------------------------------------------------- #
 # Secondary-animation constants (per the video-pipeline spec).
@@ -44,7 +49,8 @@ def load_mono_waveform(audio_path: Path) -> tuple[np.ndarray, int, float]:
 
     Returns ``(samples, sample_rate, duration_s)``. Uses ``soundfile`` first
     (fast, no subprocess) and falls back to MoviePy's ffmpeg-backed decoder
-    for formats soundfile cannot read (some MP3 encodings).
+    for formats soundfile cannot read (some MP3 encodings). Without MoviePy,
+    the ffmpeg binary decodes the file directly.
     """
     try:
         import soundfile as sf  # noqa: PLC0415
@@ -74,19 +80,49 @@ def load_mono_waveform(audio_path: Path) -> tuple[np.ndarray, int, float]:
                 data = data.reshape(-1, channels).mean(axis=1)
             return data, int(sr), len(data) / float(sr)
         except (KeyError, wave.Error, ValueError) as exc:
-            _LOG.debug("stdlib WAV decode failed on %s (%s); using moviepy", audio_path, exc)
+            _LOG.debug("stdlib WAV decode failed on %s (%s); using moviepy or ffmpeg", audio_path, exc)
 
-    from moviepy import AudioFileClip  # noqa: PLC0415
+    try:
+        from moviepy import AudioFileClip  # noqa: PLC0415
+    except ImportError:
+        return _decode_with_ffmpeg(audio_path)
 
     clip = AudioFileClip(str(audio_path))
     try:
-        sr = 44100
+        sr = _DECODE_SAMPLE_RATE
         arr = clip.to_soundarray(fps=sr)
         mono = arr.mean(axis=1) if arr.ndim > 1 else arr
         duration = float(clip.duration)
         return mono.astype(np.float32), sr, duration
     finally:
         clip.close()
+
+
+def _decode_with_ffmpeg(audio_path: Path) -> tuple[np.ndarray, int, float]:
+    completed = run_ffmpeg(
+        [
+            resolve_ffmpeg(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(audio_path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(_DECODE_SAMPLE_RATE),
+            "-f",
+            "f32le",
+            "-",
+        ],
+        timeout=_DECODE_TIMEOUT_S,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or b"").decode("utf-8", "replace").strip()
+        raise RuntimeError(f"ffmpeg could not decode {audio_path.name}: {detail[-200:]}")
+    mono = np.frombuffer(completed.stdout, dtype="<f4").astype(np.float32)
+    return mono, _DECODE_SAMPLE_RATE, len(mono) / float(_DECODE_SAMPLE_RATE)
 
 
 class AudioAnalyzer:
