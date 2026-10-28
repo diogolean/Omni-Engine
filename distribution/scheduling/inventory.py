@@ -240,8 +240,9 @@ def build_title_template(topic: str) -> str:
 
 
 def build_visual_hook(topic: str) -> str:
-    """Short 5-word ALL-CAPS hook for the image overlay."""
-    return " ".join(normalize_pin_text(topic).upper().split()[:5])
+    """ALL-CAPS overlay hook. A clause stays whole instead of a 5-word stump."""
+    short_hook = Symbol('production.formats.pins.pin_copy', 'short_hook')  # noqa: PLC0415
+    return short_hook(normalize_pin_text(topic)).upper()
 
 
 def normalize_article_url(url: str) -> str:

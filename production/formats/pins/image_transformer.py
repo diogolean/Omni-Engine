@@ -139,23 +139,35 @@ def configured_pin_method() -> str:
     return "blurred_padding"
 
 
+_FONT_CACHE: dict[tuple[int, int], "ImageFont.FreeTypeFont | ImageFont.ImageFont"] = {}
+
+
 def _find_font(
     candidates: list[str], size: int
 ) -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
     global _warned_default_font
+    key = (id(candidates), size)
+    cached = _FONT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None
     for path in candidates:
         if Path(path).is_file():
             try:
-                return ImageFont.truetype(path, size)
+                font = ImageFont.truetype(path, size)
+                break
             except Exception:  # noqa: BLE001
                 continue
-    if not _warned_default_font:
-        _warned_default_font = True
-        log.warning(
-            "No scalable pin font found; hook text will render tiny. "
-            "Install fonts-liberation or keep Fonts/Montserrat in the image."
-        )
-    return ImageFont.load_default()
+    if font is None:
+        if not _warned_default_font:
+            _warned_default_font = True
+            log.warning(
+                "No scalable pin font found; hook text will render tiny. "
+                "Install fonts-liberation or keep Fonts/Montserrat in the image."
+            )
+        font = ImageFont.load_default()
+    _FONT_CACHE[key] = font
+    return font
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +219,38 @@ def _blurred_padding(img: Image.Image, w: int, h: int) -> Image.Image:
 
 
 _HOOK_MAX_LINES = 3
+_HOOK_FONT_SIZE = 54
+_HOOK_FONT_FLOOR = 22
+_HOOK_LINE_HEIGHT = 64
 _DOMAIN_FONT_SIZE = 36
+
+
+def _hook_line_height(font_size: int) -> int:
+    """54px keeps the original 64px leading. Smaller type tightens with it."""
+    if font_size >= _HOOK_FONT_SIZE:
+        return _HOOK_LINE_HEIGHT
+    return max(font_size + 8, int(font_size * _HOOK_LINE_HEIGHT / _HOOK_FONT_SIZE))
+
+
+def _wrap_hook_words(words: list[str], font, max_w: int) -> list[str] | None:
+    """Wrap onto at most 3 lines. None when a word would be dropped or overflow."""
+    if not words:
+        return []
+    rows: list[list[str]] = [[]]
+    for word in words:
+        if _text_width(word, font) > max_w:
+            return None
+        if not rows[-1]:
+            rows[-1].append(word)
+            continue
+        trial = " ".join(rows[-1] + [word])
+        if _text_width(trial, font) <= max_w:
+            rows[-1].append(word)
+            continue
+        if len(rows) >= _HOOK_MAX_LINES:
+            return None
+        rows.append([word])
+    return [" ".join(row) for row in rows if row]
 
 
 def _text_width(text: str, font) -> int:
@@ -217,30 +260,63 @@ def _text_width(text: str, font) -> int:
     return int(bbox[2] - bbox[0])
 
 
-def _hook_lines(hook_text: str) -> list[str]:
-    """At most 8 words and 3 lines, wrapped to the card width on whole words."""
-    from production.formats.pins.pin_copy import short_hook, trim_dangling_hook  # noqa: PLC0415
+def _trim_hook_lines(lines: list[str]) -> list[str]:
+    from production.formats.pins.pin_copy import trim_dangling_hook  # noqa: PLC0415
+
+    if not lines:
+        return []
+    trimmed = list(lines)
+    trimmed[-1] = trim_dangling_hook(trimmed[-1])
+    return [line for line in trimmed if line]
+
+
+def _hook_layout(hook_text: str) -> tuple[list[str], int]:
+    """Lines and font size. Shrink so the predicate stays; do not drop words.
+
+    The panel is still at most three lines. 54px is kept when the hook
+    already fits, which is the original leading.
+    """
+    from production.formats.pins.pin_copy import short_hook  # noqa: PLC0415
+    from shared.pin_text import clause_prefixes, is_dangling_pin_word  # noqa: PLC0415
 
     words = short_hook(hook_text).upper().split()
     if not words:
-        return []
-    font = _find_font(_SERIF_CANDIDATES, 54)
+        return [], _HOOK_FONT_SIZE
     max_w = PIN_W - 80
-    rows: list[list[str]] = [[]]
-    for word in words:
-        trial = rows[-1] + [word]
-        overflows = bool(rows[-1]) and _text_width(" ".join(trial), font) > max_w
-        if overflows:
-            if len(rows) >= _HOOK_MAX_LINES:
-                break
-            rows.append([word])
-        else:
-            rows[-1].append(word)
-    lines = [" ".join(row) for row in rows if row]
-    if lines:
-        lines[-1] = trim_dangling_hook(lines[-1])
-        lines = [line for line in lines if line]
-    return lines[:_HOOK_MAX_LINES]
+    for size in range(_HOOK_FONT_SIZE, _HOOK_FONT_FLOOR - 1, -1):
+        font = _find_font(_SERIF_CANDIDATES, size)
+        lines = _wrap_hook_words(words, font, max_w)
+        if lines is not None:
+            return _trim_hook_lines(lines), size
+    font = _find_font(_SERIF_CANDIDATES, _HOOK_FONT_FLOOR)
+    text = " ".join(words)
+    candidates = [text, *reversed(clause_prefixes(text))]
+    seen: set[tuple[str, ...]] = set()
+    for prefix in candidates:
+        kept = prefix.split()
+        while len(kept) > 1 and is_dangling_pin_word(kept[-1]):
+            kept.pop()
+        key = tuple(kept)
+        if not kept or key in seen:
+            continue
+        seen.add(key)
+        lines = _wrap_hook_words(kept, font, max_w)
+        if lines is not None:
+            return _trim_hook_lines(lines), _HOOK_FONT_FLOOR
+    kept = list(words)
+    while kept:
+        while len(kept) > 1 and is_dangling_pin_word(kept[-1]):
+            kept.pop()
+        lines = _wrap_hook_words(kept, font, max_w)
+        if lines is not None:
+            return _trim_hook_lines(lines), _HOOK_FONT_FLOOR
+        kept.pop()
+    return [], _HOOK_FONT_FLOOR
+
+
+def _hook_lines(hook_text: str) -> list[str]:
+    """At most 3 lines, wrapped to the card width. The predicate is kept."""
+    return _hook_layout(hook_text)[0]
 
 
 def _record_credit(record: dict) -> str:
@@ -330,10 +406,11 @@ def _draw_hook_lines(
     lines: list[str],
     *,
     top: int,
+    font_size: int = _HOOK_FONT_SIZE,
+    line_height: int = _HOOK_LINE_HEIGHT,
 ) -> None:
     hook_text_colour = _theme_color("hook_text")
-    font_large = _find_font(_SERIF_CANDIDATES, 54)
-    line_height = 64
+    font_large = _find_font(_SERIF_CANDIDATES, font_size)
     cursor_y = top
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font_large)
@@ -353,12 +430,12 @@ def _draw_hook_zone(
     footer_h: int = 0,
 ) -> None:
     """Short hook on a panel that is only as tall as the lines."""
-    lines = _hook_lines(hook_text)
+    lines, font_size = _hook_layout(hook_text)
     if not lines:
         return
     vignette = _theme_color("vignette")
     divider = _theme_color("divider")
-    line_height = 64
+    line_height = _hook_line_height(font_size)
     zone_h = 28 + len(lines) * line_height + 18
     if anchor == "bottom":
         zone_top = max(0, PIN_H - footer_h - zone_h - 8)
@@ -378,7 +455,9 @@ def _draw_hook_zone(
         edge.putalpha(fade)
         panel.paste(edge, (0, zone_h - fade.height))
     canvas.paste(panel, (0, zone_top), panel)
-    _draw_hook_lines(draw, lines, top=zone_top + 16)
+    _draw_hook_lines(
+        draw, lines, top=zone_top + 16, font_size=font_size, line_height=line_height
+    )
     div_y = zone_top + zone_h - 2
     draw.line([(60, div_y), (PIN_W - 60, div_y)], fill=divider[:3], width=2)
 
@@ -399,17 +478,24 @@ def _draw_cover_hook(
     footer_h: int = 0,
 ) -> None:
     """Short hook on a gradient, opposite the photo's focal band when needed."""
-    lines = _hook_lines(hook_text)
+    lines, font_size = _hook_layout(hook_text)
     if not lines:
         return
-    fade_h = 36 + len(lines) * 64 + 28
+    line_height = _hook_line_height(font_size)
+    fade_h = 36 + len(lines) * line_height + 28
     top = 0 if anchor != "bottom" else max(0, PIN_H - footer_h - fade_h)
     mask = _fade_mask(PIN_W, fade_h, 185, top=(anchor != "bottom"))
     overlay = Image.new("RGBA", (PIN_W, fade_h), (8, 12, 14, 0))
     overlay.putalpha(mask)
     canvas.paste(overlay, (0, top), overlay)
-    cursor = 28 if anchor != "bottom" else top + fade_h - (len(lines) * 64) - 8
-    _draw_hook_lines(ImageDraw.Draw(canvas), lines, top=cursor)
+    cursor = 28 if anchor != "bottom" else top + fade_h - (len(lines) * line_height) - 8
+    _draw_hook_lines(
+        ImageDraw.Draw(canvas),
+        lines,
+        top=cursor,
+        font_size=font_size,
+        line_height=line_height,
+    )
 
 
 def _draw_button_zone(
