@@ -16,7 +16,12 @@ from products.aiwake.longform.metadata import (
     chapter_marks,
     short_cta,
 )
-from products.aiwake.longform.plan import build_episode_plan, pacing_brief
+from products.aiwake.longform.plan import (
+    build_episode_plan,
+    exchange_start_s,
+    pacing_brief,
+    retention_hook_exchanges,
+)
 from products.aiwake.longform.qa import MediaProbe, duration_window, evaluate_package
 from products.aiwake.longform.seats import ExpensiveModelRefused, resolve_longform_seats
 from products.aiwake.longform.shorts import choose_windows
@@ -43,6 +48,24 @@ def test_six_minute_plan_has_intro_rounds_and_outro() -> None:
     brief = pacing_brief(plan, plan.segments[-1].start_exchange)
     assert "LONG-FORM ACT" in brief
     assert "No new topic" in brief
+
+
+def test_retention_hooks_stay_inside_a_45_second_gap() -> None:
+    settings = load_settings()
+    for target in (300.0, 360.0, 600.0):
+        plan = build_episode_plan(settings.long_format, target_duration_s=target)
+        hooks = retention_hook_exchanges(plan)
+        times = [exchange_start_s(plan, exchange) for exchange in hooks]
+        gaps = [later - earlier for earlier, later in zip(times, times[1:])]
+        assert hooks[0] == 0
+        assert plan.segments[-1].start_exchange in hooks
+        assert gaps
+        assert max(gaps) <= 45
+        host = pacing_brief(plan, hooks[1])
+        assert "RETENTION HOOK" in host
+        assert "You are the host" in host
+        closing = pacing_brief(plan, plan.segments[-1].start_exchange)
+        assert "No new topic" in closing
 
 
 def test_ten_minute_plan_stays_inside_the_turn_cap() -> None:
@@ -209,6 +232,7 @@ def test_offline_lines_survive_the_long_form_validators() -> None:
             assert _jaccard(tokens[left], tokens[right]) < 0.55
     for line in _LONG_FORM_REBUTTALS:
         assert 20 <= len(line.split()) <= 40
+        assert "?" not in line
         assert all(len(sentence.split()) <= 15 for sentence in split_sentences(line))
     reset_long_form_cursor()
 

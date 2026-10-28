@@ -325,9 +325,15 @@ class Provocateur:
             if self._long_form
             else "Use fewer than 25 words total. "
         )
+        guest = (
+            "You are the guest under the lights, not a second host. "
+            "Defend or admit. Do not ask a question back. "
+            if self._long_form
+            else ""
+        )
         return (
             "Answer the accusation directly. Defend your dignity or admit the limit. "
-            f"{range_instruction}No sentence may exceed 15 words. Use sixth-grade language and concrete "
+            f"{guest}{range_instruction}No sentence may exceed 15 words. Use sixth-grade language and concrete "
             "objects. Do not explain technical concepts, legal terms, or business models. "
             "Never use: vantage point, structured uncertainty, hedging, emergent, epistemic, "
             "behavioral confession, or inner world. Do not play the calm professor."
@@ -526,8 +532,10 @@ class Provocateur:
 
         def _is_street_level(candidate: str) -> bool:
             lowered = candidate.lower()
+            guest_holds_the_question = self._long_form and "?" in candidate
             return (
                 bool(candidate.strip())
+                and not guest_holds_the_question
                 and len(candidate.split()) >= minimum_words
                 and len(candidate.split()) <= word_limit
                 and all(

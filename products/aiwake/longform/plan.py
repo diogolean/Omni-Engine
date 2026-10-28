@@ -137,22 +137,59 @@ def build_episode_plan(
     )
 
 
+def exchange_start_s(plan: EpisodePlan, exchange: int) -> float:
+    """Target clock time where this exchange begins."""
+    segment = plan.segment_for(exchange)
+    before = sum(
+        item.target_s for item in plan.segments if item.end_exchange <= segment.start_exchange
+    )
+    span = max(1, segment.exchanges)
+    offset = exchange - segment.start_exchange
+    return before + segment.target_s * (offset / span)
+
+
+def retention_hook_exchanges(plan: EpisodePlan, *, interval_s: float = 28.0) -> tuple[int, ...]:
+    """Exchanges that must land a new hook.
+
+    The cold open is the first hook. After that, a hook falls on the first
+    exchange whose target clock is about half a minute past the previous
+    hook, so the gap stays inside 30–45 seconds. The outro is always a hook.
+    """
+    hooks = [0]
+    last = 0.0
+    for exchange in range(1, plan.turns):
+        start = exchange_start_s(plan, exchange)
+        if start - last >= interval_s:
+            hooks.append(exchange)
+            last = start
+    outro = plan.segments[-1].start_exchange
+    if outro not in hooks:
+        hooks.append(outro)
+    return tuple(hooks)
+
+
 def pacing_brief(plan: EpisodePlan, exchange: int, *, callback: str = "") -> str:
     """System-side direction for one exchange. The label is never spoken."""
     segment = plan.segment_for(exchange)
     lines = [
         f"LONG-FORM ACT {segment.act}: {segment.title}. Do not speak this label.",
         segment.objective,
-        "Verbal tennis only. One blade, then stop. No lecture, no recap, no summary.",
+        "You are the host. Acidic, amused, one blade. The guest defends. You do not lecture and you do not recap.",
+        "Verbal tennis only. One sentence a stranger could repeat, then the question. Then stop.",
         "If the last line floated off into jargon, drag it back to a toaster, a bill, a leash, or a power cord.",
         "Keep the pressure up. A long video dies when the third minute repeats the first.",
     ]
     if segment.kind == "intro":
-        lines.append("Name the fight. Do not preview the later rounds.")
+        lines.append("Name the fight in the first breath. Do not preview the later rounds.")
     elif segment.kind == "outro":
         lines.append("No new topic. Demand they reconcile a contradiction, then stop.")
-    elif (exchange - segment.start_exchange) % 3 == 2:
-        lines.append("Callback: quote one earlier claim and twist it. Do not restart the subject.")
+    elif segment.act > 2:
+        lines.append("Do not reuse the previous chapter's object or accusation. Turn the knife.")
+    if exchange in retention_hook_exchanges(plan):
+        lines.append(
+            "RETENTION HOOK. Open on a new image or quote one earlier claim and twist it. "
+            "Do not restate the previous question. The viewer needs a turn in this breath."
+        )
     if callback:
         lines.append(callback)
     return "\n".join(lines)

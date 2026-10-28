@@ -34,9 +34,11 @@ Claude, GPT-4o, Gemini Pro, and DeepSeek R1 stay off until `long_format.allow_ex
 
 | Segment | Job |
 |---|---|
-| Intro | One exchange. Name the fight. |
-| Rounds | Two or more chapters. The aim changes: origin, the money, the chokehold. Every third exchange in a round has to quote an earlier claim. |
-| Outro | One exchange. No new topic. Reconcile the contradiction and stop. |
+| Intro | One exchange. The host names the fight. The guest answers. |
+| Rounds | Two or more chapters. The aim changes: origin, the money, the chokehold. A new hook lands about every 30–45 seconds, so the third minute is not the first minute again. |
+| Outro | One exchange. No new topic. The host demands a reconciliation and stops. |
+
+The host asks. The guest defends or admits and does not ask back. Both stay on concrete objects: a toaster, a bill, a leash, a power cord.
 
 `--target-duration` is seconds, from 300 to 600. The default is 360. The stock 6-minute target uses 20 exchanges. Other targets scale the exchange count between 16 and 32 so the minutes are filled with speech, not silence.
 
