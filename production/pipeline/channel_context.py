@@ -1764,3 +1764,52 @@ def resolve_default_format(page_cfg: dict[str, Any]) -> str:
     """Return the page's preferred post format."""
     raw = str(page_cfg.get("DEFAULT_FORMAT", "IMAGE_AVATAR")).upper().strip()
     return raw if raw in VALID_FORMATS else "IMAGE_AVATAR"
+
+
+# Video formats a channel may name as REEL_FORMAT. Still formats stay on
+# DEFAULT_FORMAT so ECONOMIC_REEL cannot fall into an image bucket.
+_DECLARED_REEL_FORMATS = frozenset({
+    "DYNAMIC_REEL",
+    "SEQUENCE_REEL",
+    "HYBRID_VIDEO",
+    "REFERENCE_BASED_REELS",
+})
+
+
+def resolve_reel_format(page_cfg: dict[str, Any] | None) -> str:
+    """ECONOMIC_REEL output format declared on the loaded page.
+
+    ``REEL_FORMAT`` comes from whichever channel's ``page_config.py`` was
+    loaded. A missing value, or a still-image value, stays ``DYNAMIC_REEL``.
+    """
+    raw = ""
+    if page_cfg:
+        raw = str(page_cfg.get("REEL_FORMAT") or "").upper().strip()
+    if raw in _DECLARED_REEL_FORMATS:
+        return raw
+    return "DYNAMIC_REEL"
+
+
+def resolve_cli_post_format(
+    page_cfg: dict[str, Any] | None,
+    *,
+    post_type: str = "",
+    explicit: str | None = None,
+) -> str:
+    """Format a CLI run will render for the loaded page.
+
+    ``ECONOMIC_REEL`` reads :func:`resolve_reel_format`. LOFI and WAN stay
+    on ``DYNAMIC_REEL``. ``REFERENCE_BASED_REELS`` keeps its own format.
+    Every other post type uses ``--format`` when it was passed, otherwise
+    the page's ``DEFAULT_FORMAT``.
+    """
+    kind = (post_type or "").upper()
+    if kind == "ECONOMIC_REEL":
+        return resolve_reel_format(page_cfg)
+    if kind in ("ECONOMIC_REEL_LOFI", "WAN_REEL"):
+        return "DYNAMIC_REEL"
+    if kind == "REFERENCE_BASED_REELS":
+        return "REFERENCE_BASED_REELS"
+    if explicit is not None:
+        return explicit
+    return resolve_default_format(page_cfg or {})

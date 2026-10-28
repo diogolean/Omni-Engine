@@ -34,13 +34,13 @@ from production.pipeline.runtime import (
     random,
     resolve_default_avatar_mode,
     sys,
-    resolve_default_format,
     timedelta,
     timezone,
 )
 from production.pipeline.acts import _looks_like_upstream_api_failure, _silence_noisy_http_loggers  # noqa: E402
 from production.pipeline.orchestrator import produce, run_test_images_debug_mode  # noqa: E402
 from production.pipeline.reporting import _emit_clean_api_error, _preflight_gemini_image_batch_cost, _print_production_summary, _print_test_footer, _snapshot_verified_models  # noqa: E402
+from production.pipeline.channel_context import resolve_cli_post_format
 from production.pipeline.channel_flags import flag as _channel_flag
 from production.pipeline.channel_flags import sole_page as _sole_page
 from production.pipeline.cli_parser import _together_cli_image_model
@@ -204,23 +204,14 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         if args.avatar is not None
         else resolve_default_avatar_mode(_tmp_page_cfg)
     )
-    post_format: str = (
-        args.post_format
-        if args.post_format is not None
-        else resolve_default_format(_tmp_page_cfg)
+    # ECONOMIC_REEL reads REEL_FORMAT from the loaded page. A page that does
+    # not declare one still gets DYNAMIC_REEL, so the reel does not fall into
+    # a static image format. LOFI and WAN stay on DYNAMIC_REEL.
+    post_format = resolve_cli_post_format(
+        _tmp_page_cfg,
+        post_type=getattr(args, "post_type", ""),
+        explicit=getattr(args, "post_format", None),
     )
-    # ECONOMIC_REEL has its own video-compilation pipeline — stop it routing into
-    # the static image post_format buckets (IMAGE_AVATAR etc.) so the bootstrap
-    # display and any format-sensitive guards all see the correct type.
-    if getattr(args, "post_type", "").upper() == "ECONOMIC_REEL":
-        post_format = "DYNAMIC_REEL"
-    if getattr(args, "post_type", "").upper() == "ECONOMIC_REEL_LOFI":
-        post_format = "DYNAMIC_REEL"
-    if getattr(args, "post_type", "").upper() == "WAN_REEL":
-        post_format = "DYNAMIC_REEL"
-    # REFERENCE_BASED_REELS uses its own engine path — keep the format as-is.
-    if getattr(args, "post_type", "").upper() == "REFERENCE_BASED_REELS":
-        post_format = "REFERENCE_BASED_REELS"
 
     try:
         page_ctx = load_page_context(page_id, avatar_mode=avatar_mode, post_format=post_format)

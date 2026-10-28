@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """One structured LLM call that turns a script into a shot list.
 
-``REEL_SHOT_PLANNER`` defaults off. Only the documentary pipeline uses it.
+``REEL_SHOT_PLANNER`` defaults off on the channel page config, matching
+``shot_planner.json`` (``enabled_flag``). Only the documentary pipeline
+uses it. A set environment variable of that name overrides the page.
 Invalid JSON is repaired once. A second failure returns None so the caller
 can keep the existing per-beat resolver.
 """
 from __future__ import annotations
 
-from shared.channel_flags import flag, sole_page
+from shared.channel_flags import flag, sole_page, value
 
 import json
 import logging
@@ -16,7 +18,11 @@ import re
 from typing import Any, Callable
 
 from production.formats.economic_reel.shot_planner.build import split_sentences
-from production.formats.economic_reel.shot_planner.entities import Entity, load_entities
+from production.formats.economic_reel.shot_planner.entities import (
+    Entity,
+    load_channel_config,
+    load_entities,
+)
 from production.formats.economic_reel.shot_planner.normalize import normalize_shots
 from production.formats.economic_reel.shot_planner.schema import Shot, ShotList, shot_from_dict, validate_shot_list
 
@@ -50,11 +56,27 @@ _SYSTEM = (
 )
 
 
+def planner_flag_name(channel: str) -> str:
+    """Name of the page-config flag ``shot_planner.json`` points at."""
+    raw = load_channel_config((channel or "").strip().lower())
+    name = str(raw.get("enabled_flag") or "").strip()
+    return name or "REEL_SHOT_PLANNER"
+
+
 def planner_enabled(channel: str) -> bool:
-    """True only for Ancient Knowledge when ``REEL_SHOT_PLANNER`` is on."""
-    if not flag((channel or "").strip().lower(), "DOCUMENTARY_PIPELINE"):
+    """True when this documentary channel's shot planner is on.
+
+    The page-config flag named by ``shot_planner.json`` is the default
+    (off unless the page sets it). A set environment variable of that
+    same name wins.
+    """
+    slug = (channel or "").strip().lower()
+    if not flag(slug, "DOCUMENTARY_PIPELINE"):
         return False
-    return os.environ.get("REEL_SHOT_PLANNER", "").strip().lower() in _ON
+    name = planner_flag_name(slug)
+    if name in os.environ:
+        return os.environ.get(name, "").strip().lower() in _ON
+    return bool(value(slug, name, False))
 
 
 def planner_prompt(topic: str, script: str, entities: list[Entity]) -> str:
