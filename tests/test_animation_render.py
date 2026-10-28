@@ -1,9 +1,11 @@
 """Parametric renders. OpenCV is optional on a bare checkout; CI installs it."""
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import subprocess
+import sys
 import wave
 from pathlib import Path
 
@@ -272,6 +274,40 @@ def test_closed_pipe_without_a_file_includes_the_return_code(
     assert "Broken pipe" in message
     assert "exited 1" in message
     assert "empty stderr" in message
+
+
+# Stands in for ffmpeg: reads frames until EOF, then writes a partial file and exits 0.
+_PARTIAL_ENCODER = "import pathlib, sys; sys.stdin.buffer.read(); pathlib.Path(sys.argv[1]).write_bytes(b'partial')"
+
+
+@pytest.mark.parametrize("error", [ValueError("bad frame"), FileNotFoundError("missing puppet asset")])
+def test_a_frame_that_fails_to_draw_kills_ffmpeg(tmp_path: Path, monkeypatch, error: Exception) -> None:
+    """EOF would let ffmpeg finish a truncated file with exit 0, so the encoder is killed."""
+    import shared.ffmpeg as ffmpeg_impl
+
+    started: list[subprocess.Popen] = []
+    real_popen = ffmpeg_impl.popen_ffmpeg
+
+    def _popen(cmd, **kwargs):
+        started.append(real_popen(cmd, **kwargs))
+        return started[-1]
+
+    monkeypatch.setattr(ffmpeg_impl, "popen_ffmpeg", _popen)
+    out = tmp_path / "out.mp4"
+
+    def _frames():
+        yield np.zeros((16, 16, 3), dtype=np.uint8)
+        raise error
+
+    renderer = renderer_impl.AnimationRenderer(width=16, height=16, fps=10)
+    with pytest.raises(type(error)):
+        renderer._pipe_frames([sys.executable, "-c", _PARTIAL_ENCODER, str(out)], _frames(), out)
+    (proc,) = started
+    assert proc.poll() is not None
+    assert not out.exists()
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        with contextlib.suppress(OSError):
+            stream.close()
 
 
 def test_shortest_keeps_the_file_when_audio_is_shorter(tmp_path: Path) -> None:

@@ -307,7 +307,7 @@ class AnimationRenderer:
         self, cmd: list[str], frame_iter: Iterable[np.ndarray], output_path: Path
     ) -> tuple[int, float]:
         start = time.perf_counter()
-        from shared.ffmpeg import popen_ffmpeg
+        from shared.ffmpeg import kill_process_tree, popen_ffmpeg
 
         proc = popen_ffmpeg(
             cmd,
@@ -321,20 +321,28 @@ class AnimationRenderer:
             for frame in frame_iter:
                 rgb = np.ascontiguousarray(frame, dtype=np.uint8)
                 yuv420 = cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420)
-                proc.stdin.write(yuv420.tobytes())
+                try:
+                    proc.stdin.write(yuv420.tobytes())
+                except OSError as exc:
+                    stderr = _finish_ffmpeg_pipe(proc, timeout=30)
+                    elapsed = time.perf_counter() - start
+                    # -shortest closes stdin once the audio ends. A clean exit
+                    # with a finished file is the stop, not a failed encode.
+                    if proc.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+                        _LOG.info(
+                            "ffmpeg closed the frame pipe after %d frame(s) (exit 0)",
+                            frames_written,
+                        )
+                        return frames_written, elapsed
+                    raise _FfmpegFailure(_ffmpeg_failure_text(stderr, exc, proc.returncode), []) from exc
                 frames_written += 1
-        except (BrokenPipeError, OSError) as exc:
-            stderr = _finish_ffmpeg_pipe(proc, timeout=30)
-            elapsed = time.perf_counter() - start
-            # -shortest closes stdin once the audio ends. A clean exit with
-            # a finished file is the stop, not a failed encode.
-            if proc.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
-                _LOG.info(
-                    "ffmpeg closed the frame pipe after %d frame(s) (exit 0)",
-                    frames_written,
-                )
-                return frames_written, elapsed
-            raise _FfmpegFailure(_ffmpeg_failure_text(stderr, exc, proc.returncode), [])
+        except _FfmpegFailure:
+            raise
+        except BaseException:
+            # Closing stdin here would let ffmpeg finish a truncated file with
+            # exit 0, and leaving it open would block ffmpeg on the pipe.
+            kill_process_tree(proc)
+            raise
         stderr = _finish_ffmpeg_pipe(proc, timeout=120)
         elapsed = time.perf_counter() - start
         if proc.returncode != 0 or not output_path.is_file():
