@@ -36,6 +36,9 @@ CONTENT_NICHE: str = (
 
 DEFAULT_AVATAR_MODE: str = "OFF"
 DEFAULT_FORMAT: str = "IMAGE_BACKGROUND"
+# ECONOMIC_REEL output. The CLI reads REEL_FORMAT from the selected channel.
+# A channel that omits it still resolves to DYNAMIC_REEL.
+REEL_FORMAT: str = "DYNAMIC_REEL"
 IMAGE_ASPECT_RATIO: str = "4:5"
 # Search public-domain and CC libraries before Flux for cards. See
 # docs/architecture/ADR-free-images-first.md.
@@ -362,6 +365,9 @@ NICHE_DISCLAIMER: str = (
 
 # Engine flags. The pipeline reads these; it does not test the channel name.
 DOCUMENTARY_PIPELINE: bool = True
+# Shot planner. Off, matching shot_planner.json: enabled_flag names this key
+# and the file does not turn it on. REEL_SHOT_PLANNER=1 overrides one run.
+REEL_SHOT_PLANNER: bool = False
 WAN_REEL: bool = True
 VISUAL_GROUNDING: bool = True
 ANGLE_MEMORY: bool = True
