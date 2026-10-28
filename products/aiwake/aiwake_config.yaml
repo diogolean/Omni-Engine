@@ -63,7 +63,8 @@ long_format:
   host_words: [15, 25]
   guest_words: [20, 40]
   # A retention hook lands about every 30s on the episode clock, never more
-  # than 45s apart (the next exchange's length is checked before it starts).
+  # than 45s apart. Before an exchange starts, the director assumes it may
+  # run 30% longer than the ones so far.
   hook_interval_s: 30
   hook_max_gap_s: 45
   # Tries per line. The last try only has to meet the hard contract (complete,

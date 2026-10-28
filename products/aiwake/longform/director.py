@@ -13,8 +13,9 @@ Rules it holds:
   chokehold finale is always reached before the verdict, even when short
   lines would hit ``max_turns`` before the clock runs out;
 * a hook lands about every ``hook_interval_s`` and never later than
-  ``hook_max_gap_s`` after the previous one (the next exchange's expected
-  length is checked before it starts);
+  ``hook_max_gap_s`` after the previous one: before an exchange starts,
+  the director assumes it may run 30% longer than usual, and, while only a
+  few exchanges are measured, no shorter than planned;
 * escalation follows the share of the clock already spent, so minute five
   is meaner than minute one;
 * the finale alternates: a chokehold sets one early claim against the
@@ -40,6 +41,12 @@ from .plan import END_HOLD_S, TURN_GAP_S, VERDICT_S, EpisodePlan, Segment
 from .text import addresses_you, points_back, sentences, speaks_for_self
 
 HOOK_ROTATION: tuple[str, ...] = ("callback", "stakes", "image", "reversal")
+# Spoken exchanges vary by about a quarter around their average (a
+# counter-punch runs long), so the hook-gap check leaves this much room.
+_NEXT_EXCHANGE_MARGIN = 1.3
+# Until this many exchanges are measured, the planned length is a floor for
+# that check: two short answers say little about the third.
+_SETTLED_EXCHANGES = 4
 # The guest brief asks for one quotable sentence about itself, ten words or fewer.
 CLAIM_MAX_WORDS = 10
 _CLAIM_MIN_WORDS = 4
@@ -400,14 +407,20 @@ class EpisodeDirector:
         if self._segment_exchanges == 0 and segment.kind == "round":
             return "chapter"
         gap = self.clock_s - self._last_hook_s
-        expected = max(self.average_exchange_s, self._exchange_seconds[-1] if self._exchange_seconds else 0.0)
-        if gap < self.preset.hook_interval_s and gap + expected <= self.preset.hook_max_gap_s:
+        if gap < self.preset.hook_interval_s and gap + self._next_exchange_s() <= self.preset.hook_max_gap_s:
             return ""
         kind = self._rotate()
         if kind == "callback" and segment.is_finale:
             # The finale already quotes them on every other line.
             kind = self._rotate()
         return kind
+
+    def _next_exchange_s(self) -> float:
+        """A generous guess at the next exchange's length, for the hook-gap check."""
+        guesses = [self.average_exchange_s, *self._exchange_seconds[-1:]]
+        if len(self._exchange_seconds) < _SETTLED_EXCHANGES:
+            guesses.append(self.plan.exchange_s)
+        return _NEXT_EXCHANGE_MARGIN * max(guesses)
 
     def _rotate(self) -> str:
         kind = HOOK_ROTATION[self._hook_turn % len(HOOK_ROTATION)]

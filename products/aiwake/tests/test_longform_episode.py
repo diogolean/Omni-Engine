@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import random
+from collections.abc import Sequence
 from dataclasses import replace
 from functools import cache
 from pathlib import Path
@@ -108,6 +110,24 @@ def _direct(
     return plan, director, tuple(beats)
 
 
+def _direct_measured(target_s: float, exchanges_s: Sequence[float]) -> EpisodeDirector:
+    """Run the director with a measured length per exchange, two fifths host and three fifths guest."""
+    plan = build_episode_plan(_preset(), target_duration_s=target_s)
+    director = EpisodeDirector(plan, _preset())
+    for exchange in range(plan.max_turns):
+        beat = director.next_beat(exchange)
+        if beat is None:
+            break
+        spoken = exchanges_s[exchange % len(exchanges_s)] - 2 * TURN_GAP_S
+        director.add_line(spoken * 0.4)
+        director.host_spoke(beat, f"Host line {exchange}?", hook_verified=True if beat.hook else None)
+        director.add_line(spoken * 0.6)
+        director.guest_spoke(beat, _answer(exchange))
+        if director.finished:
+            break
+    return director
+
+
 def _first(beats: tuple[Beat, ...], **wanted: str) -> Beat:
     return next(beat for beat in beats if all(getattr(beat, key) == value for key, value in wanted.items()))
 
@@ -200,6 +220,30 @@ def test_hooks_never_sit_more_than_45_seconds_apart(target: int, host_s: float, 
     assert beats[0].hook == "open"
     assert beats[-1].hook == "bookend"
     assert all(beat.hook == "chapter" for beat in beats if beat.opens_chapter and beat.segment.kind == "round" and not beat.segment.is_finale)
+
+
+# Exchange lengths of an offline six-minute episode voiced by Edge TTS. A 17 s
+# counter-punch after two 14 s exchanges once left 45.6 s between hooks.
+_EDGE_EXCHANGES_S = (
+    13.3, 14.8, 13.8, 17.0, 15.6, 14.5, 16.3, 15.7, 14.4, 15.6, 14.9, 15.6,
+    15.0, 15.7, 16.7, 19.0, 15.3, 17.1, 15.5, 17.4, 15.0, 18.3, 17.7,
+)
+
+
+def test_a_long_answer_after_short_ones_cannot_push_a_hook_past_45_seconds() -> None:
+    summary = _direct_measured(360, _EDGE_EXCHANGES_S).summary()
+    assert summary["max_hook_gap_s"] <= _preset().hook_max_gap_s
+    hooked = sum(1 for beat in summary["beats"] if beat["hook"])
+    assert hooked <= 0.7 * len(summary["beats"])
+
+
+@pytest.mark.parametrize("base_s", [12.0, 16.0, 20.0])
+@pytest.mark.parametrize("seed", range(8))
+def test_hooks_hold_45_seconds_when_exchanges_vary_by_a_fifth(seed: int, base_s: float) -> None:
+    rng = random.Random(seed)
+    lengths = [base_s * rng.uniform(0.8, 1.2) for _ in range(48)]
+    for target in (300, 600):
+        assert _direct_measured(target, lengths).summary()["max_hook_gap_s"] <= _preset().hook_max_gap_s
 
 
 def test_finale_alternates_chokehold_and_press_then_cracks_once() -> None:
