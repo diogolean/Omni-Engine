@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Card and description copy driven by the channel ``pin_theme`` strings.
 
-The layout stays the original pin (serif hook panel, gold divider, CTA
-bar). The words are config so they can be tuned without a code change.
+The card is a bold sans title on one band, a short CTA, and the domain.
+The words are config so they can be tuned without a code change.
 New pins carry the article link. Nothing here updates a pin that already
 exists on the board.
 """
@@ -222,7 +222,9 @@ def build_pin_description(record: dict) -> str:
 
 def _with_credit(body: str, record: dict) -> str:
     """Append the short attribution. A description with no credit stays within 220."""
-    credit = str(record.get("image_credit") or "").strip()
+    from production.formats.pins.credit_text import repair_credit_encoding  # noqa: PLC0415
+
+    credit = repair_credit_encoding(str(record.get("image_credit") or ""))
     if not credit or credit in body:
         return body
     combined = f"{body}\n{credit}" if body else credit

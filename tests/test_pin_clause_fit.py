@@ -12,7 +12,7 @@ from production.formats.pins.image_transformer import (
     PIN_W,
     _HOOK_FONT_SIZE,
     _HOOK_LINE_HEIGHT,
-    _SERIF_CANDIDATES,
+    _SANS_BOLD_CANDIDATES,
     _find_font,
     _hook_layout,
     _hook_line_height,
@@ -98,20 +98,22 @@ def test_card_hook_keeps_the_predicate_instead_of_who_made(
     assert not is_dangling_pin_word(shown[-1])
     assert len(lines) <= 3
     assert size < _HOOK_FONT_SIZE
-    font = _find_font(_SERIF_CANDIDATES, size)
+    font = _find_font(_SANS_BOLD_CANDIDATES, size)
     for line in lines:
-        assert _text_width(line, font) <= PIN_W - 80
+        assert _text_width(line, font) <= PIN_W - 64
 
 
-def test_short_hook_keeps_the_original_type_size() -> None:
+def test_short_hook_keeps_the_large_type_size() -> None:
     lines, size = _hook_layout("Baalbek trilithon")
-    assert lines == ["BAALBEK TRILITHON"]
+    assert lines == ["BAALBEK", "TRILITHON"]
     assert size == _HOOK_FONT_SIZE
+    assert size >= 54 * 3
     assert _hook_line_height(size) == _HOOK_LINE_HEIGHT
     sentence = "A lost Inca city of gold hidden in the Amazon"
     assert short_hook(sentence) == "A lost Inca city of gold hidden"
     kept, kept_size = _hook_layout(sentence)
-    assert kept_size == _HOOK_FONT_SIZE
+    # A 7-word promise still sits in the 2–3x band. The 3x size is the short hook.
+    assert 54 * 2 <= kept_size < _HOOK_FONT_SIZE
     assert " ".join(kept).split()[-1] == "HIDDEN"
 
 
@@ -149,7 +151,8 @@ def test_drawn_hook_shrinks_and_the_cta_stays(
     assert "THEM" in blob
     assert "AIR" in blob
     assert "WHO MADE THEM" in blob
-    assert "READ THE FULL STORY ->" in blob
+    assert "READ MORE" in blob
+    assert "READ THE FULL STORY" not in blob
     hook_sizes = [size for text, size in drawn if "NAZCA" in text.upper() or "THEM" in text.upper()]
     assert hook_sizes
     assert max(hook_sizes) < _HOOK_FONT_SIZE

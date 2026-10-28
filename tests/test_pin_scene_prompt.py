@@ -262,7 +262,7 @@ def test_credit_is_on_the_card_and_in_the_description_and_blocks_when_missing(
     assert raw
     credit_bits = [size for text, size in drawn if text == "Ada, CC BY"]
     assert credit_bits
-    assert 32 <= max(credit_bits) <= 40
+    assert 14 <= max(credit_bits) <= 20
     description = build_pin_description(record)
     assert "Ada, CC BY" in description
     assert record["target_url"] in description
