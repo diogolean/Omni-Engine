@@ -99,9 +99,18 @@ PIN_IMAGE_STYLE: str = (
 
 # Pins stay at $0. A missing free photo is skipped and retried, never drawn.
 PIN_PAID_IMAGE_FALLBACK: bool = False
-# OpenRouter ":free" model. A failure uses the local template.
-# DeepSeek Flash is opt-in: "deepinfra:deepseek-ai/DeepSeek-V4-Flash"
-PIN_TEXT_MODEL: str = "openrouter:meta-llama/llama-3.3-70b-instruct:free"
+# One title band for every pin. "top" is the top third. "bottom" is a solid lower band.
+PIN_TEXT_POSITION: str = "top"
+# OpenRouter ":free" models, in order. A 404 or 429 tries the next one.
+# meta-llama/llama-3.3-70b-instruct:free was removed from OpenRouter (HTTP 404).
+# Every id below was on the public models list with a $0 price on 2026-10-28.
+# A paid or Claude id is skipped. The template is the only fallback.
+PIN_TEXT_MODEL: str = "openrouter:google/gemma-4-31b-it:free"
+PIN_TEXT_MODEL_FALLBACKS: list = [
+    "openrouter:google/gemma-4-26b-a4b-it:free",
+    "openrouter:xingchen-agi/xing4.0-29b-a4b:free",
+    "openrouter:liquid/lfm-2.5-2.6b:free",
+]
 # Hard cap for one pin. Any paid call is refused before the request.
 PIN_SPEND_CAP_USD: float = 0.0
 

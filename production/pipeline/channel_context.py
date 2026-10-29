@@ -1787,6 +1787,11 @@ def resolve_reel_format(page_cfg: dict[str, Any] | None) -> str:
         raw = str(page_cfg.get("REEL_FORMAT") or "").upper().strip()
     if raw in _DECLARED_REEL_FORMATS:
         return raw
+    if raw:
+        _LOG.warning(
+            "REEL_FORMAT %r is not a video format; using DYNAMIC_REEL.",
+            raw,
+        )
     return "DYNAMIC_REEL"
 
 

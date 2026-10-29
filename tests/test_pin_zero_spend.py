@@ -23,11 +23,18 @@ from production.formats.pins.spend import (
     paid_image_fallback,
     spend_cap_usd,
     text_model,
+    text_model_chain,
 )
 from production.providers.llm import cheap_llm
 from shared.channel_flags import flag, value
 
-_FREE_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+_FREE_MODEL = "google/gemma-4-31b-it:free"
+_FREE_CHAIN = [
+    ("openrouter", "google/gemma-4-31b-it:free"),
+    ("openrouter", "google/gemma-4-26b-a4b-it:free"),
+    ("openrouter", "xingchen-agi/xing4.0-29b-a4b:free"),
+    ("openrouter", "liquid/lfm-2.5-2.6b:free"),
+]
 
 
 def _photo(path: Path) -> None:
@@ -70,7 +77,11 @@ def test_zero_spend_flags_are_per_channel() -> None:
     provider, model = text_model("ancient_knowledge")
     assert provider == "openrouter"
     assert model == _FREE_MODEL
+    assert text_model_chain("ancient_knowledge") == _FREE_CHAIN
+    assert all(":free" in item[1] for item in _FREE_CHAIN)
+    assert "llama-3.3-70b" not in model
     assert text_model("wonder_feed") is None
+    assert text_model_chain("wonder_feed") == []
 
 
 def test_free_model_estimates_zero() -> None:
@@ -153,7 +164,7 @@ def test_flux_is_not_called_when_the_pin_cap_is_zero(
 
 
 def test_free_text_failure_uses_the_template_and_not_deepseek(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     chains: list[object] = []
 
@@ -167,8 +178,11 @@ def test_free_text_failure_uses_the_template_and_not_deepseek(
     monkeypatch.setattr("production.providers.llm.cheap_llm.complete", _complete)
     monkeypatch.setattr("agents.mcp.text_model.complete_writer_primary", _writer)
     entry = _claude_entry(channel_id="ancient_knowledge")
-    assert ensure_writer_pin_copy(entry, use_ai=True) is True
-    assert chains == [[("openrouter", _FREE_MODEL)]]
+    with caplog.at_level(logging.WARNING):
+        assert ensure_writer_pin_copy(entry, use_ai=True) is True
+    assert chains == [[spec] for spec in _FREE_CHAIN]
+    assert "PIN TEXT FALLBACK" in caplog.text
+    assert "using template" in caplog.text
     assert entry["copy_provider"] == "template"
     assert entry["copy_model"] == "template"
     assert entry["pinterest_caption"] == build_caption_regex(
@@ -176,14 +190,73 @@ def test_free_text_failure_uses_the_template_and_not_deepseek(
     )
 
 
+def test_free_chain_skips_404_and_429_and_never_calls_paid(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A removed model and a rate limit try the next :free id. Paid stays idle."""
+    calls: list[str] = []
+
+    def _complete(*_args: object, **kwargs: object) -> object:
+        chain = kwargs.get("chain") or []
+        model = chain[0][1]
+        calls.append(model)
+        if not str(model).endswith(":free"):
+            raise AssertionError(model)
+        if model == _FREE_CHAIN[0][1]:
+            from production.providers.llm.cheap_llm import CheapLLMUnavailable
+
+            raise CheapLLMUnavailable(f"openrouter:{model}:HTTP404")
+        if model == _FREE_CHAIN[1][1]:
+            from production.providers.llm.cheap_llm import CheapLLMUnavailable
+
+            raise CheapLLMUnavailable(f"openrouter:{model}:HTTP429")
+
+        class _Result:
+            text = json.dumps(
+                {
+                    "pinterest_title": "Nazca lines from the air",
+                    "pinterest_caption": "The figures are still there.",
+                    "visual_hook": "Why the Nazca lines still point up",
+                }
+            )
+            provider = "openrouter"
+
+        result = _Result()
+        result.model = model
+        return result
+
+    def _writer(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("paid writer")
+
+    monkeypatch.setattr("production.providers.llm.cheap_llm.complete", _complete)
+    monkeypatch.setattr("agents.mcp.text_model.complete_writer_primary", _writer)
+    entry = _claude_entry(channel_id="ancient_knowledge", topic="Nazca Lines")
+    with caplog.at_level(logging.WARNING):
+        assert ensure_writer_pin_copy(entry, use_ai=True) is True
+    assert calls == [spec[1] for spec in _FREE_CHAIN[:3]]
+    assert entry["copy_model"] == _FREE_CHAIN[2][1]
+    assert "HTTP 404" in caplog.text
+    assert "HTTP 429" in caplog.text
+    assert "using template" not in caplog.text
+
+
+def test_paid_and_claude_ids_are_not_pin_fallbacks() -> None:
+    from production.formats.pins import spend
+
+    dropped = spend.text_model_chain("ancient_knowledge")
+    assert all(model.endswith(":free") for _provider, model in dropped)
+    assert spend._is_free_model("google/gemma-4-31b-it:free")
+    assert spend._is_claude("anthropic", "claude-sonnet-4-5")
+    refused = spend._parse_model("anthropic:claude-sonnet-4-5")
+    assert refused is not None
+    assert spend._is_claude(*refused)
+
+
 def test_named_model_is_opt_in_and_does_not_fall_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A channel that names DeepSeek calls that model and no other."""
     chains: list[object] = []
-
-    def _spec(_channel: str) -> tuple[str, str]:
-        return "deepinfra", "deepseek-ai/DeepSeek-V4-Flash"
 
     def _complete(*_args: object, **kwargs: object) -> object:
         chains.append(kwargs.get("chain"))
@@ -204,7 +277,14 @@ def test_named_model_is_opt_in_and_does_not_fall_through(
     def _writer(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("default writer")
 
-    monkeypatch.setattr("production.formats.pins.spend.text_model", _spec)
+    monkeypatch.setattr(
+        "production.formats.pins.spend.text_model_chain",
+        lambda _channel: [("deepinfra", "deepseek-ai/DeepSeek-V4-Flash")],
+    )
+    monkeypatch.setattr(
+        "production.formats.pins.spend.pin_text_configured",
+        lambda _channel: True,
+    )
     monkeypatch.setattr("production.providers.llm.cheap_llm.complete", _complete)
     monkeypatch.setattr("agents.mcp.text_model.complete_writer_primary", _writer)
     entry = _claude_entry(channel_id="wonder_feed", topic="Oak Island")
@@ -340,7 +420,7 @@ def test_ancient_knowledge_pin_calls_no_paid_provider(
     assert stats["published"] == 0
     assert stats["skipped"] == 1
     assert paid == []
-    assert chains == [[("openrouter", _FREE_MODEL)]]
+    assert chains == [[spec] for spec in _FREE_CHAIN]
     assert "no free image" in caplog.text
     saved = json.loads((tmp_path / "master_inventory.json").read_text(encoding="utf-8"))
     assert saved["entries"][0]["publication_status"]["posted_on_pinterest"] is False
