@@ -280,6 +280,7 @@ class DebateRoom:
         self._participants: dict[SpeakerRole, Participant] = {}
         self._observers: list[DebateObserver] = []
         self._violation_count = 0
+        self._usage: dict[str, dict[str, Any]] = {}
         self._is_open = False
 
     # -- Construction helpers ---------------------------------------------- #
@@ -425,6 +426,7 @@ class DebateRoom:
         self.transcript.ended_at = utcnow()
         self.transcript.metadata["end_reason"] = reason
         self.transcript.metadata["violations"] = self._violation_count
+        self.transcript.metadata["token_usage"] = self.usage
 
         self.broadcast(RoomEvent.DEBATE_ENDED, reason=reason, turns=len(self.transcript.utterances))
         for observer in tuple(self._observers):
@@ -516,12 +518,13 @@ class DebateRoom:
         extra_context: Sequence[str] = (),
         turn_index: int | None = None,
         validator: Callable[[str], bool] | None = None,
-        rejection_note: str = "",
+        rejection_note: str | Callable[[str], str] = "",
         max_attempts: int = 2,
         constraints_override: RoomConstraints | None = None,
         max_tokens_override: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         provocation_category: str = "",
+        final_validator: Callable[[str], bool] | None = None,
     ) -> Utterance:
         """Have a participant take one turn, then broadcast the result.
 
@@ -541,13 +544,16 @@ class DebateRoom:
             turn_index: Override the auto-incremented turn counter.
             validator: Predicate over the clamped text. False means re-roll.
             rejection_note: Internal instruction added as a *system* block on
-                retry. Never concatenated onto the user stimulus.
+                retry. Never concatenated onto the user stimulus. A callable
+                receives the rejected draft and returns the note.
             max_attempts: Total generations before accepting whatever came back.
             constraints_override: Turn-specific output contract; the normal
                 role constraints remain unchanged when omitted.
             max_tokens_override: Dedicated completion allowance for this turn.
             reasoning_effort: Optional provider thinking level for this turn.
             provocation_category: Telemetry tag for orchestrator lines; never spoken.
+            final_validator: Replaces ``validator`` on the last attempt, so a
+                caller can drop soft requirements instead of aborting.
 
         Returns:
             The clamped, recorded :class:`Utterance`.
@@ -603,6 +609,7 @@ class DebateRoom:
             except LLMError as exc:
                 self.broadcast(RoomEvent.PROVIDER_ERROR, turn_index=index, role=role.value, error=str(exc))
                 raise DebateAborted(f"{role.value} provider failed: {exc}") from exc
+            self._record_usage(role, response)
 
             _LOG.info(
                 "%s raw provider response: attempt=%d/%d finish_reason=%s "
@@ -642,15 +649,21 @@ class DebateRoom:
                     )
 
             accepted = bool(clean_text) and not response.truncated_by_provider
-            if validator is not None:
-                accepted = accepted and validator(clean_text)
+            check = (
+                final_validator
+                if final_validator is not None and attempt >= max(1, max_attempts)
+                else validator
+            )
+            if check is not None:
+                accepted = accepted and check(clean_text)
             if accepted:
                 break
 
             _LOG.info("%s candidate rejected by validator (attempt %d/%d)", role.value, attempt, max_attempts)
+            note = rejection_note(clean_text) if callable(rejection_note) else rejection_note
             rejection = (
-                "Internal note. Do not speak this. The previous draft was rejected as repetitive:\n"
-                f"{clean_text}\n{rejection_note}"
+                "Internal note. Do not speak this. The previous draft was rejected:\n"
+                f"{clean_text}\n{note}"
             ).strip()
             attempt_context = [*extra_context, rejection]
 
@@ -708,6 +721,22 @@ class DebateRoom:
     @property
     def violation_count(self) -> int:
         return self._violation_count
+
+    @property
+    def usage(self) -> dict[str, dict[str, Any]]:
+        """Every generation this session paid for, rejected drafts included, per seat."""
+        return {role: dict(entry) for role, entry in self._usage.items()}
+
+    def _record_usage(self, role: SpeakerRole, response: Any) -> None:
+        entry = self._usage.setdefault(
+            role.value,
+            {"provider": "", "model": "", "calls": 0, "prompt_tokens": 0, "completion_tokens": 0},
+        )
+        entry["provider"] = str(getattr(response, "provider", "") or entry["provider"])
+        entry["model"] = str(getattr(response, "model", "") or entry["model"])
+        entry["calls"] += 1
+        entry["prompt_tokens"] += int(getattr(response, "prompt_tokens", 0) or 0)
+        entry["completion_tokens"] += int(getattr(response, "completion_tokens", 0) or 0)
 
     def last_utterance(self, role: SpeakerRole | None = None) -> Utterance | None:
         """Most recent line, optionally filtered to one speaker."""

@@ -8,11 +8,17 @@ from __future__ import annotations
 
 import ast
 import math
+import shutil
+import subprocess
+import sys
 import wave
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from animation.parametric.animator_types import DialogueTurn
-from animation.parametric.audio_analyzer import AudioAnalyzer
+from animation.parametric.audio_analyzer import AudioAnalyzer, load_mono_waveform
 
 import core.animator.voice as voice
 
@@ -126,3 +132,39 @@ def test_duration_override_sets_the_analyzer_timeline(tmp_path: Path) -> None:
     full = AudioAnalyzer(fps=10).analyze(wav, turns, use_rhubarb=False)
     assert full.n_frames == math.ceil(2.0 * 10)
     assert full.duration_s == 2.0
+
+
+def test_an_mp3_decodes_through_ffmpeg_without_soundfile_or_moviepy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("ffmpeg is not installed")
+    mp3 = tmp_path / "line.mp3"
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=24000:duration=1",
+            str(mp3),
+        ],
+        check=True,
+        timeout=60,
+    )
+    monkeypatch.setitem(sys.modules, "soundfile", None)
+    monkeypatch.setitem(sys.modules, "moviepy", None)
+    samples, rate, duration = load_mono_waveform(mp3)
+    assert rate == 44100
+    assert duration == pytest.approx(1.0, abs=0.1)
+    assert float(np.abs(samples).max()) > 0.05
+
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not audio " * 200)
+    with pytest.raises(RuntimeError, match="ffmpeg could not decode broken.mp3"):
+        load_mono_waveform(broken)

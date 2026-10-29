@@ -32,9 +32,8 @@ python -m products.aiwake --turns 4 --no-audio --no-video
 # Bulk: N original videos. Scripts are never reused across the batch or later runs.
 python -m products.aiwake --quantity 5
 
-# Long-form YouTube arena (20 exchanges by default, isolated outputs)
-python -m products.aiwake --mode longform --resolution 1920x1080 \
-  --target-duration 360 --random-matchups --generate-thumbnail
+# Long-form 16:9 episode plus 2-3 vertical Shorts. See longform/README.md.
+python tools/channel_cli.py --channel aiwake longform --offline --target-duration 360
 
 python -m products.aiwake --list-models      # alias table + current seats
 python -m products.aiwake --list-providers
@@ -43,11 +42,13 @@ python -m products.aiwake --generate-bgm-batch  # production library (approved i
 python -m pytest products/aiwake -q
 ```
 
-Long-form artifacts are written under
-`outputs/aiwake/animation_clips/long_format/{session_id}/`: the episode MP4,
-session thumbnail, `thumbnail_1920x1080.png`, and `metadata.json`. Omitting
-`--long-format`, `--post-type long_format`, and `--mode longform` preserves the
-approved vertical pipeline.
+Long-form episodes land in `{OUTPUT_PATH}/aiwake/animation_clips/long_format/{session_id}/`:
+the 1920x1080 episode, `metadata.json` (title, description, chapters, tags, cost, QA report),
+and `shorts/`. The default seats are DeepSeek Chat against Llama 70B, about $0.026 in model
+tokens for a 6-minute episode. Premium models need `long_format.allow_expensive: true`.
+`products/aiwake/longform/README.md` covers the episode shape, the pacing rules, the
+pre-publish gate, and the costs. Omitting `--long-format`, `--post-type long_format`,
+and `--mode longform` preserves the approved vertical pipeline.
 
 Or from Python:
 
@@ -71,7 +72,7 @@ print(batch.succeeded, [item.video_path for item in batch.items])
 ## Folder tree
 
 ```
-channels_config/aiwake/
+products/aiwake/
 ├── __init__.py               # public façade: run_pipeline + core types
 ├── __main__.py               # CLI (`python -m products.aiwake`)
 ├── aiwake_config.yaml        # ALL tunables: models, guardrails, voices, VFX
@@ -104,6 +105,19 @@ channels_config/aiwake/
 │   ├── audio.py              #   TTSEngine ABC + edge-tts + silent engine
 │   ├── renderer.py           #   MoviePy/Pillow terminal UI, audio-synced typing
 │   └── vfx.py                #   VFX hook registry (scanlines, visualizer stubs)
+│
+├── longform/                 # 16:9 YouTube episodes + Shorts (see longform/README.md)
+│   ├── plan.py               #   chapters and rounds for a 5-10 minute target
+│   ├── director.py           #   episode clock, hooks, guest stances, quotes
+│   ├── briefs.py             #   per-line prompts and line checks
+│   ├── metadata.py           #   YouTube title, description, chapters, tags
+│   ├── shorts.py             #   2-3 vertical teasers per episode
+│   ├── qa.py                 #   pre-publish gate
+│   ├── cost.py               #   planning estimate + measured bill
+│   ├── seats.py              #   cheap seats, premium models opt-in
+│   ├── ffmpeg_guard.py       #   refuses ffmpeg commands that could run forever
+│   ├── publish.py            #   assembles the package after the render
+│   └── text.py               #   shared sentence and word helpers
 │
 ├── store/                    # local state: memory JSON, transcripts, metrics
 └── tests/                    # 31 offline tests
