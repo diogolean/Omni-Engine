@@ -10,7 +10,9 @@ audio track as normalized-rate AAC
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -133,6 +135,98 @@ class RenderStats:
         return self.video_seconds / self.render_seconds if self.render_seconds > 0 else 0.0
 
 
+class RenderTimeout(TimeoutError):
+    """The ffmpeg encode exceeded its budget and the process was stopped."""
+
+    def __init__(self, timeout_s: float) -> None:
+        self.timeout_s = float(timeout_s)
+        super().__init__(
+            f"ffmpeg encode exceeded {self.timeout_s:.1f}s and the process was stopped"
+        )
+
+
+def _kill_if_alive(proc: subprocess.Popen) -> None:
+    """Stop ffmpeg when it is still running. A finished process is left alone."""
+    poll = getattr(proc, "poll", None)
+    if not callable(poll):
+        return
+    try:
+        if poll() is not None:
+            return
+    except Exception:  # noqa: BLE001 — test doubles may not be a real Popen
+        return
+    try:
+        from shared.ffmpeg import kill_process_tree  # noqa: PLC0415
+
+        kill_process_tree(proc)
+    except Exception:  # noqa: BLE001 — the timeout path must not raise a second error
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _signal_kill(proc: subprocess.Popen) -> None:
+    """Ask the process group to stop. The caller reaps it.
+
+    The watchdog must not ``wait``: the pipe thread is the one that reaps,
+    and two threads waiting on one ``Popen`` is not reliable.
+    """
+    pid = getattr(proc, "pid", None)
+    if not pid:
+        return
+    if os.name != "nt":
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _arm_encode_watchdog(proc: subprocess.Popen, deadline: float) -> threading.Event:
+    """Signal the ffmpeg process group if the encode is still running at ``deadline``."""
+    cancel = threading.Event()
+
+    def _watch() -> None:
+        remaining = deadline - time.monotonic()
+        if cancel.wait(timeout=max(0.0, remaining)):
+            return
+        _signal_kill(proc)
+
+    threading.Thread(target=_watch, name="ffmpeg-deadline", daemon=True).start()
+    return cancel
+
+
+def _write_stdin(proc: subprocess.Popen, payload: bytes, timeout: float, timeout_s: float) -> None:
+    """Write one frame. If ffmpeg stops reading, kill it instead of blocking."""
+    error: list[BaseException] = []
+
+    def _write() -> None:
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(payload)
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the caller thread
+            error.append(exc)
+
+    worker = threading.Thread(target=_write, name="ffmpeg-stdin", daemon=True)
+    worker.start()
+    worker.join(timeout if timeout > 0 else 0.05)
+    if worker.is_alive():
+        _kill_if_alive(proc)
+        worker.join(timeout=2)
+        raise RenderTimeout(timeout_s)
+    if error:
+        raise error[0]
+
+
+def _past_deadline(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
 class AnimationRenderer:
     """Pipes compact YUV420 frames into ffmpeg and muxes dialogue audio."""
 
@@ -142,24 +236,33 @@ class AnimationRenderer:
         self.fps = fps
         self.ffmpeg_path = _resolve_ffmpeg()
 
-    def _video_codec_args(self, *, use_gpu: bool) -> list[str]:
+    def _video_codec_args(
+        self,
+        *,
+        use_gpu: bool,
+        preset: str = "veryfast",
+        crf: int = 17,
+        gop: int = 30,
+        tune: str | None = "grain",
+    ) -> list[str]:
         del use_gpu  # The delivery contract is intentionally encoder-stable.
-        return [
+        args = [
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            preset,
             "-crf",
-            "17",
+            str(int(crf)),
             "-g",
-            "30",
+            str(int(gop)),
             "-keyint_min",
-            "30",
+            str(int(gop)),
             "-sc_threshold",
             "0",
-            "-tune",
-            "grain",
         ]
+        if tune:
+            args += ["-tune", tune]
+        return args
 
     def render(
         self,
@@ -169,6 +272,14 @@ class AnimationRenderer:
         output_path: Path,
         duration_s: float,
         subtitles_path: str | Path | None = None,
+        preset: str = "veryfast",
+        crf: int = 17,
+        gop: int = 30,
+        tune: str | None = "grain",
+        threads: int | None = None,
+        deterministic: bool = False,
+        encode_timeout_s: float | None = None,
+        retain_frames: bool = True,
     ) -> RenderStats:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +293,14 @@ class AnimationRenderer:
                 output_path=encoded_path,
                 use_gpu=use_gpu,
                 subtitles_path=Path(subtitles_path) if subtitles_path else None,
+                preset=preset,
+                crf=crf,
+                gop=gop,
+                tune=tune,
+                threads=threads,
+                deterministic=deterministic,
+                encode_timeout_s=encode_timeout_s,
+                retain_frames=retain_frames,
             )
             shutil.copyfile(encoded_path, output_path)
 
@@ -216,12 +335,24 @@ class AnimationRenderer:
         use_gpu: bool,
         audio_codec: str,
         subtitles_path: Path | None = None,
+        preset: str = "veryfast",
+        crf: int = 17,
+        gop: int = 30,
+        tune: str | None = "grain",
+        threads: int | None = None,
+        deterministic: bool = False,
     ) -> list[str]:
         cmd = [
             self.ffmpeg_path,
             "-y",
             "-loglevel",
             "error",
+        ]
+        if deterministic:
+            # Drop the encode clock and the lavc version banner so two runs
+            # of the same frames produce the same file.
+            cmd += ["-fflags", "+bitexact"]
+        cmd += [
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -244,7 +375,22 @@ class AnimationRenderer:
             # from applying an anamorphic display transform to the final MP4.
             filters.append(f"subtitles='{_escape_filter_path(subtitles_path)}'")
         cmd += ["-vf", ",".join(filters)]
-        cmd += self._video_codec_args(use_gpu=use_gpu)
+        cmd += self._video_codec_args(
+            use_gpu=use_gpu,
+            preset=preset,
+            crf=crf,
+            gop=gop,
+            tune=tune,
+        )
+        if deterministic:
+            cmd += [
+                "-flags",
+                "+bitexact",
+                "-x264-params",
+                "threads=1:lookahead-threads=1:sliced-threads=0",
+            ]
+        if threads is not None:
+            cmd += ["-threads", str(int(threads))]
         cmd += ["-pix_fmt", "yuv420p"]
         if audio_path is not None:
             cmd += ["-c:a", audio_codec]
@@ -255,6 +401,13 @@ class AnimationRenderer:
             # duration_override that truncates the video frame count never
             # produces a video-audio length mismatch in the final container.
             cmd += ["-map", "0:v", "-map", "1:a", "-shortest"]
+        if deterministic:
+            cmd += [
+                "-map_metadata",
+                "-1",
+                "-metadata",
+                "creation_time=1970-01-01T00:00:00Z",
+            ]
         cmd.append(str(output_path))
         return cmd
 
@@ -266,6 +419,14 @@ class AnimationRenderer:
         output_path: Path,
         use_gpu: bool,
         subtitles_path: Path | None = None,
+        preset: str = "veryfast",
+        crf: int = 17,
+        gop: int = 30,
+        tune: str | None = "grain",
+        threads: int | None = None,
+        deterministic: bool = False,
+        encode_timeout_s: float | None = None,
+        retain_frames: bool = True,
     ) -> tuple[int, str, float]:
         audio_p = Path(audio_path) if audio_path else None
         # Always encode the final stream to a known-good AAC/44.1 kHz
@@ -282,11 +443,24 @@ class AnimationRenderer:
                     use_gpu=encoder_is_gpu,
                     audio_codec=audio_codec,
                     subtitles_path=subtitles_path,
+                    preset=preset,
+                    crf=crf,
+                    gop=gop,
+                    tune=tune,
+                    threads=threads,
+                    deterministic=deterministic,
                 )
                 encoder_name = "h264_nvenc" if encoder_is_gpu else "libx264"
                 try:
-                    frames_written, elapsed = self._pipe_frames(cmd, frame_iter, output_path)
+                    frames_written, elapsed = self._pipe_frames(
+                        cmd,
+                        frame_iter,
+                        output_path,
+                        encode_timeout_s=encode_timeout_s,
+                    )
                     return frames_written, f"{encoder_name}+{audio_codec}", elapsed
+                except RenderTimeout:
+                    raise
                 except _FfmpegFailure as exc:
                     last_error = exc
                     _LOG.warning(
@@ -295,18 +469,28 @@ class AnimationRenderer:
                         audio_codec,
                         exc,
                     )
-                    # Frame generators are exhausted after one attempt; the
-                    # caller passed a fresh iterator per top-level render()
-                    # call, so a retry needs the *same* frames again. We
-                    # therefore materialize frames once, up front, on first
-                    # failure so subsequent retries can replay them.
+                    if not retain_frames:
+                        raise RuntimeError(
+                            "ffmpeg failed for every encoder/audio-codec combination: "
+                            f"{last_error}"
+                        ) from exc
+                    # Legacy callers retry once. That retry is the only place
+                    # a frame iterator is copied, and only after a failure.
                     frame_iter = exc.consumed_frames + list(frame_iter)
         raise RuntimeError(f"ffmpeg failed for every encoder/audio-codec combination: {last_error}")
 
     def _pipe_frames(
-        self, cmd: list[str], frame_iter: Iterable[np.ndarray], output_path: Path
+        self,
+        cmd: list[str],
+        frame_iter: Iterable[np.ndarray],
+        output_path: Path,
+        *,
+        encode_timeout_s: float | None = None,
     ) -> tuple[int, float]:
+        if encode_timeout_s is not None and encode_timeout_s <= 0:
+            raise ValueError("encode_timeout_s must be positive")
         start = time.perf_counter()
+        deadline = None if encode_timeout_s is None else time.monotonic() + float(encode_timeout_s)
         from shared.ffmpeg import popen_ffmpeg
 
         proc = popen_ffmpeg(
@@ -317,32 +501,62 @@ class AnimationRenderer:
         )
         assert proc.stdin is not None
         frames_written = 0
+        cancel = _arm_encode_watchdog(proc, deadline) if deadline is not None else None
         try:
-            for frame in frame_iter:
-                rgb = np.ascontiguousarray(frame, dtype=np.uint8)
-                yuv420 = cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420)
-                proc.stdin.write(yuv420.tobytes())
-                frames_written += 1
-        except (BrokenPipeError, OSError) as exc:
-            stderr = _finish_ffmpeg_pipe(proc, timeout=30)
+            try:
+                for frame in frame_iter:
+                    if _past_deadline(deadline):
+                        _kill_if_alive(proc)
+                        raise RenderTimeout(encode_timeout_s or 0.0)
+                    rgb = np.ascontiguousarray(frame, dtype=np.uint8)
+                    yuv420 = cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420)
+                    payload = yuv420.tobytes()
+                    if deadline is None:
+                        proc.stdin.write(payload)
+                    else:
+                        _write_stdin(
+                            proc,
+                            payload,
+                            max(0.05, deadline - time.monotonic()),
+                            float(encode_timeout_s or 0.0),
+                        )
+                    frames_written += 1
+            except RenderTimeout:
+                _kill_if_alive(proc)
+                raise
+            except (BrokenPipeError, OSError) as exc:
+                if _past_deadline(deadline):
+                    _kill_if_alive(proc)
+                    raise RenderTimeout(encode_timeout_s or 0.0) from exc
+                stderr = _finish_ffmpeg_pipe(proc, timeout=30)
+                elapsed = time.perf_counter() - start
+                # -shortest closes stdin once the audio ends. A clean exit with
+                # a finished file is the stop, not a failed encode.
+                if proc.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+                    _LOG.info(
+                        "ffmpeg closed the frame pipe after %d frame(s) (exit 0)",
+                        frames_written,
+                    )
+                    return frames_written, elapsed
+                raise _FfmpegFailure(_ffmpeg_failure_text(stderr, exc, proc.returncode), [])
+            if _past_deadline(deadline):
+                _kill_if_alive(proc)
+                raise RenderTimeout(encode_timeout_s or 0.0)
+            finish_timeout = 120.0 if deadline is None else max(1.0, deadline - time.monotonic())
+            stderr = _finish_ffmpeg_pipe(proc, timeout=finish_timeout)
             elapsed = time.perf_counter() - start
-            # -shortest closes stdin once the audio ends. A clean exit with
-            # a finished file is the stop, not a failed encode.
-            if proc.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
-                _LOG.info(
-                    "ffmpeg closed the frame pipe after %d frame(s) (exit 0)",
-                    frames_written,
+            if _past_deadline(deadline) and proc.returncode != 0:
+                raise RenderTimeout(encode_timeout_s or finish_timeout)
+            if proc.returncode != 0 or not output_path.is_file():
+                raise _FfmpegFailure(
+                    _ffmpeg_failure_text(stderr, None, proc.returncode),
+                    [],
                 )
-                return frames_written, elapsed
-            raise _FfmpegFailure(_ffmpeg_failure_text(stderr, exc, proc.returncode), [])
-        stderr = _finish_ffmpeg_pipe(proc, timeout=120)
-        elapsed = time.perf_counter() - start
-        if proc.returncode != 0 or not output_path.is_file():
-            raise _FfmpegFailure(
-                _ffmpeg_failure_text(stderr, None, proc.returncode),
-                [],
-            )
-        return frames_written, elapsed
+            return frames_written, elapsed
+        finally:
+            if cancel is not None:
+                cancel.set()
+            _kill_if_alive(proc)
 
 
 class _FfmpegFailure(RuntimeError):
@@ -417,4 +631,4 @@ def resolve_ffmpeg() -> str:
     return _resolve_ffmpeg()
 
 
-__all__ = ["AnimationRenderer", "RenderStats", "resolve_ffmpeg"]
+__all__ = ["AnimationRenderer", "RenderStats", "RenderTimeout", "resolve_ffmpeg"]

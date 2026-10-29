@@ -18,10 +18,13 @@ __all__ = [
     "PuppetSkin",
     "PuppetTheme",
     "RenderStats",
+    "SceneSpec",
     "ShotReverseShotCompositor",
     "SpeakerStyle",
     "WordTiming",
+    "load_scene",
     "render_dynamic_animation",
+    "render_scene",
 ]
 
 _EXPORTS = {
@@ -38,7 +41,10 @@ _EXPORTS = {
     "ShotReverseShotCompositor": "animation.parametric.compositor",
     "AnimationRenderer": "animation.parametric.renderer",
     "RenderStats": "animation.parametric.renderer",
+    "SceneSpec": "animation.parametric.scene_spec",
+    "load_scene": "animation.parametric.scene_spec",
     "render_dynamic_animation": "animation.api",
+    "render_scene": "animation.parametric.scene_render",
 }
 
 
