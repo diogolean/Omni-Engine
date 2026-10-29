@@ -172,6 +172,27 @@ def random_matchup_schedule(
     return tuple(schedule[:qty])
 
 
+def real_voice_seconds(observer: VoiceObserver, tail_silence_s: float) -> Callable[[Utterance], float | None]:
+    """Real TTS length of a voiced line, or None when the track is only an estimate.
+
+    The number is the probed file length with the padded tail taken off. The
+    file is not passed to ffmpeg ``-t``, and nothing trims the spoken take.
+    """
+
+    def _measure(utterance: Utterance) -> float | None:
+        asset = observer.assets.get(utterance.turn_index)
+        if asset is None or asset.estimated:
+            return None
+        if not Path(asset.path).is_file():
+            return None
+        spoken = float(asset.duration_s) - float(tail_silence_s)
+        if spoken <= 0:
+            return None
+        return spoken
+
+    return _measure
+
+
 def voice_seconds(observer: VoiceObserver, tail_silence_s: float) -> Callable[[Utterance], float | None]:
     """Spoken length of a voiced line, measured the way the renderer lays it out.
 
@@ -578,7 +599,9 @@ def run_pipeline(
             "session_id": room.session_id,
             "topic": room.topic,
             "debate_mode": cfg.debate.mode,
+            "style": cfg.debate.style,
             "provocation_focus": cfg.debate.provocation_focus,
+            "cornered_min_duration_s": cfg.debate.cornered_min_duration_s,
             "cornered_max_duration_s": cfg.debate.cornered_max_duration_s,
             "orchestrator_model": cfg.spec_for("orchestrator").model,
             "target_model": cfg.spec_for("target").model,
@@ -614,6 +637,11 @@ def run_pipeline(
         spoken_seconds=(
             voice_seconds(voice_observer, cfg.audio.tail_silence_s)
             if long_form and voice_observer is not None
+            else None
+        ),
+        real_tts_seconds=(
+            real_voice_seconds(voice_observer, cfg.audio.tail_silence_s)
+            if voice_observer is not None and not long_form
             else None
         ),
     )
