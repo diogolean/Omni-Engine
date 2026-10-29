@@ -380,6 +380,9 @@ class RoomConstraints(BaseModel):
     exclude_mid_sentence_truncation: bool = False
     banned_openers: tuple[str, ...] = ()
     pacing_directive: str = ""
+    # When set, replaces the question-or-answer shape line. Empty keeps the
+    # historical contract text byte for byte.
+    shape_line: str = ""
 
     def as_prompt_block(self) -> str:
         """Render the constraints as an injectable system directive.
@@ -396,7 +399,9 @@ class RoomConstraints(BaseModel):
             "Spoken prose only: no markdown, no lists, no headings, no emoji, no stage directions.",
             "Never restate the question or summarise your opponent before answering.",
         ]
-        if self.require_single_question:
+        if self.shape_line.strip():
+            lines.append(self.shape_line.strip())
+        elif self.require_single_question:
             lines.append(
                 "End on exactly ONE question mark. Ask a single blade of a question, never a battery of them."
             )

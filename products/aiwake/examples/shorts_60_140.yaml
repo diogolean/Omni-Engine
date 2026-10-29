@@ -1,0 +1,26 @@
+# Aiwake short whose spoken window is about 60-140 seconds.
+#
+# About 8-10 turns. ``turns: 10`` is the hard exchange cap, so a run can
+# reach the top of that range and cannot loop past it. Cornered mode stops
+# only after a finished turn, once real TTS audio is at least
+# ``cornered_min_duration_s`` and the next turn would pass
+# ``cornered_max_duration_s``. Speech is never trimmed with ffmpeg -t.
+#
+# Style stays cornered here. Pass ``--style light`` to use the other preset
+# without copying this duration window.
+#
+#   python -m products.aiwake --mode cornered --style cornered \
+#       --cornered-max-duration 140 --config products/aiwake/examples/shorts_60_140.yaml \
+#       --orchestrator deepseek-chat --target llama-70b --render-mode dynamic_animation
+
+debate:
+  mode: cornered
+  style: cornered
+  turns: 10
+  cornered_min_duration_s: 61
+  cornered_max_duration_s: 140
+
+long_format:
+  shorts_min_s: 61
+  shorts_target_s: 100
+  shorts_max_s: 140

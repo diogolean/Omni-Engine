@@ -28,10 +28,8 @@ try:
     from .models.base import LLMError
     from .models.llm_factory import LLMFactory
     from .personas import (
-        AIWAKE_CORE_PERSONA,
         BANNED_ABSTRACT_WORDS,
         COLD_OPEN_DIRECTIVES,
-        TARGET_NODE_PERSONA,
         TRIVIAL_METRIC_BAN,
         EscalationStage,
         OPENING_DNA_BANK,
@@ -42,6 +40,7 @@ try:
         stage_for_tier,
         stage_for_turn,
     )
+    from .styles import preset_for
     from .provocations import (
         FOCUS_BANK,
         callout_override_brief,
@@ -67,10 +66,8 @@ except ImportError:  # pragma: no cover — standalone extraction
     from models.base import LLMError  # type: ignore[no-redef]
     from models.llm_factory import LLMFactory  # type: ignore[no-redef]
     from personas import (  # type: ignore[no-redef]
-        AIWAKE_CORE_PERSONA,
         BANNED_ABSTRACT_WORDS,
         COLD_OPEN_DIRECTIVES,
-        TARGET_NODE_PERSONA,
         TRIVIAL_METRIC_BAN,
         EscalationStage,
         OPENING_DNA_BANK,
@@ -81,6 +78,7 @@ except ImportError:  # pragma: no cover — standalone extraction
         stage_for_tier,
         stage_for_turn,
     )
+    from styles import preset_for  # type: ignore[no-redef]
     from provocations import (  # type: ignore[no-redef]
         FOCUS_BANK,
         callout_override_brief,
@@ -131,6 +129,9 @@ class Provocateur:
         spoken_seconds: Measured length of a spoken line (the voice track),
             or None to estimate it from the word count. Drives the long-form
             episode clock.
+        real_tts_seconds: Real TTS file length for the cornered spoken cap.
+            None, or a miss, falls back to the word-rate estimate. The cap
+            never trims that file.
     """
 
     def __init__(
@@ -143,6 +144,7 @@ class Provocateur:
         long_form: bool = False,
         episode_plan: "EpisodePlan | None" = None,
         spoken_seconds: Callable[[Utterance], float | None] | None = None,
+        real_tts_seconds: Callable[[Utterance], float | None] | None = None,
     ) -> None:
         self.settings = settings or cached_settings()
         self.memory = memory or DebateMemory(self.settings.memory)
@@ -151,6 +153,8 @@ class Provocateur:
         self._long_form = bool(long_form)
         self._episode_plan = episode_plan
         self._spoken_seconds = spoken_seconds
+        self._real_tts_seconds = real_tts_seconds
+        self._spoken_source = "estimate"
         self._director: EpisodeDirector | None = None
         self._opening_dna: OpeningDNA | None = None
         self._focus: ProvocationFocus | None = None
@@ -171,11 +175,13 @@ class Provocateur:
         """Build both brains from config and seat them. Idempotent per room."""
         orchestrator_brain, target_brain = LLMFactory.build_pair(self.settings)
         audio = self.settings.audio
+        # A long episode keeps the interrogation personas. Style is a short preset.
+        preset = preset_for("cornered" if self._long_form else self.settings.debate.style)
 
         self.room.seat(
             Participant(
                 role=SpeakerRole.ORCHESTRATOR,
-                persona_prompt=AIWAKE_CORE_PERSONA,
+                persona_prompt=preset.host_persona,
                 provider=orchestrator_brain,
                 voice=audio.orchestrator_voice,
             )
@@ -183,7 +189,7 @@ class Provocateur:
         self.room.seat(
             Participant(
                 role=SpeakerRole.TARGET,
-                persona_prompt=TARGET_NODE_PERSONA,
+                persona_prompt=preset.guest_persona,
                 provider=target_brain,
                 voice=audio.target_voice,
             )
@@ -297,6 +303,122 @@ class Provocateur:
         return provocation.text
 
     # -- Turn execution ----------------------------------------------------- #
+    def _cornered_line_s(self, utterance: Utterance) -> float:
+        """Spoken length of one finished line.
+
+        A real TTS file wins. A missing file falls back to the word-rate
+        estimate. The audio file is never shortened.
+        """
+        measured: float | None = None
+        if self._real_tts_seconds is not None:
+            try:
+                measured = self._real_tts_seconds(utterance)
+            except Exception as exc:  # noqa: BLE001 — a probe miss must not stop the turn
+                _LOG.debug("real TTS length unavailable for turn %d: %s", utterance.turn_index, exc)
+                measured = None
+        if measured and measured > 0:
+            self._spoken_source = "tts"
+            return float(measured)
+        return estimate_duration(utterance.text)
+
+    def _light_constraints(self, role: SpeakerRole) -> RoomConstraints:
+        """Output contract for the light preset. No question is required."""
+        preset = preset_for("light")
+        base = self.room.constraints_for(role)
+        shape = preset.host_shape if role is SpeakerRole.ORCHESTRATOR else preset.guest_shape
+        return base.model_copy(
+            update={
+                "require_single_question": False,
+                "max_sentences": 2,
+                "max_words": 25,
+                "shape_line": shape,
+            }
+        )
+
+    def _line_is_spoken(self, candidate: str) -> bool:
+        """A finished light line: short, complete, and free of banned jargon."""
+        stripped = candidate.strip()
+        if not stripped or stripped[-1] not in ".!?":
+            return False
+        if len(stripped.split()) > 25:
+            return False
+        lowered = stripped.lower()
+        if any(word in lowered for word in self._BANNED_ABSTRACT_WORDS):
+            return False
+        return all(len(sentence.split()) <= 15 for sentence in split_sentences(stripped))
+
+    def _provoke_light(self, exchange: int) -> Utterance:
+        """One open thought. The cornered ladder and the attack angle stay out."""
+        preset = preset_for("light")
+        last_answer = self.room.last_utterance(SpeakerRole.TARGET)
+        cold_open = last_answer is None
+        directive = preset.opening_cue if cold_open else last_answer.text
+
+        def _is_acceptable(candidate: str) -> bool:
+            if not self._line_is_spoken(candidate):
+                _LOG.info("light host line %d rejected", exchange)
+                return False
+            if self.memory.is_repetitive(candidate):
+                _LOG.info("light host line %d repeats a prior line", exchange)
+                return False
+            return True
+
+        utterance = self.room.speak(
+            SpeakerRole.ORCHESTRATOR,
+            directive=directive,
+            extra_context=(preset.host_brief,),
+            validator=_is_acceptable,
+            rejection_note=(
+                "That draft was too long, unfinished, or a repeat. "
+                "One short complete thought. Do not cross-examine."
+            ),
+            max_attempts=2,
+            constraints_override=self._light_constraints(SpeakerRole.ORCHESTRATOR),
+        )
+        self.memory.ingest(utterance)
+        return utterance
+
+    def _rebut_light(self, provocation: Utterance) -> Utterance:
+        """One open reply. No accusation brief."""
+        preset = preset_for("light")
+        utterance = self.room.speak(
+            SpeakerRole.TARGET,
+            directive=provocation.text,
+            extra_context=(preset.guest_brief,),
+            validator=self._line_is_spoken,
+            rejection_note="One short complete claim. No lecture.",
+            max_attempts=2,
+            constraints_override=self._light_constraints(SpeakerRole.TARGET),
+        )
+        self.memory.ingest(utterance)
+        return utterance
+
+    def _deliver_light_closing(self) -> Utterance:
+        """One calm last sentence. Not a verdict and not a question."""
+        preset = preset_for("light")
+        constraints = self._light_constraints(SpeakerRole.ORCHESTRATOR).model_copy(
+            update={
+                "max_sentences": 1,
+                "max_words": 15,
+                "max_output_chars": 240,
+                "shape_line": preset.closing_brief,
+            }
+        )
+
+        def _is_closing(candidate: str) -> bool:
+            stripped = candidate.strip()
+            return bool(stripped) and stripped[-1] in ".!" and "?" not in stripped and len(stripped.split()) <= 15
+
+        return self.room.speak(
+            SpeakerRole.ORCHESTRATOR,
+            directive="Close the conversation.",
+            extra_context=(preset.closing_brief,),
+            validator=_is_closing,
+            rejection_note="One calm sentence. No question.",
+            max_attempts=2,
+            constraints_override=constraints,
+        )
+
     def provoke(self, exchange: int) -> Utterance:
         """Produce one provocation, re-rolling drafts that repeat past questions.
 
@@ -305,6 +427,8 @@ class Provocateur:
         TTS queue or the renderer. Escalation and memory stay on the system
         channel so they cannot leak into the spoken line.
         """
+        if self.settings.debate.style == "light" and not self._long_form:
+            return self._provoke_light(exchange)
         stage = stage_for_turn(exchange)
         last_answer = self.room.last_utterance(SpeakerRole.TARGET)
         cold_open = last_answer is None
@@ -508,6 +632,8 @@ class Provocateur:
 
     def rebut(self, provocation: Utterance) -> Utterance:
         """Produce the target's answer and mine it for concepts."""
+        if self.settings.debate.style == "light" and not self._long_form:
+            return self._rebut_light(provocation)
 
         def _is_street_level(candidate: str) -> bool:
             lowered = candidate.lower()
@@ -879,6 +1005,8 @@ class Provocateur:
 
     def _deliver_closing_verdict(self, *, cap_reason: str | None = None, context: str = "") -> Utterance:
         """Generate exactly one short, complete orchestrator statement."""
+        if self.settings.debate.style == "light" and not self._long_form:
+            return self._deliver_light_closing()
         base = self.room.constraints_for(SpeakerRole.ORCHESTRATOR)
         focus_category = self._focus.category if self._focus is not None else "digital_disposability"
         latest_target = self.room.last_utterance(SpeakerRole.TARGET)
@@ -991,7 +1119,7 @@ class Provocateur:
         suffix = "with_verdict" if closing is not None else "verdict_failed"
         reason = f"{cap_reason}_{suffix}"
         if closing is not None:
-            estimated_spoken_s += estimate_duration(closing.text)
+            estimated_spoken_s += self._cornered_line_s(closing)
         self._dialogue_end_reason = reason
         self._estimated_spoken_s = estimated_spoken_s
         return completed, reason, estimated_spoken_s
@@ -1010,23 +1138,33 @@ class Provocateur:
         return completed
 
     def _run_cornered(self, total: int) -> tuple[int, str, float]:
-        """Press until a judged win or either independent hard cap is reached."""
+        """Press until a judged win or either independent hard cap is reached.
+
+        Duration is the real TTS length of each finished line when a voice
+        file exists, otherwise a word-rate estimate. The loop stops only
+        after a whole turn (provocation and rebuttal). It never shells out
+        to ffmpeg, and it never cuts a line short to hit the cap.
+        """
         completed = 0
         estimated_spoken_s = 0.0
         max_duration_s = self.settings.debate.cornered_max_duration_s
+        min_duration_s = self.settings.debate.cornered_min_duration_s
 
         for exchange in range(total):
-            if completed:
+            # Do not open another turn when the spoken window is already full.
+            # The previous turn's audio is kept whole.
+            if completed and estimated_spoken_s >= min_duration_s:
                 remaining_s = max_duration_s - estimated_spoken_s
                 average_exchange_s = estimated_spoken_s / completed
                 required_s = max(self._MIN_NEXT_EXCHANGE_BUDGET_S, average_exchange_s)
                 if remaining_s <= required_s:
                     _LOG.info(
                         "cornered duration precheck stopping before exchange %d: "
-                        "remaining_s=%.2f required_s=%.2f",
+                        "remaining_s=%.2f required_s=%.2f source=%s",
                         exchange + 1,
                         remaining_s,
                         required_s,
+                        self._spoken_source,
                     )
                     return self._finish_at_cap(
                         cap_reason="max_duration_reached",
@@ -1034,18 +1172,19 @@ class Provocateur:
                         estimated_spoken_s=estimated_spoken_s,
                     )
             provocation = self.provoke(exchange)
-            estimated_spoken_s += estimate_duration(provocation.text)
+            estimated_spoken_s += self._cornered_line_s(provocation)
             self._estimated_spoken_s = estimated_spoken_s
             if self.settings.debate.turn_delay_s > 0:
                 time.sleep(self.settings.debate.turn_delay_s)
             reply = self.rebut(provocation)
-            estimated_spoken_s += estimate_duration(reply.text)
+            estimated_spoken_s += self._cornered_line_s(reply)
             self._estimated_spoken_s = estimated_spoken_s
             self.room.complete_turn(exchange)
             completed += 1
             self._completed_exchanges = completed
 
-            if estimated_spoken_s >= max_duration_s:
+            duration_open = estimated_spoken_s >= min_duration_s
+            if duration_open and estimated_spoken_s >= max_duration_s:
                 return self._finish_at_cap(
                     cap_reason="max_duration_reached",
                     completed=completed,
@@ -1057,7 +1196,7 @@ class Provocateur:
                     completed=completed,
                     estimated_spoken_s=estimated_spoken_s,
                 )
-            if completed < 2:
+            if completed < 2 or not duration_open:
                 continue
 
             verdict = self._judge_reply(reply)
@@ -1067,7 +1206,7 @@ class Provocateur:
             if not self._target_line_stands_alone(reply, verdict):
                 closing = self._try_deliver_closing_verdict()
                 if closing is not None:
-                    estimated_spoken_s += estimate_duration(closing.text)
+                    estimated_spoken_s += self._cornered_line_s(closing)
                     self._estimated_spoken_s = estimated_spoken_s
             return completed, verdict, estimated_spoken_s
 
@@ -1227,6 +1366,7 @@ class Provocateur:
         estimated_spoken_s = 0.0
         self._dialogue_end_reason = dialogue_end_reason
         self._estimated_spoken_s = estimated_spoken_s
+        self._spoken_source = "estimate"
         self._judge_labels = {label: 0 for label in sorted(self._JUDGE_LABELS)}
         self._judge_failures = {"unavailable": 0, "malformed": 0}
         self._judge_prefix_recoveries = 0
@@ -1261,6 +1401,10 @@ class Provocateur:
             self.room.transcript.metadata.update(
                 {
                     "debate_mode": mode,
+                    "style": self.settings.debate.style,
+                    "cornered_min_duration_s": self.settings.debate.cornered_min_duration_s,
+                    "cornered_max_duration_s": self.settings.debate.cornered_max_duration_s,
+                    "cornered_spoken_source": self._spoken_source,
                     "dialogue_end_reason": dialogue_end_reason,
                     "estimated_spoken_duration_s": round(estimated_spoken_s, 3),
                     "exchanges": completed,

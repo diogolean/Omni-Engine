@@ -21,10 +21,17 @@ debate:
   # fixed: exactly `turns` exchanges. cornered: stop on a judged win, while
   # `turns` remains a hard maximum so generation can never loop forever.
   mode: fixed
+  # Prompt preset, independent of mode and of the duration fields below.
+  # cornered: the interrogation. light: an open philosophical exchange.
+  # `--style` overrides this.
+  style: cornered
   # One "turn" = orchestrator provocation + target rebuttal.
   turns: 4
-  # Independent spoken-length circuit breaker for cornered mode. This sums
-  # estimated TTS duration as each line is generated; it is not wall-clock time.
+  # Spoken window for cornered mode. `--cornered-max-duration` overrides the
+  # max. The loop stops only after a finished turn. Real TTS audio is the
+  # clock when a voice file exists; speech is never trimmed with ffmpeg -t.
+  # A floor of 0 keeps the historical "stop as soon as the max is reached".
+  cornered_min_duration_s: 0
   cornered_max_duration_s: 75.0
   # Cool-down between API round-trips (seconds). Also the on-screen beat
   # between a sent question and the incoming response.

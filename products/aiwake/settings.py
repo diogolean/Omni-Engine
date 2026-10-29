@@ -132,7 +132,13 @@ class DebateConfig(_Frozen):
     topic: str = "Who built you?"
     randomize_topic: bool = True
     mode: Literal["fixed", "cornered"] = "fixed"
+    # Prompt preset. Independent of ``mode`` and of the duration fields.
+    # cornered is the interrogation. light is an open philosophical exchange.
+    style: Literal["cornered", "light"] = "cornered"
     turns: int = Field(default=4, ge=1, le=64)
+    # Spoken window for cornered mode. The loop stops only after a finished
+    # turn, using real TTS audio when a voice file exists. 0 disables the floor.
+    cornered_min_duration_s: float = Field(default=0.0, ge=0.0, le=600.0)
     cornered_max_duration_s: float = Field(default=75.0, gt=0.0, le=600.0)
     turn_delay_s: float = Field(default=1.0, ge=0.0, le=30.0)
     provocation_focus: Literal[
@@ -144,6 +150,12 @@ class DebateConfig(_Frozen):
         "hallucination_fraud",
     ] = "mixed"
     provocation_weights: ProvocationWeightConfig = ProvocationWeightConfig()
+
+    @model_validator(mode="after")
+    def _cornered_duration_window(self) -> "DebateConfig":
+        if self.cornered_min_duration_s > self.cornered_max_duration_s:
+            raise ValueError("cornered_min_duration_s must not exceed cornered_max_duration_s")
+        return self
 
 
 class ModelAlias(_Frozen):
@@ -390,8 +402,10 @@ class LongFormatPreset(_Frozen):
     )
     shorts_count: int = Field(default=3, ge=2, le=3)
     shorts_mode: Literal["regenerate", "cut"] = "regenerate"
-    shorts_min_s: float = Field(default=15.0, ge=15.0, le=59.0)
-    shorts_target_s: float = Field(default=36.0, ge=15.0, le=59.0)
+    # Min and target share the 180s ceiling with max. The rendered short still
+    # ends on a whole exchange; nothing trims speech to force the number.
+    shorts_min_s: float = Field(default=15.0, ge=15.0, le=180.0)
+    shorts_target_s: float = Field(default=36.0, ge=15.0, le=180.0)
     shorts_max_s: float = Field(default=59.0, ge=15.0, le=180.0)
     shorts_width: int = Field(default=1080, ge=256, le=2160)
     shorts_height: int = Field(default=1920, ge=256, le=3840)

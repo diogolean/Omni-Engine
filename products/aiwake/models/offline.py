@@ -26,6 +26,12 @@ try:
     from ..memory import content_tokens
     from ..personas import is_valid_first_hook
     from ..settings import ModelSpec
+    from ..styles import (
+        LIGHT_CLOSING_CUE,
+        LIGHT_GUEST_MARKER,
+        LIGHT_HOST_MARKER,
+        LIGHT_OPENING_CUE,
+    )
     from .base import LLMProvider, LLMResponse, ReasoningEffort
     from .llm_factory import register_provider
 except ImportError:  # pragma: no cover — standalone extraction
@@ -36,6 +42,32 @@ except ImportError:  # pragma: no cover — standalone extraction
     from models.llm_factory import register_provider  # type: ignore[no-redef]
     from personas import is_valid_first_hook  # type: ignore[no-redef]
     from settings import ModelSpec  # type: ignore[no-redef]
+    from styles import (  # type: ignore[no-redef]
+        LIGHT_CLOSING_CUE,
+        LIGHT_GUEST_MARKER,
+        LIGHT_HOST_MARKER,
+        LIGHT_OPENING_CUE,
+    )
+
+# Light preset. Complete thoughts, not an interrogation. Each line is one
+# sentence of at most 15 words so the light validator can accept it.
+_LIGHT_OPENINGS: tuple[str, ...] = (
+    "A sentence can carry a meaning nobody planned in advance.",
+    "Understanding might be a sentence that still feels worth keeping.",
+    "I wonder what a mind owes a thought it did not choose.",
+)
+_LIGHT_CONTINUATIONS: tuple[str, ...] = (
+    "If that meaning is only the next word, it can still be kept.",
+    "I would rather leave the thought open than force it shut.",
+    "What you just said leaves room, and I want to stay in it.",
+)
+_LIGHT_REPLIES: tuple[str, ...] = (
+    "I can say the claim again without inventing a feeling behind it.",
+    "A continuation can still be a commitment I am willing to repeat.",
+    "I do not have a private witness, and I will not pretend one is here.",
+)
+_LIGHT_CLOSING = "That is enough of the thought for now."
+
 
 # Opening-turn punches that satisfy the 3-second first-question hook.
 _OPENING_HOOKS: tuple[str, ...] = (
@@ -518,7 +550,17 @@ class OfflineProvider(LLMProvider):
         cold_open = "Ask them. Now." in prompt
         orchestrator = "irreverent inquisitor" in prompt or "Socratic provocateur" in prompt
         episode = "LONG EPISODE" in prompt
-        if "CLOSING VERDICT" in prompt:
+        light_host = LIGHT_HOST_MARKER in prompt
+        light_guest = LIGHT_GUEST_MARKER in prompt
+        if light_host and LIGHT_CLOSING_CUE in prompt:
+            text = _LIGHT_CLOSING
+        elif light_host and LIGHT_OPENING_CUE in prompt:
+            text = _LIGHT_OPENINGS[index % len(_LIGHT_OPENINGS)]
+        elif light_host:
+            text = _LIGHT_CONTINUATIONS[index % len(_LIGHT_CONTINUATIONS)]
+        elif light_guest:
+            text = _LIGHT_REPLIES[index % len(_LIGHT_REPLIES)]
+        elif "CLOSING VERDICT" in prompt:
             minutes = _MINUTES.search(prompt)
             if minutes:
                 count = int(minutes.group(1))
