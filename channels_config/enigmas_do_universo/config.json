@@ -1,0 +1,30 @@
+{
+  "channel_id": "enigmas_do_universo",
+  "display_name": "Enigmas do Universo",
+  "outputs_dir": "outputs/enigmas_do_universo",
+  "board_name": "Enigmas do Universo",
+  "target_url": "",
+  "hashtags": "#Astronomy #SpaceMysteries #NASA #Cosmos #EnigmasDoUniverso",
+  "cta_button_label": "FOLLOW THE SKY ->",
+  "default_topic": "Astronomy Mysteries",
+  "cta_variants": [
+    "Follow Enigmas do Universo for the next sky we cannot explain.",
+    "The photograph is real. The explanation is still open.",
+    "Save this if the night sky still has a question.",
+    "Follow Enigmas do Universo — one mystery, one photograph."
+  ],
+  "ai_system_prompt": "You write pins for Enigmas do Universo. The brand name stays Portuguese. Titles, captions, and hooks are English, the same language as the other factory channels. Open with a real astronomical observation, then the question it still leaves open. Use phrases like 'astronomers still debate', 'one measurement shows', 'the photograph does not decide'. Never claim an alien visitation or a secret program as fact. Never use hype words: unlock, discover, elevate, game-changer, harness, revolutionary, dive.",
+  "pin_theme": {
+    "vignette": [4, 8, 22, 190],
+    "hook_text": [236, 242, 255],
+    "button_bg": [12, 24, 48, 230],
+    "button_text": [220, 230, 255],
+    "url_text": [160, 180, 210],
+    "divider": [120, 160, 210, 200],
+    "hook_template": "{topic}",
+    "cta_label": "FOLLOW THE SKY ->",
+    "site_domain": "",
+    "description_lead": "{title} — the observation, the measurement, and the question the photograph leaves open.",
+    "description_closer": "Follow Enigmas do Universo for the next signal."
+  }
+}
