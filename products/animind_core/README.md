@@ -8,7 +8,7 @@ Rhubarb visemes).
 | Endpoint | What runs |
 | --- | --- |
 | `POST /v1/characters` | `rig.py`: Gemini image via Aiwake `create_puppet.generate_character_image` (closed mouth, then "open" and "round" edits with the closed shot as reference) -> BiRefNet matte (rembg `birefnet-general`, as in the Rigly rigger) -> magenta despill -> Gemini feature boxes (face, eyes, mouth) -> layers `body`, `head`, `eyes`, `eyes_closed` + mouth sprites `X A B C D E F G H`. `right` is the mirror of `left`; `front` reuses the left art for now. |
-| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes per line (`animation.parametric.rhubarb`, envelope fallback) with absolute times and a `view` per line -> `scene.py` compositor -> Rigly `animation.parametric.renderer.AnimationRenderer` (ffmpeg) -> `jobs/<id>/preview.mp4` (1280x720, 24 fps, parody label baked in). |
+| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes per line (`animation.parametric.rhubarb`, envelope fallback) with absolute times and a `view` per line -> `scene.py` compositor with the cinematic look of `look.py` (parallax scenario plates with depth-of-field blur, rim/key light and soft drop shadows baked into the rig layers, camera push-in + handheld drift + reframing per speaker with cross-dissolves and whip pans, grade LUT + vignette, captions and lower-thirds with name and source; all precomputed per job and deterministic, ~0.1 s/frame on CPU) -> Rigly `animation.parametric.renderer.AnimationRenderer` (ffmpeg) -> `jobs/<id>/preview.mp4` (1280x720, 24 fps, parody label baked in). |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
 Without a Gemini key (or with `ANIMIND_FORCE_MOCK=1`) characters are a flat PIL

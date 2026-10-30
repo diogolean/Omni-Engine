@@ -125,3 +125,30 @@ def test_slug_folds_accents():
     from products.animind_core.characters import _slug
 
     assert _slug("Pirata filósofo de chapéu") == "pirata_filosofo_de_chapeu"
+
+
+def _scene(template="debate", scenario="arena"):
+    import numpy as np
+
+    from products.animind_core import scene
+
+    script = [{"speaker": 0, "text": "Primeira fala.", "startMs": 0, "endMs": 2500},
+              {"speaker": 1, "text": "Segunda fala.", "startMs": 2800, "endMs": 5000}]
+    return scene.Scene(template=template, scenario=scenario, rigs=[None, None], script=script, envelope=np.ones(600) * 0.5,
+                       env_fps=100, duration_s=5.5, disclaimer="Paródia • Gerado por IA", names=["A", "B"], roles=["x", "y"])
+
+
+def test_cinema_frames_are_deterministic():
+    a, b = _scene(), _scene()
+    for t in (0.2, 1.6, 2.85, 4.0):
+        fa, fb = a.frame(t), b.frame(t)
+        assert fa.size == (1280, 720) and fa.tobytes() == fb.tobytes()
+
+
+def test_debate_camera_cuts_to_each_speaker():
+    sc = _scene()
+    starts = [(round(s, 2), shot.cx < 640, kind) for s, shot, kind in sc.shots]
+    assert starts[0][2] == "cut" and len(starts) == 3
+    assert starts[1][1] and not starts[2][1]  # speaker 0 sits left, speaker 1 right
+    assert {k for *_, k in starts[1:]} == {"dissolve", "whip"}
+    assert len(sc.camera(starts[1][0] + 0.05)) in {1, 2}

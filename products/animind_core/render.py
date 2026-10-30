@@ -64,6 +64,15 @@ def line_view(template: str, speaker: int, index: int) -> str:
     return "front" if index % 2 == 0 else "right"
 
 
+def role_line(char: dict[str, Any], template: str, topic: str, lang: str) -> str:
+    """Lower-third second line: the photo's source when there is one, else the scene and topic."""
+    attr = (char.get("photo") or {}).get("attribution") or {}
+    if attr.get("author"):
+        return f"{'Foto' if lang == 'pt-BR' else 'Photo'}: {attr['author']} · {attr.get('license', '')}".strip(" ·")
+    kind = {"debate": ("Debate", "Debate"), "lesson": ("Aula", "Lesson")}.get(template, ("Fala", "Talk"))
+    return f"{kind[0] if lang == 'pt-BR' else kind[1]} · {topic}"[:60]
+
+
 async def _tts(text: str, voice: str, out: Path) -> None:
     import edge_tts  # noqa: PLC0415
 
@@ -107,7 +116,7 @@ def _set(job_id: str, **kw: Any) -> None:
         _JOBS[job_id].update(kw)
 
 
-def _rig_views(char: dict[str, Any], template: str, idx: int) -> dict[str, scene.RigView] | None:
+def _rig_views(char: dict[str, Any], template: str, idx: int, scenario: str = "studio") -> dict[str, scene.RigView] | None:
     saved = characters.load(str(char.get("id") or ""))
     if not saved:
         return None
@@ -115,7 +124,8 @@ def _rig_views(char: dict[str, Any], template: str, idx: int) -> dict[str, scene
     out = {}
     for view in ("front", "left", "right"):
         data = rig.load_view(skin, view)
-        out[view] = scene.load_rig_view(data, scene.fit_scale(data["canvas"]["h"], template, idx))
+        out[view] = scene.load_rig_view(data, scene.fit_scale(data["canvas"]["h"], template, idx),
+                                         scene.light(scenario, template, idx))
     return out
 
 
@@ -128,7 +138,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         if not chars:
             raise ValueError("characters is required")
         template = req.get("template") if req.get("template") in scene.PLACES else "solo"
-        scenario = req.get("scenario") if req.get("scenario") in scene.BG else "studio"
+        scenario = req.get("scenario") if req.get("scenario") in scene.SCENARIOS else "studio"
         lang = req.get("lang") if req.get("lang") in VOICES else "pt-BR"
         topic = (req.get("topic") or "inteligência artificial").strip()[:200]
         work = settings.data_dir() / "jobs" / job_id
@@ -159,9 +169,11 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             w.writeframes(track.tobytes())
         duration = len(track) / SAMPLE_RATE
         n = 2 if template == "debate" else 1
-        rigs = [_rig_views(chars[min(i, len(chars) - 1)], template, i) for i in range(n)]
+        cast = [chars[min(i, len(chars) - 1)] for i in range(n)]
+        rigs = [_rig_views(c, template, i, scenario) for i, c in enumerate(cast)]
         sc = scene.Scene(template=template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
-                         env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER)
+                         env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER,
+                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, topic, lang) for c in cast])
         video = work / "preview.mp4"
         _set(job_id, progress=0.55)
         with _RENDER_LOCK:
