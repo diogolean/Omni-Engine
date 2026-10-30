@@ -248,7 +248,7 @@ class Scene:
             shot = clamp(self.shot_for(line["speaker"], i))
             if shot != shots[-1][1]:
                 shots.append((max(start - 0.1, shots[-1][0] + 0.5), shot, "cut"))
-            if self.template == "debate" and end - start > 5.5 and line.get("kind") != "quote":
+            if self.template == "debate" and end - start > 5.5:
                 other = 1 - line["speaker"]
                 mid = start + (end - start) * 0.55
                 shots.append((mid, clamp(Shot(*self.shot_for(other, i)[:3], "react")), "cut"))
