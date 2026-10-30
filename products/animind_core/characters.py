@@ -89,6 +89,9 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "mouthShots": built["mouthShots"],
         "artStyle": art_style,
         "frontShot": built.get("frontShot", "mock"),
+        # generate-then-verify QA: score 0-100, Gemini cost, attempts, failed gates; sheet stored with the character
+        "qa": built.get("qa"),
+        "qaSheetUrl": url(skin / "qa_sheet.png") if (skin / "qa_sheet.png").exists() else None,
         "frontImageUrl": url(skin / "character_front.png") if (skin / "character_front.png").exists() else None,
         "imageUrl": url(skin / "character.png"),
         # Review sheet: every viseme and eye state per view, for a human check.

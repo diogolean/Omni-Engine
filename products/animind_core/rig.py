@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 _LOG = logging.getLogger("animind_core.rig")
 
@@ -120,37 +120,77 @@ def _png(src: Path, dest: Path, size: tuple[int, int] | None = None) -> Path:
     return dest
 
 
-def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, style: str = "cartoon",
-                   front: bool = True) -> dict[str, Any]:
-    """Draw the closed-mouth master, the front view (side as reference) and the two mouth edits.
+def _budget_left() -> float:
+    from production.cost.google_guardrail import get_google_cost_tracker, max_google_cost_usd  # noqa: PLC0415
+    return max_google_cost_usd() - get_google_cost_tracker().total_usd()
 
-    Order matters under the budget cap: master, then front, then mouths (mouths can be warped)."""
+
+def spent_usd() -> float:
+    from production.cost.google_guardrail import get_google_cost_tracker  # noqa: PLC0415
+    return get_google_cost_tracker().total_usd()
+
+
+def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict[str, int], notes: dict[str, str],
+                 tries: int = 2) -> Path | None:
+    """Draw the 4x3 parts sheet (9 mouths + 3 eye states) and gate it: 12 cells must slice out and
+    the closed-mouth and open-eye cells must register on the master (NCC). Re-drawn while the cap allows."""
+    from . import partsheet, qa  # noqa: PLC0415
+    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    with Image.open(closed) as im:
+        base = im.convert("RGBA")
+    for attempt in range(tries):
+        if _budget_left() < qa.IMAGE_USD:
+            notes["sheet"] = notes.get("sheet", "") + f" | no budget for attempt {attempt + 1}"
+            break
+        attempts["sheet"] = attempts.get("sheet", 0) + 1
+        raw = work / "_gen_sheet"
+        try:
+            generate_character_image(partsheet.SHEET_PROMPT, raw, aspect_ratio="4:3", reference_path=closed)
+            out = _png(raw, work / "source_sheet.png")
+            got = partsheet.load(out, base, boxes)
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stop / bad image
+            notes["sheet"] = f"failed: {str(exc)[:160]}"
+            continue
+        finally:
+            raw.unlink(missing_ok=True)
+        good = [k for k in (got or {}).get("good", []) if k in partsheet.VISEMES]
+        if len(good) >= partsheet.MIN_GOOD_MOUTHS:
+            notes["sheet"] = f"gemini (cells ok {''.join(good)}, tries {attempt + 1})"
+            return out
+        notes["sheet"] = f"rejected (cells ok {''.join(good) or '-'}, tries {attempt + 1})"
+    return None
+
+
+def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, style: str = "cartoon",
+                   front: bool = True, attempts: dict[str, int] | None = None) -> dict[str, Any]:
+    """Generate-then-verify: master (closed mouth) -> parts sheet (all mouths + lids, gated) -> front view
+    (gated for symmetry). Order is priority under the cap; a gate failure re-draws only while budget remains,
+    otherwise that asset falls back to the deterministic path (warped mouths, drawn lids, side art)."""
     from . import styles  # noqa: PLC0415
     from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
 
+    attempts = attempts if attempts is not None else {}
     work.mkdir(parents=True, exist_ok=True)
     raw = work / "_gen_closed"
+    attempts["master"] = 1
     generate_character_image(raw_prompt or STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style)), raw, aspect_ratio="4:5")
     closed = _png(raw, work / "source_closed.png")
     raw.unlink(missing_ok=True)
     size = Image.open(closed).size
     shots: dict[str, Path] = {"closed": closed}
     notes: dict[str, str] = {}
+    boxes = detect_features(closed)
+    sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=1)
     front_boxes: dict[str, Box] | None = None
-    if front:
-        front_boxes = _front_shot(closed, work, size, shots, notes)
-    for name, prompt in EDIT_PROMPTS.items():
-        raw = work / f"_gen_{name}"
-        try:
-            generate_character_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
-            shots[name] = _png(raw, work / f"source_{name}.png", size)
-            notes[name] = "gemini"
-        except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stops included; visemes fall back to warps
-            _LOG.warning("shot %s skipped: %s", name, exc)
-            notes[name] = f"warped (shot failed: {str(exc)[:160]})"
-        finally:
-            raw.unlink(missing_ok=True)
-    return {"shots": shots, "notes": notes, "frontBoxes": front_boxes}
+    if front and _budget_left() >= 0.039:
+        attempts["front"] = 1
+        front_boxes = _front_shot(closed, work, size, shots, notes, attempts=2 if _budget_left() >= 0.078 + 0.002 else 1)
+    if sheet is None and _budget_left() >= 0.039:
+        sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=1)
+    if sheet is not None:
+        shots["sheet"] = sheet
+    return {"shots": shots, "notes": notes, "frontBoxes": front_boxes, "boxes": boxes}
 
 
 FRONT_RETRY = (
@@ -283,45 +323,83 @@ def _crop_layer(img: Image.Image) -> tuple[Image.Image, tuple[int, int]]:
 # ---------------------------------------------------------------- sprites
 
 
-def _mouth_sprite(base: Image.Image, shot: Image.Image | None, box: Box, *, sy: float = 1.0, sx: float = 1.0) -> Image.Image:
-    """Mouth patch for ``box``: the base mouth, with ``shot`` (scaled about the
-    mouth centre) blended in through a feathered ellipse."""
+def _lips_mask(box: Box, mouth: Box) -> Image.Image:
+    """Alpha of every mouth sprite inside ``box``: a soft ellipse around the detected mouth
+    (dropping below it for open jaws). The base head is inpainted only where this is fully
+    opaque, so where the sprite fades out the base underneath is the very same art: no seam,
+    no rectangle, no second mustache."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    mw, mh = mouth[2] - mouth[0], mouth[3] - mouth[1]
+    # detector boxes are tight: lip corners and cupid's bow sit outside them
+    ex0, ex1 = mouth[0] - x0 - mw * 0.3, mouth[2] - x0 + mw * 0.3
+    ey0, ey1 = mouth[1] - y0 - mh * 0.3, min(h - 2, mouth[3] - y0 + mh * 0.7)
+    r = max(2, int(min(ex1 - ex0, ey1 - ey0) * 0.08))
+    # fade fully inside the box, but never shrink past the detected mouth itself
+    ex0 = max(ex0, min(3 * r, mouth[0] - x0))
+    ey0 = max(ey0, min(3 * r, mouth[1] - y0))
+    ex1 = min(ex1, max(w - 3 * r, mouth[2] - x0))
+    m = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(m).ellipse((ex0, ey0, ex1, ey1), fill=255)
+    return m.filter(ImageFilter.GaussianBlur(r))
+
+
+def _mouth_sprite(base: Image.Image, shot: Image.Image | None, box: Box, mouth: Box, *,
+                  sy: float = 1.0, sx: float = 1.0, ref: Image.Image | None = None) -> Image.Image:
+    """Mouth sprite for ``box``: the base art (lips + mustache, which this layer owns) with,
+    for open shapes, only the cavity of ``shot`` colour-matched and pasted in. Alpha is
+    always :func:`_lips_mask`, identical for every viseme so crossfades stay seamless."""
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
     patch = base.crop(box)
-    src = (shot or base).crop(box)
+    lips = _lips_mask(box, mouth)
     if shot is not None:
-        src = _open_cavity(patch, src, sx, sy)
+        patch = _open_cavity(patch, shot.crop(box), lips, sx, sy, ref.crop(box) if ref is not None else None)
     elif sx != 1.0 or sy != 1.0:
         nw, nh = max(1, int(w * sx)), max(1, int(h * sy))
-        scaled = src.resize((nw, nh), Image.LANCZOS)
-        src = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        src.paste(scaled, ((w - nw) // 2, int((h - nh) * 0.35)))
-        filled = patch.copy()
-        filled.alpha_composite(src)
-        src = filled
-    mask = _feather_ellipse(w, h)
-    alpha = Image.fromarray(
-        (np.asarray(mask, np.float32) / 255 * np.asarray(src.getchannel("A"), np.float32)).astype(np.uint8)
-    )
-    out = src.copy()
-    out.putalpha(alpha)
-    return out
+        scaled = patch.resize((nw, nh), Image.LANCZOS)
+        layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        layer.paste(scaled, ((w - nw) // 2, int((h - nh) * 0.35)))
+        core = Image.fromarray(np.where(np.asarray(lips) > 250, 255, 0).astype(np.uint8)).filter(ImageFilter.GaussianBlur(3))
+        layer.putalpha(ImageChops.multiply(layer.getchannel("A"), core))  # the rim keeps the base art untouched
+        patch = patch.copy()
+        patch.alpha_composite(layer)
+    alpha = np.minimum(np.asarray(lips), np.asarray(base.crop(box).getchannel("A")))
+    patch.putalpha(Image.fromarray(alpha))
+    return patch
 
 
-def _open_cavity(patch: Image.Image, shot: Image.Image, sx: float, sy: float) -> Image.Image:
-    """Base ``patch`` with only the part of ``shot`` that differs (the open
-    mouth) pasted in, scaled about its own top edge. Scaling the whole crop
-    instead squashed the mustache and lips into a second copy over the base
-    one, which read as a horizontal tear in close-ups."""
+def _open_cavity(patch: Image.Image, shot: Image.Image, lips: Image.Image, sx: float, sy: float,
+                 ref: Image.Image | None = None) -> Image.Image:
+    """Base ``patch`` with only the open-mouth cavity of ``shot`` pasted in. The cavity is the
+    largest changed blob inside the lips area, minus dark desaturated hair (a redrawn mustache
+    would otherwise double), shifted to the base colours (median of the unchanged ring) and
+    scaled about its top edge."""
+    import cv2  # noqa: PLC0415
+
     a, b = np.asarray(patch, np.int16), np.asarray(shot, np.int16)
-    diff = (np.abs(a[..., :3] - b[..., :3]).max(axis=2) > 40) & (b[..., 3] > 128)
+    r = np.asarray(ref, np.int16) if ref is not None else a  # sheet cells: diff against the sheet's own closed mouth
+    inside = np.asarray(lips) > 250  # cavity stays in the opaque core; the rim is always base art
+    def _hair(x: np.ndarray) -> np.ndarray:
+        rgb = x[..., :3].astype(np.float32)
+        return (rgb.mean(axis=2) < 90) & (rgb.max(axis=2) - rgb.min(axis=2) < 35)
+
+    hair = _hair(a) | _hair(b) | _hair(r)  # mustache in either image stays the base's (owned by this layer, never redrawn)
+    diff = (np.abs(r[..., :3] - b[..., :3]).max(axis=2) > 40) & (b[..., 3] > 128) & (r[..., 3] > 128) & inside & ~hair
+    diff = cv2.morphologyEx(diff.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n, lab, st, _ = cv2.connectedComponentsWithStats(diff, connectivity=8)
     out = patch.copy()
-    if not diff.any():
+    if n < 2:
         return out
-    m = Image.fromarray((diff * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(2))
-    cav = shot.copy()
-    cav.putalpha(Image.fromarray(np.minimum(np.asarray(m), np.asarray(shot.getchannel("A")))))
+    keep = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+    cav_m = lab == keep
+    ring = inside & ~cav_m & (b[..., 3] > 128) & (a[..., 3] > 128)
+    shift = np.median(a[ring][:, :3] - b[ring][:, :3], axis=0) if ring.sum() > 20 else np.zeros(3)
+    fixed = np.asarray(shot).copy()
+    fixed[..., :3] = np.clip(b[..., :3] + shift, 0, 255).astype(np.uint8)
+    m = Image.fromarray((cav_m * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(3)).filter(ImageFilter.GaussianBlur(1.5))
+    cav = Image.fromarray(fixed)
+    cav.putalpha(Image.fromarray(np.minimum(np.asarray(m), fixed[..., 3])))
     bx = m.getbbox()
     if bx and (sx != 1.0 or sy != 1.0):
         part = cav.crop(bx)
@@ -343,18 +421,61 @@ def _skin_and_ink(base: Image.Image, face: Box) -> tuple[tuple[int, int, int], t
     return skin, ink  # type: ignore[return-value]
 
 
+def _lid_skin(base: Image.Image, box: Box, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Skin tone of the upper lid: median of the band just above the eye opening."""
+    x0, y0, x1, y1 = box
+    h = y1 - y0
+    arr = np.asarray(base.crop((x0, max(0, y0 - h // 6), x1, y0 + h // 6)))
+    px = arr[arr[..., 3] > 200][..., :3]
+    if len(px) < 10:
+        return fallback
+    lum = px.mean(axis=1)
+    return tuple(int(v) for v in np.median(px[lum >= np.percentile(lum, 50)], axis=0))  # type: ignore[return-value]
+
+
 def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], ink: tuple[int, int, int]) -> Image.Image:
-    """Lids: skin over each eye plus a dark arc along the lash line."""
+    """Closed lids at full resolution: lid-coloured skin over the eye opening with a 1 px
+    edge, plus a crisp lash line (drawn 4x and downsampled for clean anti-aliasing)."""
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     for x0, y0, x1, y1 in eyes:
         w, h = x1 - x0, y1 - y0
-        lid = Image.new("RGBA", (w, h), skin + (255,))
-        lid.putalpha(_feather_ellipse(w, h, 0.18))
+        tone = _lid_skin(base, (x0, y0, x1, y1), skin)
+        k = 4
+        m = Image.new("L", (w * k, h * k), 0)
+        ImageDraw.Draw(m).ellipse((w * k * 0.06, h * k * 0.1, w * k * 0.94, h * k * 0.9), fill=255)
+        lid = Image.new("RGBA", (w, h), tone + (255,))
+        lid.putalpha(m.resize((w, h), Image.LANCZOS))
+        line = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
+        ImageDraw.Draw(line).arc((w * k * 0.1, h * k * 0.05, w * k * 0.9, h * k * 0.75), 20, 160,
+                                 fill=ink + (255,), width=max(2 * k, h * k // 12))
+        lid.alpha_composite(line.resize((w, h), Image.LANCZOS))
         layer.alpha_composite(lid, (x0, y0))
-        d = ImageDraw.Draw(layer)
-        d.arc((x0 + w * 0.08, y0 + h * 0.15, x1 - w * 0.08, y1 - h * 0.15), 15, 165, fill=ink + (255,), width=max(3, h // 9))
     alpha = np.minimum(np.asarray(layer.getchannel("A")), np.asarray(base.getchannel("A")))
     layer.putalpha(Image.fromarray(alpha))
+    return layer
+
+
+def _sheet_lids(base: Image.Image, closed: Image.Image, eyes: list[Box]) -> Image.Image | None:
+    """Closed lids cut from the parts sheet (registered ``closed``): the drawn lids inside each eye
+    opening, crisp 1 px edge, shifted to the master's skin colours (median over the eye box rim)."""
+    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    for x0, y0, x1, y1 in eyes:
+        w, h = x1 - x0, y1 - y0
+        cell = np.asarray(closed.crop((x0, y0, x1, y1))).astype(np.int16)
+        ref = np.asarray(base.crop((x0, y0, x1, y1))).astype(np.int16)
+        if (cell[..., 3] > 128).mean() < 0.6:
+            return None
+        k = 4
+        m = Image.new("L", (w * k, h * k), 0)
+        ImageDraw.Draw(m).ellipse((w * k * 0.06, h * k * 0.1, w * k * 0.94, h * k * 0.9), fill=255)
+        m = np.asarray(m.resize((w, h), Image.LANCZOS))
+        rim = (m < 20) & (cell[..., 3] > 128) & (ref[..., 3] > 128)
+        shift = np.median(ref[rim][:, :3] - cell[rim][:, :3], axis=0) if rim.sum() > 10 else np.zeros(3)
+        out = cell.copy()
+        out[..., :3] = np.clip(cell[..., :3] + shift, 0, 255)
+        out[..., 3] = np.minimum(m, cell[..., 3])
+        layer.alpha_composite(Image.fromarray(out.astype(np.uint8)), (x0, y0))
+    layer.putalpha(Image.fromarray(np.minimum(np.asarray(layer.getchannel("A")), np.asarray(base.getchannel("A")))))
     return layer
 
 
@@ -439,13 +560,13 @@ def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], i
         sock = Image.new("RGBA", (w, h), (255, 255, 255, 0))
         sock.putalpha(sk)
         socket.alpha_composite(sock, (x0, y0))
-        shifts.append((max(w * 0.12, w * 0.42 - r * 0.6), max(h * 0.08, h * 0.36 - r * 0.7)))
+        shifts.append((max(1.0, min(w * 0.4 - r * 1.1, w * 0.18)), max(1.0, min(h * 0.36 - r * 1.1, h * 0.1))))  # iris stays inside the socket
         # half lid: skin over the upper socket, curved lash line
-        lid = Image.new("RGBA", (w, h), skin + (255,))
+        lid = Image.new("RGBA", (w, h), _lid_skin(base, (x0, y0, x0 + w, y0 + h), skin) + (255,))
         lm = Image.new("L", (w, h), 0)
         ImageDraw.Draw(lm).ellipse((w * 0.04, h * 0.02, w * 0.96, h * 0.98), fill=255)
         ImageDraw.Draw(lm).ellipse((w * 0.02, h * 0.42, w * 0.98, h * 1.3), fill=0)
-        lid.putalpha(lm.filter(ImageFilter.GaussianBlur(max(1, h // 30))))
+        lid.putalpha(lm.filter(ImageFilter.GaussianBlur(0.8)))
         ImageDraw.Draw(lid).arc((w * 0.1, h * 0.42, w * 0.9, h * 1.3), 215, 325,
                                 fill=ink + (255,), width=max(2, h // 14))
         half.alpha_composite(lid, (x0, y0))
@@ -486,18 +607,17 @@ def _slice_bust(base: Image.Image, face: Box, chin: int) -> tuple[Image.Image, I
     return torso, neck, sl.head
 
 
-def _mouthless(head: Image.Image, mbox: Box) -> Image.Image:
-    """``head`` with the mouth region (ellipse in ``mbox``) inpainted from the surrounding skin,
-    so the face stays clean and the mouth layer alone carries the lips."""
+def _mouthless(head: Image.Image, mbox: Box, mouth: Box) -> Image.Image:
+    """``head`` inpainted where the mouth sprite is fully opaque (:func:`_lips_mask` > 250), so
+    the mouth layer alone carries lips and mustache and its soft rim lies over unchanged art."""
     import cv2  # noqa: PLC0415
 
     arr = np.asarray(head).copy()
     hole = np.zeros(arr.shape[:2], np.uint8)
     x0, y0, x1, y1 = mbox
-    w, h = x1 - x0, y1 - y0
-    cv2.ellipse(hole, ((x0 + x1) // 2, (y0 + y1) // 2), (int(w * 0.42), int(h * 0.42)), 0, 0, 360, 255, -1)
+    hole[y0:y1, x0:x1] = (np.asarray(_lips_mask(mbox, mouth)) > 250).astype(np.uint8) * 255
     hole &= (arr[..., 3] > 128).astype(np.uint8) * 255
-    rgb = cv2.inpaint(np.ascontiguousarray(arr[..., :3]), hole, max(3, w // 12), cv2.INPAINT_TELEA)
+    rgb = cv2.inpaint(np.ascontiguousarray(arr[..., :3]), hole, max(3, (x1 - x0) // 12), cv2.INPAINT_TELEA)
     arr[..., :3] = rgb
     return Image.fromarray(arr)
 
@@ -578,7 +698,8 @@ def load_view(skin: Path, view: str) -> dict[str, Any]:
 
 
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
-             matte: Callable[[Image.Image], Image.Image], front: bool = False) -> dict[str, Any]:
+             matte: Callable[[Image.Image], Image.Image], front: bool = False,
+             sheet: Path | None = None) -> dict[str, Any]:
     """Build view parts from mattes + boxes: left/right from the side art, or ``views/front`` when ``front``."""
     with Image.open(shots["closed"]) as im:
         base = _despill(matte(im).convert("RGBA"))
@@ -591,21 +712,32 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
             dx, dy = _shift(np.asarray(base), np.asarray(cut))
             aligned[name] = _translate(cut, dx, dy) if abs(dx) < 40 and abs(dy) < 40 else None
     face, mouth = boxes["face"], boxes["mouth"]
-    mbox = _grow(mouth, size, 0.45, 0.45, 1.3)  # open jaws drop down
+    mbox = _grow(mouth, size, 0.6, 0.7, 1.3)  # open jaws drop down
     mbox = (mbox[0], mbox[1], mbox[2], min(mbox[3], max(face[3] + 6, mouth[3] + 4)))
     mbox = _union(mbox, _grow(mouth, size, 0.3, 0.3, 0.6))
     op, rd = aligned["open"], aligned["round"]
     sprites = {
-        "X": _mouth_sprite(base, None, mbox),
-        "A": _mouth_sprite(base, None, mbox),
-        "B": _mouth_sprite(base, op, mbox, sy=0.45) if op else _mouth_sprite(base, None, mbox, sy=1.06),
-        "C": _mouth_sprite(base, op, mbox, sy=0.72) if op else _mouth_sprite(base, None, mbox, sy=1.12),
-        "D": _mouth_sprite(base, op, mbox) if op else _mouth_sprite(base, None, mbox, sy=1.2),
-        "E": _mouth_sprite(base, rd, mbox) if rd else _mouth_sprite(base, op, mbox, sx=0.8, sy=0.8),
-        "F": _mouth_sprite(base, rd, mbox, sx=0.82, sy=0.85) if rd else _mouth_sprite(base, None, mbox, sx=0.85),
-        "G": _mouth_sprite(base, op, mbox, sy=0.3) if op else _mouth_sprite(base, None, mbox),
-        "H": _mouth_sprite(base, op, mbox, sy=0.6) if op else _mouth_sprite(base, None, mbox, sy=1.08),
+        "X": _mouth_sprite(base, None, mbox, mouth),
+        "A": _mouth_sprite(base, None, mbox, mouth),
+        "B": _mouth_sprite(base, op, mbox, mouth, sy=0.45) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.06),
+        "C": _mouth_sprite(base, op, mbox, mouth, sy=0.72) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.12),
+        "D": _mouth_sprite(base, op, mbox, mouth) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.2),
+        "E": _mouth_sprite(base, rd, mbox, mouth) if rd else _mouth_sprite(base, op, mbox, mouth, sx=0.8, sy=0.8),
+        "F": _mouth_sprite(base, rd, mbox, mouth, sx=0.82, sy=0.85) if rd else _mouth_sprite(base, None, mbox, mouth, sx=0.85),
+        "G": _mouth_sprite(base, op, mbox, mouth, sy=0.3) if op else _mouth_sprite(base, None, mbox, mouth),
+        "H": _mouth_sprite(base, op, mbox, mouth, sy=0.6) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.08),
     }
+    parts_from_sheet: dict[str, Any] | None = None
+    if sheet is not None and sheet.exists():
+        from . import partsheet  # noqa: PLC0415
+        with Image.open(shots["closed"]) as src:  # register on the unmatted art: the matte's empty alpha skews NCC
+            ref_art = src.convert("RGB") if src.size == base.size else base
+        parts_from_sheet = partsheet.load(sheet, ref_art, boxes)
+    good = set(parts_from_sheet.get("good", [])) if parts_from_sheet else set()
+    if parts_from_sheet:  # per-cell: only cells that registered well replace the fallback mouths
+        ms = parts_from_sheet["mouths"]
+        ref = ms["X"] if "X" in good else None
+        sprites |= {v: _mouth_sprite(base, ms[v], mbox, mouth, ref=ref) for v in "ABCDEFGH" if v in good}
     skin_rgb, ink = _skin_and_ink(base, face)
     eyes_boxes = [_grow(boxes[k], size, 0.18, 0.25, 0.25) for k in ("left_eye", "right_eye")]
     eyes_open = Image.new("RGBA", size, (0, 0, 0, 0))
@@ -614,6 +746,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         patch.putalpha(Image.fromarray(np.minimum(np.asarray(patch.getchannel("A")), np.asarray(_feather_ellipse(b[2] - b[0], b[3] - b[1], 0.18)))))
         eyes_open.alpha_composite(patch, (b[0], b[1]))
     eyes_closed = _eyes_closed(base, eyes_boxes, skin_rgb, ink)
+    if parts_from_sheet and "eyes_closed" in good:
+        eyes_closed = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_closed"], eyes_boxes) or eyes_closed
     eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
     chin = max(face[3], mouth[3]) + int((face[3] - face[1]) * 0.04)
     torso, neck, head = _slice_bust(base, face, chin)
@@ -621,7 +755,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "size": size,
         "torso": _crop_layer(torso),
         "neck": _crop_layer(neck),
-        "head": _crop_layer(_mouthless(head, mbox)),
+        "head": _crop_layer(_mouthless(head, mbox, mouth)),
         "eyes": _crop_layer(eyes_open),
         "eyes_closed": _crop_layer(eyes_closed),
         "eye_white": _crop_layer(eye["eye_white"]),
@@ -631,6 +765,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "eyeRig": eye["meta"],
         "visemes": {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()},
     }
+    (skin / ("sheet_front.json" if front else "sheet.json")).write_text(json.dumps(
+        {"used": sorted(good), "ncc": parts_from_sheet.get("cellNcc") if parts_from_sheet else None}), encoding="utf-8")
     if front:
         base.save(skin / "character_front.png", format="PNG", optimize=True)
         (skin / "rig_front.json").write_text(json.dumps({"size": size, "boxes": boxes, "mouthBox": mbox}, indent=2), encoding="utf-8")
@@ -691,14 +827,21 @@ def reset_budget() -> None:
 
 def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_prompt: str | None = None,
               style: str = "cartoon") -> dict[str, Any]:
-    """Real path: Gemini shots -> BiRefNet mattes -> layered rig with 3 views (front drawn, not reused)."""
+    """One call, generate-then-verify: Gemini master + parts sheet + front, each gated and re-drawn within
+    the cap; BiRefNet mattes; layered rig in 3 views; then the QA gates (:mod:`qa`) score the rig, a failed
+    skin/edge gate on sheet mouths rebuilds with the deterministic mouths, and ``qa.json`` + ``qa_sheet.png``
+    are stored with the character."""
+    from . import qa  # noqa: PLC0415
+
     reset_budget()
-    gen = generate_shots(subject, skin, raw_prompt=raw_prompt, style=style)
-    boxes = detect_features(gen["shots"]["closed"])
+    attempts: dict[str, int] = {}
+    gen = generate_shots(subject, skin, raw_prompt=raw_prompt, style=style, attempts=attempts)
+    boxes = gen["boxes"]
+    sheet = gen["shots"].get("sheet")
     matte = BiRefNetMatte()
     status = {"left": "ready", "right": "ready (mirror of left)", "front": "ready (left art; no frontal shot)"}
     try:
-        views = assemble(skin, gen["shots"], boxes, url, matte=matte)
+        views = assemble(skin, gen["shots"], boxes, url, matte=matte, sheet=sheet)
         fr = gen["shots"].get("front")
         if fr:
             try:
@@ -707,11 +850,19 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
             except Exception as exc:  # noqa: BLE001 — detection/cut failure keeps the side art
                 _LOG.warning("front view rig failed: %s", exc)
                 status["front"] = f"ready (left art; front rig failed: {str(exc)[:120]})"
+        report = qa.finalize(skin, spent_usd(), attempts)
+        if sheet is not None and not (report["gates"]["skin"]["pass"] and report["gates"]["edges"]["pass"]):
+            attempts["sheetFallback"] = 1  # free retry: deterministic mouths/lids instead of the sheet
+            views |= assemble(skin, gen["shots"], boxes, url, matte=matte)
+            gen["notes"]["sheet"] = gen["notes"].get("sheet", "") + " | QA fallback to warped mouths"
+            report = qa.finalize(skin, spent_usd(), attempts)
     finally:
         matte.close()
     views.setdefault("front", views["left"])
-    return {"views": views, "viewStatus": status, "mouthShots": {k: v for k, v in gen["notes"].items() if k != "front"},
-            "frontShot": gen["notes"].get("front", "skipped")}
+    return {"views": views, "viewStatus": status, "mouthShots": {"sheet": gen["notes"].get("sheet", "none")},
+            "frontShot": gen["notes"].get("front", "skipped"),
+            "qa": {"score": report["score"], "costUsd": report["costUsd"], "attempts": attempts,
+                   "failed": [k for k, g in report["gates"].items() if not g["pass"]]}}
 
 
 def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:

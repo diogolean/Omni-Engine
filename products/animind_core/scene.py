@@ -24,6 +24,17 @@ from . import eyes, look, styles
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
+XFADE_S = 1.5 / FPS  # visemes crossfade over ~1.5 frames instead of popping
+
+
+def viseme_mix(cues: list[dict[str, Any]], t: float, fade: float = XFADE_S) -> tuple[str, str, float]:
+    """``(current, previous, weight of current)`` at ``t``: the newest cue fades in over ``fade`` s."""
+    cur, prev, since = "X", "X", 1e9
+    for cue in cues:
+        if cue["t"] > t:
+            break
+        prev, cur, since = cur, cue["v"], t - cue["t"]
+    return cur, prev, 1.0 if cur == prev or fade <= 0 else min(1.0, max(0.0, since / fade))
 SS = 2.0  # characters are composited supersampled so close-ups stay sharp
 _REPO = Path(__file__).resolve().parents[2]
 _FONT_DIR = _REPO / "Fonts" / "Montserrat" / "static"
@@ -174,13 +185,8 @@ class Scene:
         ms = t * 1000
         return next((l for l in self.script if l["startMs"] <= ms <= l["endMs"] + grace * 1000), None)
 
-    def _viseme(self, line: dict[str, Any], t: float) -> str:
-        cur = "X"
-        for cue in line.get("visemes") or []:
-            if cue["t"] > t:
-                break
-            cur = cue["v"]
-        return cur
+    def _viseme(self, line: dict[str, Any], t: float) -> tuple[str, str, float]:
+        return viseme_mix(line.get("visemes") or [], t, XFADE_S)
 
     def _view(self, idx: int, t: float) -> str:
         line = self._line_at(t, 0.35)
@@ -326,7 +332,7 @@ class Scene:
             self._cache[key] = (img, xy)
         return self._cache[key]
 
-    def _draw_char(self, stage: Image.Image, idx: int, t: float, amp: float, vis: str, soft: bool = False) -> None:
+    def _draw_char(self, stage: Image.Image, idx: int, t: float, amp: float, vis: tuple[str, str, float], soft: bool = False) -> None:
         cx = W * self.places[min(idx, len(self.places) - 1)][0] * SS
         seed = 1.3 * idx
         breathe = math.sin(t * 1.6 + seed) * 2 * SS
@@ -347,8 +353,15 @@ class Scene:
             return
         lids = eyes.blink(t, 7 + idx * 13)
         gx, gy = self.gaze(idx, t, view)
-        mouth = rv.visemes.get(vis) or rv.visemes.get("X")
+        gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))  # eye_shift is the socket-safe maximum
+        cur_v, prev_v, wv = vis
+        mouth = rv.visemes.get(cur_v) or rv.visemes.get("X")
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
+        before = rv.visemes.get(prev_v) or rv.visemes.get("X")
+        if mouth and before and wv < 1.0 and before[0] is not mouth[0]:
+            fading = mouth[0].copy()  # same alpha shape for every viseme, so a plain blend is seamless
+            fading.putalpha(fading.getchannel("A").point(lambda a: int(a * wv)))
+            parts = list(rv.layers) + [("mouth", before[0], before[1], before[2]), ("mouth", fading, mouth[1], mouth[2] + 0.001)]
         names = {p[0] for p in parts}
         movable = {"eye_white", "iris", "eye_socket"} <= names
         socket = next((p for p in parts if p[0] == "eye_socket"), None)
@@ -461,7 +474,7 @@ class Scene:
         for idx in order:
             speaking = line is not None and line["speaker"] == idx
             soft = single and line is not None and not speaking
-            self._draw_char(stage, idx, t, amp if speaking else 0.0, self._viseme(line, t) if speaking else "X", soft)
+            self._draw_char(stage, idx, t, amp if speaking else 0.0, self._viseme(line, t) if speaking else ("X", "X", 1.0), soft)
             img, xy = self._set_piece("lectern", idx, soft)
             stage.alpha_composite(img, xy)
         return stage

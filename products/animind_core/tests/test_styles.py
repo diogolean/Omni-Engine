@@ -63,7 +63,7 @@ def test_squashed_open_mouth_keeps_mustache_rows_intact():
     ImageDraw.Draw(shot).ellipse((45, 60, 75, 90), fill=(120, 20, 30, 255))  # open mouth
     box = (10, 30, 110, 100)
     for sy in (0.3, 0.45, 0.6):
-        spr = np.asarray(_mouth_sprite(base, shot, box, sy=sy))[..., :3].astype(int)
+        spr = np.asarray(_mouth_sprite(base, shot, box, (30, 45, 90, 70), sy=sy))[..., :3].astype(int)
         ref = np.asarray(base.crop(box))[..., :3].astype(int)
         assert np.abs(spr[:20] - ref[:20]).max() == 0  # mustache (rows 10-25) not squashed or doubled
         assert (spr[30:] != ref[30:]).any()  # mouth still opens
@@ -82,3 +82,45 @@ def test_rig_has_torso_neck_mouthless_head_and_mouth_layer(tmp_path):
     # the mock's lip line (dark red at y=440, x 285..355) is gone from the face layer
     px = np.asarray(head)[440 - hy, 320 - hx]
     assert not (px[0] < 160 and px[1] < 80), px
+
+
+def test_mouth_sprite_soft_alpha_matches_base_and_hides_seam():
+    from PIL import Image, ImageDraw
+    from products.animind_core.rig import _mouth_sprite, _mouthless
+    base = Image.new("RGBA", (160, 160), (230, 190, 160, 255))
+    ImageDraw.Draw(base).rectangle((50, 70, 110, 80), fill=(40, 30, 30, 255))  # mustache
+    shot = base.copy()
+    ImageDraw.Draw(shot).rectangle((0, 0, 159, 159), fill=(250, 215, 185, 255))  # lighter redraw
+    ImageDraw.Draw(shot).ellipse((65, 82, 95, 105), fill=(120, 20, 30, 255))  # open cavity
+    box, mouth = (20, 50, 140, 130), (50, 68, 110, 90)
+    spr = _mouth_sprite(base, shot, box, mouth)
+    a = np.asarray(spr.getchannel("A"))
+    assert a[0].max() == 0 and a[:, 0].max() == 0  # no rectangle edge
+    rgb = np.asarray(spr)[..., :3].astype(int)
+    ref = np.asarray(base.crop(box))[..., :3].astype(int)
+    ring = (a > 30) & (a < 250)
+    ring[28:60, 40:80] = False  # the open cavity itself (shot coords 65-95 x 82-105)
+    assert np.abs(rgb[ring] - ref[ring]).max() <= 2  # soft rim = base colours, no lighter patch
+    head = np.asarray(_mouthless(base, box, mouth))
+    # where the sprite is not fully opaque the head is untouched, so no second mustache shows
+    full = np.zeros(head.shape[:2], bool); full[50:130, 20:140] = a > 250
+    assert (head[~full] == np.asarray(base)[~full]).all()
+
+
+def test_viseme_crossfade_and_iris_clamp():
+    from products.animind_core.scene import viseme_mix
+    cues = [{"t": 0.0, "v": "X"}, {"t": 1.0, "v": "D"}]
+    assert viseme_mix(cues, 0.5) == ("X", "X", 1.0)
+    cur, prev, w = viseme_mix(cues, 1.02)
+    assert (cur, prev) == ("D", "X") and 0 < w < 1
+    assert viseme_mix(cues, 1.5)[2] == 1.0
+
+
+def test_closed_lids_are_sharp():
+    from PIL import Image
+    from products.animind_core.rig import _eyes_closed
+    base = Image.new("RGBA", (200, 120), (230, 190, 160, 255))
+    lids = np.asarray(_eyes_closed(base, [(40, 30, 100, 70)], (230, 190, 160), (30, 20, 20)).getchannel("A")).astype(int)
+    row = lids[50, 30:110]
+    ramp = ((row > 10) & (row < 245)).sum()
+    assert ramp <= 6  # edge within ~2-3 px per side, not a blurry blob
