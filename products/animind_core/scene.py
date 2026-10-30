@@ -24,13 +24,20 @@ from . import look
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
-SS = 1.5  # characters are composited supersampled so close-ups stay sharp
+SS = 2.0  # characters are composited supersampled so close-ups stay sharp
 _REPO = Path(__file__).resolve().parents[2]
 _FONT_DIR = _REPO / "Fonts" / "Montserrat" / "static"
 SCENARIOS = ("studio", "classroom", "arena", "space")
-# (x centre as a fraction of W, scale on top of "fit to 92% of the height")
-PLACES = {"debate": [(0.27, 0.85), (0.73, 0.85)], "lesson": [(0.25, 0.9)], "solo": [(0.5, 0.95)]}
+# (x centre as a fraction of W, scale on top of BUST_H)
+PLACES = {"debate": [(0.29, 1.0), (0.71, 1.0)], "lesson": [(0.25, 1.0)], "solo": [(0.5, 1.06)]}
+# Set geometry (fractions of H / W). The rigs are busts: each stands behind a lectern whose top hides
+# the cut, so in a wide shot the floor, the lectern base and its contact shadow show the full depth.
+BUST_H, BUST_BOTTOM = 0.55, 0.8
+LECTERN_TOP, LECTERN_BASE, LECTERN_W = 0.645, 0.835, 0.27
+FACE_Y = 0.42  # where the faces sit, for close framings
+BOARD = (0.45, 0.08, 0.94, 0.62)  # lesson board on the stage (x0, y0, x1, y1)
 DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.5, 0.6
+CAP_H = 180  # caption strip height (speaker label + two rows)
 
 
 def _font(weight: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -45,8 +52,6 @@ class RigView:
     size: tuple[int, int]
     layers: list[tuple[str, Image.Image, tuple[int, int], int]] = field(default_factory=list)
     visemes: dict[str, tuple[Image.Image, tuple[int, int], int]] = field(default_factory=dict)
-    shadow: Image.Image | None = None
-    shadow_pad: int = 0
     side: int = 1
 
 
@@ -70,10 +75,6 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
     for v, layer in view["visemes"].items():
         img, xy = sized(layer, rim=False)
         rv.visemes[v] = (img, xy, layer.get("z", 99))
-    if light:
-        radius = 9 * SS
-        rv.shadow = look.drop_shadow([(i, xy) for n, i, xy, _ in rv.layers if n in {"body", "head"}], size, radius)
-        rv.shadow_pad = int(radius * 3)
     return rv
 
 
@@ -138,9 +139,12 @@ class Scene:
         self.board_font = _font("Medium", 30)
         self.name_font = _font("Bold", 30)
         self.role_font = _font("SemiBold", 15)
+        self.speaker_font = _font("Bold", 16)
         self.names, self.roles = names or [], roles or []
         self.shots = self._plan_shots()
         self._cache: dict[Any, Image.Image] = {}
+        n = 2 if self.template == "debate" else 1
+        self.lights = [look.light_for(self.scenario, self.template, i, self.places[min(i, len(self.places) - 1)][0]) for i in range(n)]
 
     # ------------------------------------------------------------ timeline
     def _line_at(self, t: float, grace: float = 0.0) -> dict[str, Any] | None:
@@ -164,30 +168,52 @@ class Scene:
         return "front"
 
     def shot_for(self, speaker: int, i: int) -> Shot:
-        """Framing per template: wide, or a medium close-up with look room."""
+        """Shot grammar per line: a wide establishing shot, over-the-shoulder singles, a close-up
+        cutaway on every real quote and a two-shot for the closing (debate); the lesson cuts to
+        the board for quotes."""
+        line = self.script[i] if 0 <= i < len(self.script) else {}
+        quote = line.get("kind") == "quote"
+        last = i == len(self.script) - 1 and len(self.script) >= 4
+        if speaker < 0:
+            return Shot(W / 2, H * 0.5, 1.0, "wide")
+        px = self.places[min(speaker, len(self.places) - 1)][0]
+        toward = 1 if px < 0.5 else -1  # look room toward the other side of the frame
         if self.template == "debate":
-            if speaker < 0:
-                return Shot(W / 2, H * 0.5, 1.06)
-            px = self.places[min(speaker, 1)][0]
-            look_room = 0.07 if px < 0.5 else -0.07
-            return Shot(W * (px + look_room), H * 0.55, 1.42)
+            if last:
+                return Shot(W / 2, H * 0.47, 1.24, "two")
+            if quote:
+                return Shot(W * (px + 0.035 * toward), H * FACE_Y, 2.1, "cu")
+            return Shot(W * (px + 0.115 * toward), H * 0.47, 1.6, "ots")
         if self.template == "lesson":
-            return Shot(W / 2, H * 0.5, 1.05) if speaker < 0 or i % 2 == 0 else Shot(W / 2, H * 0.44, 1.16)
-        return Shot(W / 2, H * 0.5, 1.08) if speaker < 0 or i % 2 == 0 else Shot(W / 2, H * 0.5, 1.34)
+            if quote:
+                bx0, by0, bx1, by1 = BOARD
+                return Shot(W * (bx0 + bx1) / 2, H * (by0 + by1) / 2 + H * 0.03, 1.72, "board")
+            if last:
+                return Shot(W / 2, H * 0.5, 1.0, "wide")
+            return Shot(W * (px + 0.13), H * 0.47, 1.55, "mcu")
+        if quote:
+            return Shot(W / 2, H * FACE_Y, 2.0, "cu")
+        return Shot(W / 2, H * 0.5, 1.0, "wide") if last else Shot(W / 2, H * 0.47, 1.5, "mcu")
 
     def _plan_shots(self) -> list[tuple[float, Shot, str]]:
-        """(start s, shot, transition into it). Debate opens wide, then cuts per speaker."""
+        """(start s, shot, transition into it). Every template opens wide (establishing), then cuts
+        to the first speaker; hard cuts between singles, a dissolve into wide/two/board shots and a
+        whip pan when a quote close-up answers the other side."""
         shots: list[tuple[float, Shot, str]] = [(0.0, look.clamp_shot(self.shot_for(-1, 0)), "cut")]
-        kinds = ("dissolve", "whip")
         for i, line in enumerate(self.script):
             start = line["startMs"] / 1000
             if i == 0:
-                if self.template != "debate":
-                    continue
-                start = min(start + 1.4, max(start, line["endMs"] / 1000 - 1.0))
+                start = min(start + 1.6, max(start, line["endMs"] / 1000 - 1.0))
             shot = look.clamp_shot(self.shot_for(line["speaker"], i))
-            if shot != shots[-1][1]:
-                shots.append((max(start - 0.12, shots[-1][0] + 0.5), shot, kinds[len(shots) % 2]))
+            prev = shots[-1][1]
+            if shot != prev:
+                if shot.kind in ("wide", "two", "board") or prev.kind in ("wide", "board"):
+                    kind = "dissolve"
+                elif shot.kind == "cu" and abs(shot.cx - prev.cx) > W * 0.25:
+                    kind = "whip"
+                else:
+                    kind = "cut"
+                shots.append((max(start - 0.12, shots[-1][0] + 0.5), shot, kind))
         return shots
 
     def camera(self, t: float) -> list[tuple[float, Shot, float]]:
@@ -196,7 +222,7 @@ class Scene:
         start, shot, kind = self.shots[k]
 
         def pushed(s: Shot, since: float) -> Shot:
-            return Shot(s.cx, s.cy, s.zoom * (1 + 0.045 * min(1.0, since / 7.0)))
+            return Shot(s.cx, s.cy, s.zoom * (1 + 0.045 * min(1.0, since / 7.0)), s.kind)
 
         local = t - start
         cur = pushed(shot, local)
@@ -206,31 +232,71 @@ class Scene:
         before = pushed(prev, start - p_start)
         if kind == "dissolve" and local < DISSOLVE_S:
             a = look.ease(local / DISSOLVE_S)
-            return [(1 - a, Shot(before.cx, before.cy, before.zoom * (1 + 0.01 * a)), 0.0), (a, cur, 0.0)]
+            return [(1 - a, Shot(before.cx, before.cy, before.zoom * (1 + 0.01 * a), before.kind), 0.0), (a, cur, 0.0)]
         if kind == "whip" and local < WHIP_S:
             u = local / WHIP_S
             a = look.ease(u)
             s = Shot(before.cx + (cur.cx - before.cx) * a, before.cy + (cur.cy - before.cy) * a,
-                     before.zoom + (cur.zoom - before.zoom) * a)
+                     before.zoom + (cur.zoom - before.zoom) * a, cur.kind)
             return [(1.0, s, math.sin(math.pi * u))]
         return [(1.0, cur, 0.0)]
 
     # ------------------------------------------------------------ drawing
-    def _draw_char(self, stage: Image.Image, idx: int, t: float, amp: float, vis: str) -> None:
+    def _soft(self, idx: int, view: str, rv: RigView) -> Image.Image:
+        """The listener in an over-the-shoulder single: out of focus and darker (cached rest pose)."""
+        key = ("soft", idx, view)
+        if key not in self._cache:
+            img = Image.new("RGBA", rv.size, (0, 0, 0, 0))
+            mouth = rv.visemes.get("X")
+            parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
+            for name, layer, xy, _z in sorted(parts, key=lambda p: p[3]):
+                if name != "eyes_closed":
+                    img.alpha_composite(layer, xy)
+            img = img.filter(ImageFilter.GaussianBlur(7 * SS))
+            r, g, b, a = img.split()
+            dim = lambda v: int(v * 0.62)  # noqa: E731
+            self._cache[key] = Image.merge("RGBA", (r.point(dim), g.point(dim), b.point(dim), a))
+        return self._cache[key]
+
+    def _set_piece(self, name: str, idx: int, soft: bool) -> tuple[Image.Image, tuple[int, int]]:
+        """Lectern (or its contact shadow) for place ``idx``, in stage pixels."""
+        key = (name, idx, soft)
+        if key not in self._cache:
+            cx = W * self.places[min(idx, len(self.places) - 1)][0] * SS
+            lw = round(W * LECTERN_W * SS)
+            lh = round(H * (LECTERN_BASE - LECTERN_TOP) * SS)
+            if name == "lectern":
+                img = look.lectern(self.scenario, (lw, lh), self.lights[min(idx, len(self.lights) - 1)])
+                if soft:
+                    img = img.filter(ImageFilter.GaussianBlur(6 * SS))
+                xy = (round(cx - lw / 2), round(H * LECTERN_TOP * SS))
+            else:  # contact shadow on the floor, pushed away from the key
+                sw, sh = round(lw * 1.35), round(H * 0.06 * SS)
+                img = look.contact_shadow((sw, sh))
+                side = self.lights[min(idx, len(self.lights) - 1)].side
+                xy = (round(cx - sw / 2 + side * W * 0.012 * SS), round(H * LECTERN_BASE * SS - sh * 0.55))
+            self._cache[key] = (img, xy)
+        return self._cache[key]
+
+    def _draw_char(self, stage: Image.Image, idx: int, t: float, amp: float, vis: str, soft: bool = False) -> None:
         cx = W * self.places[min(idx, len(self.places) - 1)][0] * SS
         seed = 1.3 * idx
         breathe = math.sin(t * 1.6 + seed) * 2 * SS
         views = self.rigs[idx] if idx < len(self.rigs) else None
-        rv = (views.get(self._view(idx, t)) or views.get("front")) if views else None
+        view = self._view(idx, t)
+        rv = (views.get(view) or views.get("front")) if views else None
+        bottom = H * BUST_BOTTOM * SS
         if rv is None:
             d = ImageDraw.Draw(stage)
             lift = amp * 4 * SS
-            d.ellipse((cx - 160 * SS, H * 0.6 * SS, cx + 160 * SS, H * 1.1 * SS), fill=(42, 42, 42, 255))
-            d.ellipse((cx - 100 * SS, (H * 0.25) * SS - lift, cx + 100 * SS, H * 0.6 * SS - lift), fill=(51, 51, 51, 255))
+            top = bottom - H * BUST_H * SS
+            d.ellipse((cx - 150 * SS, top + H * 0.3 * SS, cx + 150 * SS, bottom + H * 0.2 * SS), fill=(42, 42, 42, 255))
+            d.ellipse((cx - 85 * SS, top - lift, cx + 85 * SS, top + H * 0.32 * SS - lift), fill=(51, 51, 51, 255))
             return
-        x0, y0 = round(cx - rv.size[0] / 2), round(H * 0.98 * SS) - rv.size[1]
-        if rv.shadow is not None:  # cast away from the key light, onto the backdrop
-            stage.alpha_composite(rv.shadow, (x0 - rv.shadow_pad + round(rv.side * 26 * SS), y0 - rv.shadow_pad + round(10 * SS + breathe * 0.4)))
+        x0, y0 = round(cx - rv.size[0] / 2), round(bottom) - rv.size[1]
+        if soft:
+            stage.alpha_composite(self._soft(idx, view, rv), (x0, y0 + round(breathe * 0.4)))
+            return
         blink = (t + seed) % 3.6 < 0.12
         mouth = rv.visemes.get(vis) or rv.visemes.get("X")
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
@@ -240,51 +306,78 @@ class Scene:
             dy = breathe * 0.4 if name == "body" else breathe - amp * 4 * SS - (amp * 6 * SS if name == "brows" else 0)
             stage.alpha_composite(img, (x0 + lx, y0 + ly + round(dy)))
 
-    def _board(self, stage: Image.Image, t: float) -> None:
+    def _board(self, stage: Image.Image, t: float, soft: bool = False) -> None:
+        """Lesson board: beat label, the line set as large as the board allows (vertically
+        centred), and the quote's source at the foot."""
         cur = self._line_at(t, 0.35) or (self.script[0] if self.script else None)
         key = ("board", cur["text"] if cur else "", cur.get("kind") if cur else None)
+        bx0, by0, bx1, by1 = BOARD
         if key not in self._cache:
-            bw, bh = int(W * 0.44 * SS), int(H * 0.48 * SS)
-            img = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+            bw, bh = int(W * (bx1 - bx0) * SS), int(H * (by1 - by0) * SS)
+            pad = int(18 * SS)
+            img = Image.new("RGBA", (bw + 2 * pad, bh + 2 * pad), (0, 0, 0, 0))
+            shadow = Image.new("L", img.size, 0)  # soft shadow on the wall behind the board
+            ImageDraw.Draw(shadow).rounded_rectangle((pad + 6 * SS, pad + 10 * SS, pad + bw, pad + bh + 4 * SS), int(12 * SS), fill=150)
+            img.putalpha(shadow.filter(ImageFilter.GaussianBlur(9 * SS)))
             d = ImageDraw.Draw(img)
-            if self.scenario == "classroom":  # chalkboard in a wooden frame
-                d.rounded_rectangle((0, 0, bw - 1, bh - 1), int(10 * SS), fill=(70, 46, 28, 255))
-                d.rounded_rectangle((int(12 * SS), int(12 * SS), bw - int(12 * SS), bh - int(12 * SS)), int(6 * SS), fill=(24, 44, 36, 255))
-            else:  # glass panel
-                d.rounded_rectangle((0, 0, bw - 1, bh - 1), int(16 * SS), fill=(255, 255, 255, 16), outline=(255, 255, 255, 46), width=2)
-            ink = (236, 238, 228, 235) if self.scenario == "classroom" else (255, 255, 255, 225)
+            o = pad
+            if self.scenario == "classroom":  # chalkboard in a wooden frame, with a chalk tray
+                d.rounded_rectangle((o, o, o + bw - 1, o + bh - 1), int(10 * SS), fill=(82, 54, 32, 255))
+                d.rounded_rectangle((o + int(14 * SS), o + int(14 * SS), o + bw - int(14 * SS), o + bh - int(14 * SS)), int(5 * SS), fill=(26, 48, 39, 255))
+                d.rectangle((o + int(30 * SS), o + bh - int(14 * SS), o + bw - int(30 * SS), o + bh - int(4 * SS)), fill=(104, 70, 42, 255))
+                ink = (238, 240, 230, 240)
+            else:  # dark glass screen with a thin accent frame
+                d.rounded_rectangle((o, o, o + bw - 1, o + bh - 1), int(14 * SS), fill=(10, 12, 16, 228), outline=(*self.accent, 150), width=int(2 * SS))
+                ink = (255, 255, 255, 240)
             quote = bool(cur) and cur.get("kind") == "quote"
-            x, top, width = W * 0.03 * SS, H * 0.05 * SS, W * 0.38 * SS
+            x, width = o + bw * 0.075, bw * 0.85
+            top = o + bh * 0.1
             if cur and cur.get("beat"):
-                _tracked(d, (x, top), str(cur["beat"]).upper(), _font("Bold", int(18 * SS)), (*self.accent, 255), 3 * SS)
+                _tracked(d, (x, top), str(cur["beat"]).upper(), _font("Bold", int(17 * SS)), (*self.accent, 255), 3.5 * SS)
+                d.line((x, top + 30 * SS, x + 44 * SS, top + 30 * SS), fill=(*self.accent, 220), width=int(3 * SS))
             src = (cur.get("quote") or {}).get("source", "") if quote else ""
             text = f"“{key[1]}”" if quote else key[1]
-            room = bh - top - H * (0.16 if src else 0.08) * SS
-            for size in (30, 27, 24, 21):  # largest size whose rows fit the board
-                font = _font("MediumItalic" if quote else "Medium", int(size * SS))
-                rows, step = _wrap(d, text, font, width), size * 1.42 * SS
+            body_top, body_bot = top + 50 * SS, o + bh - bh * (0.17 if src else 0.09)
+            room = body_bot - body_top
+            for size in (52, 48, 44, 40, 37, 34, 31, 28, 25, 22):  # largest size whose rows fit the board
+                font = _font("SemiBoldItalic" if quote else "SemiBold", int(size * SS))
+                rows, step = _wrap(d, text, font, width), size * 1.3 * SS
                 if len(rows) * step <= room:
                     break
-            for i, s in enumerate(rows):
-                d.text((x, top + H * 0.07 * SS + i * step), s, font=font, fill=ink)
+            y = body_top + max(0.0, (room - len(rows) * step) / 2)
+            for i, row in enumerate(rows):
+                d.text((x, y + i * step), row, font=font, fill=ink)
             if src:
-                sf = _font("Medium", int(16 * SS))
+                sf = _font("Medium", int(17 * SS))
                 src = "— " + src
                 while d.textlength(src, font=sf) > width and len(src) > 8:
                     src = src.rstrip("…")[:-2].rstrip(" ,·") + "…"
-                d.text((x, bh - H * 0.07 * SS), src, font=sf, fill=(*ink[:3], 170))
+                d.text((x, o + bh - bh * 0.1), src, font=sf, fill=(*ink[:3], 175), anchor="lm")
             self._cache[key] = img
-        stage.alpha_composite(self._cache[key], (int(W * 0.48 * SS), int(H * 0.14 * SS)))
+        board = self._cache[key]
+        if soft:  # out of focus behind the teacher in a medium close-up
+            if ("soft",) + key not in self._cache:
+                self._cache[("soft",) + key] = board.filter(ImageFilter.GaussianBlur(5 * SS))
+            board = self._cache[("soft",) + key]
+        pad = (board.width - int(W * (bx1 - bx0) * SS)) // 2
+        stage.alpha_composite(board, (int(W * bx0 * SS) - pad, int(H * by0 * SS) - pad))
 
-    def _stage(self, t: float, line: dict[str, Any] | None, amp: float) -> Image.Image:
+    def _stage(self, t: float, line: dict[str, Any] | None, amp: float, shot: Shot | None = None) -> Image.Image:
         stage = Image.new("RGBA", (round(W * SS), round(H * SS)), (0, 0, 0, 0))
         if self.template == "lesson":
-            self._board(stage, t)
+            self._board(stage, t, soft=shot is not None and shot.kind == "mcu")
         n = 2 if self.template == "debate" else 1
+        for idx in range(n):
+            img, xy = self._set_piece("shadow", idx, False)
+            stage.alpha_composite(img, xy)
         order = sorted(range(n), key=lambda i: 1 if (line and line["speaker"] == i) else 0)  # speaker in front
+        single = shot is not None and shot.kind in ("ots", "cu") and n > 1
         for idx in order:
             speaking = line is not None and line["speaker"] == idx
-            self._draw_char(stage, idx, t, amp if speaking else 0.0, self._viseme(line, t) if speaking else "X")
+            soft = single and line is not None and not speaking
+            self._draw_char(stage, idx, t, amp if speaking else 0.0, self._viseme(line, t) if speaking else "X", soft)
+            img, xy = self._set_piece("lectern", idx, soft)
+            stage.alpha_composite(img, xy)
         return stage
 
     def _shoot(self, stage: Image.Image, shot: Shot, drift: tuple[float, float, float], blur: float) -> Image.Image:
@@ -323,17 +416,25 @@ class Scene:
         return len(pages) - 1
 
     def _caption(self, line: dict[str, Any], page: int = 0) -> Image.Image:
-        key = ("cap", line["text"], line.get("kind"), page)
+        """Bottom caption: a small tracked speaker label in the accent colour over one or two rows."""
+        key = ("cap", line["text"], line.get("kind"), page, line.get("speaker"))
         if key not in self._cache:
             font = self.quote_font if line.get("kind") == "quote" else self.caption_font
             rows = self._pages(line)[page]
-            img = Image.new("RGBA", (W, 150), (0, 0, 0, 0))
+            img = Image.new("RGBA", (W, CAP_H), (0, 0, 0, 0))
             d = ImageDraw.Draw(img)
-            y0 = 150 - 20 - len(rows) * 44
+            y0 = CAP_H - 22 - len(rows) * 44
+            sp = line.get("speaker", -1)
+            label = pretty_name(self.names[sp]).upper() if 0 <= sp < len(self.names) else ""
+            lw = sum(d.textlength(c, font=self.speaker_font) + 2.6 for c in label)
             for i, s in enumerate(rows):
                 d.text((W / 2, y0 + i * 44), s, font=font, fill=(0, 0, 0, 230), anchor="mt")
+            if label:
+                d.text((W / 2, y0 - 26), label, font=self.speaker_font, fill=(0, 0, 0, 200), anchor="mt")
             shadow = img.filter(ImageFilter.GaussianBlur(5))
             d = ImageDraw.Draw(shadow)
+            if label:
+                _tracked(d, (W / 2 - lw / 2, y0 - 26), label, self.speaker_font, (*self.accent, 255), 2.6)
             for i, s in enumerate(rows):
                 d.text((W / 2, y0 + i * 44), s, font=font, fill=(255, 255, 255, 255), anchor="mt")
             self._cache[key] = shadow
@@ -389,12 +490,13 @@ class Scene:
             self._cache[key] = img.crop((0, 0, pw + 1, 96))
         return self._cache[key]
 
-    def _overlays(self, frame: Image.Image, t: float, line: dict[str, Any] | None) -> None:
+    def _overlays(self, frame: Image.Image, t: float, line: dict[str, Any] | None, shot: Shot | None = None) -> None:
         frame.alpha_composite(self.scrim)
-        if line and self.template != "lesson":
+        on_board = self.template == "lesson" and (shot is None or shot.kind in ("board", "wide"))
+        if line and not on_board:  # the lesson reads the board; captions only when it is out of frame
             since = t - line["startMs"] / 1000
             a = look.ease(since / 0.18)
-            frame.alpha_composite(_fade(self._caption(line, self._page_at(line, t)), a), (0, H - 150 + round(6 * (1 - a))))
+            frame.alpha_composite(_fade(self._caption(line, self._page_at(line, t)), a), (0, H - CAP_H + round(6 * (1 - a))))
         if line and (tag := self._tag(line)) is not None:
             a = look.ease((t - line["startMs"] / 1000) / 0.25)
             frame.alpha_composite(_fade(tag, a), ((W - tag.width) // 2, 22 - round(8 * (1 - a))))
@@ -409,7 +511,7 @@ class Scene:
                     right = self.template == "debate" and line["speaker"] == 1
                     slide = round(30 * (1 - a)) * (1 if right else -1)
                     x = (W - 64 - lt.width if right else 64) + slide
-                    frame.alpha_composite(_fade(lt, a), (x, H - 236))
+                    frame.alpha_composite(_fade(lt, a), (x, H - 262))
         d = ImageDraw.Draw(frame)
         lw = d.textlength(self.disclaimer, font=self.label_font) + 28
         d.rounded_rectangle((24, 24, 24 + lw, 58), 17, fill=(255, 255, 255, 235))
@@ -420,10 +522,12 @@ class Scene:
         line = self._line_at(t)
         k = min(len(self.env) - 1, max(0, int(t * self.env_fps)))
         amp = float(self.env[k]) if len(self.env) else 0.0
-        stage = self._stage(t, line, amp)
+        cam = self.camera(t)
+        shot = cam[-1][1]
+        stage = self._stage(t, line, amp, shot)
         drift = look.handheld(t)
         out = None
-        for weight, shot, blur in self.camera(t):
+        for weight, shot, blur in cam:
             img = self._shoot(stage, shot, drift, blur)
             out = img if out is None else Image.blend(out, img, weight)
         rgb = ImageChops.multiply(out.convert("RGB").point(self.lut), self.vig)
@@ -431,7 +535,7 @@ class Scene:
         if fade < 0.999:
             rgb = Image.blend(Image.new("RGB", (W, H)), rgb, fade)
         frame = rgb.convert("RGBA")
-        self._overlays(frame, t, line)
+        self._overlays(frame, t, line, cam[-1][1])
         return frame
 
     def frames(self) -> Iterator[np.ndarray]:
@@ -441,7 +545,7 @@ class Scene:
 
 def fit_scale(canvas_h: int, template: str, idx: int) -> float:
     places = PLACES.get(template, PLACES["solo"])
-    return places[min(idx, len(places) - 1)][1] * (H * 0.92) / canvas_h
+    return places[min(idx, len(places) - 1)][1] * (H * BUST_H) / canvas_h
 
 
 def light(scenario: str, template: str, idx: int) -> Light:

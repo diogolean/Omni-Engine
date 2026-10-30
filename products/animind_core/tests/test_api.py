@@ -151,8 +151,25 @@ def test_cinema_frames_are_deterministic():
 
 def test_debate_camera_cuts_to_each_speaker():
     sc = _scene()
-    starts = [(round(s, 2), shot.cx < 640, kind) for s, shot, kind in sc.shots]
-    assert starts[0][2] == "cut" and len(starts) == 3
+    starts = [(round(s, 2), shot.cx < 640, kind, shot.kind) for s, shot, kind in sc.shots]
+    assert starts[0][2] == "cut" and starts[0][3] == "wide" and len(starts) == 3  # establishing wide first
     assert starts[1][1] and not starts[2][1]  # speaker 0 sits left, speaker 1 right
-    assert {k for *_, k in starts[1:]} == {"dissolve", "whip"}
+    assert [s[3] for s in starts[1:]] == ["ots", "ots"] and [s[2] for s in starts[1:]] == ["dissolve", "cut"]
     assert len(sc.camera(starts[1][0] + 0.05)) in {1, 2}
+
+
+def test_shot_grammar_quotes_get_a_close_up_and_the_close_is_a_two_shot():
+    import numpy as np
+
+    from products.animind_core import scene
+
+    script = [{"speaker": i % 2, "text": f"Fala {i}.", "startMs": i * 3000, "endMs": i * 3000 + 2500,
+               "kind": "quote" if i == 1 else "paraphrase"} for i in range(4)]
+    sc = scene.Scene(template="debate", scenario="studio", rigs=[None, None], script=script, envelope=np.ones(1300) * 0.5,
+                     env_fps=100, duration_s=12.5, disclaimer="x", names=["A", "B"], roles=["x", "y"])
+    kinds = [shot.kind for _, shot, _ in sc.shots]
+    assert kinds == ["wide", "ots", "cu", "ots", "two"]
+    cu = sc.shots[2][1]
+    assert cu.zoom > sc.shots[1][1].zoom and cu.cx > 640  # speaker 1's quote, tight on the right
+    frame = sc.frame(6.5)  # the listener is out of focus in a single; still a full frame
+    assert frame.size == (1280, 720)

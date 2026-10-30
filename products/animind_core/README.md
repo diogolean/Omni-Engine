@@ -8,7 +8,7 @@ Rhubarb visemes).
 | Endpoint | What runs |
 | --- | --- |
 | `POST /v1/characters` | `rig.py`: Gemini image via Aiwake `create_puppet.generate_character_image` (closed mouth, then "open" and "round" edits with the closed shot as reference) -> BiRefNet matte (rembg `birefnet-general`, as in the Rigly rigger) -> magenta despill -> Gemini feature boxes (face, eyes, mouth) -> layers `body`, `head`, `eyes`, `eyes_closed` + mouth sprites `X A B C D E F G H`. `right` is the mirror of `left`; `front` reuses the left art for now. |
-| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes per line (`animation.parametric.rhubarb`, envelope fallback) with absolute times and a `view` per line -> `scene.py` compositor with the cinematic look of `look.py` (parallax scenario plates with depth-of-field blur, rim/key light and soft drop shadows baked into the rig layers, camera push-in + handheld drift + reframing per speaker with cross-dissolves and whip pans, grade LUT + vignette, captions and lower-thirds with name and source; all precomputed per job and deterministic, ~0.1 s/frame on CPU) -> Rigly `animation.parametric.renderer.AnimationRenderer` (ffmpeg) -> `jobs/<id>/preview.mp4` (1280x720, 24 fps, parody label baked in). |
+| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes per line (`animation.parametric.rhubarb`, envelope fallback) with absolute times and a `view` per line -> `scene.py` compositor with the cinematic look of `look.py` (built sets per scenario on parallax plates (perspective floor under a 0.6 H horizon, set pieces and practical lights that match the rim colours, depth-of-field blur), each bust standing behind a lectern that hides the cut with a contact shadow on the floor, rim/key light, set ambient and occlusion baked into the rig layers, shot grammar (wide establishing shot, over-the-shoulder singles with the listener out of focus, a close-up cutaway on every real quote, a closing two-shot; the lesson cuts to the board for quotes) with hard cuts, dissolves and whip pans plus push-in and handheld drift, grade LUT + vignette, captions and lower-thirds with name and source; all precomputed per job and deterministic, ~0.1 s/frame on CPU) -> Rigly `animation.parametric.renderer.AnimationRenderer` (ffmpeg) -> `jobs/<id>/preview.mp4` (1280x720, 24 fps, parody label baked in). |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
 Without a Gemini key (or with `ANIMIND_FORCE_MOCK=1`) characters are a flat PIL
@@ -43,7 +43,7 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   repeats 7+ words of a quote is replaced. `basis` names the quote it restates, if any. With no sheet
   (fictional characters, offline) every line is a paraphrase.
 - On screen: a chip "CITAÇÃO REAL · source · Wikiquote" or "PARÁFRASE"; quote captions in italics
-  within “ ”; captions paged two rows at a time. The lesson board shows the beat, the quote and its source.
+  within “ ”; captions paged two rows at a time. The lesson board shows the beat, the line set as large as the board allows, and the quote source; captions carry a tracked speaker label.
 - Result adds `writer` (`gemini`|`template`), `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
   The character name is cut before a comma or parenthesis to find the person ("Sócrates, de toga" -> "Sócrates").
 
