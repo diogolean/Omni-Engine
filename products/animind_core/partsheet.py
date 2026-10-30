@@ -203,6 +203,38 @@ def load(sheet_path: Path, base: Image.Image, boxes: dict[str, Box]) -> dict[str
         return load_image(im.convert("RGB"), base, boxes)
 
 
+OPEN_RANK = "BHCED"  # Rhubarb shapes from least to most open (F pucker, G F/V, A pressed keep their cells)
+
+
+def opening(img: Image.Image, ref: Image.Image, mouth: Box) -> float:
+    """How far a mouth cell departs from the rest mouth X inside the (grown) mouth box: mean colour change."""
+    x0, y0, x1, y1 = mouth
+    w, h = x1 - x0, y1 - y0
+    box = (max(0, x0 - w // 4), max(0, y0 - h // 2), x1 + w // 4, y1 + h)
+    a = np.asarray(img.convert("RGB").crop(box)).astype(np.float32)
+    b = np.asarray(ref.convert("RGB").crop(box)).astype(np.float32)
+    return float(np.abs(a - b).mean())
+
+
+def rank_by_opening(mouths: dict[str, Image.Image], mouth: Box, good: list[str]) -> dict[str, str]:
+    """Gemini often draws the right shapes in the wrong cells. Re-assign the open shapes among the good
+    cells by measured opening (least -> most: B, H, C, E, D) so D is always the widest. Returns new->old."""
+    if "X" not in good:
+        return {}
+    keys = [k for k in OPEN_RANK if k in good]
+    if len(keys) < 3:
+        return {}
+    score = {k: opening(mouths[k], mouths["X"], mouth) for k in keys}
+    by_open = sorted(keys, key=score.get)
+    target = [k for k in OPEN_RANK if k in keys]
+    old = {k: mouths[k] for k in keys}
+    mapping = {}
+    for new, src in zip(target, by_open, strict=True):
+        mouths[new] = old[src]
+        mapping[new] = src
+    return {k: v for k, v in mapping.items() if k != v}
+
+
 def load_image(sheet: Image.Image, base: Image.Image, boxes: dict[str, Box]) -> dict[str, Any] | None:
     cells = slice_grid(sheet)
     if len(cells) < COLS * ROWS:
@@ -221,10 +253,13 @@ def load_image(sheet: Image.Image, base: Image.Image, boxes: dict[str, Box]) -> 
     for e in EYES:
         eyes[e], n = align(named[e], base, band, face)
         e_ncc.append(n)
+    good = [k for k, n in zip(ORDER, m_ncc + e_ncc, strict=True) if n >= CELL_MIN_NCC]
+    relabel = rank_by_opening(mouths, mouth, good)
     return {
         "mouths": mouths,
+        "relabel": relabel,
         "eyes": eyes,
         "ncc": {"mouth": round(float(np.median(m_ncc)), 3), "eyes": round(float(np.median(e_ncc)), 3)},
-        "good": [k for k, n in zip(ORDER, m_ncc + e_ncc, strict=True) if n >= CELL_MIN_NCC],
+        "good": good,
         "cellNcc": {k: round(n, 3) for k, n in zip(ORDER, m_ncc + e_ncc, strict=True)},
     }
