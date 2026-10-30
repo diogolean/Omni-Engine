@@ -409,16 +409,18 @@ def grade_lut(scenario: str) -> list[int]:
     return lut
 
 
-def vignette(strength: float = 0.5) -> Image.Image:
+def vignette(strength: float = 0.5, size: tuple[int, int] = (W, H)) -> Image.Image:
+    W, H = size  # noqa: N806
     x, y = _grid(W, H)
     r = np.sqrt(((x - W / 2) / (W / 2)) ** 2 + ((y - H / 2) / (H / 2)) ** 2) / math.sqrt(2)
     v = 1 - strength * np.clip((r - 0.45) / 0.55, 0, 1) ** 1.6
     return Image.fromarray((v * 255).astype(np.uint8)).convert("RGB")
 
 
-def scrim() -> Image.Image:
+def scrim(size: tuple[int, int] = (W, H), top: float = 0.68) -> Image.Image:
     """Bottom gradient that seats the captions."""
-    a = (np.clip((np.arange(H, dtype=np.float32) - H * 0.68) / (H * 0.32), 0, 1) ** 1.5 * 150).astype(np.uint8)
+    W, H = size  # noqa: N806
+    a = (np.clip((np.arange(H, dtype=np.float32) - H * top) / (H * (1 - top)), 0, 1) ** 1.5 * 150).astype(np.uint8)
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     img.putalpha(Image.fromarray(np.repeat(a[:, None], W, axis=1)))
     return img
@@ -442,9 +444,10 @@ def handheld(t: float, amount: float = 1.0) -> tuple[float, float, float]:
     return dx * amount, dy * amount, roll * amount
 
 
-def clamp_shot(s: Shot) -> Shot:
+def clamp_shot(s: Shot, window_w: float = W) -> Shot:
+    """Keep the camera window (``window_w`` frame px wide at zoom 1) inside the set."""
     z = max(1.04, s.zoom)
-    hw, hh = W / (2 * z) + 8, H / (2 * z) + 8
+    hw, hh = window_w / (2 * z) + 8, H / (2 * z) + 8
     return Shot(min(max(s.cx, hw), W - hw), min(max(s.cy, hh), H - hh), z, s.kind)
 
 

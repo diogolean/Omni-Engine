@@ -65,7 +65,7 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
     if not shutil.which("ffmpeg"):
         pytest.skip("ffmpeg not installed")
 
-    async def fake_tts(text, voice, out, rate="+0%"):
+    async def fake_tts(text, voice, out, rate="+0%", pitch="+0Hz"):
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=0.8", str(out)], check=True)
 
     monkeypatch.setattr(render, "_tts", fake_tts)

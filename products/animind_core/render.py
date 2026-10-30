@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from . import characters, rig, scene, script as scripts, settings
+from . import casting, characters, rig, scene, script as scripts, settings
 
 _LOG = logging.getLogger("animind_core")
 PARODY_DISCLAIMER = "Paródia • Gerado por IA"
@@ -37,7 +37,7 @@ _LOCK = threading.Lock()
 _RENDER_LOCK = threading.Lock()
 
 
-FAST_RATE = "+15%"  # re-voice a line that overruns its beat budget
+FAST_PCT = 15  # re-voice a line that overruns its beat budget (on top of the cast pace)
 
 
 def line_view(template: str, speaker: int, index: int) -> str:
@@ -56,24 +56,24 @@ def role_line(char: dict[str, Any], template: str, topic: str, lang: str) -> str
     return f"{kind[0] if lang == 'pt-BR' else kind[1]} · {topic}"[:60]
 
 
-async def _tts(text: str, voice: str, out: Path, rate: str = "+0%") -> None:
+async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str = "+0Hz") -> None:
     import edge_tts  # noqa: PLC0415
 
-    await edge_tts.Communicate(text, voice, rate=rate).save(str(out))
+    await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
 
 
-def _voice_line(text: str, voice: str, mp3: Path, clip: Path, max_s: float) -> tuple[np.ndarray, str]:
-    """edge-tts clip as PCM; re-voiced faster once when it overruns ``max_s``."""
-    rate = "+0%"
-    asyncio.run(_tts(text, voice, mp3))
+def _voice_line(text: str, pick: dict[str, Any], mp3: Path, clip: Path, max_s: float) -> tuple[np.ndarray, str]:
+    """edge-tts clip as PCM in the cast voice; re-voiced faster once when it overruns ``max_s``."""
+    args = casting.edge_args(pick)
+    asyncio.run(_tts(text, pick["voice"], mp3, **args))
     _to_wav(mp3, clip)
     pcm = _read_pcm(clip)
     if len(pcm) / SAMPLE_RATE > max_s:
-        rate = FAST_RATE
-        asyncio.run(_tts(text, voice, mp3, rate))
+        args = casting.edge_args(pick, FAST_PCT)
+        asyncio.run(_tts(text, pick["voice"], mp3, **args))
         _to_wav(mp3, clip)
         pcm = _read_pcm(clip)
-    return pcm, rate
+    return pcm, args["rate"]
 
 
 def _to_wav(src: Path, dst: Path) -> None:
@@ -142,12 +142,15 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         work.mkdir(parents=True, exist_ok=True)
         written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang)
         lines = written["lines"]
-        voices = VOICES[lang]
+        fmt = "9:16" if req.get("format") == "9:16" else "16:9"
+        n = 2 if template == "debate" else 1
+        cast = [chars[min(i, len(chars) - 1)] for i in range(n)]
+        voices = casting.cast(cast, lang, req.get("voices"))
         pcm_parts, script, sources, t = [], [], set(), 0.0
         for i, planned in enumerate(lines):
             speaker, text = planned["speaker"], planned["text"]
             mp3, clip = work / f"line_{i}.mp3", work / f"line_{i}.wav"
-            pcm, rate = _voice_line(text, voices[speaker % 2], mp3, clip, planned["maxS"])
+            pcm, rate = _voice_line(text, voices[min(speaker, len(voices) - 1)], mp3, clip, planned["maxS"])
             dur = len(pcm) / SAMPLE_RATE
             cues, src = line_visemes(clip, text, t)
             sources.add(src)
@@ -165,16 +168,14 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             w.setframerate(SAMPLE_RATE)
             w.writeframes(track.tobytes())
         duration = len(track) / SAMPLE_RATE
-        n = 2 if template == "debate" else 1
-        cast = [chars[min(i, len(chars) - 1)] for i in range(n)]
         rigs = [_rig_views(c, template, i, scenario) for i, c in enumerate(cast)]
         sc = scene.Scene(template=template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
                          env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER,
-                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang)
+                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt)
         video = work / "preview.mp4"
         _set(job_id, progress=0.55)
         with _RENDER_LOCK:
-            AnimationRenderer(width=scene.W, height=scene.H, fps=scene.FPS).render(
+            AnimationRenderer(width=sc.OW, height=sc.OH, fps=scene.FPS).render(
                 frame_iter=sc.frames(), audio_path=audio, output_path=video, duration_s=duration,
                 preset="veryfast", crf=20, gop=48, tune="animation", threads=2, deterministic=True,
                 encode_timeout_s=900, retain_frames=False,
@@ -187,6 +188,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             # Additive: which viseme source ran, and which characters had a core rig.
             "visemeSource": sorted(sources), "rigged": [r is not None for r in rigs],
             # Additive: who wrote the script and the persona sheets behind the quotes.
+            "format": fmt, "width": sc.OW, "height": sc.OH,
+            "voices": [{k: v[k] for k in ("voice", "pitchHz", "ratePct", "auto", "traits")} for v in voices],
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
         })
     except Exception as exc:  # noqa: BLE001 — surfaced on the job

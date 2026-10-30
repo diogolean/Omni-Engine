@@ -38,6 +38,7 @@ FACE_Y = 0.42  # where the faces sit, for close framings
 BOARD = (0.45, 0.08, 0.94, 0.62)  # lesson board on the stage (x0, y0, x1, y1)
 DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.5, 0.6
 CAP_H = 180  # caption strip height (speaker label + two rows)
+VWIN = H * 9 / 16  # vertical camera window width in frame px at zoom 1
 
 
 def _font(weight: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -122,7 +123,16 @@ class Scene:
 
     def __init__(self, *, template: str, scenario: str, rigs: list[dict[str, RigView] | None], script: list[dict[str, Any]],
                  envelope: np.ndarray, env_fps: int, duration_s: float, disclaimer: str, fps: int = FPS,
-                 names: list[str] | None = None, roles: list[str] | None = None, lang: str = "pt-BR") -> None:
+                 names: list[str] | None = None, roles: list[str] | None = None, lang: str = "pt-BR",
+                 fmt: str = "16:9") -> None:
+        # 9:16 shoots a vertical window (VWIN frame px wide) of the same 16:9 set at 1080x1920.
+        self.vertical = fmt == "9:16"
+        self.OW, self.OH = (1080, 1920) if self.vertical else (W, H)
+        self.win = VWIN if self.vertical else W
+        k = 1.45 if self.vertical else 1.0
+        self.k = k
+        self.cap_h = round(CAP_H * k)
+        self.cap_y = round(self.OH * 0.70) if self.vertical else H - CAP_H  # vertical: above the app chrome
         self.template = template if template in PLACES else "solo"
         self.scenario = scenario if scenario in SCENARIOS else "studio"
         self.rigs, self.script, self.env, self.env_fps = rigs, script, envelope, env_fps
@@ -131,11 +141,11 @@ class Scene:
         self.places = PLACES[self.template]
         self.far, self.mid = look.plates(self.scenario, self.template, [p[0] for p in self.places])
         self.lut = look.grade_lut(self.scenario)
-        self.vig = look.vignette(0.55)
-        self.scrim = look.scrim()
+        self.vig = look.vignette(0.55, (self.OW, self.OH))
+        self.scrim = look.scrim((self.OW, self.OH), 0.62 if self.vertical else 0.68)
         self.accent = look.ACCENT[self.scenario]
-        self.caption_font = _font("SemiBold", 34)
-        self.quote_font = _font("SemiBoldItalic", 34)
+        self.caption_font = _font("SemiBold", round(34 * k))
+        self.quote_font = _font("SemiBoldItalic", round(34 * k))
         self.tag_font = _font("Bold", 15)
         self.source_font = _font("Medium", 17)
         self.label_font = _font("SemiBold", 18)
@@ -143,7 +153,7 @@ class Scene:
         self.board_font = _font("Medium", 30)
         self.name_font = _font("Bold", 30)
         self.role_font = _font("SemiBold", 15)
-        self.speaker_font = _font("Bold", 16)
+        self.speaker_font = _font("Bold", round(16 * k))
         self.names, self.roles = names or [], roles or []
         self.shots = self._plan_shots()
         self._cache: dict[Any, Image.Image] = {}
@@ -182,6 +192,10 @@ class Scene:
             return Shot(W / 2, H * 0.5, 1.0, "wide")
         px = self.places[min(speaker, len(self.places) - 1)][0]
         toward = 1 if px < 0.5 else -1  # look room toward the other side of the frame
+        if self.vertical:  # singles only: the window is too narrow for a two-shot
+            if quote:
+                return Shot(W * (px + 0.01 * toward), H * FACE_Y, 1.75, "cu")
+            return Shot(W * (px + 0.02 * toward), H * 0.5, 1.22, "single")
         if self.template == "debate":
             if last:
                 return Shot(W / 2, H * 0.47, 1.24, "two")
@@ -203,6 +217,8 @@ class Scene:
         """(start s, shot, transition into it). Every template opens wide (establishing), then cuts
         to the first speaker; hard cuts between singles, a dissolve into wide/two/board shots and a
         whip pan when a quote close-up answers the other side."""
+        if self.vertical:
+            return self._plan_vertical()
         shots: list[tuple[float, Shot, str]] = [(0.0, look.clamp_shot(self.shot_for(-1, 0)), "cut")]
         for i, line in enumerate(self.script):
             start = line["startMs"] / 1000
@@ -218,6 +234,25 @@ class Scene:
                 else:
                     kind = "cut"
                 shots.append((max(start - 0.12, shots[-1][0] + 0.5), shot, kind))
+        return shots
+
+    def _plan_vertical(self) -> list[tuple[float, Shot, str]]:
+        """Shot/countershot for 9:16: open on the first speaker (no establishing wide), hard cut on
+        every change of speaker, and on long debate lines a short reaction cutaway to the listener
+        (who keeps looking at the speaker)."""
+        clamp = lambda s: look.clamp_shot(s, self.win)  # noqa: E731
+        first = self.script[0]["speaker"] if self.script else 0
+        shots: list[tuple[float, Shot, str]] = [(0.0, clamp(self.shot_for(max(0, first), 0)), "cut")]
+        for i, line in enumerate(self.script):
+            start, end = line["startMs"] / 1000, line["endMs"] / 1000
+            shot = clamp(self.shot_for(line["speaker"], i))
+            if shot != shots[-1][1]:
+                shots.append((max(start - 0.1, shots[-1][0] + 0.5), shot, "cut"))
+            if self.template == "debate" and end - start > 5.5 and line.get("kind") != "quote":
+                other = 1 - line["speaker"]
+                mid = start + (end - start) * 0.55
+                shots.append((mid, clamp(Shot(*self.shot_for(other, i)[:3], "react")), "cut"))
+                shots.append((mid + 1.3, shot, "cut"))
         return shots
 
     def camera(self, t: float) -> list[tuple[float, Shot, float]]:
@@ -422,11 +457,21 @@ class Scene:
         return stage
 
     def _shoot(self, stage: Image.Image, shot: Shot, drift: tuple[float, float, float], blur: float) -> Image.Image:
-        out = self.far.transform((W, H), Image.AFFINE, look.affine(shot, "far", drift), Image.BILINEAR).convert("RGBA")
-        out.alpha_composite(self.mid.transform((W, H), Image.AFFINE, look.affine(shot, "mid", drift), Image.BILINEAR))
-        out.alpha_composite(stage.transform((W, H), Image.AFFINE, look.affine(shot, "stage", drift, SS), Image.BILINEAR))
+        size = (self.OW, self.OH)
+
+        def aff(depth: str, scale: float = 1.0) -> tuple[float, ...]:
+            a, b, c, d, e, f = look.affine(shot, depth, drift, scale)
+            if not self.vertical:
+                return a, b, c, d, e, f
+            # output px -> 16:9 frame px of a centred VWIN-wide window, then the usual mapping
+            u, ox = H / self.OH, (W - self.win) / 2
+            return a * u, b * u, a * ox + c, d * u, e * u, d * ox + f
+
+        out = self.far.transform(size, Image.AFFINE, aff("far"), Image.BILINEAR).convert("RGBA")
+        out.alpha_composite(self.mid.transform(size, Image.AFFINE, aff("mid"), Image.BILINEAR))
+        out.alpha_composite(stage.transform(size, Image.AFFINE, aff("stage", SS), Image.BILINEAR))
         if blur > 0.05:  # whip pan: horizontal motion blur
-            smear = out.resize((W // 40, H), Image.BOX).resize((W, H), Image.BICUBIC)
+            smear = out.resize((self.OW // 40, self.OH), Image.BOX).resize(size, Image.BICUBIC)
             out = Image.blend(out, smear, min(0.92, blur))
         return out
 
@@ -437,7 +482,7 @@ class Scene:
             quote = line.get("kind") == "quote"
             text = f"“{line['text']}”" if quote else line["text"]
             d = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-            rows = _wrap(d, text, self.quote_font if quote else self.caption_font, W * 0.72)
+            rows = _wrap(d, text, self.quote_font if quote else self.caption_font, self.OW * (0.86 if self.vertical else 0.72))
             self._cache[key] = [rows[i:i + 2] for i in range(0, len(rows), 2)] or [[]]
         return self._cache[key]
 
@@ -462,22 +507,22 @@ class Scene:
         if key not in self._cache:
             font = self.quote_font if line.get("kind") == "quote" else self.caption_font
             rows = self._pages(line)[page]
-            img = Image.new("RGBA", (W, CAP_H), (0, 0, 0, 0))
+            img = Image.new("RGBA", (self.OW, self.cap_h), (0, 0, 0, 0))
             d = ImageDraw.Draw(img)
-            y0 = CAP_H - 22 - len(rows) * 44
+            y0 = self.cap_h - round(22 * self.k) - len(rows) * round(44 * self.k)
             sp = line.get("speaker", -1)
             label = pretty_name(self.names[sp]).upper() if 0 <= sp < len(self.names) else ""
             lw = sum(d.textlength(c, font=self.speaker_font) + 2.6 for c in label)
             for i, s in enumerate(rows):
-                d.text((W / 2, y0 + i * 44), s, font=font, fill=(0, 0, 0, 230), anchor="mt")
+                d.text((self.OW / 2, y0 + i * round(44 * self.k)), s, font=font, fill=(0, 0, 0, 230), anchor="mt")
             if label:
-                d.text((W / 2, y0 - 26), label, font=self.speaker_font, fill=(0, 0, 0, 200), anchor="mt")
+                d.text((self.OW / 2, y0 - round(26 * self.k)), label, font=self.speaker_font, fill=(0, 0, 0, 200), anchor="mt")
             shadow = img.filter(ImageFilter.GaussianBlur(5))
             d = ImageDraw.Draw(shadow)
             if label:
-                _tracked(d, (W / 2 - lw / 2, y0 - 26), label, self.speaker_font, (*self.accent, 255), 2.6)
+                _tracked(d, (self.OW / 2 - lw / 2, y0 - round(26 * self.k)), label, self.speaker_font, (*self.accent, 255), 2.6)
             for i, s in enumerate(rows):
-                d.text((W / 2, y0 + i * 44), s, font=font, fill=(255, 255, 255, 255), anchor="mt")
+                d.text((self.OW / 2, y0 + i * round(44 * self.k)), s, font=font, fill=(255, 255, 255, 255), anchor="mt")
             self._cache[key] = shadow
         return self._cache[key]
 
@@ -509,8 +554,12 @@ class Scene:
             d.ellipse((16, 15, 26, 25), fill=dot)
             _tracked(d, (36, 12), head, self.tag_font, dot, 2.0)
             d.text((36 + hw + 12, 20), src, font=self.source_font, fill=(255, 255, 255, 220), anchor="lm")
-            self._cache[key] = img
+            self._cache[key] = self._big(img)
         return self._cache[key]
+
+    def _big(self, img: Image.Image) -> Image.Image:
+        """Chips and lower-thirds are drawn at 16:9 size; 9:16 scales them up to its text size."""
+        return img.resize((round(img.width * self.k), round(img.height * self.k)), Image.LANCZOS) if self.vertical else img
 
     def _lower_third(self, idx: int) -> Image.Image:
         key = ("lt", idx)
@@ -528,7 +577,7 @@ class Scene:
             d.rounded_rectangle((0, 0, 6, 92), 3, fill=(*self.accent, 255))
             d.text((26, 14), name, font=self.name_font, fill=(255, 255, 255, 255))
             _tracked(d, (27, 58), role, self.role_font, (*self.accent, 235), 2.2)
-            self._cache[key] = img.crop((0, 0, pw + 1, 96))
+            self._cache[key] = self._big(img.crop((0, 0, pw + 1, 96)))
         return self._cache[key]
 
     def _overlays(self, frame: Image.Image, t: float, line: dict[str, Any] | None, shot: Shot | None = None) -> None:
@@ -537,10 +586,10 @@ class Scene:
         if line and not on_board:  # the lesson reads the board; captions only when it is out of frame
             since = t - line["startMs"] / 1000
             a = look.ease(since / 0.18)
-            frame.alpha_composite(_fade(self._caption(line, self._page_at(line, t)), a), (0, H - CAP_H + round(6 * (1 - a))))
+            frame.alpha_composite(_fade(self._caption(line, self._page_at(line, t)), a), (0, self.cap_y + round(6 * (1 - a))))
         if line and (tag := self._tag(line)) is not None:
             a = look.ease((t - line["startMs"] / 1000) / 0.25)
-            frame.alpha_composite(_fade(tag, a), ((W - tag.width) // 2, 22 - round(8 * (1 - a))))
+            frame.alpha_composite(_fade(tag, a), ((self.OW - tag.width) // 2, (110 if self.vertical else 22) - round(8 * (1 - a))))
         if line:
             first = next(l for l in self.script if l["speaker"] == line["speaker"])
             since = t - line["startMs"] / 1000
@@ -553,13 +602,13 @@ class Scene:
                     close = shot is not None and shot.kind in ("ots", "cu")
                     right = self.template == "debate" and (line["speaker"] == 1) != close
                     slide = round(30 * (1 - a)) * (1 if right else -1)
-                    x = (W - 64 - lt.width if right else 64) + slide
-                    frame.alpha_composite(_fade(lt, a), (x, H - 262))
+                    x = (self.OW - 64 - lt.width if right else 64) + slide
+                    frame.alpha_composite(_fade(lt, a), (x, self.cap_y - round(82 * self.k)))
         d = ImageDraw.Draw(frame)
         lw = d.textlength(self.disclaimer, font=self.label_font) + 28
         d.rounded_rectangle((24, 24, 24 + lw, 58), 17, fill=(255, 255, 255, 235))
         d.text((38, 41), self.disclaimer, font=self.label_font, fill=(10, 10, 10, 255), anchor="lm")
-        d.text((W - 28, 41), "animind", font=self.brand_font, fill=(255, 255, 255, 110), anchor="rm")
+        d.text((self.OW - 28, 41), "animind", font=self.brand_font, fill=(255, 255, 255, 110), anchor="rm")
 
     def frame(self, t: float) -> Image.Image:
         line = self._line_at(t)
@@ -576,7 +625,7 @@ class Scene:
         rgb = ImageChops.multiply(out.convert("RGB").point(self.lut), self.vig)
         fade = look.ease(t / FADE_IN_S) * look.ease((self.duration_s - t) / FADE_OUT_S)
         if fade < 0.999:
-            rgb = Image.blend(Image.new("RGB", (W, H)), rgb, fade)
+            rgb = Image.blend(Image.new("RGB", (self.OW, self.OH)), rgb, fade)
         frame = rgb.convert("RGBA")
         self._overlays(frame, t, line, cam[-1][1])
         return frame
