@@ -119,3 +119,27 @@ owns the neck, which rises behind the jaw). The face no longer rides the jaw: on
 changes with speech; torso/neck follow 40%/70% of the breath. Partial openings scale only the open
 cavity (pixels that differ from the closed mouth) about its top edge, so mustaches and lips are
 never squashed into a second copy (the old "tear" in close-ups).
+
+## One-click character: generate-then-verify
+
+`POST /v1/characters` (one call) builds a rigged character:
+
+1. **Master** (Gemini nano-banana, closed mouth, 4:5).
+2. **Parts sheet** (4x3: 9 mouths A–H/X + eyes open/half/closed). The grid is auto-detected (4x3, 4x4,
+   white or magenta background); each cell is affine-registered on the master and kept only if its NCC
+   >= 0.7. At least 5 good mouth cells accept the sheet; bad cells fall back to warped mouths.
+3. **Front view** (side as reference), gated for frontality (eyes/mouth offset, eye ratio) and for
+   landmark drift vs. the side art. The front rig also uses the sheet mouths whose cells register.
+4. **Retries:** a failed sheet/front gate is re-drawn (up to 3 per asset, firmer prompts) while the
+   Gemini cap (`MAX_GOOGLE_COST_PER_RUN_USD`, `REEL_REEL_BUDGET_USD`) has room for another image.
+5. **QA** (`qa.py`): skin deltaE, residual mouth (skin-relative), front symmetry, landmarks, alpha
+   edges, resolution -> score 0–100. `qa.json` + `qa_sheet.png` are stored with the character; a failed
+   skin/edge gate on sheet mouths rebuilds with deterministic mouths (free).
+
+**Cost:** $0.039/image. No retries = 3 images = ~$0.12. Test-phase cap 0.30 allows up to ~7 images;
+production should use a lower cap (see `.env.example`).
+
+**Image models:** `image_models.py` holds the model registry (nano-banana default; Flux listed as a
+pluggable, not-yet-wired provider), config via `ANIMIND_IMAGE_MODEL` / `ANIMIND_IMAGE_MODELS`, and a
+per-user/per-model monthly credit ledger (`ANIMIND_FREE_CREDITS`). Nothing is charged; keys are read
+from env by name only.
