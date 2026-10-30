@@ -112,6 +112,7 @@ def test_line_views():
 
     assert [line_view("debate", s, i) for i, s in enumerate((0, 1))] == ["right", "left"]
     assert line_view("solo", 0, 1) == "right"
+    assert line_view("debate", 1, 6, "fechamento") == "front" and line_view("debate", 0, 0, "gancho") == "front"
 
 
 def test_despill_removes_magenta():

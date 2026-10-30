@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import rig, settings, sheet
+from . import rig, settings, sheet, styles
 
 _LOG = logging.getLogger("animind_core")
 _BUILD_LOCK = threading.Lock()  # one character at a time: BiRefNet needs ~8 GB on CPU
@@ -68,10 +68,11 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     def url(path: Path) -> str:
         return f"{files_base}/{path.relative_to(assets).as_posix()}"
 
+    art_style = styles.pick(req.get("artStyle"))
     mode = "gemini" if settings.gemini_available() else "mock"
     with _BUILD_LOCK:
         if mode == "gemini":
-            built = rig.build_rig(subject, skin, url, raw_prompt=req.get("rawPrompt"))
+            built = rig.build_rig(subject, skin, url, raw_prompt=req.get("rawPrompt"), style=art_style)
         else:
             built = rig.build_mock_rig(name, skin, url)
 
@@ -86,9 +87,12 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "generator": mode,
         "viewStatus": built["viewStatus"],
         "mouthShots": built["mouthShots"],
+        "artStyle": art_style,
+        "frontShot": built.get("frontShot", "mock"),
+        "frontImageUrl": url(skin / "character_front.png") if (skin / "character_front.png").exists() else None,
         "imageUrl": url(skin / "character.png"),
         # Review sheet: every viseme and eye state per view, for a human check.
-        "reviewSheetUrl": url(sheet.build(skin, name)),
+        "reviewSheetUrl": url(sheet.build(skin, name, art_style)),
     }
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     return character

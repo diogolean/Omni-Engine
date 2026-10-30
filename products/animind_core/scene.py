@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import numpy as np
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from . import eyes, look
+from . import eyes, look, styles
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
@@ -124,7 +124,7 @@ class Scene:
     def __init__(self, *, template: str, scenario: str, rigs: list[dict[str, RigView] | None], script: list[dict[str, Any]],
                  envelope: np.ndarray, env_fps: int, duration_s: float, disclaimer: str, fps: int = FPS,
                  names: list[str] | None = None, roles: list[str] | None = None, lang: str = "pt-BR",
-                 fmt: str = "16:9") -> None:
+                 fmt: str = "16:9", style: str = "cartoon") -> None:
         # 9:16 shoots a vertical window (VWIN frame px wide) of the same 16:9 set at 1080x1920.
         self.vertical = fmt == "9:16"
         self.OW, self.OH = (1080, 1920) if self.vertical else (W, H)
@@ -139,8 +139,12 @@ class Scene:
         self.duration_s, self.disclaimer, self.fps = duration_s, disclaimer, fps
         self.lang = lang
         self.places = PLACES[self.template]
+        self.style = styles.pick(style)
         self.far, self.mid = look.plates(self.scenario, self.template, [p[0] for p in self.places])
-        self.lut = look.grade_lut(self.scenario)
+        self.far, self.mid = styles.tint_plate(self.far, self.style), styles.tint_plate(self.mid, self.style)
+        self.lut = styles.lut(look.grade_lut(self.scenario), self.style)
+        self.sat = styles.saturation(self.style)
+        self.texture = styles.texture(self.style, (self.OW, self.OH))
         self.vig = look.vignette(0.55, (self.OW, self.OH))
         self.scrim = look.scrim((self.OW, self.OH), 0.62 if self.vertical else 0.68)
         self.accent = look.ACCENT[self.scenario]
@@ -622,7 +626,14 @@ class Scene:
         for weight, shot, blur in cam:
             img = self._shoot(stage, shot, drift, blur)
             out = img if out is None else Image.blend(out, img, weight)
-        rgb = ImageChops.multiply(out.convert("RGB").point(self.lut), self.vig)
+        rgb = out.convert("RGB").point(self.lut)
+        if abs(self.sat - 1.0) > 1e-3:
+            rgb = ImageEnhance.Color(rgb).enhance(self.sat)
+        rgb = ImageChops.multiply(rgb, self.vig)
+        if self.texture is not None:
+            rgb = rgb.convert("RGBA")
+            rgb.alpha_composite(self.texture)
+            rgb = rgb.convert("RGB")
         fade = look.ease(t / FADE_IN_S) * look.ease((self.duration_s - t) / FADE_OUT_S)
         if fade < 0.999:
             rgb = Image.blend(Image.new("RGB", (self.OW, self.OH)), rgb, fade)

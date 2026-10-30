@@ -14,7 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-from . import eyes, rig
+from . import eyes, rig, styles
 
 _FONT_DIR = Path(__file__).resolve().parents[2] / "Fonts" / "Montserrat" / "static"
 PHONEMES = {
@@ -65,7 +65,8 @@ def compose(view: dict[str, Any], vis: str = "X", lids: str = "open", gaze: tupl
 
 
 def _face_box(skin: Path, view: str, size: tuple[int, int]) -> tuple[int, int, int, int]:
-    meta = json.loads((skin / "rig.json").read_text(encoding="utf-8"))
+    own = skin / "rig_front.json"
+    meta = json.loads((own if view == "front" and own.exists() else skin / "rig.json").read_text(encoding="utf-8"))
     x0, y0, x1, y1 = meta["boxes"]["face"]
     w, h = x1 - x0, y1 - y0
     x0, x1 = x0 - w * 0.12, x1 + w * 0.12
@@ -77,7 +78,7 @@ def _face_box(skin: Path, view: str, size: tuple[int, int]) -> tuple[int, int, i
     return (round(cx - side / 2), round(cy - side / 2), round(cx + side / 2), round(cy + side / 2))
 
 
-def build(skin: Path, name: str = "") -> Path:
+def build(skin: Path, name: str = "", style: str = "") -> Path:
     """Write ``<skin>/review_sheet.png`` and return its path."""
     views = {v: rig.load_view(skin, v) for v in ("front", "left", "right")}
     cols = max(len(rig.VISEMES), len(EYE_STATES))
@@ -87,13 +88,14 @@ def build(skin: Path, name: str = "") -> Path:
     sheet = Image.new("RGB", (width, height), (16, 17, 20))
     d = ImageDraw.Draw(sheet)
     title, small, tag = _font("Bold", 30), _font("SemiBold", 15), _font("Bold", 16)
-    d.text((PAD, 22), f"Ficha de revisão · {name}".rstrip(" ·"), font=title, fill=(255, 255, 255))
+    label = styles.STYLES.get(style, {}).get("label", "")
+    d.text((PAD, 22), " · ".join(x for x in ("Ficha de revisão", name, f"estilo {label}" if label else "") if x), font=title, fill=(255, 255, 255))
     d.text((PAD, 60), "Bocas (visemas Rhubarb X, A–H com fonemas) e estados dos olhos, por vista", font=small, fill=(170, 170, 178))
     y = 90
     for vname, view in views.items():
         size = (view["canvas"]["w"], view["canvas"]["h"])
         box = _face_box(skin, vname, size)
-        d.text((PAD, y + 8), VIEW_LABEL[vname] + (" (arte do perfil esquerdo)" if vname == "front" else ""), font=tag, fill=(245, 176, 66))
+        d.text((PAD, y + 8), VIEW_LABEL[vname] + (" (arte do perfil esquerdo)" if vname == "front" and not (skin / "views" / "front").exists() else ""), font=tag, fill=(245, 176, 66))
         y += ROW_HEAD
         rows = [[(f"{v} · {PHONEMES[v]}", dict(vis=v, gaze=eyes.camera_target(vname, {"left": -1, "right": 1}.get(vname, 0)))) for v in rig.VISEMES],
                 [(label, dict(lids=lids, gaze=g)) for label, lids, g in EYE_STATES]

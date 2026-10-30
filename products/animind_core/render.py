@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from . import casting, characters, rig, scene, script as scripts, settings
+from . import casting, characters, rig, scene, script as scripts, settings, styles
 
 _LOG = logging.getLogger("animind_core")
 PARODY_DISCLAIMER = "Paródia • Gerado por IA"
@@ -40,8 +40,14 @@ _RENDER_LOCK = threading.Lock()
 FAST_PCT = 15  # re-voice a line that overruns its beat budget (on top of the cast pace)
 
 
-def line_view(template: str, speaker: int, index: int) -> str:
-    """Debate speakers face each other; solo/lesson turn on every other line."""
+CAMERA_BEATS = ("gancho", "fechamento", "resumo")
+
+
+def line_view(template: str, speaker: int, index: int, beat: str = "") -> str:
+    """Hook and closing lines address the camera (front view); otherwise debate speakers face
+    each other and solo/lesson turn on every other line."""
+    if beat in CAMERA_BEATS:
+        return "front"
     if template == "debate":
         return "right" if speaker == 0 else "left"
     return "front" if index % 2 == 0 else "right"
@@ -141,6 +147,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         work = settings.data_dir() / "jobs" / job_id
         work.mkdir(parents=True, exist_ok=True)
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
+        art = styles.pick(req.get("style") or (chars[0].get("artStyle") if chars else None))
         written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang, mode=mode)
         lines = written["lines"]
         fmt = "9:16" if req.get("format") == "9:16" else "16:9"
@@ -157,7 +164,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             sources.add(src)
             gap_s = planned.get("pauseAfterS", GAP_S)
             script.append({**planned, "startMs": int(t * 1000), "endMs": int((t + dur) * 1000),
-                           "visemes": cues, "view": line_view(template, speaker, i), "ttsRate": rate})
+                           "visemes": cues, "view": line_view(template, speaker, i, planned.get("beat", "")), "ttsRate": rate})
             pcm_parts += [pcm, np.zeros(int(gap_s * SAMPLE_RATE), dtype=np.int16)]
             t += dur + gap_s
             _set(job_id, progress=0.1 + 0.4 * (i + 1) / len(lines))
@@ -172,7 +179,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         rigs = [_rig_views(c, template, i, scenario) for i, c in enumerate(cast)]
         sc = scene.Scene(template=template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
                          env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER,
-                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt)
+                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art)
         video = work / "preview.mp4"
         _set(job_id, progress=0.55)
         with _RENDER_LOCK:
@@ -193,6 +200,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "voices": [{k: v[k] for k in ("voice", "pitchHz", "ratePct", "auto", "traits")} for v in voices],
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
             "personaMode": mode,
+            "style": art,
         })
     except Exception as exc:  # noqa: BLE001 — surfaced on the job
         _LOG.exception("render job %s failed", job_id)

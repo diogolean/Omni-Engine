@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import API_VERSION, characters, knowledge, render, settings
+from . import API_VERSION, characters, knowledge, styles, render, settings
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
@@ -52,6 +52,12 @@ def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(404, "job not found")
     return job
+
+
+@app.get("/v1/styles")
+def get_styles() -> dict:
+    """Animation styles accepted as ``artStyle`` (characters) and ``style`` (render)."""
+    return {"styles": styles.catalog(), "default": styles.DEFAULT}
 
 
 @app.post("/v1/personas/deep", dependencies=[Depends(require_key)])

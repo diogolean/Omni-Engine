@@ -12,8 +12,13 @@ One request makes one character:
    the face, eye and mouth boxes.
 4. Layers: ``body`` and ``head`` (split under the chin with an overlap),
    ``eyes`` and ``eyes_closed``, and one mouth sprite per Rhubarb viseme
-   ``X A B C D E F G H``. The ``right`` view is the mirror of ``left``;
-   ``front`` reuses the left art (status says so).
+   ``X A B C D E F G H``. The ``right`` view is the mirror of ``left``.
+5. ``front``: one more Gemini call redraws the same character facing the
+   camera, with the side shot as reference. It is cut, detected and rigged
+   (eyes, lids, warped mouths) like the side. If the budget or detection
+   fails, ``front`` falls back to the left art and ``viewStatus`` says so.
+
+``style`` (see :mod:`styles`) swaps the drawing-style sentence of the prompt.
 
 Everything is written under ``<data>/assets/puppets/<id>/``; nothing here
 touches git. ``build_mock_rig`` draws the same layer set with PIL, no network.
@@ -37,7 +42,7 @@ VISEMES = ("X", "A", "B", "C", "D", "E", "F", "G", "H")
 DETECT_MODEL = "gemini-2.5-flash"
 
 STYLE_PROMPT = (
-    "{subject}. Expressive 2D cartoon character design, clean flat cel shading, bold dark outlines. "
+    "{subject}. {style}. "
     "Medium bust shot (head and shoulders), three-quarter view, head turned 25 degrees toward the left "
     "of the image, looking left. Mouth closed, lips together, eyes open, friendly neutral expression. "
     "Head in the upper half of the frame, shoulders reaching the bottom edge, nothing cropped at the top. "
@@ -55,6 +60,13 @@ EDIT_PROMPTS = {
         "lips pushed forward as if saying 'OO'. Do not move the head."
     ),
 }
+FRONT_PROMPT = (
+    "Redraw this exact same character, same art style, colors, outfit, hair and outlines, but facing the "
+    "camera straight on (front view, symmetric), looking directly at the viewer. Medium bust shot, head and "
+    "shoulders, same scale and framing, head in the upper half, shoulders reaching the bottom edge. Mouth "
+    "closed, lips together, eyes open, neutral friendly expression. Solid flat pure magenta #FF00FF background. "
+    "No text."
+)
 DETECT_PROMPT = (
     "Detect, in this cartoon character image, the face (whole head without hair or ears), the left eye, "
     "the right eye and the mouth. Return JSON only: "
@@ -107,27 +119,32 @@ def _png(src: Path, dest: Path, size: tuple[int, int] | None = None) -> Path:
     return dest
 
 
-def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None) -> dict[str, Any]:
-    """Draw the closed-mouth master and the two mouth edits. Returns paths and notes."""
+def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, style: str = "cartoon",
+                   front: bool = True) -> dict[str, Any]:
+    """Draw the closed-mouth master, the front view (side as reference) and the two mouth edits.
+
+    Order matters under the budget cap: master, then front, then mouths (mouths can be warped)."""
+    from . import styles  # noqa: PLC0415
     from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
 
     work.mkdir(parents=True, exist_ok=True)
     raw = work / "_gen_closed"
-    generate_character_image(raw_prompt or STYLE_PROMPT.format(subject=subject), raw, aspect_ratio="4:5")
+    generate_character_image(raw_prompt or STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style)), raw, aspect_ratio="4:5")
     closed = _png(raw, work / "source_closed.png")
     raw.unlink(missing_ok=True)
     size = Image.open(closed).size
     shots: dict[str, Path] = {"closed": closed}
     notes: dict[str, str] = {}
-    for name, prompt in EDIT_PROMPTS.items():
+    prompts = ({"front": FRONT_PROMPT} if front else {}) | EDIT_PROMPTS
+    for name, prompt in prompts.items():
         raw = work / f"_gen_{name}"
         try:
             generate_character_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
             shots[name] = _png(raw, work / f"source_{name}.png", size)
             notes[name] = "gemini"
         except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stops included; visemes fall back to warps
-            _LOG.warning("mouth shot %s skipped: %s", name, exc)
-            notes[name] = f"warped (shot failed: {str(exc)[:160]})"
+            _LOG.warning("shot %s skipped: %s", name, exc)
+            notes[name] = f"{'left art' if name == 'front' else 'warped'} (shot failed: {str(exc)[:160]})"
         finally:
             raw.unlink(missing_ok=True)
     return {"shots": shots, "notes": notes}
@@ -409,15 +426,18 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
 
 def load_view(skin: Path, view: str) -> dict[str, Any]:
     """Read ``views/<view>/view.json`` with absolute file paths in ``url``."""
-    base = skin / "views" / ("left" if view == "front" else view)
+    base = skin / "views" / view
+    if not (base / "view.json").exists():
+        base = skin / "views" / ("left" if view == "front" else view)
     data = json.loads((base / "view.json").read_text(encoding="utf-8"))
     for layer in [*data["layers"], *data["visemes"].values()]:
         layer["url"] = str(base / layer["url"])
     return data
 
 
-def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *, matte: Callable[[Image.Image], Image.Image]) -> dict[str, Any]:
-    """Build the left view parts from mattes + boxes, write left/right views."""
+def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
+             matte: Callable[[Image.Image], Image.Image], front: bool = False) -> dict[str, Any]:
+    """Build view parts from mattes + boxes: left/right from the side art, or ``views/front`` when ``front``."""
     with Image.open(shots["closed"]) as im:
         base = _despill(matte(im).convert("RGBA"))
     size = base.size
@@ -468,6 +488,10 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "eyeRig": eye["meta"],
         "visemes": {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()},
     }
+    if front:
+        base.save(skin / "character_front.png", format="PNG", optimize=True)
+        (skin / "rig_front.json").write_text(json.dumps({"size": size, "boxes": boxes, "mouthBox": mbox}, indent=2), encoding="utf-8")
+        return {"front": _write_view(parts, skin / "views" / "front", url, mirror=False)}
     base.save(skin / "character.png", format="PNG", optimize=True)
     left = _write_view(parts, skin / "views" / "left", url, mirror=False)
     right = _write_view(parts, skin / "views" / "right", url, mirror=True)
@@ -522,18 +546,29 @@ def reset_budget() -> None:
     reset_google_cost_tracker()
 
 
-def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_prompt: str | None = None) -> dict[str, Any]:
-    """Real path: Gemini shots -> BiRefNet mattes -> layered rig with 3 views."""
+def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_prompt: str | None = None,
+              style: str = "cartoon") -> dict[str, Any]:
+    """Real path: Gemini shots -> BiRefNet mattes -> layered rig with 3 views (front drawn, not reused)."""
     reset_budget()
-    gen = generate_shots(subject, skin, raw_prompt=raw_prompt)
+    gen = generate_shots(subject, skin, raw_prompt=raw_prompt, style=style)
     boxes = detect_features(gen["shots"]["closed"])
     matte = BiRefNetMatte()
+    status = {"left": "ready", "right": "ready (mirror of left)", "front": "ready (left art; no frontal shot)"}
     try:
         views = assemble(skin, gen["shots"], boxes, url, matte=matte)
+        fr = gen["shots"].get("front")
+        if fr:
+            try:
+                views |= assemble(skin, {"closed": fr}, detect_features(fr), url, matte=matte, front=True)
+                status["front"] = "ready (gemini front view, side as reference; mouths warped)"
+            except Exception as exc:  # noqa: BLE001 — detection/cut failure keeps the side art
+                _LOG.warning("front view rig failed: %s", exc)
+                status["front"] = f"ready (left art; front rig failed: {str(exc)[:120]})"
     finally:
         matte.close()
-    status = {"left": "ready", "right": "ready (mirror of left)", "front": "ready (left art; no frontal shot yet)"}
-    return {"views": {**views, "front": views["left"]}, "viewStatus": status, "mouthShots": gen["notes"]}
+    views.setdefault("front", views["left"])
+    return {"views": views, "viewStatus": status, "mouthShots": {k: v for k, v in gen["notes"].items() if k != "front"},
+            "frontShot": gen["notes"].get("front", "skipped")}
 
 
 def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
@@ -557,5 +592,6 @@ def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[st
     shot.save(shots_dir / "open.png")
     boxes = {"face": (170, 150, 470, 520), "left_eye": (237, 296, 293, 348), "right_eye": (347, 296, 403, 348), "mouth": (285, 425, 355, 455)}
     views = assemble(skin, {"closed": shots_dir / "closed.png", "open": shots_dir / "open.png"}, boxes, url, matte=lambda im: im.convert("RGBA"))
-    status = {"left": "mock", "right": "mock (mirror)", "front": "mock (left art)"}
-    return {"views": {**views, "front": views["left"]}, "viewStatus": status, "mouthShots": {"open": "mock", "round": "warped"}}
+    views |= assemble(skin, {"closed": shots_dir / "closed.png"}, boxes, url, matte=lambda im: im.convert("RGBA"), front=True)
+    status = {"left": "mock", "right": "mock (mirror)", "front": "mock (front rig)"}
+    return {"views": views, "viewStatus": status, "mouthShots": {"open": "mock", "round": "warped"}, "frontShot": "mock"}
