@@ -19,3 +19,8 @@ def gemini_available() -> bool:
     if (os.getenv("ANIMIND_FORCE_MOCK") or "").strip().lower() in {"1", "true", "yes"}:
         return False
     return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+
+
+def personas_online() -> bool:
+    """Fetch persona sheets from Wikiquote on a cache miss (``ANIMIND_PERSONAS_OFFLINE=1`` disables)."""
+    return (os.getenv("ANIMIND_PERSONAS_OFFLINE") or "").strip().lower() not in {"1", "true", "yes"}
