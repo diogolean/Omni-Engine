@@ -31,6 +31,18 @@ def health() -> dict:
     return {"ok": True, "version": API_VERSION, "generator": "gemini" if settings.gemini_available() else "mock"}
 
 
+@app.post("/v1/characters/{character_id}/front", dependencies=[Depends(require_key)])
+def post_character_front(character_id: str, request: Request) -> dict:
+    """Redraw a character's front view (checked for frontality, one retry within the Gemini cap)."""
+    try:
+        saved = characters.regenerate_front(character_id, _base(request))
+    except NotImplementedError as exc:
+        raise HTTPException(501, str(exc)) from exc
+    if saved is None:
+        raise HTTPException(404, "unknown character")
+    return saved
+
+
 @app.post("/v1/characters", dependencies=[Depends(require_key)])
 def post_characters(body: dict, request: Request) -> dict:
     try:

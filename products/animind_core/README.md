@@ -102,3 +102,10 @@ Each Gemini rig also gets a real front view: a second image generated with the s
 reference (nose centred, both ears visible), cut and rigged like the side (`views/front`,
 `character_front.png`, `frontImageUrl`). Camera-address beats (`gancho`, `fechamento`, `resumo`)
 use it; the review sheet shows side and front with the style label. Budget: see `.env.example`.
+
+Front views are checked on the detector boxes (`rig.frontality`): eyes and mouth must sit within 4%
+of the face width from the face centre and both eyes match in width (3/4 art measures >= 6.5%). A
+3/4 result is redrawn once with a firmer prompt, before the mouth edits, so the retry stays inside
+the Gemini cap (the open mouth then falls back to a warp). `POST /v1/characters/{id}/front` redraws
+only the front of an existing character. In 9:16, singles put faces at 34% height and close-ups at
+29%, so chins stay above the captions (70%).

@@ -96,3 +96,28 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     }
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     return character
+
+
+def regenerate_front(character_id: str, base_url: str) -> dict[str, Any] | None:
+    """Redraw the front view of a Gemini character (frontality check + one retry) and save it."""
+    saved = load(character_id)
+    if not saved:
+        return None
+    if saved.get("generator") != "gemini" or not settings.gemini_available():
+        raise NotImplementedError("front regeneration needs a Gemini character and GEMINI_API_KEY")
+    assets = settings.data_dir() / "assets"
+    skin = puppets_dir() / character_id
+
+    def url(path: Path) -> str:
+        return f"{base_url}/v1/files/{path.relative_to(assets).as_posix()}"
+
+    with _BUILD_LOCK:
+        built = rig.regenerate_front(skin, url)
+    saved["frontShot"] = built["frontShot"]
+    if "views" in built:
+        saved["views"]["front"] = built["views"]["front"]
+        saved["viewStatus"]["front"] = "ready (gemini front view, regenerated)"
+        saved["frontImageUrl"] = url(skin / "character_front.png")
+        saved["reviewSheetUrl"] = url(sheet.build(skin, saved["name"], saved.get("artStyle", "cartoon")))
+    (skin / "character.json").write_text(json.dumps(saved, indent=2), encoding="utf-8")
+    return saved

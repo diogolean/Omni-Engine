@@ -136,8 +136,10 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
     size = Image.open(closed).size
     shots: dict[str, Path] = {"closed": closed}
     notes: dict[str, str] = {}
-    prompts = ({"front": FRONT_PROMPT} if front else {}) | EDIT_PROMPTS
-    for name, prompt in prompts.items():
+    front_boxes: dict[str, Box] | None = None
+    if front:
+        front_boxes = _front_shot(closed, work, size, shots, notes)
+    for name, prompt in EDIT_PROMPTS.items():
         raw = work / f"_gen_{name}"
         try:
             generate_character_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
@@ -145,10 +147,92 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
             notes[name] = "gemini"
         except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stops included; visemes fall back to warps
             _LOG.warning("shot %s skipped: %s", name, exc)
-            notes[name] = f"{'left art' if name == 'front' else 'warped'} (shot failed: {str(exc)[:160]})"
+            notes[name] = f"warped (shot failed: {str(exc)[:160]})"
         finally:
             raw.unlink(missing_ok=True)
-    return {"shots": shots, "notes": notes}
+    return {"shots": shots, "notes": notes, "frontBoxes": front_boxes}
+
+
+FRONT_RETRY = (
+    " IMPORTANT: the previous attempt came out as a three-quarter view. The face must be perfectly frontal and "
+    "mirror-symmetric: the nose exactly in the middle between the eyes, both eyes the same size, both cheeks and "
+    "both ears equally wide."
+)
+FRONT_MAX_OFFSET = 0.04  # eyes/mouth centre off the face centre, as a share of face width (3/4 views: >= 0.065)
+FRONT_MIN_EYE_RATIO = 0.8  # narrower eye / wider eye
+
+
+def frontality(boxes: dict[str, Box]) -> dict[str, float | bool]:
+    """Is a drawn face frontal? On a 3/4 view the eyes and mouth sit off the face centre and the far
+    eye is narrower. Measured on the detector boxes: frontal shots measure <= 0.03, side art >= 0.065."""
+    f, le, re_, m = boxes["face"], boxes["left_eye"], boxes["right_eye"], boxes["mouth"]
+    fw = max(f[2] - f[0], 1)
+    cx = (f[0] + f[2]) / 2
+    eyes = abs(((le[0] + le[2]) / 2 + (re_[0] + re_[2]) / 2) / 2 - cx) / fw
+    mouth = abs((m[0] + m[2]) / 2 - cx) / fw
+    wl, wr = max(le[2] - le[0], 1), max(re_[2] - re_[0], 1)
+    ratio = min(wl, wr) / max(wl, wr)
+    ok = max(eyes, mouth) <= FRONT_MAX_OFFSET and ratio >= FRONT_MIN_EYE_RATIO
+    return {"eyesOffset": round(eyes, 3), "mouthOffset": round(mouth, 3), "eyeRatio": round(ratio, 2), "frontal": ok}
+
+
+def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str, Path], notes: dict[str, str],
+                *, attempts: int = 2) -> dict[str, Box] | None:
+    """Draw the front view (side as reference), check it is frontal, retry once with a firmer prompt.
+
+    Runs before the mouth edits so the retry spends the budget the open mouth would have used (that
+    mouth then falls back to a warp). A 3/4 result that still fails keeps the best attempt, flagged."""
+    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    best: tuple[float, Path, dict[str, Box], dict[str, Any]] | None = None
+    for attempt in range(attempts):
+        raw = work / "_gen_front"
+        try:
+            generate_character_image(FRONT_PROMPT + (FRONT_RETRY if attempt else ""), raw, aspect_ratio="4:5", reference_path=closed)
+            out = _png(raw, work / f"source_front{'' if not attempt else f'_{attempt + 1}'}.png", size)
+            boxes = detect_features(out)
+            check = frontality(boxes)
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stop or detection failure
+            _LOG.warning("front attempt %d failed: %s", attempt + 1, exc)
+            if best is None:
+                notes["front"] = f"left art (shot failed: {str(exc)[:160]})"
+            break
+        finally:
+            raw.unlink(missing_ok=True)
+        score = max(check["eyesOffset"], check["mouthOffset"]) + (1 - check["eyeRatio"]) * 0.1
+        if best is None or score < best[0]:
+            best = (score, out, boxes, check)
+        if check["frontal"]:
+            break
+    if best is None:
+        return None
+    _score, out, boxes, check = best
+    if out.name != "source_front.png":
+        out.replace(work / "source_front.png")
+        out = work / "source_front.png"
+    shots["front"] = out
+    tries = attempt + 1
+    notes["front"] = (f"gemini ({'frontal' if check['frontal'] else 'still 3/4, best of ' + str(tries)}; "
+                      f"eyes {check['eyesOffset']}, mouth {check['mouthOffset']}, eye ratio {check['eyeRatio']}; tries {tries})")
+    return boxes
+
+
+def regenerate_front(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
+    """Redraw only the front view of an existing Gemini rig (checked + one retry) and re-rig it."""
+    reset_budget()
+    closed = skin / "source_closed.png"
+    size = Image.open(closed).size
+    shots: dict[str, Path] = {}
+    notes: dict[str, str] = {}
+    boxes = _front_shot(closed, skin, size, shots, notes)
+    if not boxes:
+        return {"frontShot": notes.get("front", "failed")}
+    matte = BiRefNetMatte()
+    try:
+        views = assemble(skin, {"closed": shots["front"]}, boxes, url, matte=matte, front=True)
+    finally:
+        matte.close()
+    return {"views": views, "frontShot": notes["front"]}
 
 
 # ---------------------------------------------------------------- geometry
@@ -560,7 +644,7 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
         fr = gen["shots"].get("front")
         if fr:
             try:
-                views |= assemble(skin, {"closed": fr}, detect_features(fr), url, matte=matte, front=True)
+                views |= assemble(skin, {"closed": fr}, gen.get("frontBoxes") or detect_features(fr), url, matte=matte, front=True)
                 status["front"] = "ready (gemini front view, side as reference; mouths warped)"
             except Exception as exc:  # noqa: BLE001 — detection/cut failure keeps the side art
                 _LOG.warning("front view rig failed: %s", exc)

@@ -38,6 +38,8 @@ FACE_Y = 0.42  # where the faces sit, for close framings
 BOARD = (0.45, 0.08, 0.94, 0.62)  # lesson board on the stage (x0, y0, x1, y1)
 DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.5, 0.6
 CAP_H = 180  # caption strip height (speaker label + two rows)
+V_FACE_AT = 0.34  # 9:16: faces sit this high in the output so the chin clears the captions (cap_y 0.70)
+V_CU_FACE_AT = 0.29  # close-ups: bigger head, so it sits higher still
 VWIN = H * 9 / 16  # vertical camera window width in frame px at zoom 1
 
 
@@ -198,8 +200,8 @@ class Scene:
         toward = 1 if px < 0.5 else -1  # look room toward the other side of the frame
         if self.vertical:  # singles only: the window is too narrow for a two-shot
             if quote:
-                return Shot(W * (px + 0.01 * toward), H * FACE_Y, 1.75, "cu")
-            return Shot(W * (px + 0.02 * toward), H * 0.5, 1.22, "single")
+                return Shot(W * (px + 0.01 * toward), vertical_cy(1.55, V_CU_FACE_AT), 1.55, "cu")
+            return Shot(W * (px + 0.02 * toward), vertical_cy(1.22), 1.22, "single")
         if self.template == "debate":
             if last:
                 return Shot(W / 2, H * 0.47, 1.24, "two")
@@ -644,6 +646,11 @@ class Scene:
     def frames(self) -> Iterator[np.ndarray]:
         for i in range(max(1, math.ceil(self.duration_s * self.fps))):
             yield np.asarray(self.frame(i / self.fps).convert("RGB"))
+
+
+def vertical_cy(zoom: float, face_at: float = V_FACE_AT) -> float:
+    """Camera centre (frame px) that puts the faces at ``face_at`` of a 9:16 output at ``zoom``."""
+    return H * FACE_Y + (0.5 - face_at) * H / zoom
 
 
 def fit_scale(canvas_h: int, template: str, idx: int) -> float:
