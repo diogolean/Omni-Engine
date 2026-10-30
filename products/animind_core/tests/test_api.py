@@ -9,6 +9,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CORE_API_KEY", "test-key")
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ANIMIND_FORCE_MOCK", "1")
+    monkeypatch.setenv("ANIMIND_PERSONAS_OFFLINE", "1")
     from products.animind_core.app import app
 
     return TestClient(app)
@@ -64,7 +65,7 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
     if not shutil.which("ffmpeg"):
         pytest.skip("ffmpeg not installed")
 
-    async def fake_tts(text, voice, out):
+    async def fake_tts(text, voice, out, rate="+0%"):
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=0.8", str(out)], check=True)
 
     monkeypatch.setattr(render, "_tts", fake_tts)
@@ -79,6 +80,9 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
     res = state["result"]
     assert res["rigged"] == [True]
     assert all(line["visemes"] and line["view"] in {"front", "left", "right"} for line in res["script"])
+    assert res["writer"] == "template" and res["personas"][0]["found"] is False
+    assert {line["kind"] for line in res["script"]} == {"paraphrase"}  # no sheet offline: nothing passes as a quote
+    assert [line["beat"] for line in res["script"]][0] == "gancho"
     assert client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1]).status_code == 200
 
 
@@ -96,11 +100,11 @@ def test_unknown_job(client):
     assert client.get("/v1/jobs/nope", headers=H).status_code == 404
 
 
-def test_default_script_debate():
-    from products.animind_core.render import default_script
+def test_template_debate_alternates_speakers():
+    from products.animind_core import script
 
-    lines = default_script("debate", "IA", 2, "pt-BR")
-    assert {s for s, _ in lines} == {0, 1}
+    lines = script.write("debate", "IA", ["A", "B"], sheets=[{"quotes": []}, {"quotes": []}], use_llm=False)["lines"]
+    assert {line["speaker"] for line in lines} == {0, 1}
 
 
 def test_line_views():

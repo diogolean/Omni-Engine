@@ -14,10 +14,33 @@ Rhubarb visemes).
 Without a Gemini key (or with `ANIMIND_FORCE_MOCK=1`) characters are a flat PIL
 drawing cut into the same layers; the response says `"generator": "mock"`.
 
+## Scripts: real quotes, marked paraphrases
+
+`script.py` writes every render from a beat plan, and `personas.py` keeps a sheet of real quotes per
+character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas/<lang>/`, outside git;
+"not found" is cached for 7 days).
+
+- **debate**: gancho -> tese (quote) -> réplica (quote) -> two short alternating réplicas -> tréplica (quote) -> two fechamentos.
+- **lesson**: gancho -> ponto 1 (quote) -> ponto 2 -> ponto 3 (quote) -> exemplo -> resumo. **solo**: gancho -> tese (quote) -> argumento -> fechamento.
+- Each beat has a word budget (`maxS` = words / 2.6 + 0.8 s) and a pause after it. A clip that overruns
+  `maxS` is voiced again at `+15%` (`ttsRate`).
+- `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
+  `quote {id, text, source, url, site, wikisource?}`. Gemini (`gemini-2.5-flash`, one text call) only picks
+  quote ids and writes the other lines. An unknown or reused id becomes the best topic match from the
+  sheet, never model text.
+- `kind: "paraphrase"`: written lines, never shown as quotes. Quote marks are removed, and a line that
+  repeats 7+ words of a quote is replaced. `basis` names the quote it restates, if any. With no sheet
+  (fictional characters, offline) every line is a paraphrase.
+- On screen: a chip "CITAÇÃO REAL · source · Wikiquote" or "PARÁFRASE"; quote captions in italics
+  within “ ”; captions paged two rows at a time. The lesson board shows the beat, the quote and its source.
+- Result adds `writer` (`gemini`|`template`), `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
+  The character name is cut before a comma or parenthesis to find the person ("Sócrates, de toga" -> "Sócrates").
+
 ## Env
 
 - `CORE_API_KEY` (required; `Authorization: Bearer ...`).
 - `GEMINI_API_KEY` (absent -> mock art). `ANIMIND_DATA_DIR` (default `~/.animind-core`, outside git). `CORE_PUBLIC_URL`.
+- `ANIMIND_PERSONAS_OFFLINE=1`: never fetch Wikiquote (tests); only cached sheets are used.
 - `RHUBARB_PATH`: Rhubarb Lip Sync binary (Linux has no auto-download; absent -> envelope visemes).
 - Cost: one character is one budget unit (both caps are reset per request). A character is 3 images
   (~$0.04 each) + one text call. The engine defaults (`REEL_REEL_BUDGET_USD` $0.05 and the
