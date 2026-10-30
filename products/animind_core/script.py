@@ -217,9 +217,9 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
     template = template if template in PLANS else "solo"
     topic = (topic or "").strip() or ("inteligência artificial" if lang == "pt-BR" else "artificial intelligence")
     n = 2 if template == "debate" and len(names) >= 2 else 1
-    names = [(names[min(i, len(names) - 1)] if names else "") for i in range(n)]
+    names = [personas.persona_name(names[min(i, len(names) - 1)]) if names else "" for i in range(n)]
     if sheets is None:
-        sheets = [personas.load(personas.persona_name(nm), lang, fetch=settings.personas_online()) for nm in names]
+        sheets = [personas.load(nm, lang, fetch=settings.personas_online()) for nm in names]
     plan = plan_for(template, n)
     if use_llm is None:
         use_llm = settings.gemini_available()
