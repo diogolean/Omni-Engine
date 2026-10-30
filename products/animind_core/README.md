@@ -1,24 +1,34 @@
-# Animind core API (v1)
+# Animind core API (contract v2)
 
-Small HTTP API that the Animind app calls at `CORE_URL/v1/*` (see `lib/contract.ts`
-in github.com/diogolean/animind). It wraps existing code only:
+Small HTTP API that the Animind app calls at `ANIMIND_CORE_URL/v1/*` (see
+`lib/contract.ts` in github.com/diogolean/animind). URL prefix `v1`, payloads
+follow contract **v2** (views `front`/`left`/`right`, each with layers + 9
+Rhubarb visemes).
 
-- `POST /v1/characters` -> `products/aiwake/animator/factory/one_shot_factory.py`
-  `OneShotPuppetFactory.create_character` (Gemini image via
-  `create_puppet.generate_character_image`, BiRefNet cutout, jaw slice,
-  `animation.parametric.factory.rigger.auto_rig_character` for eyes and Rhubarb
-  mouths A-H/X), then `OneShotPuppetFactory.generate_view` for `facing_right` and
-  `facing_front`. Returns the contract `Character` plus `views`, `visemeMap`, `manifestUrl`.
-- `POST /v1/render`, `GET /v1/jobs/{id}` -> edge-tts voices + `animation.parametric.scene_render.render_scene`.
-- `GET /v1/files/{path}` serves generated PNG/JSON/media from `ANIMIND_DATA_DIR`.
+| Endpoint | What runs |
+| --- | --- |
+| `POST /v1/characters` | `rig.py`: Gemini image via Aiwake `create_puppet.generate_character_image` (closed mouth, then "open" and "round" edits with the closed shot as reference) -> BiRefNet matte (rembg `birefnet-general`, as in the Rigly rigger) -> magenta despill -> Gemini feature boxes (face, eyes, mouth) -> layers `body`, `head`, `eyes`, `eyes_closed` + mouth sprites `X A B C D E F G H`. `right` is the mirror of `left`; `front` reuses the left art for now. |
+| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes per line (`animation.parametric.rhubarb`, envelope fallback) with absolute times and a `view` per line -> `scene.py` compositor -> Rigly `animation.parametric.renderer.AnimationRenderer` (ffmpeg) -> `jobs/<id>/preview.mp4` (1280x720, 24 fps, parody label baked in). |
+| `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
-Env: `CORE_API_KEY` (required, `Authorization: Bearer`), `GEMINI_API_KEY` (absent -> mock art),
-`ANIMIND_DATA_DIR` (default `~/.animind-core`, outside git), `CORE_PUBLIC_URL`,
-`MAX_GOOGLE_COST_PER_RUN_USD` (the shared guardrail; reset per character request, clamped to $0.05
-unless `GOOGLE_COST_ALLOW_ABOVE_CEILING=1`). One view costs ~$0.04; all 3 views ~$0.12, so the
-right and front views need that opt-in, otherwise they come back with a `failed: GOOGLE BUDGET` status.
+Without a Gemini key (or with `ANIMIND_FORCE_MOCK=1`) characters are a flat PIL
+drawing cut into the same layers; the response says `"generator": "mock"`.
+
+## Env
+
+- `CORE_API_KEY` (required; `Authorization: Bearer ...`).
+- `GEMINI_API_KEY` (absent -> mock art). `ANIMIND_DATA_DIR` (default `~/.animind-core`, outside git). `CORE_PUBLIC_URL`.
+- `RHUBARB_PATH`: Rhubarb Lip Sync binary (Linux has no auto-download; absent -> envelope visemes).
+- Cost: one character is one budget unit (both caps are reset per request). A character is 3 images
+  (~$0.04 each) + one text call. The engine defaults (`REEL_REEL_BUDGET_USD` $0.05 and the
+  Google guardrail `MAX_GOOGLE_COST_PER_RUN_USD`, clamped to $0.05) only fit the base image: the
+  mouth shots then fall back to warps of the closed mouth (`mouthShots` says so). For the full set:
+  `REEL_REEL_BUDGET_USD=0.15 MAX_GOOGLE_COST_PER_RUN_USD=0.15 GOOGLE_COST_ALLOW_ABOVE_CEILING=1`.
+- Memory: BiRefNet on CPU peaks near 8 GB while a character is cut; it is freed after each request,
+  and characters are built one at a time.
 
 ```bash
 pip install -r requirements.txt -r products/animind_core/requirements.txt
-CORE_API_KEY=... uvicorn products.animind_core.app:app --port 8787
+CORE_API_KEY=... RHUBARB_PATH=/path/to/rhubarb uvicorn products.animind_core.app:app --port 8787
+pytest products/animind_core/tests
 ```

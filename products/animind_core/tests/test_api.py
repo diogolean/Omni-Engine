@@ -26,16 +26,66 @@ def test_upload_needs_rights(client):
     assert r.status_code == 400
 
 
-def test_character_contract_shape(client):
-    r = client.post("/v1/characters", headers=H, json={"source": {"kind": "prompt", "prompt": "owl professor"}})
-    assert r.status_code == 200
-    c = r.json()
-    names = {layer["name"] for layer in c["layers"]}
-    assert {"body", "head", "eyes", "eyes_closed", "mouth_rest", "mouth_A", "mouth_E", "mouth_O", "mouth_M"} <= names
-    assert set(c["views"]) == {"facing_left", "facing_right", "facing_front"}
-    assert len(c["views"]["facing_left"]["visemes"]) == 9
-    path = c["layers"][0]["url"].split("/v1/files/")[1]
+def _make(client, prompt="owl professor"):
+    r = client.post("/v1/characters", headers=H, json={"source": {"kind": "prompt", "prompt": prompt}})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_character_contract_v2_shape(client):
+    c = _make(client)
+    assert c["status"] == "ready" and c["style"] == "rig" and c["generator"] == "mock"
+    assert set(c["views"]) == {"front", "left", "right"}
+    for view in c["views"].values():
+        assert {"body", "head", "eyes", "eyes_closed"} <= {layer["name"] for layer in view["layers"]}
+        assert set(view["visemes"]) == set("XABCDEFGH")
+        for layer in [*view["layers"], *view["visemes"].values()]:
+            assert {"name", "url", "x", "y", "w", "h", "z"} <= set(layer)
+            assert 0 <= layer["x"] and layer["x"] + layer["w"] <= view["canvas"]["w"]
+    path = c["views"]["left"]["layers"][0]["url"].split("/v1/files/")[1]
     assert client.get(f"/v1/files/{path}").headers["content-type"] == "image/png"
+
+
+def test_right_view_mirrors_left(client):
+    c = _make(client)
+    w = c["views"]["left"]["canvas"]["w"]
+    left = {layer["name"]: layer for layer in c["views"]["left"]["layers"]}
+    for layer in c["views"]["right"]["layers"]:
+        assert layer["x"] == w - left[layer["name"]]["x"] - left[layer["name"]]["w"]
+
+
+def test_render_job_has_visemes_and_video(client, monkeypatch):
+    """Full mock pipeline: edge-tts is stubbed, Rhubarb may be absent (envelope)."""
+    import shutil
+    import subprocess
+
+    from products.animind_core import render
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+
+    async def fake_tts(text, voice, out):
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=0.8", str(out)], check=True)
+
+    monkeypatch.setattr(render, "_tts", fake_tts)
+    c = _make(client)
+    job = client.post("/v1/render", headers=H, json={"characters": [c], "template": "solo", "scenario": "studio", "topic": "IA"}).json()
+    for _ in range(240):
+        state = client.get(f"/v1/jobs/{job['id']}", headers=H).json()
+        if state["status"] in {"done", "failed"}:
+            break
+        time.sleep(0.5)
+    assert state["status"] == "done", state
+    res = state["result"]
+    assert res["rigged"] == [True]
+    assert all(line["visemes"] and line["view"] in {"front", "left", "right"} for line in res["script"])
+    assert client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1]).status_code == 200
+
+
+def test_unknown_character_is_not_loaded():
+    from products.animind_core import characters
+
+    assert characters.load("../../etc") is None
 
 
 def test_files_cannot_escape(client):
@@ -51,3 +101,21 @@ def test_default_script_debate():
 
     lines = default_script("debate", "IA", 2, "pt-BR")
     assert {s for s, _ in lines} == {0, 1}
+
+
+def test_line_views():
+    from products.animind_core.render import line_view
+
+    assert [line_view("debate", s, i) for i, s in enumerate((0, 1))] == ["right", "left"]
+    assert line_view("solo", 0, 1) == "right"
+
+
+def test_despill_removes_magenta():
+    from PIL import Image
+
+    from products.animind_core.rig import _despill
+
+    img = Image.new("RGBA", (2, 1), (255, 0, 255, 255))
+    img.putpixel((1, 0), (200, 40, 40, 255))  # a red tie stays
+    out = _despill(img)
+    assert out.getpixel((0, 0))[3] == 0 and out.getpixel((1, 0))[3] == 255
