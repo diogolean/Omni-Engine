@@ -166,10 +166,10 @@ class Scene:
                 return Shot(W / 2, H * 0.5, 1.06)
             px = self.places[min(speaker, 1)][0]
             look_room = 0.07 if px < 0.5 else -0.07
-            return Shot(W * (px + look_room), H * 0.42, 1.42)
+            return Shot(W * (px + look_room), H * 0.55, 1.42)
         if self.template == "lesson":
             return Shot(W / 2, H * 0.5, 1.05) if speaker < 0 or i % 2 == 0 else Shot(W / 2, H * 0.44, 1.16)
-        return Shot(W / 2, H * 0.5, 1.08) if speaker < 0 or i % 2 == 0 else Shot(W / 2, H * 0.4, 1.34)
+        return Shot(W / 2, H * 0.5, 1.08) if speaker < 0 or i % 2 == 0 else Shot(W / 2, H * 0.5, 1.34)
 
     def _plan_shots(self) -> list[tuple[float, Shot, str]]:
         """(start s, shot, transition into it). Debate opens wide, then cuts per speaker."""
@@ -327,7 +327,7 @@ class Scene:
                     right = self.template == "debate" and line["speaker"] == 1
                     slide = round(30 * (1 - a)) * (1 if right else -1)
                     x = (W - 64 - lt.width if right else 64) + slide
-                    frame.alpha_composite(_fade(lt, a), (x, H - 250))
+                    frame.alpha_composite(_fade(lt, a), (x, H - 236))
         d = ImageDraw.Draw(frame)
         lw = d.textlength(self.disclaimer, font=self.label_font) + 28
         d.rounded_rectangle((24, 24, 24 + lw, 58), 17, fill=(255, 255, 255, 235))
