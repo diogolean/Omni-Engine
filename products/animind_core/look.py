@@ -25,8 +25,8 @@ W, H = 1280, 720
 MARGIN = 1.3  # plate size / frame size
 PW, PH = round(W * MARGIN), round(H * MARGIN)
 OX, OY = (PW - W) / 2, (PH - H) / 2  # frame origin inside a plate
-HORIZON = 0.8  # floor line, fraction of H
-PARALLAX = {"far": 0.35, "mid": 0.65, "stage": 1.0}
+HORIZON = 0.6  # floor line (camera at chest height), fraction of H
+PARALLAX = {"far": 0.5, "mid": 0.75, "stage": 1.0}
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,7 @@ class Light:
     side: int
     rim: tuple[float, float, float]
     strength: float = 0.75
+    ambient: tuple[float, float, float] = (1.0, 1.0, 1.0)  # set colour wrapped onto the character
 
 
 RIM = {
@@ -51,13 +52,20 @@ GRADE = {
     "arena": ((0.02, 0.008, 0.04), (1.06, 0.97, 1.0), 0.45),
     "space": ((0.0, 0.02, 0.05), (0.96, 1.0, 1.08), 0.4),
 }
+# the set's bounce light, multiplied into the characters so they sit in the same air as the plates
+AMBIENT = {
+    "studio": (0.9, 0.93, 1.0),
+    "classroom": (1.0, 0.92, 0.8),
+    "arena": (0.98, 0.84, 0.95),
+    "space": (0.82, 0.9, 1.04),
+}
 ACCENT = {"studio": (245, 176, 66), "classroom": (240, 196, 110), "arena": (255, 84, 96), "space": (96, 214, 255)}
 
 
 def light_for(scenario: str, template: str, idx: int, place_x: float) -> Light:
     side = 1 if template == "solo" else (-1 if place_x < 0.5 else 1)
     rims = RIM.get(scenario, RIM["studio"])
-    return Light(side=side, rim=rims[min(idx, len(rims) - 1)])
+    return Light(side=side, rim=rims[min(idx, len(rims) - 1)], ambient=AMBIENT.get(scenario, AMBIENT["studio"]))
 
 
 # ---------------------------------------------------------------- plates
@@ -91,41 +99,119 @@ def _py(fy: float) -> float:
     return OY + fy * H
 
 
-def _floor(arr: np.ndarray, color: tuple[float, float, float], reflect: float) -> None:
-    """Floor below the horizon: darker, with a mirrored, fading copy of the wall."""
+def _floor(arr: np.ndarray, color: tuple[float, float, float], reflect: float, pattern: str = "seams",
+           gloss: float = 1.0) -> None:
+    """Perspective floor below the horizon: a mirrored, fading copy of the wall, then a texture
+    in floor coordinates (``u`` across, ``v`` = depth) so seams converge on the vanishing point."""
     hy = int(_py(HORIZON))
     n = arr.shape[0] - hy
     wall = arr[max(0, hy - n):hy][::-1]
-    fade = np.linspace(1, 0, len(wall), dtype=np.float32)[:, None, None]
+    fade = (np.linspace(1, 0, len(wall), dtype=np.float32) ** 1.6)[:, None, None]
     base = np.array(color, np.float32)[None, None, :]
-    ramp = np.linspace(1.0, 0.55, n, dtype=np.float32)[:, None, None]
+    ramp = np.linspace(0.75, 1.15, n, dtype=np.float32)[:, None, None]  # nearer floor catches more key light
     floor = np.broadcast_to(base * ramp, (n, arr.shape[1], 3)).copy()
-    floor[: len(wall)] += wall * reflect * fade
+    floor[: len(wall)] += wall * reflect * gloss * fade
+    x = np.arange(arr.shape[1], dtype=np.float32)[None, :]
+    dz = np.arange(1, n + 1, dtype=np.float32)[:, None]  # rows below the horizon
+    u = (x - _px(0.5)) / dz * 40.0  # floor units across (perspective)
+    v = 4000.0 / dz  # floor units in depth
+    aa = np.clip(dz / 60.0, 0.15, 1.0)  # seams fade out toward the horizon instead of aliasing
+    if pattern == "planks":
+        plank = np.floor(u / 22.0)
+        tone = 0.86 + 0.14 * np.sin(plank * 12.9898) ** 2
+        seam = (np.abs(((u / 22.0) % 1.0) - 0.5) > 0.47).astype(np.float32)
+        joint = (np.abs(((v + plank * 37.0) / 160.0) % 1.0 - 0.5) > 0.493).astype(np.float32)
+        floor *= (tone * (1 - 0.35 * aa * np.maximum(seam, joint)))[..., None]
+    elif pattern == "tiles":
+        su = (np.abs(((u / 30.0) % 1.0) - 0.5) > 0.475).astype(np.float32)
+        sv = (np.abs(((v / 30.0) % 1.0) - 0.5) > 0.47).astype(np.float32)
+        floor += (np.maximum(su, sv) * aa)[..., None] * np.array((0.03, 0.13, 0.18), np.float32)
+    else:  # seams of large glossy panels
+        su = (np.abs(((u / 60.0) % 1.0) - 0.5) > 0.488).astype(np.float32)
+        sv = (np.abs(((v / 90.0) % 1.0) - 0.5) > 0.485).astype(np.float32)
+        floor *= (1 - 0.3 * aa * np.maximum(su, sv))[..., None]
     arr[hy:] = floor
-    arr[hy : hy + 2] += 0.035  # horizon edge catches the light
+    arr[hy : hy + 2] += 0.03  # horizon edge catches the light
+
+
+def _rect(x: np.ndarray, y: np.ndarray, x0: float, y0: float, x1: float, y1: float, soft: float = 1.5) -> np.ndarray:
+    """Anti-aliased rectangle mask in frame fractions."""
+    return (np.clip((x - _px(x0)) / soft + 0.5, 0, 1) * np.clip((_px(x1) - x) / soft + 0.5, 0, 1)
+            * np.clip((y - _py(y0)) / soft + 0.5, 0, 1) * np.clip((_py(y1) - y) / soft + 0.5, 0, 1))
+
+
+def _add(arr: np.ndarray, mask: np.ndarray, color: tuple[float, float, float]) -> None:
+    arr += mask[..., None] * np.array(color, np.float32)
+
+
+def _paint(arr: np.ndarray, mask: np.ndarray, color: tuple[float, float, float] | np.ndarray) -> None:
+    arr[:] = arr * (1 - mask[..., None]) + mask[..., None] * np.asarray(color, np.float32)
 
 
 def _far(scenario: str, places: list[float]) -> np.ndarray:
+    """Back wall, set pieces and the floor. Practical lights sit where the rim lights come from:
+    left of frame for the character on the left, right for the one on the right."""
     x, y = _grid(PW, PH)
-    t = (y / PH)[..., None]
+    t = np.clip((y - _py(0.0)) / (_py(HORIZON) - _py(0.0)), 0, 1)[..., None]
+    rims = RIM.get(scenario, RIM["studio"])
     if scenario == "classroom":
-        arr = np.array((0.3, 0.255, 0.2), np.float32) * (1 - t) + np.array((0.16, 0.13, 0.1), np.float32) * t
-        arr = arr * (0.9 + 0.1 * _noise(PW, PH, 6, 11)[..., None])
-        for wx in (0.04, 0.96):  # tall windows with cool daylight
-            win = ((np.abs(x - _px(wx)) < 0.07 * W) & (y > _py(0.06)) & (y < _py(0.66))).astype(np.float32)
-            arr += win[..., None] * np.array((0.55, 0.62, 0.7), np.float32)
+        arr = np.array((0.34, 0.29, 0.22), np.float32) * (1 - t) + np.array((0.27, 0.22, 0.16), np.float32) * t
+        arr = arr * (0.94 + 0.06 * _noise(PW, PH, 9, 11)[..., None])
+        _paint(arr, _rect(x, y, -0.2, HORIZON - 0.15, 1.2, HORIZON + 0.01), (0.2, 0.125, 0.07))  # wainscot
+        _add(arr, _rect(x, y, -0.2, HORIZON - 0.155, 1.2, HORIZON - 0.145), (0.12, 0.09, 0.05))  # its rail
+        panel = (np.abs(((x - _px(0)) / (0.11 * W)) % 1.0 - 0.5) > 0.47) * _rect(x, y, -0.2, HORIZON - 0.14, 1.2, HORIZON)
+        arr -= panel[..., None] * 0.05
+        x0, x1, y0, y1 = -0.1, 0.12, 0.06, 0.46  # sunlit window, left (the key/rim side of the teacher)
+        _paint(arr, _rect(x, y, x0 - 0.012, y0 - 0.02, x1 + 0.012, y1 + 0.02), (0.18, 0.11, 0.06))
+        sky = np.clip((y - _py(y0)) / (_py(y1) - _py(y0)), 0, 1)[..., None]
+        glass = np.array((1.0, 0.93, 0.76), np.float32) * (1 - sky) + np.array((0.98, 0.8, 0.55), np.float32) * sky
+        _paint(arr, _rect(x, y, x0, y0, x1, y1), glass)
+        for mx in (0.01, 0.065):
+            _paint(arr, _rect(x, y, mx - 0.004, y0, mx + 0.004, y1), (0.18, 0.11, 0.06))
+        _paint(arr, _rect(x, y, x0, 0.255, x1, 0.263), (0.18, 0.11, 0.06))
+        arr += _blob(x, y, _px(0.2), _py(0.3), 0.25 * W, 0.35 * H)[..., None] * np.array((0.2, 0.15, 0.08), np.float32)
+        x0 = 0.86  # bookcase on the right
+        _paint(arr, _rect(x, y, x0, 0.08, 1.15, HORIZON + 0.005), (0.16, 0.1, 0.055))
+        books = Image.new("RGBA", (PW, PH), (0, 0, 0, 0))  # spines drawn with PIL (cheap), then laid in
+        db = ImageDraw.Draw(books)
+        rng = np.random.default_rng(5)
+        palette = [(115, 31, 26), (38, 64, 102), (128, 102, 51), (51, 82, 46), (140, 128, 102), (90, 40, 70)]
+        for shelf in range(4):
+            sy1 = 0.1 + (shelf + 1) * 0.12
+            bx = x0 + 0.012
+            while bx < 1.13:
+                bw = rng.uniform(0.008, 0.016)
+                c = np.array(palette[int(rng.integers(len(palette)))]) * rng.uniform(0.6, 1.0)
+                db.rectangle((_px(bx), _py(sy1 - rng.uniform(0.07, 0.095)), _px(bx + bw), _py(sy1 - 0.004)), fill=(*c.astype(int), 255))
+                bx += bw + 0.002
+            db.rectangle((_px(x0), _py(sy1 - 0.004), PW, _py(sy1 + 0.006)), fill=(61, 38, 20, 255))
+        b = np.asarray(books, dtype=np.float32) / 255.0
+        arr[:] = arr * (1 - b[..., 3:]) + b[..., :3] * b[..., 3:]
         for px in places:
-            arr += _blob(x, y, _px(px), _py(0.42), 0.22 * W, 0.4 * H)[..., None] * np.array((0.14, 0.11, 0.07), np.float32)
-        _floor(arr, (0.2, 0.135, 0.085), 0.12)
-        hy = int(_py(HORIZON))
-        arr[hy:] *= (0.92 + 0.08 * (np.sin(x[hy:] / 9.0) > 0.96))[..., None]  # plank seams
+            arr += _blob(x, y, _px(px), _py(0.4), 0.2 * W, 0.32 * H)[..., None] * np.array((0.1, 0.075, 0.045), np.float32)
+        _floor(arr, (0.3, 0.19, 0.11), 0.1, "planks")
+        arr += _blob(x, y, _px(0.3), _py(0.92), 0.4 * W, 0.12 * H)[..., None] * np.array((0.16, 0.11, 0.05), np.float32)
     elif scenario == "arena":
-        arr = np.array((0.035, 0.025, 0.045), np.float32) * np.ones((PH, PW, 1), np.float32)
-        arr += _blob(x, y, _px(0.1), _py(0.35), 0.45 * W, 0.6 * H)[..., None] * np.array((0.45, 0.04, 0.09), np.float32)
-        arr += _blob(x, y, _px(0.9), _py(0.35), 0.45 * W, 0.6 * H)[..., None] * np.array((0.04, 0.12, 0.48), np.float32)
-        grid = ((np.mod(x, 46) < 2) | (np.mod(y, 46) < 2)).astype(np.float32) * (y < _py(HORIZON))
-        arr += grid[..., None] * 0.025
-        _floor(arr, (0.03, 0.025, 0.04), 0.35)
+        arr = np.array((0.03, 0.022, 0.04), np.float32) * np.ones((PH, PW, 1), np.float32)
+        arr += _blob(x, y, _px(0.0), _py(0.25), 0.4 * W, 0.5 * H)[..., None] * np.array((0.5, 0.05, 0.1), np.float32)
+        arr += _blob(x, y, _px(1.0), _py(0.25), 0.4 * W, 0.5 * H)[..., None] * np.array((0.05, 0.13, 0.55), np.float32)
+        band = _rect(x, y, -0.2, HORIZON - 0.075, 1.2, HORIZON - 0.04)  # LED ad board, red to blue
+        mix = np.clip((x - _px(0.1)) / (0.8 * W), 0, 1)[..., None]
+        led = np.array((0.95, 0.2, 0.3), np.float32) * (1 - mix) + np.array((0.25, 0.4, 1.0), np.float32) * mix
+        stripes = (0.75 + 0.25 * (np.mod(x, 9) < 6))[..., None]
+        arr = arr * (1 - band[..., None]) + band[..., None] * led * stripes * 0.75
+        arr += _blob(x, y, _px(0.5), _py(HORIZON - 0.06), 0.9 * W, 0.05 * H)[..., None] * led * 0.12
+        _paint(arr, _rect(x, y, 0.36, 0.1, 0.64, 0.36), (0.02, 0.02, 0.03))  # jumbotron
+        scr = _rect(x, y, 0.37, 0.115, 0.63, 0.345)
+        sm = np.clip((x - _px(0.37)) / (0.26 * W), 0, 1)[..., None]
+        _paint(arr, scr, (np.array((0.5, 0.06, 0.12), np.float32) * (1 - sm) + np.array((0.06, 0.14, 0.55), np.float32) * sm)
+               * (0.8 + 0.2 * _noise(PW, PH, 4, 21)[..., None]))
+        _floor(arr, (0.035, 0.03, 0.045), 0.4)
+        hy = _py(HORIZON)  # the ring: a lit disc with a glowing edge
+        r = np.sqrt(((x - _px(0.5)) / (0.62 * W)) ** 2 + ((y - _py(0.95)) / (0.3 * H)) ** 2) * (y > hy)
+        disc = np.clip((1 - r) * 25, 0, 1)
+        edge = np.exp(-((r - 1) * 28) ** 2) * (y > hy)
+        arr += disc[..., None] * 0.05 + edge[..., None] * led * 0.5
     elif scenario == "space":
         neb = _noise(PW, PH, 5, 7) * _noise(PW, PH, 11, 8)
         arr = np.array((0.008, 0.012, 0.04), np.float32) + neb[..., None] * np.array((0.42, 0.12, 0.5), np.float32)
@@ -133,52 +219,72 @@ def _far(scenario: str, places: list[float]) -> np.ndarray:
         rng = np.random.default_rng(42)
         sx, sy, sb = rng.integers(0, PW, 900), rng.integers(0, PH, 900), rng.random(900) ** 3
         arr[sy, sx] += (0.25 + 0.75 * sb)[:, None]
-        _floor(arr, (0.03, 0.04, 0.06), 0.25)
-        hy = int(_py(HORIZON))
-        arr[hy - 1 : hy + 3] += np.array((0.1, 0.45, 0.6), np.float32)
-    else:  # studio
-        arr = np.array((0.1, 0.115, 0.13), np.float32) * (1 - t) + np.array((0.04, 0.045, 0.05), np.float32) * t
-        arr += _blob(x, y, _px(0.5), _py(0.38), 0.6 * W, 0.45 * H)[..., None] * np.array((0.05, 0.1, 0.12), np.float32)
-        panels = 0.5 + 0.5 * np.cos((x - _px(0)) / (0.125 * W) * 2 * math.pi)
-        arr *= (0.9 + 0.1 * panels)[..., None]
+        metal = (0.07, 0.08, 0.1)  # bridge window frame: mullions, header and sill
+        for mx in (-0.05, 0.2, 0.5, 0.8, 1.05):
+            _paint(arr, _rect(x, y, mx - 0.012, -0.2, mx + 0.012, HORIZON), metal)
+            _add(arr, _rect(x, y, mx - 0.012, -0.2, mx - 0.008, HORIZON), (0.12, 0.2, 0.25))
+        _paint(arr, _rect(x, y, -0.2, -0.2, 1.2, 0.035), metal)
+        _paint(arr, _rect(x, y, -0.2, HORIZON - 0.045, 1.2, HORIZON + 0.005), (0.06, 0.07, 0.09))
+        _add(arr, _rect(x, y, -0.2, HORIZON - 0.047, 1.2, HORIZON - 0.04), (0.1, 0.45, 0.6))
+        arr += _blob(x, y, _px(0.0), _py(0.4), 0.18 * W, 0.4 * H)[..., None] * np.array(rims[0], np.float32) * 0.18
+        arr += _blob(x, y, _px(1.0), _py(0.4), 0.18 * W, 0.4 * H)[..., None] * np.array(rims[1], np.float32) * 0.18
+        _floor(arr, (0.05, 0.06, 0.08), 0.3, "tiles")
+    else:  # studio: talk-show set
+        arr = np.array((0.06, 0.07, 0.085), np.float32) * (1 - t) + np.array((0.1, 0.11, 0.125), np.float32) * t
+        slat = (np.abs(((x - _px(0)) / (0.045 * W)) % 1.0 - 0.5) > 0.44).astype(np.float32)
+        arr *= (1 - 0.25 * slat)[..., None]
+        _paint(arr, _rect(x, y, 0.355, 0.1, 0.645, 0.43), (0.015, 0.015, 0.02))  # screen between the guests
+        scr = _rect(x, y, 0.365, 0.115, 0.635, 0.415)
+        sm = np.clip((x - _px(0.365)) / (0.27 * W), 0, 1)[..., None]
+        glow = np.array(rims[0], np.float32) * (1 - sm) + np.array(rims[1], np.float32) * sm
+        _paint(arr, scr, 0.03 + glow * (0.05 + 0.3 * _noise(PW, PH, 5, 31)[..., None] ** 2))
+        arr += _blob(x, y, _px(0.5), _py(0.27), 0.22 * W, 0.25 * H)[..., None] * glow * 0.08
+        for sx, col in ((0.045, rims[0]), (0.955, rims[1])):  # the practicals behind the rim lights
+            arr += _blob(x, y, _px(sx), _py(0.3), 0.07 * W, 0.45 * H)[..., None] * np.array(col, np.float32) * 0.35
+            _paint(arr, _rect(x, y, sx - 0.006, 0.03, sx + 0.006, HORIZON - 0.01), np.array(col, np.float32) * 0.95)
         for px in places:
-            arr += _blob(x, y, _px(px), _py(0.45), 0.2 * W, 0.42 * H)[..., None] * np.array((0.2, 0.16, 0.12), np.float32)
-        _floor(arr, (0.05, 0.05, 0.055), 0.3)
+            arr += _blob(x, y, _px(px), _py(0.38), 0.17 * W, 0.3 * H)[..., None] * np.array((0.07, 0.065, 0.06), np.float32)
+        _paint(arr, _rect(x, y, -0.2, HORIZON - 0.012, 1.2, HORIZON + 0.002), (0.03, 0.03, 0.035))  # skirting
+        _floor(arr, (0.05, 0.052, 0.06), 0.45)
     return arr
 
 
 def _mid(scenario: str, template: str) -> Image.Image:
-    """RGBA middle layer: elements between the back wall and the characters."""
+    """RGBA middle layer: haze and fixtures between the back wall and the characters."""
     img = Image.new("RGBA", (PW, PH), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     rng = np.random.default_rng({"studio": 1, "classroom": 2, "arena": 3, "space": 4}.get(scenario, 1))
     if scenario == "classroom":
         if template != "lesson":  # the lesson draws its own board on the stage, with the text
-            box = (_px(0.33), _py(0.13), _px(0.67), _py(0.6))
+            box = (_px(0.35), _py(0.1), _px(0.65), _py(0.44))
             d.rounded_rectangle(box, 10, fill=(70, 46, 28, 255))
             d.rounded_rectangle((box[0] + 12, box[1] + 12, box[2] - 12, box[3] - 12), 6, fill=(24, 44, 36, 255))
-        shaft = Image.new("L", (PW, PH), 0)  # daylight shafts from the windows
+        shaft = Image.new("L", (PW, PH), 0)  # sunlight from the left window, onto the floor
         ds = ImageDraw.Draw(shaft)
-        for wx, k in ((0.04, 1), (0.96, -1)):
-            ds.polygon([(_px(wx) - 60, _py(0.06)), (_px(wx) + 60, _py(0.06)), (_px(wx + k * 0.38), _py(1.0)), (_px(wx + k * 0.2), _py(1.0))], fill=26)
-        shaft = shaft.filter(ImageFilter.GaussianBlur(30))
-        img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (PW, PH), (255, 244, 220)).split(), shaft)))
-        return img.filter(ImageFilter.GaussianBlur(2.2))
+        ds.polygon([(_px(-0.1), _py(0.06)), (_px(0.12), _py(0.06)), (_px(0.62), _py(1.0)), (_px(0.18), _py(1.0))], fill=30)
+        shaft = shaft.filter(ImageFilter.GaussianBlur(40))
+        img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (PW, PH), (255, 236, 200)).split(), shaft)))
+        return img.filter(ImageFilter.GaussianBlur(2.0))
     if scenario == "arena":
         cones = Image.new("L", (PW, PH), 0)
         dc = ImageDraw.Draw(cones)
-        for fx in (0.2, 0.5, 0.8):
-            dc.polygon([(_px(fx) - 18, _py(-0.05)), (_px(fx) + 18, _py(-0.05)), (_px(fx) + 230, _py(HORIZON)), (_px(fx) - 230, _py(HORIZON))], fill=34)
-        cones = cones.filter(ImageFilter.GaussianBlur(26))
+        for fx in (0.22, 0.5, 0.78):
+            dc.polygon([(_px(fx) - 14, _py(-0.02)), (_px(fx) + 14, _py(-0.02)), (_px(fx) + 200, _py(0.98)), (_px(fx) - 200, _py(0.98))], fill=30)
+        cones = cones.filter(ImageFilter.GaussianBlur(24))
         img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (PW, PH), (255, 236, 220)).split(), cones)))
-        hy = _py(HORIZON)  # crowd silhouettes along the horizon
-        for i in range(70):
-            cx = (i + rng.uniform(-0.3, 0.3)) * PW / 69
-            r = rng.uniform(15, 24)
-            top = hy - rng.uniform(20, 46)
-            d.ellipse((cx - r, top - r, cx + r, top + r), fill=(6, 5, 9, 235))
-            d.rounded_rectangle((cx - r * 1.6, top + r * 0.6, cx + r * 1.6, hy + 30), 14, fill=(6, 5, 9, 235))
-        return img.filter(ImageFilter.GaussianBlur(2.0))
+        d.rectangle((0, _py(-0.07), PW, _py(-0.045)), fill=(20, 20, 26, 255))  # truss with the fixtures
+        for fx in (0.22, 0.5, 0.78):
+            d.rounded_rectangle((_px(fx) - 22, _py(-0.06), _px(fx) + 22, _py(-0.015)), 6, fill=(30, 30, 36, 255))
+            d.ellipse((_px(fx) - 14, _py(-0.03), _px(fx) + 14, _py(-0.005)), fill=(255, 246, 230, 255))
+        hy = _py(HORIZON - 0.075)  # crowd silhouettes above the ad board
+        for row, (shade, dy) in enumerate(((8, 0), (5, -34))):
+            for i in range(60):
+                cx = (i + rng.uniform(-0.3, 0.3) + row * 0.5) * PW / 59
+                r = rng.uniform(11, 17)
+                top = hy + dy - rng.uniform(16, 34)
+                d.ellipse((cx - r, top - r, cx + r, top + r), fill=(shade, shade - 2, shade + 3, 245))
+                d.rounded_rectangle((cx - r * 1.6, top + r * 0.6, cx + r * 1.6, hy + dy + 6), 12, fill=(shade, shade - 2, shade + 3, 245))
+        return img.filter(ImageFilter.GaussianBlur(1.6))
     if scenario == "space":
         cx, cy, r = _px(0.86), _py(0.2), 0.11 * W  # planet with a lit limb
         x, y = _grid(int(2 * r) + 4, int(2 * r) + 4)
@@ -187,23 +293,80 @@ def _mid(scenario: str, template: str) -> Image.Image:
         lit = np.clip(0.25 + 0.75 * (-dx * 0.6 - dy * 0.5), 0, 1) * (0.85 + 0.15 * _noise(*x.shape[::-1], 6, 3))
         col = np.stack([lit * 0.55, lit * 0.5, lit * 0.75, inside], -1)
         img.alpha_composite(Image.fromarray((col * 255).astype(np.uint8), "RGBA"), (int(cx - r), int(cy - r)))
-        for _ in range(30):
-            sx, sy = rng.uniform(0, PW), rng.uniform(0, _py(HORIZON))
-            s = rng.uniform(1.5, 3.2)
-            d.ellipse((sx - s, sy - s, sx + s, sy + s), fill=(220, 235, 255, 230))
         return img.filter(ImageFilter.GaussianBlur(1.2))
-    for _ in range(34):  # studio: out-of-focus practical lights (bokeh)
-        cx, cy = rng.uniform(0, PW), rng.uniform(_py(0.02), _py(0.62))
-        r = rng.uniform(10, 34)
-        col = (255, 196, 120) if rng.random() < 0.6 else (120, 210, 255)
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*col, int(rng.uniform(22, 70))))
-    return img.filter(ImageFilter.GaussianBlur(3.0))
+    haze = Image.new("L", (PW, PH), 0)  # studio: haze lit by the two practicals
+    dh = ImageDraw.Draw(haze)
+    for sx, k in ((0.045, 1), (0.955, -1)):
+        dh.polygon([(_px(sx), _py(0.02)), (_px(sx + k * 0.02), _py(0.02)), (_px(sx + k * 0.3), _py(HORIZON)), (_px(sx + k * 0.05), _py(HORIZON))], fill=20)
+    haze = haze.filter(ImageFilter.GaussianBlur(36))
+    img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (PW, PH), (255, 240, 225)).split(), haze)))
+    for _ in range(14):  # a few out-of-focus practicals high on the wall
+        cx, cy = rng.uniform(0, PW), rng.uniform(_py(-0.1), _py(0.08))
+        r = rng.uniform(8, 20)
+        col = (255, 196, 120) if cx < PW / 2 else (120, 210, 255)
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*col, int(rng.uniform(25, 60))))
+    return img.filter(ImageFilter.GaussianBlur(2.5))
 
 
 def plates(scenario: str, template: str, places: list[float]) -> tuple[Image.Image, Image.Image]:
     """(far RGB plate with depth-of-field blur, mid RGBA plate)."""
-    far = _rgb(_far(scenario, places)).filter(ImageFilter.GaussianBlur(5))
+    far = _rgb(_far(scenario, places)).filter(ImageFilter.GaussianBlur(2.2))
     return far, _mid(scenario, template)
+
+
+# ---------------------------------------------------------------- set pieces on the stage
+
+# lectern finish per scenario: (body rgb, top rgb, accent strip rgb or None)
+LECTERN = {
+    "studio": ((0.075, 0.08, 0.095), (0.2, 0.21, 0.23), "rim"),
+    "classroom": ((0.36, 0.22, 0.12), (0.5, 0.33, 0.19), None),
+    "arena": ((0.04, 0.035, 0.05), (0.14, 0.13, 0.16), "rim"),
+    "space": ((0.16, 0.19, 0.23), (0.3, 0.35, 0.4), (0.3, 0.85, 1.0)),
+}
+
+
+def lectern(scenario: str, size: tuple[int, int], light: Light) -> Image.Image:
+    """Front-on lectern (RGBA, ``size`` px): top slab, slightly tapered body, lit from the key
+    (inner) side with a rim on the outer edge in the same colour as the character's rim."""
+    w, h = size
+    body, top, strip = LECTERN.get(scenario, LECTERN["studio"])
+    x = (np.arange(w, dtype=np.float32) + 0.5) / w
+    y = (np.arange(h, dtype=np.float32) + 0.5) / h
+    slab = 0.075
+    inset = np.where(y < slab, 0.0, 0.035 + 0.05 * np.clip((y - slab) / (1 - slab), 0, 1))  # taper to the base
+    edge = np.minimum(x[None, :] - inset[:, None], 1 - inset[:, None] - x[None, :]) * w
+    a = np.clip(edge + 0.5, 0, 1)
+    key = 1.0 + 0.35 * ((0.5 - x) * 2 * light.side)  # inner side is brighter
+    shade = np.where(y < slab, 1.0, 0.95 - 0.45 * np.clip((y - slab) / (1 - slab), 0, 1))  # darker toward the floor
+    col = np.where((y < slab)[:, None, None], np.array(top, np.float32), np.array(body, np.float32))
+    rgb = col * key[None, :, None] * shade[:, None, None]
+    if scenario == "classroom":  # wood grain and panel inlay
+        grain = _noise(w, h, 3, 17)
+        rgb *= (0.88 + 0.2 * np.sin(x[None, :] * 90 + grain * 9) * 0.5)[..., None]
+        inlay = (np.abs(x - 0.5)[None, :] < 0.36) & (np.abs(y - 0.55)[:, None] < 0.3)
+        rgb *= np.where(inlay, 0.85, 1.0)[..., None]
+    lip = np.exp(-((y - slab) / 0.012) ** 2)[:, None, None]  # slab edge: highlight above, shadow below
+    rgb = rgb + lip * (y < slab)[:, None, None] * 0.12 - lip * (y >= slab)[:, None, None] * 0.05
+    rim = np.clip(1 - (edge - 0.5) / max(2.0, w * 0.012), 0, 1)
+    outer = (x > 0.5) if light.side > 0 else (x < 0.5)
+    rgb += (rim * outer[None, :])[..., None] * np.array(light.rim, np.float32) * 0.45
+    if strip is not None:
+        sc = np.array(light.rim if strip == "rim" else strip, np.float32)
+        band = np.exp(-((y - 0.2) / 0.012) ** 2)[:, None] * (np.abs(x - 0.5) < 0.42)[None, :]
+        glow = np.exp(-((y - 0.2) / 0.06) ** 2)[:, None] * (np.abs(x - 0.5) < 0.46)[None, :] * 0.25
+        rgb += (band + glow)[..., None] * sc
+    out = np.dstack([np.clip(rgb, 0, 1), a])
+    return Image.fromarray((out * 255).astype(np.uint8))
+
+
+def contact_shadow(size: tuple[int, int], strength: float = 0.75) -> Image.Image:
+    """Soft dark ellipse (RGBA) for where an object meets the floor."""
+    x, y = _grid(*size)
+    r = np.sqrt(((x - size[0] / 2) / (size[0] / 2)) ** 2 + ((y - size[1] / 2) / (size[1] / 2)) ** 2)
+    a = np.clip(1 - r, 0, 1) ** 1.3 * strength
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    img.putalpha(Image.fromarray((a * 255).astype(np.uint8)))
+    return img
 
 
 # ---------------------------------------------------------------- light
@@ -219,9 +382,9 @@ def lit_layer(img: Image.Image, origin: tuple[int, int], canvas: tuple[int, int]
     h, w = a.shape
     gx = (np.arange(w, dtype=np.float32) + origin[0]) / max(1, canvas[0])
     gy = (np.arange(h, dtype=np.float32) + origin[1]) / max(1, canvas[1])
-    key = 1.0 + 0.12 * ((0.5 - gx) * 2 * light.side)  # brighter on the key (inner) side
-    fall = 1.0 - 0.55 * np.clip((gy - 0.72) / 0.28, 0, 1) ** 1.4
-    rgb = rgb * key[None, :, None] * fall[:, None, None]
+    key = 1.0 + 0.16 * ((0.5 - gx) * 2 * light.side)  # brighter on the key (inner) side
+    fall = 1.0 - 0.45 * np.clip((gy - 0.62) / 0.3, 0, 1) ** 1.2  # occlusion toward the lectern
+    rgb = rgb * key[None, :, None] * fall[:, None, None] * np.array(light.ambient, np.float32)
     if rim:
         dpx = max(2, round(min(w, h) * 0.014))
         nb = np.zeros_like(a)  # alpha of the neighbour toward the light (up and outward)
@@ -232,22 +395,8 @@ def lit_layer(img: Image.Image, origin: tuple[int, int], canvas: tuple[int, int]
         r = np.asarray(edge, dtype=np.float32)[..., None] / 255.0 * a[..., None] * light.strength
         rgb = 1 - (1 - np.clip(rgb, 0, 1)) * (1 - np.array(light.rim, np.float32) * r)
     out = np.dstack([np.clip(rgb, 0, 1), a])
-    return Image.fromarray((out * 255).astype(np.uint8), "RGBA")
+    return Image.fromarray((out * 255).astype(np.uint8))
 
-
-def drop_shadow(parts: list[tuple[Image.Image, tuple[int, int]]], size: tuple[int, int], radius: float) -> Image.Image:
-    """Soft black shadow (RGBA) of the union of ``parts``, same size as the view."""
-    pad = int(radius * 3)
-    mask = Image.new("L", (size[0] + 2 * pad, size[1] + 2 * pad), 0)
-    for img, (x, y) in parts:
-        mask.paste(img.getchannel("A"), (x + pad, y + pad), img.getchannel("A"))
-    mask = mask.filter(ImageFilter.GaussianBlur(radius)).point(lambda v: int(v * 0.55))
-    shadow = Image.new("RGBA", mask.size, (0, 0, 0, 0))
-    shadow.putalpha(mask)
-    return shadow
-
-
-# ---------------------------------------------------------------- grade
 
 def grade_lut(scenario: str) -> list[int]:
     lift, gain, s = GRADE.get(scenario, GRADE["studio"])
@@ -282,6 +431,7 @@ class Shot:
     cx: float  # frame-space centre
     cy: float
     zoom: float
+    kind: str = ""  # shot grammar: wide, two, ots, cu, mcu, board
 
 
 def handheld(t: float, amount: float = 1.0) -> tuple[float, float, float]:
@@ -295,7 +445,7 @@ def handheld(t: float, amount: float = 1.0) -> tuple[float, float, float]:
 def clamp_shot(s: Shot) -> Shot:
     z = max(1.04, s.zoom)
     hw, hh = W / (2 * z) + 8, H / (2 * z) + 8
-    return Shot(min(max(s.cx, hw), W - hw), min(max(s.cy, hh), H - hh), z)
+    return Shot(min(max(s.cx, hw), W - hw), min(max(s.cy, hh), H - hh), z, s.kind)
 
 
 def affine(s: Shot, depth: str, drift: tuple[float, float, float], scale: float = 1.0) -> tuple[float, ...]:
