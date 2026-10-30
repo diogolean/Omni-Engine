@@ -56,6 +56,68 @@ _DANGLING_TITLE = frozenset(
         "from", "by", "at", "into", "over",
     }
 )
+_CLAUSE_BOUNDARY = re.compile(r"[.?!]|—|–|;|:|(?<=\s)-(?=\s)")
+
+
+def is_dangling_pin_word(word: str) -> bool:
+    """A trailing article, preposition, conjunction, or bare punctuation mark."""
+    bare = (word or "").lower().strip(".,;:!?\"'—–|-")
+    return not bare or bare in _DANGLING_TITLE
+
+
+def has_clause_boundary(text: str) -> bool:
+    """True when *text* has a sentence end, colon, semicolon, or dash."""
+    return bool(_CLAUSE_BOUNDARY.search(text or ""))
+
+
+def clause_prefixes(text: str) -> list[str]:
+    """Nonempty prefixes that end on a clause boundary, short to long.
+
+    The boundary marker stays on a sentence (``.?!``) and drops off a
+    dash, colon, or semicolon, so the prefix is the clause itself.
+    """
+    found: list[str] = []
+    for match in _CLAUSE_BOUNDARY.finditer(text or ""):
+        token = match.group()
+        if token in ".?!":
+            prefix = text[: match.end()].strip()
+        else:
+            prefix = text[: match.start()].strip(" \t,;:|-—–")
+        if prefix and (not found or prefix != found[-1]):
+            found.append(prefix)
+    return found
+
+
+def cuts_mid_clause(short: str, full: str) -> bool:
+    """True when *short* is a leading fragment of *full* inside one clause.
+
+    ``The Nazca Lines: Who Made`` against ``... Who Made Them`` is a cut.
+    A fragment that stops on the colon or dash is a finished clause.
+    """
+    sw = (short or "").split()
+    fw = (full or "").split()
+    if not sw or len(sw) >= len(fw):
+        return False
+
+    def key(word: str) -> str:
+        return re.sub(r"[^a-z0-9']+", "", word.lower())
+
+    if [key(word) for word in sw] != [key(word) for word in fw[: len(sw)]]:
+        return False
+    prev = fw[len(sw) - 1]
+    nxt = fw[len(sw)]
+    if any(ch in prev for ch in ".?!—–;:"):
+        return False
+    if nxt[:1] in ".?!—–;:":
+        return False
+    return True
+
+
+def _strip_dangling_title(raw: str) -> str:
+    words = (raw or "").split()
+    while len(words) > 1 and is_dangling_pin_word(words[-1]):
+        words.pop()
+    return " ".join(words)
 
 
 def _title_key(text: str) -> str:
@@ -132,17 +194,31 @@ def dedupe_pin_title(text: str) -> str:
 
 
 def fit_pin_title(text: str, limit: int = 100) -> str:
-    """At most ``limit`` characters, ending on a word that is not a dangling tail."""
+    """At most ``limit`` characters, ending on a full clause or a whole word.
+
+    A title that does not fit keeps the longest complete clause inside the
+    limit. With no clause boundary, it ends on a word. A trailing
+    preposition or conjunction is dropped, so the line never stops on
+    ``Who Made`` when ``The Nazca Lines`` is a finished clause that fits.
+    """
     raw = (text or "").strip()
-    if len(raw) > limit:
-        head = raw[:limit]
-        if not raw[limit].isspace() and " " in head:
-            head = head.rsplit(" ", 1)[0]
-        raw = head.rstrip(" ,;:|-—–").strip() or raw[:limit].rstrip()
-    words = raw.split()
-    while len(words) > 1 and words[-1].lower().strip(".,;:!?\"'") in _DANGLING_TITLE:
-        words.pop()
-    return " ".join(words)
+    if not raw:
+        return ""
+    if len(raw) <= limit:
+        return _strip_dangling_title(raw)
+    best = ""
+    for prefix in clause_prefixes(raw):
+        if len(prefix) <= limit and len(prefix) > len(best):
+            best = prefix
+    if best:
+        stripped = _strip_dangling_title(best)
+        if stripped:
+            return stripped
+    head = raw[:limit]
+    if not raw[limit].isspace() and " " in head:
+        head = head.rsplit(" ", 1)[0]
+    head = head.rstrip(" ,;:|-—–").strip() or raw[:limit].rstrip()
+    return _strip_dangling_title(head) or head
 
 
 _BLOCKED_TITLE_SUFFIXES = (

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Card and description copy driven by the channel ``pin_theme`` strings.
 
-The layout stays the original pin (serif hook panel, gold divider, CTA
-bar). The words are config so they can be tuned without a code change.
+The card is a bold sans title on one band, a short CTA, and the domain.
+The words are config so they can be tuned without a code change.
 New pins carry the article link. Nothing here updates a pin that already
 exists on the board.
 """
@@ -91,42 +91,56 @@ def keyword_first_title(title: str, topic: str) -> str:
 
 _HOOK_WORD_LIMIT = 8
 _GENERIC_HOOK = re.compile(r"^what the records leave out about\b", re.IGNORECASE)
-_DANGLING_HOOK = frozenset(
-    {
-        "a", "an", "the", "of", "in", "on", "to", "for", "and", "or", "with",
-        "from", "by", "at", "into", "over",
-    }
-)
 
 
 def trim_dangling_hook(text: str) -> str:
     """Drop a trailing preposition so the hook does not stop mid-phrase."""
+    from shared.pin_text import is_dangling_pin_word  # noqa: PLC0415
+
     words = (text or "").split()
-    while len(words) > 1 and words[-1].lower().strip(".,;:!?\"'") in _DANGLING_HOOK:
+    while len(words) > 1 and is_dangling_pin_word(words[-1]):
         words.pop()
     return " ".join(words)
 
 
 def short_hook(text: str, *, max_words: int = _HOOK_WORD_LIMIT) -> str:
-    """At most ``max_words`` words, ending on a whole phrase."""
-    from shared.pin_text import normalize_pin_text  # noqa: PLC0415
+    """Hook copy that keeps the predicate of a clause.
 
-    words = normalize_pin_text(text).split()[:max_words]
-    return trim_dangling_hook(" ".join(words))
+    A line that already fits in ``max_words`` is returned whole. A longer
+    line with a clause boundary is kept whole too — the card wraps or
+    shrinks instead of stopping at ``Who Made``. A clauseless line still
+    ends on a word inside ``max_words``, and a trailing preposition drops.
+    """
+    from shared.pin_text import has_clause_boundary, normalize_pin_text  # noqa: PLC0415
+
+    cleaned = normalize_pin_text(text)
+    if not cleaned:
+        return ""
+    words = cleaned.split()
+    if len(words) <= max_words or has_clause_boundary(cleaned):
+        return trim_dangling_hook(cleaned)
+    return trim_dangling_hook(" ".join(words[:max_words]))
 
 
 def card_hook_text(record: dict) -> str:
     """Short topic hook. The AI visual_hook wins over a long generic template."""
-    from shared.pin_text import normalize_pin_text  # noqa: PLC0415
+    from shared.pin_text import cuts_mid_clause, normalize_pin_text  # noqa: PLC0415
 
     topic = normalize_pin_text(str(record.get("topic") or record.get("pinterest_title") or ""))
     title = str(record.get("pinterest_title") or topic)
     visual = normalize_pin_text(str(record.get("visual_hook") or ""))
     template = theme_string("hook_template")
     templated = normalize_pin_text(_fill(template, topic=topic, title=title)) if template else ""
+    full = topic or title
+    visual_cuts = bool(visual) and (
+        cuts_mid_clause(visual, full)
+        or (bool(templated) and cuts_mid_clause(visual, templated))
+    )
     same_as_template = bool(templated) and visual.lower() == templated.lower()
-    generic = bool(_GENERIC_HOOK.match(visual)) or (
-        same_as_template and len(templated.split()) > _HOOK_WORD_LIMIT
+    generic = (
+        bool(_GENERIC_HOOK.match(visual))
+        or (same_as_template and len(templated.split()) > _HOOK_WORD_LIMIT)
+        or visual_cuts
     )
     if visual and not generic:
         return short_hook(visual)
@@ -208,7 +222,9 @@ def build_pin_description(record: dict) -> str:
 
 def _with_credit(body: str, record: dict) -> str:
     """Append the short attribution. A description with no credit stays within 220."""
-    credit = str(record.get("image_credit") or "").strip()
+    from production.formats.pins.credit_text import repair_credit_encoding  # noqa: PLC0415
+
+    credit = repair_credit_encoding(str(record.get("image_credit") or ""))
     if not credit or credit in body:
         return body
     combined = f"{body}\n{credit}" if body else credit

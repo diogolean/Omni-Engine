@@ -8,6 +8,8 @@ google-genai>=1.0.0
 anthropic>=0.39.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0,<12.0
+# Arabic presentation forms for pin credits. MIT. Pillow does not shape.
+arabic-reshaper>=3.0.0,<4
 numpy>=1.26.0
 openpyxl>=3.1.0
 pypdf>=5.0.0

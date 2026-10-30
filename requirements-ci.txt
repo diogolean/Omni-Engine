@@ -10,6 +10,8 @@ python-dotenv>=1.0.0
 ruff>=0.6.0
 import-linter>=2.1
 Pillow>=10.0.0,<12.0
+# Arabic presentation forms for pin credits. MIT. Pillow does not shape.
+arabic-reshaper>=3.0.0,<4
 openpyxl>=3.1.0
 psutil>=5.9.0
 numpy>=1.26.0

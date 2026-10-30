@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 
+from shared.pin_text import fit_pin_title
+
 from production.pipeline.agentic.agents.base import BaseAgent
 from production.pipeline.agentic.llm import complete_json
 from production.pipeline.agentic.state import PipelineState
@@ -158,7 +160,7 @@ class CopywriterAgent(BaseAgent):
                 )
             caption = str(data.get("caption") or "").strip()
             overlay = str(data.get("overlay_text") or "").strip()
-            state.pinterest_title = str(data.get("pinterest_title") or "").strip()[:100]
+            state.pinterest_title = fit_pin_title(str(data.get("pinterest_title") or ""))
             state.pinterest_description = str(data.get("pinterest_description") or "").strip()
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("Copywriter LLM failed (%s).", exc)
@@ -174,7 +176,7 @@ class CopywriterAgent(BaseAgent):
         state.caption = caption
         state.overlay_text = overlay
         if not state.pinterest_title:
-            state.pinterest_title = (topic or "Ancient Mystery")[:100]
+            state.pinterest_title = fit_pin_title(topic or "Ancient Mystery")
         if not state.pinterest_description:
             state.pinterest_description = caption.split("\n\n")[0][:500]
         _LOG.info("Copywriter | #%s | %d chars", state.post_index + 1, len(caption))
@@ -231,9 +233,9 @@ class CopywriterAgent(BaseAgent):
                 state.overlay_text = ""
                 state.caption = caption
                 state.caption_mode = str(mode or "humanized")
-                state.pinterest_title = str(
-                    getattr(engine, "last_pinterest_title", "") or topic
-                )[:100]
+                state.pinterest_title = fit_pin_title(
+                    str(getattr(engine, "last_pinterest_title", "") or topic)
+                )
                 state.pinterest_description = str(
                     getattr(engine, "last_pinterest_description", "") or caption[:500]
                 )
@@ -270,9 +272,9 @@ class CopywriterAgent(BaseAgent):
             state.caption_mode = str(mode or "humanized")
             if visual and not state.visual_hook:
                 state.visual_hook = str(visual).strip()
-            state.pinterest_title = str(
-                getattr(engine, "last_pinterest_title", "") or topic
-            )[:100]
+            state.pinterest_title = fit_pin_title(
+                str(getattr(engine, "last_pinterest_title", "") or topic)
+            )
             state.pinterest_description = str(
                 getattr(engine, "last_pinterest_description", "") or caption[:500]
             )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from production.formats.economic_reel.shot_planner.plan import (
@@ -73,6 +74,17 @@ def test_cli_reads_reel_format_from_any_page() -> None:
     assert resolve_cli_post_format(
         other, post_type="REFERENCE_BASED_REELS", explicit="IMAGE_AVATAR"
     ) == "REFERENCE_BASED_REELS"
+
+
+def test_invalid_reel_format_logs_a_warning(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        assert resolve_reel_format({"REEL_FORMAT": "not-a-reel"}) == "DYNAMIC_REEL"
+    assert "REEL_FORMAT" in caplog.text
+    assert "NOT-A-REEL" in caplog.text
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        assert resolve_reel_format({}) == "DYNAMIC_REEL"
+    assert caplog.text == ""
 
 
 def test_cli_run_asks_the_page_for_the_format() -> None:

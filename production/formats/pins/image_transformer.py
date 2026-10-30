@@ -4,10 +4,11 @@ pinterest_engine.image_transformer
 -----------------------------------
 Transforms existing 3:4 library assets into 1000x1500 (2:3) Pinterest Sales Pins.
 
-The VM drip uses method ``cover``: the source photo is cover-cropped to
-1000x1500 and the hook sits on a top gradient. There is no empty band.
-``blurred_padding`` and ``center_crop`` keep the older hook panel and
-bottom button bar.
+Every method draws the same card: a 2:3 frame, a bold sans title on one
+solid band, a short CTA, the domain, and a fine-print license line.
+``cover`` and ``center_crop`` always fill the frame. ``blurred_padding``
+fills it too when a cover crop keeps most of the photo, and letterboxes
+with a blurred pad only when the crop would throw the picture away.
 
 Usage:
     from production.formats.pins.image_transformer import PinTransformer
@@ -20,7 +21,7 @@ import io
 import logging
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from shared.paths import windows_fonts_dir
 
@@ -31,10 +32,12 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 PIN_W = 1000
 PIN_H = 1500
-# Credit sits above the button. About twice the old 18px, still a footer.
-CREDIT_FONT_SIZE = 36
-CREDIT_FONT_FLOOR = 28
-CREDIT_BAR_HEIGHT = 52
+# CC BY still requires the author line. It stays in fine print.
+CREDIT_FONT_SIZE = 18
+CREDIT_FONT_FLOOR = 14
+CREDIT_BAR_HEIGHT = 28
+# A cover crop that keeps at least this much of the photo fills the frame.
+_CROP_MIN_KEEP = 0.70
 
 # Colour palette (earth-toned, clinical-clean). Channel pin_theme overrides these.
 _DEFAULT_THEME = {
@@ -42,7 +45,7 @@ _DEFAULT_THEME = {
     "hook_text": (255, 251, 245),
     "button_bg": (44, 62, 44, 230),
     "button_text": (230, 220, 195),
-    "url_text": (200, 195, 180),
+    "url_text": (255, 248, 230),
     "divider": (180, 160, 110, 200),
 }
 
@@ -61,9 +64,6 @@ _BUTTON_BG_COLOUR = _DEFAULT_THEME["button_bg"]
 _BUTTON_TEXT_COLOUR = _DEFAULT_THEME["button_text"]
 _URL_TEXT_COLOUR = _DEFAULT_THEME["url_text"]
 _DIVIDER_COLOUR = _DEFAULT_THEME["divider"]
-
-# Layout zones (fractions of PIN_H)
-_HOOK_ZONE_TOP_FRAC = 0.04
 
 def _button_label() -> str:
     from production.formats.pins.pin_copy import card_cta_label  # noqa: PLC0415
@@ -122,6 +122,20 @@ _SANS_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 ]
 
+# Title face. Bold sans stays readable when the pin is a thumbnail.
+# DejaVu is last so a Latin title uses the bundled face, and a credit
+# that those faces cannot draw can still fall through to a Unicode face.
+_SANS_BOLD_CANDIDATES = [
+    str(windows_fonts_dir() / "arialbd.ttf"),
+    str(windows_fonts_dir() / "calibrib.ttf"),
+    str(windows_fonts_dir() / "segoeuib.ttf"),
+    str(_REPO_ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Bold.ttf"),
+    str(_REPO_ROOT / "Fonts" / "Poppins" / "Poppins-Bold.ttf"),
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
+
 
 def configured_pin_method() -> str:
     """Channel ``pin_image_method``, otherwise the original blurred-padding card."""
@@ -139,23 +153,35 @@ def configured_pin_method() -> str:
     return "blurred_padding"
 
 
+_FONT_CACHE: dict[tuple[int, int], "ImageFont.FreeTypeFont | ImageFont.ImageFont"] = {}
+
+
 def _find_font(
     candidates: list[str], size: int
 ) -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
     global _warned_default_font
+    key = (id(candidates), size)
+    cached = _FONT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None
     for path in candidates:
         if Path(path).is_file():
             try:
-                return ImageFont.truetype(path, size)
+                font = ImageFont.truetype(path, size)
+                break
             except Exception:  # noqa: BLE001
                 continue
-    if not _warned_default_font:
-        _warned_default_font = True
-        log.warning(
-            "No scalable pin font found; hook text will render tiny. "
-            "Install fonts-liberation or keep Fonts/Montserrat in the image."
-        )
-    return ImageFont.load_default()
+    if font is None:
+        if not _warned_default_font:
+            _warned_default_font = True
+            log.warning(
+                "No scalable pin font found; hook text will render tiny. "
+                "Install fonts-liberation or keep Fonts/Montserrat in the image."
+            )
+        font = ImageFont.load_default()
+    _FONT_CACHE[key] = font
+    return font
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +233,41 @@ def _blurred_padding(img: Image.Image, w: int, h: int) -> Image.Image:
 
 
 _HOOK_MAX_LINES = 3
-_DOMAIN_FONT_SIZE = 36
+# Three times the previous 54px. A 5–8 word hook stays here. A longer
+# clause shrinks, down to a floor that still fits three lines.
+_HOOK_FONT_SIZE = 162
+_HOOK_FONT_FLOOR = 32
+_HOOK_LINE_HEIGHT = 190
+_DOMAIN_FONT_SIZE = 48
+_CTA_FONT_SIZE = 48
+
+
+def _hook_line_height(font_size: int) -> int:
+    """The large size keeps its leading. Smaller type tightens with it."""
+    if font_size >= _HOOK_FONT_SIZE:
+        return _HOOK_LINE_HEIGHT
+    return max(font_size + 8, int(font_size * _HOOK_LINE_HEIGHT / _HOOK_FONT_SIZE))
+
+
+def _wrap_hook_words(words: list[str], font, max_w: int) -> list[str] | None:
+    """Wrap onto at most 3 lines. None when a word would be dropped or overflow."""
+    if not words:
+        return []
+    rows: list[list[str]] = [[]]
+    for word in words:
+        if _text_width(word, font) > max_w:
+            return None
+        if not rows[-1]:
+            rows[-1].append(word)
+            continue
+        trial = " ".join(rows[-1] + [word])
+        if _text_width(trial, font) <= max_w:
+            rows[-1].append(word)
+            continue
+        if len(rows) >= _HOOK_MAX_LINES:
+            return None
+        rows.append([word])
+    return [" ".join(row) for row in rows if row]
 
 
 def _text_width(text: str, font) -> int:
@@ -217,34 +277,69 @@ def _text_width(text: str, font) -> int:
     return int(bbox[2] - bbox[0])
 
 
-def _hook_lines(hook_text: str) -> list[str]:
-    """At most 8 words and 3 lines, wrapped to the card width on whole words."""
-    from production.formats.pins.pin_copy import short_hook, trim_dangling_hook  # noqa: PLC0415
+def _trim_hook_lines(lines: list[str]) -> list[str]:
+    from production.formats.pins.pin_copy import trim_dangling_hook  # noqa: PLC0415
+
+    if not lines:
+        return []
+    trimmed = list(lines)
+    trimmed[-1] = trim_dangling_hook(trimmed[-1])
+    return [line for line in trimmed if line]
+
+
+def _hook_layout(hook_text: str) -> tuple[list[str], int]:
+    """Lines and font size. Shrink so the predicate stays; do not drop words.
+
+    The panel is still at most three lines. The large size is kept when
+    the hook already fits. A longer clause shrinks instead of dropping words.
+    """
+    from production.formats.pins.pin_copy import short_hook  # noqa: PLC0415
+    from shared.pin_text import clause_prefixes, is_dangling_pin_word  # noqa: PLC0415
 
     words = short_hook(hook_text).upper().split()
     if not words:
-        return []
-    font = _find_font(_SERIF_CANDIDATES, 54)
-    max_w = PIN_W - 80
-    rows: list[list[str]] = [[]]
-    for word in words:
-        trial = rows[-1] + [word]
-        overflows = bool(rows[-1]) and _text_width(" ".join(trial), font) > max_w
-        if overflows:
-            if len(rows) >= _HOOK_MAX_LINES:
-                break
-            rows.append([word])
-        else:
-            rows[-1].append(word)
-    lines = [" ".join(row) for row in rows if row]
-    if lines:
-        lines[-1] = trim_dangling_hook(lines[-1])
-        lines = [line for line in lines if line]
-    return lines[:_HOOK_MAX_LINES]
+        return [], _HOOK_FONT_SIZE
+    max_w = PIN_W - 64
+    for size in range(_HOOK_FONT_SIZE, _HOOK_FONT_FLOOR - 1, -1):
+        font = _find_font(_SANS_BOLD_CANDIDATES, size)
+        lines = _wrap_hook_words(words, font, max_w)
+        if lines is not None:
+            return _trim_hook_lines(lines), size
+    font = _find_font(_SANS_BOLD_CANDIDATES, _HOOK_FONT_FLOOR)
+    text = " ".join(words)
+    candidates = [text, *reversed(clause_prefixes(text))]
+    seen: set[tuple[str, ...]] = set()
+    for prefix in candidates:
+        kept = prefix.split()
+        while len(kept) > 1 and is_dangling_pin_word(kept[-1]):
+            kept.pop()
+        key = tuple(kept)
+        if not kept or key in seen:
+            continue
+        seen.add(key)
+        lines = _wrap_hook_words(kept, font, max_w)
+        if lines is not None:
+            return _trim_hook_lines(lines), _HOOK_FONT_FLOOR
+    kept = list(words)
+    while kept:
+        while len(kept) > 1 and is_dangling_pin_word(kept[-1]):
+            kept.pop()
+        lines = _wrap_hook_words(kept, font, max_w)
+        if lines is not None:
+            return _trim_hook_lines(lines), _HOOK_FONT_FLOOR
+        kept.pop()
+    return [], _HOOK_FONT_FLOOR
+
+
+def _hook_lines(hook_text: str) -> list[str]:
+    """At most 3 lines, wrapped to the card width. The predicate is kept."""
+    return _hook_layout(hook_text)[0]
 
 
 def _record_credit(record: dict) -> str:
-    text = str(record.get("image_credit") or "").strip()
+    from production.formats.pins.credit_text import repair_credit_encoding  # noqa: PLC0415
+
+    text = repair_credit_encoding(str(record.get("image_credit") or ""))
     if text:
         return text
     path = str(record.get("local_image_path") or "").strip()
@@ -253,9 +348,43 @@ def _record_credit(record: dict) -> str:
     try:
         from production.providers.image.free.attribution import credit_for_image  # noqa: PLC0415
 
-        return credit_for_image(path)
+        return repair_credit_encoding(credit_for_image(path))
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _font_covers(font, text: str) -> bool:
+    """False when *font* would draw a missing-glyph box for any character."""
+    if not hasattr(font, "getbbox"):
+        return False
+    try:
+        missing = font.getbbox("\ue000")
+    except Exception:  # noqa: BLE001
+        return False
+    for ch in text:
+        if ch.isspace():
+            continue
+        try:
+            box = font.getbbox(ch)
+        except Exception:  # noqa: BLE001
+            return False
+        if box == missing:
+            return False
+    return True
+
+
+def _covering_font(text: str, size: int, candidates: list[str]):
+    """First face in *candidates* that can draw every character of *text*."""
+    for path in candidates:
+        if not Path(path).is_file():
+            continue
+        try:
+            font = ImageFont.truetype(path, size)
+        except Exception:  # noqa: BLE001
+            continue
+        if _font_covers(font, text):
+            return font
+    return None
 
 
 def _draw_credit_footer(
@@ -265,19 +394,28 @@ def _draw_credit_footer(
     *,
     bottom: int,
 ) -> int:
-    """Small author and license line just above the CTA bar."""
-    text = (credit or "").strip()
+    """Fine-print author and license line just above the CTA bar."""
+    from production.formats.pins.credit_text import shape_credit_line  # noqa: PLC0415
+
+    text = shape_credit_line(credit)
     if not text:
         return 0
     zone_h = CREDIT_BAR_HEIGHT
     top = max(0, bottom - zone_h)
-    bar = Image.new("RGBA", (PIN_W, zone_h), (8, 10, 12, 220))
+    bar = Image.new("RGBA", (PIN_W, zone_h), (8, 10, 12, 150))
     canvas.paste(bar, (0, top), bar)
     max_w = PIN_W - 48
     size = CREDIT_FONT_SIZE
-    font = _find_font(_SANS_CANDIDATES, size)
-    while size > CREDIT_FONT_FLOOR and _text_width(text, font) > max_w:
+    font = _covering_font(text, size, _SANS_CANDIDATES)
+    while (
+        font is not None
+        and size > CREDIT_FONT_FLOOR
+        and _text_width(text, font) > max_w
+    ):
         size -= 1
+        font = _covering_font(text, size, _SANS_CANDIDATES)
+    if font is None:
+        log.warning("PIN CREDIT | no font covers %r", credit)
         font = _find_font(_SANS_CANDIDATES, size)
     shown = text
     while shown and _text_width(shown, font) > max_w and " " in shown:
@@ -286,29 +424,63 @@ def _draw_credit_footer(
         shown = text[:48]
     bbox = draw.textbbox((0, 0), shown, font=font)
     text_w = bbox[2] - bbox[0]
-    draw.text(((PIN_W - text_w) // 2, top + 8), shown, font=font, fill=(232, 228, 216))
+    text_h = bbox[3] - bbox[1]
+    x = (PIN_W - text_w) // 2
+    y = top + max(0, (zone_h - text_h) // 2)
+    draw.text((x, y), shown, font=font, fill=(232, 228, 216))
     return zone_h
 
 
-def _focal_in_upper_band(image: Image.Image) -> bool:
-    """True when the photo's detail sits in the top band, so the hook should drop."""
-    small = image.convert("L").resize((32, 48))
-    pixels = list(small.getdata())
-    width, height = small.size
-    if not pixels or width <= 0:
+def pin_text_position() -> str:
+    """``top`` (top third) or ``bottom`` (solid lower band), from page_config.
+
+    ``pin_theme.text_position`` is the same switch for a channel pack that
+    has no page_config constant. Anything else stays ``top``.
+    """
+    from production.formats.pins import config as cfg  # noqa: PLC0415
+    from shared.channel_flags import value  # noqa: PLC0415
+
+    channel = str(getattr(cfg, "CHANNEL_ID", "") or "")
+    raw = value(channel, "PIN_TEXT_POSITION", None)
+    if raw is None or raw == "":
+        raw = (getattr(cfg, "PIN_THEME", None) or {}).get("text_position", "top")
+    text = str(raw or "top").strip().lower()
+    if text in {"top", "bottom"}:
+        return text
+    log.warning("Unknown PIN_TEXT_POSITION %r; using top.", raw)
+    return "top"
+
+
+def _crop_min_keep() -> float:
+    from production.formats.pins import config as cfg  # noqa: PLC0415
+    from shared.channel_flags import value  # noqa: PLC0415
+
+    channel = str(getattr(cfg, "CHANNEL_ID", "") or "")
+    raw = value(channel, "PIN_CROP_MIN_KEEP", _CROP_MIN_KEEP)
+    try:
+        return min(1.0, max(0.0, float(raw)))
+    except (TypeError, ValueError):
+        log.warning("Invalid PIN_CROP_MIN_KEEP %r; using %.2f.", raw, _CROP_MIN_KEEP)
+        return _CROP_MIN_KEEP
+
+
+def cover_keeps_enough(image: Image.Image, w: int = PIN_W, h: int = PIN_H) -> bool:
+    """True when a cover crop keeps at least ``PIN_CROP_MIN_KEEP`` of the photo."""
+    src_w, src_h = image.size
+    if src_w < 1 or src_h < 1 or w < 1 or h < 1:
         return False
-    mean = sum(pixels) / len(pixels)
-    upper = 0.0
-    lower = 0.0
-    split = max(1, int(height * 0.4))
-    for index, value in enumerate(pixels):
-        energy = abs(value - mean)
-        row = index // width
-        if row < split:
-            upper += energy
-        elif row >= height - split:
-            lower += energy
-    return upper > lower * 1.25 and upper > 0
+    scale = max(w / src_w, h / src_h)
+    kept = (w * h) / ((src_w * scale) * (src_h * scale))
+    return kept + 1e-9 >= _crop_min_keep()
+
+
+def _frame_photo(image: Image.Image, method: str) -> Image.Image:
+    """Fill 1000x1500. Blur-pad only when the crop would discard too much."""
+    if method in {"cover", "center_crop"} or (
+        method == "blurred_padding" and cover_keeps_enough(image)
+    ):
+        return _center_crop_to_size(image, PIN_W, PIN_H)
+    return _blurred_padding(image, PIN_W, PIN_H)
 
 
 def _footer_content() -> tuple[str, str, int]:
@@ -317,11 +489,11 @@ def _footer_content() -> tuple[str, str, int]:
     url = _card_domain()
     if not label and not url:
         return "", "", 0
-    height = 36
+    height = 24
     if label:
-        height += 48
+        height += 56
     if url:
-        height += 52
+        height += 58
     return label, url, height
 
 
@@ -330,16 +502,17 @@ def _draw_hook_lines(
     lines: list[str],
     *,
     top: int,
+    font_size: int = _HOOK_FONT_SIZE,
+    line_height: int = _HOOK_LINE_HEIGHT,
 ) -> None:
     hook_text_colour = _theme_color("hook_text")
-    font_large = _find_font(_SERIF_CANDIDATES, 54)
-    line_height = 64
+    font_large = _find_font(_SANS_BOLD_CANDIDATES, font_size)
     cursor_y = top
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font_large)
         text_w = bbox[2] - bbox[0]
         x = (PIN_W - text_w) // 2
-        draw.text((x + 2, cursor_y + 2), line, font=font_large, fill=(0, 0, 0, 180))
+        draw.text((x + 3, cursor_y + 3), line, font=font_large, fill=(0, 0, 0, 210))
         draw.text((x, cursor_y), line, font=font_large, fill=hook_text_colour)
         cursor_y += line_height
 
@@ -352,64 +525,27 @@ def _draw_hook_zone(
     anchor: str = "top",
     footer_h: int = 0,
 ) -> None:
-    """Short hook on a panel that is only as tall as the lines."""
-    lines = _hook_lines(hook_text)
+    """Title on one solid dark band, in the top third or on the bottom."""
+    lines, font_size = _hook_layout(hook_text)
     if not lines:
         return
     vignette = _theme_color("vignette")
     divider = _theme_color("divider")
-    line_height = 64
-    zone_h = 28 + len(lines) * line_height + 18
+    line_height = _hook_line_height(font_size)
+    zone_h = 36 + len(lines) * line_height + 20
     if anchor == "bottom":
-        zone_top = max(0, PIN_H - footer_h - zone_h - 8)
+        zone_top = max(0, PIN_H - footer_h - zone_h)
     else:
-        zone_top = int(PIN_H * _HOOK_ZONE_TOP_FRAC)
+        zone_top = 0
 
-    panel = Image.new("RGBA", (PIN_W, zone_h), vignette)
-    fade = _fade_mask(PIN_W, min(48, zone_h), vignette[3], top=(anchor != "bottom"))
-    if anchor == "bottom":
-        panel.paste(Image.new("RGBA", (PIN_W, fade.height), (0, 0, 0, 0)), (0, 0))
-        # Keep a solid bar and fade only its top edge into the photo.
-        edge = Image.new("RGBA", (PIN_W, fade.height), vignette)
-        edge.putalpha(fade)
-        panel.paste(edge, (0, 0))
-    else:
-        edge = Image.new("RGBA", (PIN_W, fade.height), vignette)
-        edge.putalpha(fade)
-        panel.paste(edge, (0, zone_h - fade.height))
+    rgb = tuple(int(v) for v in vignette[:3])
+    panel = Image.new("RGBA", (PIN_W, zone_h), (*rgb, 235))
     canvas.paste(panel, (0, zone_top), panel)
-    _draw_hook_lines(draw, lines, top=zone_top + 16)
-    div_y = zone_top + zone_h - 2
-    draw.line([(60, div_y), (PIN_W - 60, div_y)], fill=divider[:3], width=2)
-
-
-def _fade_mask(width: int, height: int, max_alpha: int, *, top: bool) -> Image.Image:
-    """Grayscale mask, strongest at the top or the bottom edge."""
-    ramp = Image.linear_gradient("L").resize((width, height))
-    if top:
-        ramp = ImageOps.invert(ramp)
-    return ramp.point(lambda value: int(value * max_alpha / 255))
-
-
-def _draw_cover_hook(
-    canvas: Image.Image,
-    hook_text: str,
-    *,
-    anchor: str = "top",
-    footer_h: int = 0,
-) -> None:
-    """Short hook on a gradient, opposite the photo's focal band when needed."""
-    lines = _hook_lines(hook_text)
-    if not lines:
-        return
-    fade_h = 36 + len(lines) * 64 + 28
-    top = 0 if anchor != "bottom" else max(0, PIN_H - footer_h - fade_h)
-    mask = _fade_mask(PIN_W, fade_h, 185, top=(anchor != "bottom"))
-    overlay = Image.new("RGBA", (PIN_W, fade_h), (8, 12, 14, 0))
-    overlay.putalpha(mask)
-    canvas.paste(overlay, (0, top), overlay)
-    cursor = 28 if anchor != "bottom" else top + fade_h - (len(lines) * 64) - 8
-    _draw_hook_lines(ImageDraw.Draw(canvas), lines, top=cursor)
+    _draw_hook_lines(
+        draw, lines, top=zone_top + 24, font_size=font_size, line_height=line_height
+    )
+    edge = zone_top + zone_h - 1 if anchor != "bottom" else zone_top
+    draw.line([(0, edge), (PIN_W, edge)], fill=divider[:3], width=3)
 
 
 def _draw_button_zone(
@@ -430,28 +566,32 @@ def _draw_button_zone(
     canvas.paste(btn_panel, (0, zone_top), btn_panel)
     draw.line([(0, zone_top), (PIN_W, zone_top)], fill=divider[:3], width=3)
 
-    cursor = zone_top + 16
+    cursor = zone_top + 14
+    max_w = PIN_W - 64
     if label:
-        font_btn = _find_font(_SERIF_CANDIDATES, 34)
+        size = _CTA_FONT_SIZE
+        font_btn = _find_font(_SANS_BOLD_CANDIDATES, size)
         bbox = draw.textbbox((0, 0), label, font=font_btn)
         btn_w = bbox[2] - bbox[0]
+        while btn_w > max_w and size > 28:
+            size -= 1
+            font_btn = _find_font(_SANS_BOLD_CANDIDATES, size)
+            bbox = draw.textbbox((0, 0), label, font=font_btn)
+            btn_w = bbox[2] - bbox[0]
         draw.text(((PIN_W - btn_w) // 2, cursor), label, font=font_btn, fill=button_text)
-        cursor += 48
+        cursor += 56
 
     if url:
-        margin_left = 48
-        margin_right = 180
-        max_w = PIN_W - margin_left - margin_right
         size = _DOMAIN_FONT_SIZE
-        font_url = _find_font(_SANS_CANDIDATES, size)
+        font_url = _find_font(_SANS_BOLD_CANDIDATES, size)
         url_box = draw.textbbox((0, 0), url, font=font_url)
         url_w = url_box[2] - url_box[0]
-        while url_w > max_w and size > 22:
+        while url_w > max_w and size > 28:
             size -= 1
-            font_url = _find_font(_SANS_CANDIDATES, size)
+            font_url = _find_font(_SANS_BOLD_CANDIDATES, size)
             url_box = draw.textbbox((0, 0), url, font=font_url)
             url_w = url_box[2] - url_box[0]
-        draw.text((margin_left, cursor), url, font=font_url, fill=url_text)
+        draw.text(((PIN_W - url_w) // 2, cursor), url, font=font_url, fill=url_text)
     return zone_h
 
 
@@ -468,8 +608,9 @@ class PinTransformer:
     outputs_dir : Path, optional
         Root outputs/ directory. Defaults to config.OUTPUTS_DIR.
     method : str
-        'cover' fills the 2:3 frame and lays the hook on a gradient.
-        'blurred_padding' and 'center_crop' keep the older band layout.
+        'cover' and 'center_crop' fill the frame.
+        'blurred_padding' fills the frame when the crop keeps the photo,
+        and blur-pads only when it would not.
     """
 
     def __init__(
@@ -630,36 +771,16 @@ class PinTransformer:
         credit: str = "",
     ) -> Image.Image:
         """Assemble the final 1000x1500 canvas."""
-        anchor = "bottom" if _focal_in_upper_band(source) else "top"
+        anchor = pin_text_position()
         _label, _url, button_h = _footer_content()
         credit_h = CREDIT_BAR_HEIGHT if (credit or "").strip() else 0
         footer_h = button_h + credit_h
-        if self.method == "cover":
-            canvas = _center_crop_to_size(source, PIN_W, PIN_H).convert("RGBA")
-            _draw_cover_hook(canvas, visual_hook, anchor=anchor, footer_h=footer_h)
-            if credit_h:
-                _draw_credit_footer(
-                    canvas,
-                    ImageDraw.Draw(canvas),
-                    credit,
-                    bottom=PIN_H - button_h,
-                )
-            _draw_button_zone(canvas, ImageDraw.Draw(canvas))
-            return canvas.convert("RGB")
-
-        if self.method == "center_crop":
-            canvas = _center_crop_to_size(source, PIN_W, PIN_H)
-        else:
-            canvas = _blurred_padding(source, PIN_W, PIN_H)
-
-        canvas = canvas.convert("RGBA")
+        canvas = _frame_photo(source, self.method).convert("RGBA")
         draw = ImageDraw.Draw(canvas)
-
         _draw_hook_zone(canvas, draw, visual_hook, anchor=anchor, footer_h=footer_h)
         if credit_h:
             _draw_credit_footer(canvas, draw, credit, bottom=PIN_H - button_h)
         _draw_button_zone(canvas, draw)
-
         return canvas.convert("RGB")
 
 

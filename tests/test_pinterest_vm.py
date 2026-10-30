@@ -756,7 +756,8 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
     assert hook_bits
     assert len(" ".join(hook_bits).split()) <= 8
     assert len(hook_bits) <= 3
-    assert "READ THE FULL STORY ->" in blob
+    assert "READ MORE" in blob
+    assert "READ THE FULL STORY" not in blob
     assert "ANCIENTKNOWLEDGE.EOKVIRAL.COM" in blob
     assert "FOLLOW ANCIENT KNOWLEDGE" not in blob
     domain = [
@@ -765,9 +766,10 @@ def test_pin_theme_copy_drives_the_click_and_does_not_relink(
         if "eokviral.com" in text.lower()
     ]
     assert domain
-    assert max(item[0] for item in domain) < 80
-    assert min(item[1] for item in domain) > 1340
-    assert min(item[2] for item in domain) >= 32
+    # Centered in the bottom band, and larger than the old 36px footer.
+    assert min(item[0] for item in domain) > 40
+    assert min(item[1] for item in domain) > 1300
+    assert min(item[2] for item in domain) >= 44
 
     title = keyword_first_title(record["pinterest_title"], record["topic"])
     assert title.lower().startswith("baalbek")
