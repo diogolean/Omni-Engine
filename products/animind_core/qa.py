@@ -15,7 +15,8 @@ from PIL import Image, ImageDraw
 IMAGE_USD = 0.039
 LIMITS = {"skinDeltaE": 6.0, "residualMouth": 0.04, "frontOffset": 0.05, "landmarkDrift": 0.08,
           "hardEdge": 0.0, "mouthRange": 10.0, "faceWidthPx": 200}
-WEIGHTS = {"skin": 20, "mouthless": 20, "mouths": 10, "front": 15, "landmarks": 15, "edges": 15, "resolution": 5}
+WEIGHTS = {"skin": 15, "mouthless": 10, "doubleMouth": 20, "mouths": 10, "front": 10, "landmarks": 10, "edges": 15,
+           "resolution": 10}
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -65,6 +66,44 @@ def residual_mouth(view: Path, mouth_box: list[int]) -> dict[str, Any]:
     cavity = ((r + g + b) / 3 < 70) & (r > g + 30) & (r - b > 40) & (a > 128)
     share = float((lips | cavity).mean())
     return {"pass": share <= LIMITS["residualMouth"], "value": round(share, 3), "limit": LIMITS["residualMouth"]}
+
+
+def skin_of(rgb: np.ndarray) -> np.ndarray:
+    """Local skin colour: median of the brighter half of the pixels (lips, lines and cavity are darker)."""
+    px = rgb.reshape(-1, 3).astype(np.float32)
+    lum = px.mean(axis=1)
+    return np.median(px[lum >= np.median(lum)], axis=0)
+
+
+def ink_mask(rgb: np.ndarray, skin: np.ndarray) -> np.ndarray:
+    """Mouth ink relative to the local skin: lip red, dark-red cavity, or a dark warm lip line."""
+    c = rgb.astype(np.float32)
+    r, g, b = c[..., 0], c[..., 1], c[..., 2]
+    lum = c.mean(axis=2)
+    srg, slum = float(skin[0] - skin[1]), float(skin.mean())
+    lips = (r - g > srg + 30) & (r > b + 25)
+    cavity = (lum < 70) & (r > g + 30) & (r - b > 40)
+    line = (lum < 0.55 * slum) & (r > b + 10) & (r - g > srg - 5)
+    return lips | cavity | line
+
+
+def _mouth_region(mouth: list[int] | tuple[int, ...], shape: tuple[int, ...]) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = mouth
+    w, h = x1 - x0, y1 - y0
+    return (max(0, x0 - w // 4), max(0, y0 - h // 2), min(shape[1], x1 + w // 4), min(shape[0], y1 + int(h * 0.8)))
+
+
+def ink_share(rgb: np.ndarray, ref: np.ndarray, mouth: list[int] | tuple[int, ...]) -> float:
+    """Share of mouth-ink pixels left around the mouth of ``rgb`` (a mouthless edit); skin from ``ref``'s
+    surroundings so a smudge that is merely darker than skin still counts."""
+    x0, y0, x1, y1 = _mouth_region(mouth, rgb.shape)
+    patch = rgb[y0:y1, x0:x1]
+    if patch.size == 0:
+        return 0.0
+    import cv2  # noqa: PLC0415
+    ink = ink_mask(patch, skin_of(ref[y0:y1, x0:x1])).astype(np.uint8)
+    ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    return round(float(ink.mean()), 3)
 
 
 def front_symmetry(front_boxes: dict[str, list[int]] | None) -> dict[str, Any]:
@@ -119,6 +158,76 @@ def mouth_range(view: Path) -> dict[str, Any]:
     return {"pass": ok, "value": diffs.get("D", 0.0), "limit": lim, "moving": moving, "diffs": diffs}
 
 
+def _stacked(ink: np.ndarray, mw: int, mh: int) -> bool:
+    """Two wide mouth-ink blobs one above the other with skin between them: a second mouth."""
+    import cv2  # noqa: PLC0415
+    n, _lab, st, _c = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    big = [st[i] for i in range(1, n) if st[i][4] >= max(10, 0.03 * mw * mh) and st[i][2] >= 0.3 * mw]
+    for i, a in enumerate(big):
+        for b in big[i + 1:]:
+            top, low = (a, b) if a[1] < b[1] else (b, a)
+            overlap = min(top[0] + top[2], low[0] + low[2]) - max(top[0], low[0])
+            gap = low[1] - (top[1] + top[3])
+            if overlap >= 0.5 * min(top[2], low[2]) and gap >= max(3, 0.12 * mh):
+                return True
+    return False
+
+
+def double_mouth(view: Path) -> dict[str, Any]:
+    """No second mouth anywhere: (1) the mouthless head carries no lip/mouth ink around the mouth;
+    (2) every composed viseme (head + sprite) shows one mouth, no ink outside the sprite and no
+    stacked lip lines inside it; (3) the sheet cell had no mouth ink outside its cut mask."""
+    import cv2  # noqa: PLC0415
+    v = json.loads((view / "view.json").read_text())
+    mq = v.get("mouthQA")
+    if not mq:  # rigs built before the mouthless head: boxes from the rig file
+        rj = view.parent.parent / ("rig_front.json" if view.name == "front" else "rig.json")
+        if not rj.exists():
+            return {"pass": False, "value": None, "limit": 0, "note": "no mouth box"}
+        r = json.loads(rj.read_text())
+        mq = {"mouth": r["boxes"]["mouth"], "head": "old rig"}
+    head = next(l for l in v["layers"] if l["name"] == "head")
+    canvas = Image.new("RGBA", (v["canvas"]["w"], v["canvas"]["h"]), (0, 0, 0, 0))
+    canvas.alpha_composite(Image.open(view / head["url"]).convert("RGBA"), (head["x"], head["y"]))
+    mx0, my0, mx1, my1 = mq["mouth"]
+    mw, mh = mx1 - mx0, my1 - my0
+    rx0, ry0, rx1, ry1 = _mouth_region(mq["mouth"], (v["canvas"]["h"], v["canvas"]["w"]))
+    base = np.asarray(canvas)[ry0:ry1, rx0:rx1]
+    skin = skin_of(base[..., :3][base[..., 3] > 128]) if (base[..., 3] > 128).any() else np.array([220, 180, 160])
+    k = np.ones((2, 2), np.uint8)
+
+    yy, xx = np.mgrid[ry0:ry1, rx0:rx1]
+    # around the mouth only: the nose tip above and the jaw line / collar below are not mouth ink
+    zone = ((xx - (mx0 + mx1) / 2) / (mw * 0.75)) ** 2 + ((yy - (my0 + my1) / 2 - mh * 0.15) / (mh * 1.05)) ** 2 <= 1
+
+    def ink_of(rgba: np.ndarray) -> np.ndarray:
+        m = ink_mask(rgba[..., :3], skin) & (rgba[..., 3] > 128) & zone
+        return cv2.morphologyEx(m.astype(np.uint8), cv2.MORPH_OPEN, k).astype(bool)
+
+    min_px = max(8, int(0.01 * mw * mh))
+    bad: dict[str, str] = {}
+    head_ink = int(ink_of(base).sum())
+    if head_ink >= min_px:
+        bad["head"] = f"{head_ink}px ink on mouthless head"
+    for name, m in v["visemes"].items():
+        spr = Image.open(view / m["url"]).convert("RGBA")
+        layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        layer.alpha_composite(spr, (m["x"], m["y"]))
+        comp = canvas.copy()
+        comp.alpha_composite(layer)
+        c = np.asarray(comp)[ry0:ry1, rx0:rx1]
+        a = np.asarray(layer)[ry0:ry1, rx0:rx1, 3]
+        ink = ink_of(c)
+        outside = int((ink & (a < 40)).sum())
+        if outside >= min_px:
+            bad[name] = f"{outside}px ink outside sprite"
+        elif _stacked(ink & (a >= 40), mw, mh):
+            bad[name] = "stacked lip lines"
+        elif mq.get("cellGhost", {}).get(name, 0) > 0.05:
+            bad[name] = f"cell ghost {mq['cellGhost'][name]}"
+    return {"pass": not bad, "value": len(bad), "limit": 0, "bad": bad, "head": mq.get("head")}
+
+
 def alpha_edges(view: Path) -> dict[str, Any]:
     """Mouth sprites and eye layers must fade to 0 before their bounding box (no rectangles)."""
     v = json.loads((view / "view.json").read_text())
@@ -151,6 +260,7 @@ def run(skin: Path) -> dict[str, Any]:
         "landmarks": landmark_alignment(rig["boxes"], front["boxes"] if front else None),
         "edges": alpha_edges(left),
         "mouths": mouth_range(left),
+        "doubleMouth": double_mouth(left),
         "resolution": resolution(rig["boxes"]),
     }
     if front and (skin / "views" / "front" / "view.json").exists():
@@ -159,6 +269,10 @@ def run(skin: Path) -> dict[str, Any]:
         fm = mouth_range(skin / "views" / "front")
         if not fm["pass"]:
             gates["mouths"] = fm | {"view": "front"}
+        fd = double_mouth(skin / "views" / "front")
+        if not fd["pass"] or not gates["doubleMouth"]["pass"]:
+            gates["doubleMouth"] = {"pass": False, "value": (gates["doubleMouth"]["value"] or 0) + (fd["value"] or 0),
+                                    "limit": 0, "bad": {"left": gates["doubleMouth"].get("bad"), "front": fd.get("bad")}}
         fe = alpha_edges(skin / "views" / "front")  # rectangles on the front sprites fail the same gate
         if not fe["pass"]:
             gates["edges"] = fe | {"view": "front"}
