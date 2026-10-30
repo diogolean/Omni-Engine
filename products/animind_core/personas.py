@@ -9,6 +9,13 @@ wikitext, the work it comes from and links to Wikiquote, Wikipedia and,
 when the page cites it, Wikisource. The script writer may only put these
 strings on screen as quotes (see :mod:`products.animind_core.script`).
 
+Each quote also gets ``sourceKind``: ``primary`` when its source names a work
+by or about the person (book, dialogue, letter, speech: a title, a page, a §
+or a section named after the work) and ``secondary`` when it only comes from a
+magazine, website, anthology or "citado em" chain, or has no work at all.
+Entries flagged as attributed, disputed or misattributed are dropped. Primary
+quotes rank first and only they may be shown as a real quote.
+
 A name with no matching biography page gets ``found: false`` (cached for a
 week) and every line of that character is a marked paraphrase.
 """
@@ -31,7 +38,8 @@ from . import settings
 _LOG = logging.getLogger("animind_core")
 UA = "AnimindCore/1.0 (github.com/diogolean/animind; persona quotes)"
 SITES = {"pt-BR": "pt", "en-US": "en"}
-MAX_QUOTES = 12
+MAX_QUOTES = 24
+SHEET_VERSION = 2  # bump when parsing/ranking changes; older cached sheets are rebuilt
 MIN_WORDS, MAX_WORDS = 4, 45
 NEGATIVE_TTL_S = 7 * 24 * 3600
 SKIP_SECTION = re.compile(
@@ -40,6 +48,14 @@ SKIP_SECTION = re.compile(
     re.I,
 )
 PERSON_PAGE = re.compile(r"\{\{\s*(info/biografia|autor|wikipedia|pessoa|biografia)|\[\[\s*(categoria|category)\s*:", re.I)
+GENERIC_SECTION = re.compile(r"^(cita[cç][õo]es|frases|quotes|sourced|verificad)", re.I)
+DISPUTED = re.compile(r"atribu[ií]d|disputad|apócrif|apocryph|misattrib|erroneamente|duvidos|sem fonte|unsourced|não confirmad", re.I)
+SECONDARY = re.compile(
+    r"revista|magazine|jornal|newspaper|\bfolha\b|nova escola|citad[oa]s? (em|in|por)|como citad|quoted in|cited in|as quoted|"
+    r"handbook|epigram|antologia|anthology|dicionário de citações|dictionary of quotations|frases para|pensador|"
+    r"\bsite\b|\bblog\b|www\.|\.com\b|times\b|internet",
+    re.I,
+)
 DISAMBIG = re.compile(r"\{\{\s*(desambigua|disambig)", re.I)
 
 
@@ -107,13 +123,24 @@ def parse_quotes(wikitext: str, *, site_lang: str = "pt", page_url: str = "") ->
             source = re.sub(r"^(fonte|source)\s*:\s*", "", clean(src_lines[-1] if src_lines else ""), flags=re.I)
             if len(source) > 110:
                 source = source[:110].rsplit(",", 1)[0].rstrip(" -,") + "…"
-            sec = section if (not source or len(source) < 20) else ""  # "38e-39a" needs its work; a full citation does not
-            cur["source"] = " · ".join(p for p in dict.fromkeys((group, sec, source)) if p)
-            ws = _wikisource(" ".join(subs) + " " + cur.pop("_raw"), site_lang)
+            grp = "" if GENERIC_SECTION.search(group) or fold(source).startswith(fold(group) or "\0") else group
+            raw_src = " ".join(src_lines)
+            secondary = bool(SECONDARY.search(source) or SECONDARY.search(" ".join(clean(s) for s in src_lines)))
+            # the section names the work ("Apologia de Sócrates") unless the source already does or is secondary
+            sec_words = {w for w in fold(section).split() if len(w) > 3 and w.isalpha()}
+            sec = section if section and not secondary and not (sec_words & set(fold(source).split())) else ""
+            cur["source"] = " · ".join(p for p in dict.fromkeys((grp, sec, source)) if p)
+            cur["work"] = section or group
+            if DISPUTED.search(" ".join(clean(s) for s in subs)):
+                cur = None  # attributed / disputed / misattributed: not the person's words
+            else:
+                has_work = bool(sec or re.search(r"''|\d|§", raw_src) or (grp and source and source != grp))
+                cur["sourceKind"] = "secondary" if secondary or not has_work else "primary"
+            ws = _wikisource(" ".join(subs) + " " + cur.pop("_raw"), site_lang) if cur is not None else None
             if ws:
                 cur["wikisource"] = ws
-            words = len(cur["text"].split())
-            if MIN_WORDS <= words <= MAX_WORDS and "[" not in cur["text"] and "{" not in cur["text"]:
+            words = len(cur["text"].split()) if cur is not None else 0
+            if cur is not None and MIN_WORDS <= words <= MAX_WORDS and "[" not in cur["text"] and "{" not in cur["text"]:
                 out.append(cur)
         cur, subs = None, []
 
@@ -159,14 +186,25 @@ def parse_quotes(wikitext: str, *, site_lang: str = "pt", page_url: str = "") ->
 
 
 def pick(quotes: list[dict[str, Any]], n: int = MAX_QUOTES) -> list[dict[str, Any]]:
-    """Keep the n best for speech: 8–30 words first, page order otherwise; ids q1..qn."""
-    def score(i_q: tuple[int, dict[str, Any]]) -> tuple[int, int]:
-        i, q = i_q
-        w = len(q["text"].split())
-        return (0 if 6 <= w <= 30 else 1, i)
+    """Keep the n best for speech, ids q1..qn in rank order.
 
-    chosen = sorted(sorted(enumerate(quotes), key=score)[:n], key=lambda iq: iq[0])
-    return [{"id": f"q{k + 1}", **q} for k, (_, q) in enumerate(chosen)]
+    Primary sources first, then speakable length (6–20 words, then up to 30), taking works in turn
+    (one quote per work per round) so one long section does not fill the sheet.
+    """
+    def tier(q: dict[str, Any]) -> tuple[int, int]:
+        w = len(q["text"].split())
+        return (0 if q.get("sourceKind", "primary") == "primary" else 1, 0 if 6 <= w <= 20 else 1 if w <= 30 else 2)
+
+    ranked: list[tuple[tuple[int, int, int, int], dict[str, Any]]] = []
+    seen_per: dict[tuple[tuple[int, int], str], int] = {}
+    for i, q in enumerate(quotes):
+        t = tier(q)
+        k = (t, q.get("work", ""))
+        r = seen_per.get(k, 0)
+        seen_per[k] = r + 1
+        ranked.append(((t[0], t[1], r, i), q))
+    chosen = [q for _, q in sorted(ranked, key=lambda x: x[0])[:n]]
+    return [{"id": f"q{k + 1}", **q} for k, q in enumerate(chosen)]
 
 
 # ------------------------------------------------------------------ fetching
@@ -215,7 +253,7 @@ def wiki_url(site: str, title: str) -> str:
 def build(name: str, lang: str = "pt-BR") -> dict[str, Any]:
     """Fetch a fresh sheet (network)."""
     sl = SITES.get(lang, "pt")
-    sheet: dict[str, Any] = {"name": name, "lang": lang, "found": False, "fetchedAt": int(time.time()), "quotes": []}
+    sheet: dict[str, Any] = {"name": name, "lang": lang, "found": False, "version": SHEET_VERSION, "fetchedAt": int(time.time()), "quotes": []}
     page = find_page(name, lang)
     if not page:
         return sheet
@@ -233,6 +271,14 @@ def persona_name(name: str) -> str:
     return " ".join(head.split())[:60]
 
 
+def is_primary(q: dict[str, Any]) -> bool:
+    """A quote that may be shown as a real quote (sheets cached before ``sourceKind`` are judged by their source)."""
+    kind = q.get("sourceKind")
+    if kind:
+        return kind == "primary"
+    return bool(q.get("source")) and not SECONDARY.search(q.get("source", "")) and not DISPUTED.search(q.get("source", ""))
+
+
 def cache_path(name: str, lang: str) -> Path:
     return settings.data_dir() / "personas" / lang / f"{slug(name)}.yaml"
 
@@ -242,7 +288,8 @@ def load(name: str, lang: str = "pt-BR", *, fetch: bool = True) -> dict[str, Any
     path = cache_path(name, lang)
     if path.is_file():
         sheet = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        if sheet.get("found") or time.time() - float(sheet.get("fetchedAt") or 0) < NEGATIVE_TTL_S or not fetch:
+        fresh = sheet.get("version") == SHEET_VERSION
+        if (fresh and sheet.get("found")) or not fetch or (fresh and time.time() - float(sheet.get("fetchedAt") or 0) < NEGATIVE_TTL_S):
             return sheet
     if not fetch:
         return {"name": name, "lang": lang, "found": False, "quotes": []}

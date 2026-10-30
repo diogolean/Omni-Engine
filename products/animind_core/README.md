@@ -18,16 +18,26 @@ drawing cut into the same layers; the response says `"generator": "mock"`.
 
 `script.py` writes every render from a beat plan, and `personas.py` keeps a sheet of real quotes per
 character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas/<lang>/`, outside git;
-"not found" is cached for 7 days).
+"not found" is cached for 7 days; sheets from an older `SHEET_VERSION` are rebuilt on the next load).
 
-- **debate**: gancho -> tese (quote) -> réplica (quote) -> two short alternating réplicas -> tréplica (quote) -> two fechamentos.
+- Sheet quotes carry `sourceKind`: `primary` (the source names a work by or about the person: book,
+  dialogue, letter, speech, page or §) or `secondary` (magazine, website, anthology, "citado em", or no
+  work at all). Entries in "Atribuídas/Disputed/Misattributed/Sobre/Quotes about" sections, or whose
+  source line says "atribuída/disputada", are dropped. Up to 24 quotes, primary first, short (6–20 words)
+  first, one per work per round so every book gets a chance.
+
+- **debate**: gancho -> tese (quote) -> réplica (quote) -> réplica -> réplica (quote, <= 20 words) -> tréplica (quote) -> two fechamentos.
 - **lesson**: gancho -> ponto 1 (quote) -> ponto 2 -> ponto 3 (quote) -> exemplo -> resumo. **solo**: gancho -> tese (quote) -> argumento -> fechamento.
 - Each beat has a word budget (`maxS` = words / 2.6 + 0.8 s) and a pause after it. A clip that overruns
   `maxS` is voiced again at `+15%` (`ttsRate`).
 - `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
   `quote {id, text, source, url, site, wikisource?}`. Gemini (`gemini-2.5-flash`, one text call) only picks
-  quote ids and writes the other lines. An unknown or reused id becomes the best topic match from the
-  sheet, never model text.
+  quote ids and writes the other lines. Only `primary` quotes can be a "Citação real". Quote beats prefer
+  quotes sharing words with the topic (stemmed): an unknown/reused id, or an off-topic id while an on-topic
+  quote fits, becomes the best topic match (then the shortest), never model text.
+- A written line that is one of the speaker's primary quotes (same words after normalizing case, accents
+  and punctuation, or contains it, or a >= 6-word excerpt covering 60%+ of it) is shown as that quote, with
+  the sheet's literal text and source.
 - `kind: "paraphrase"`: written lines, never shown as quotes. Quote marks are removed, and a line that
   repeats 7+ words of a quote is replaced. `basis` names the quote it restates, if any. With no sheet
   (fictional characters, offline) every line is a paraphrase.

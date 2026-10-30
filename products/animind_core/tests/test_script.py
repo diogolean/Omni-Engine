@@ -34,7 +34,7 @@ def sheet():
 def test_parser_keeps_quotes_with_sources_and_skips_attributed():
     qs = sheet()["quotes"]
     texts = [q["text"] for q in qs]
-    assert texts[0].startswith("Só sei que nada sei") and not texts[0].startswith('"')
+    assert any(t.startswith("Só sei que nada sei") for t in texts) and not any(t.startswith('"') for t in texts)
     assert "A vida sem exame não vale a pena ser vivida pelo homem." in texts
     assert not any("atribuída" in t for t in texts)  # == Atribuídas == is not the persona's own words
     assert "Apologia de Sócrates" not in texts  # an italic title line is not a quote
@@ -97,7 +97,7 @@ def test_writer_cannot_invent_or_steal_quotes(monkeypatch):
             {"i": 0, "text": "“Eu inventei esta frase”, disse ele, e é falsa."},
             {"i": 1, "quoteId": "q999", "text": "Citação inventada pelo modelo."},  # unknown id -> a real sheet quote
             {"i": 2, "quoteId": real["id"]},  # other speaker's id must not be used for speaker 1
-            {"i": 3, "text": real["text"]},  # an unmarked copy of a quote is rejected
+            {"i": 3, "text": "Uma fala escrita, sem citação."},
             {"i": 4, "text": "Curta e boa.", "basisId": real["id"]},
         ]
 
@@ -108,7 +108,7 @@ def test_writer_cannot_invent_or_steal_quotes(monkeypatch):
     assert not any(c in lines[0]["text"] for c in script.QUOTE_MARKS)
     assert lines[1]["kind"] == "quote" and lines[1]["text"] in {q["text"] for q in s["quotes"]}
     assert lines[2]["speaker"] == 1 and lines[2]["kind"] == "paraphrase"
-    assert lines[3]["text"] != real["text"]
+    assert lines[3]["kind"] == "paraphrase"
     assert lines[4]["kind"] == "paraphrase" and "basis" not in lines[4]  # basis must be the speaker's own quote
 
 
@@ -124,7 +124,7 @@ def test_scene_marks_quotes_on_screen(template):
 
     from products.animind_core import scene
 
-    q = sheet()["quotes"][0]
+    q = max(sheet()["quotes"], key=lambda x: len(x["text"]))
     lines = [{"speaker": 0, "beat": "tese", "kind": "quote", "text": q["text"], "quote": script.cite(q), "startMs": 0, "endMs": 6000},
              {"speaker": 1 if template == "debate" else 0, "beat": "réplica", "kind": "paraphrase", "text": "Prove.",
               "startMs": 6200, "endMs": 7000}]
@@ -134,3 +134,155 @@ def test_scene_marks_quotes_on_screen(template):
     assert len(sc._pages(lines[0])) >= 2 and sc._page_at(lines[0], 0.1) == 0 and sc._page_at(lines[0], 5.9) == len(sc._pages(lines[0])) - 1
     assert sc._pages(lines[0])[0][0].startswith("“") and sc._pages(lines[0])[-1][-1].endswith("”")
     assert sc.frame(3.0).size == (1280, 720)
+
+
+# Modeled on the real pt.wikiquote pages (checked 2026-10-30): Sócrates has == Platão == with a
+# === Apologia === subsection that also holds "Revista Nova Escola" and "citado em" entries, then
+# == Plutarco == (a note only), == Atribuídas ==, == Sobre Sócrates ==; Nietzsche has === Verificadas ===
+# (German original + ::: citation), one === <book> === section per work, == Atribuídas == ("como citado in").
+SOCRATES_PAGE = """{{Info/Biografia/Wikidata}}
+=== Verificadas ===
+; Sócrates não deixou escritos.
+
+==Platão==
+* As palavras falsas não são apenas más em si, mas também infectam a alma com o mal.
+**''Fédon'', 91
+
+===''[[w:Apologia de Sócrates|Apologia de Sócrates]]''===
+*Prefiro morrer tendo falado a minha maneira, do que falar da sua maneira e viver.
+**38e-39a
+
+* "O princípio dos [[raciocínio]]s é constituído pela [[essência]] das coisas"
+:- ''Fonte: [http://revistaescola.abril.com.br/x.shtml Revista Nova Escola, 179, jan-fev05]''
+
+* "O mais razoável que se possa dizer sobre o [[matrimônio]] é isto: haja o que haja você se arrependerá."
+::- ''citado em "Speaker's handbook of epigrams and witticisms" - Página 40, Harper, 1955
+
+* "A verdade sobre o raciocínio é que ele nasce da dúvida honesta de cada um."
+:- Frase atribuída a Sócrates, sem fonte primária
+
+==Plutarco==
+*Não sou um ateniense ou um grego, mas um cidadão do mundo.
+**Nota: Comparar ''Críton'' de Platão.
+
+==Atribuídas==
+* "Se alguém procura a saúde pergunta-lhe primeiro se está disposto a evitar as causas da doença."
+::- ''[[Sócrates]] como citado in: Filosofia Para O Dia A Dia - Página 182
+
+==Sobre Sócrates==
+* "Sócrates foi o homem mais sábio de Atenas, disse o oráculo de Delfos."
+
+[[Categoria:Filósofos]]
+"""
+NIETZSCHE_PAGE = """{{Info/Biografia/Wikidata}}
+=== Verificadas ===
+* "Não há fatos eternos, como não há [[verdade]]s absolutas".
+::- es gibt keine ewigen Tatsachen: so wie es keine absoluten Wahrheiten gibt.
+:::- Sachregister - Volume 23 de Gesammelte Werke - Página 289, [[Friedrich Wilhelm Nietzsche]], Musarion, 1929
+
+* "A maturidade do homem consiste em ter reencontrado a seriedade que em criança se colocava nos jogos."
+::- ''Werke - volume 2, página 629, Friedrich Wilhelm Nietzsche - C. Hanser, 1956
+
+=== O Crepúsculo dos Ídolos ===
+[https://books.google.com.br/books?id=br4 O Crepúsculo dos Ídolos], [[Friedrich Nietzsche]]; Hemus, 2004
+
+* "O que não me mata me fortalece."
+::- [https://books.google.com.br/books?id=br4&pg=PA9 Página 10], Máximas e Sátiras, 8
+
+* "Sem música a vida seria um erro."
+::- [https://books.google.com.br/books?id=br4&pg=PA13 Página 13] Máximas e Sátiras, 33
+
+==Atribuídas==
+* "A [[fé]] é querer ignorar tudo aquilo que é [[verdade]]."
+::- ''[[Nietzsche]] como citado in Vidas e Obras - Página 281, Ferrari, 2007
+
+==Sobre==
+* "A filosofia moderna foi e é nietzscheana, porque ele não parou de falar de sentido."
+:- ''[[Gilles Deleuze]], filósofo francês''
+
+[[Categoria:Pessoas]]
+"""
+
+
+def real_sheet(page, name, url):
+    return {"name": name, "found": True, "wikiquote": url,
+            "quotes": personas.pick(personas.parse_quotes(page, site_lang="pt", page_url=url))}
+
+
+def socrates():
+    return real_sheet(SOCRATES_PAGE, "Sócrates", URL)
+
+
+def nietzsche():
+    return real_sheet(NIETZSCHE_PAGE, "Nietzsche", "https://pt.wikiquote.org/wiki/Friedrich_Nietzsche")
+
+
+def test_sheet_ranks_primary_sources_first_and_drops_disputed():
+    qs = socrates()["quotes"]
+    by = {q["text"]: q for q in qs}
+    primary = [q["text"] for q in qs if q["sourceKind"] == "primary"]
+    assert primary == ["As palavras falsas não são apenas más em si, mas também infectam a alma com o mal.",
+                       "Prefiro morrer tendo falado a minha maneira, do que falar da sua maneira e viver."]
+    magazine = by["O princípio dos raciocínios é constituído pela essência das coisas"]
+    assert magazine["sourceKind"] == "secondary" and "Nova Escola" in magazine["source"]
+    assert "Apologia" not in magazine["source"]  # the magazine is not the dialogue
+    assert by["Não sou um ateniense ou um grego, mas um cidadão do mundo."]["sourceKind"] == "secondary"  # no work named
+    assert by[next(t for t in by if t.startswith("O mais razoável"))]["sourceKind"] == "secondary"  # "citado em" a handbook
+    assert [q["sourceKind"] for q in qs] == sorted(q["sourceKind"] for q in qs)  # all primary before any secondary
+    texts = " ".join(by)
+    assert "nasce da dúvida" not in texts  # flagged "atribuída" in its source line
+    assert "procura a saúde" not in texts and "oráculo" not in texts  # == Atribuídas == and == Sobre == sections
+    assert "Apologia de Sócrates" in by["Prefiro morrer tendo falado a minha maneira, do que falar da sua maneira e viver."]["source"]
+    n = {q["text"]: q for q in nietzsche()["quotes"]}
+    assert n["O que não me mata me fortalece."]["source"].startswith("O Crepúsculo dos Ídolos · Página 10")
+    assert all(q["sourceKind"] == "primary" for q in n.values()) and not any("fé é querer" in t for t in n)
+
+
+def test_real_quote_lines_never_use_secondary_sources(monkeypatch):
+    s, n = socrates(), nietzsche()
+    secondary = {q["id"] for q in s["quotes"] if q["sourceKind"] == "secondary"}
+    monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 1, "quoteId": sorted(secondary)[0]}, {"i": 5, "quoteId": sorted(secondary)[-1]}])
+    # the topic matches the magazine quote best; it still must not be a "Citação real"
+    out = script.write("debate", "o raciocínio e a essência das coisas", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
+    assert script.check(out["lines"], [s, n]) == []
+    quotes = [line for line in out["lines"] if line["kind"] == "quote"]
+    assert quotes and not any(line["quote"]["id"] in secondary for line in quotes if line["speaker"] == 0)
+    assert all("Nova Escola" not in line["quote"]["source"] and "citado em" not in line["quote"]["source"] for line in quotes)
+    assert out["personas"][0]["primaryQuotes"] == 2
+
+
+def test_written_line_that_is_a_real_quote_is_marked_with_its_source(monkeypatch):
+    s, n = socrates(), nietzsche()
+    ids = {q["text"][:12]: q["id"] for q in n["quotes"]}
+    # Nietzsche's quote beats take two other quotes; then the writer puts his real line in a written beat
+    # (fechamento, speaker 1) with other casing/punctuation, and a 7-word excerpt of Sócrates in another
+    monkeypatch.setattr(script, "_gemini", lambda prompt: [
+        {"i": 2, "quoteId": ids["Não há fatos"]}, {"i": 4, "quoteId": ids["Sem música a"]},
+        {"i": 6, "text": "o que NÃO me mata, me fortalece!"},
+        {"i": 3, "text": "Prefiro morrer tendo falado a minha maneira"}])
+    lines = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)["lines"]
+    assert script.check(lines, [s, n]) == []
+    close = lines[6]
+    assert close["speaker"] == 1 and close["kind"] == "quote"
+    assert close["text"] == "O que não me mata me fortalece."  # the sheet's literal text, not the writer's
+    assert "Crepúsculo dos Ídolos" in close["quote"]["source"] and close["quote"]["url"].startswith("https://")
+    # 7 of 15 words is too little to call it the quote: it stays a marked paraphrase and is not an unmarked copy
+    assert lines[3]["kind"] == "paraphrase" and not script.copies_quote(lines[3]["text"], s)
+    texts = [line["text"] for line in lines if line["kind"] == "quote"]
+    assert len(texts) == len(set(texts))  # never the same quote twice
+
+
+def test_quote_beats_prefer_the_topic_and_pacing_stays_tight(monkeypatch):
+    s, n = socrates(), nietzsche()
+    off_topic = next(q["id"] for q in n["quotes"] if q["text"].startswith("Sem música"))
+    monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 2, "quoteId": off_topic}])
+    out = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
+    lines = out["lines"]
+    assert lines[2]["kind"] == "quote" and lines[2]["text"] == "Não há fatos eternos, como não há verdades absolutas"
+    assert "Gesammelte Werke" in lines[2]["quote"]["source"]
+    assert [line["beat"] for line in lines][0] == "gancho" and lines[-1]["beat"] == "fechamento"
+    assert all(a["speaker"] != b["speaker"] for a, b in zip(lines[1:-1], lines[2:-1]))  # alternating after the hook
+    for line in lines:
+        limit = 16 if line["kind"] == "paraphrase" else 30
+        assert script.words(line["text"]) <= limit + 1
+    assert sum(script.words(line["text"]) for line in lines) <= 140  # about a minute of speech

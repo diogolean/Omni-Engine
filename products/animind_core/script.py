@@ -9,6 +9,12 @@ Every line is one of two kinds:
 * ``paraphrase``: words written for the character, marked as such. When the
   writer says which quote it paraphrases, ``line["basis"]`` points to it.
 
+Only primary-source quotes (``sourceKind: primary`` in the sheet) are ever
+shown as quotes; magazine/anthology/"citado em" entries stay out. A written
+line whose text is (normalized) one of the speaker's primary quotes, or a
+literal excerpt of one, becomes that quote with its source instead of a
+paraphrase. Quote beats prefer quotes that share words with the topic.
+
 Shape and rhythm come from a fixed beat plan (hook, short alternating
 replies, rebuttal, closing; or hook, three points, example, summary), each
 beat with a word budget that keeps the edge-tts clip under ``maxS``.
@@ -44,7 +50,7 @@ PLANS: dict[str, tuple[Beat, ...]] = {
         Beat("tese", 0, "quote", 30, 0.25),
         Beat("réplica", 1, "quote", 30, 0.2),
         Beat("réplica", 0, "paraphrase", 16, 0.15),
-        Beat("réplica", 1, "paraphrase", 16, 0.15),
+        Beat("réplica", 1, "quote", 20, 0.15),
         Beat("tréplica", 0, "quote", 30, 0.45),
         Beat("fechamento", 1, "paraphrase", 16, 0.3),
         Beat("fechamento", 0, "paraphrase", 14, 0.0),
@@ -82,16 +88,43 @@ def cite(q: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tokens(text: str) -> set[str]:
-    return {w for w in personas.fold(text).split() if len(w) > 3}
+    """Content words, cut to a 6-letter stem so "verdade" meets "verdades"."""
+    return {w[:6] for w in personas.fold(text).split() if len(w) > 3}
+
+
+def _quotable(sheet: dict[str, Any]) -> list[dict[str, Any]]:
+    """Quotes that may appear as "Citação real": primary sources only."""
+    return [q for q in sheet.get("quotes") or [] if personas.is_primary(q)]
 
 
 def _eligible(sheet: dict[str, Any], max_words: int) -> list[dict[str, Any]]:
-    return [q for q in sheet.get("quotes") or [] if words(q["text"]) <= max_words]
+    return [q for q in _quotable(sheet) if words(q["text"]) <= max_words]
+
+
+def topic_score(q: dict[str, Any], topic: str) -> int:
+    return len(_tokens(topic) & _tokens(q["text"]))
 
 
 def _rank(quotes: list[dict[str, Any]], topic: str) -> list[dict[str, Any]]:
-    t = _tokens(topic)
-    return sorted(quotes, key=lambda q: (-len(t & _tokens(q["text"])), words(q["text"])))
+    """On-topic first, then shorter (tight pacing), then sheet order."""
+    return sorted(quotes, key=lambda q: (-topic_score(q, topic), words(q["text"])))
+
+
+def matching_quote(text: str, pool: list[dict[str, Any]], max_words: int) -> dict[str, Any] | None:
+    """The quote a written line actually is: same words (normalized), or a literal excerpt of >= 6 words
+    covering most of it, or the line contains the whole quote. The full quote must fit the beat."""
+    t = personas.fold(text)
+    if not t:
+        return None
+    for q in pool:
+        f = personas.fold(q["text"])
+        if not f or words(q["text"]) > max_words:
+            continue
+        if t == f or (f in t and len(f.split()) >= 4):
+            return q
+        if t in f and len(t.split()) >= 6 and len(t.split()) >= 0.6 * len(f.split()):
+            return q
+    return None
 
 
 def _clean_paraphrase(text: str, max_words: int) -> str:
@@ -150,8 +183,11 @@ def _template_text(beat: Beat, i: int, lang: str, topic: str, names: list[str]) 
 def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], topic: str, lang: str, template: str) -> str:
     who = []
     for k, (name, sheet) in enumerate(zip(names, sheets)):
-        qs = "\n".join(f'    {q["id"]}: {q["text"]}' for q in sheet.get("quotes") or []) or "    (no quotes)"
-        who.append(f"Speaker {k}: {name}\n  Real quotes (id: text):\n{qs}")
+        qs = "\n".join(
+            f'    {q["id"]}: {q["text"]}' + ("   [on topic]" if topic_score(q, topic) else "")
+            for q in _rank(_quotable(sheet), topic)
+        ) or "    (no quotes)"
+        who.append(f"Speaker {k}: {name}\n  Real quotes from primary sources, best for the topic first (id: text):\n{qs}")
     beats = "\n".join(
         f"  {i}. speaker {b.speaker}, beat '{b.name}', "
         + (f"PICK a quoteId of speaker {b.speaker} (only quotes of at most {b.max_words} words), do not write text"
@@ -172,7 +208,8 @@ Beats, in order:
 {beats}
 
 Rules:
-- Quote beats: choose the quoteId whose idea best fits the topic and the previous line; never reuse a quoteId.
+- Quote beats: choose the quoteId whose idea best fits the topic and the previous line (prefer [on topic] quotes); never reuse a quoteId.
+- Never reword a famous line of the speaker in a written beat: if you want it, it must be a quote beat with its quoteId.
 - Written beats: spoken lines in the character's voice and ideas, reacting to the line before. Short sentences, concrete words,
   no stage directions, no emoji, no quotation marks. Never present your text as a quote and never copy a quote into it.
 - If a written line restates one of the speaker's quotes, give that quoteId as basisId; else basisId is null.
@@ -240,14 +277,21 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
     for i, beat in enumerate(plan):
         sp = min(beat.speaker, n - 1)
         sheet = sheets[sp]
-        by_id = {q["id"]: q for q in sheet.get("quotes") or []}
+        by_id = {q["id"]: q for q in _quotable(sheet)}
         draft = drafted.get(i) or {}
         line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words), "pauseAfterS": beat.pause_s}
         quote = None
         if beat.kind == "quote":
             pool = [q for q in _eligible(sheet, beat.max_words) if (sp, q["id"]) not in used]
             qid = draft.get("quoteId")
-            quote = next((q for q in pool if q["id"] == qid), None) or next(iter(_rank(pool, topic)), None)
+            ranked = _rank(pool, topic)
+            quote = next((q for q in pool if q["id"] == qid), None)
+            if quote is None or (ranked and topic_score(quote, topic) == 0 < topic_score(ranked[0], topic)):
+                quote = next(iter(ranked), None)  # unknown/reused id, or off-topic while an on-topic quote fits
+        else:
+            # a written line that *is* one of the speaker's real quotes is shown as that quote, with its source
+            pool = [q for q in _quotable(sheet) if (sp, q["id"]) not in used]
+            quote = matching_quote(draft.get("text") or "", pool, beat.max_words + 6)
         if quote is not None:
             used.add((sp, quote["id"]))
             line.update(kind="quote", text=quote["text"], quote=cite(quote))
@@ -263,7 +307,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
         lines.append(line)
     personas_out = [
         {"name": nm, "found": bool(s.get("found")), "wikiquote": s.get("wikiquote"), "wikipedia": s.get("wikipedia"),
-         "quotes": len(s.get("quotes") or []), "license": s.get("license")}
+         "quotes": len(s.get("quotes") or []), "primaryQuotes": len(_quotable(s)), "license": s.get("license")}
         for nm, s in zip(names, sheets)
     ]
     return {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic}
@@ -279,6 +323,8 @@ def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]]) -> list[str
             q = line.get("quote") or {}
             if texts.get(q.get("id")) != q.get("text") or line["text"] != q.get("text"):
                 errors.append(f"line {i}: quote is not literally in the sheet")
+            elif not personas.is_primary(next(x for x in sheet["quotes"] if x["id"] == q["id"])):
+                errors.append(f"line {i}: quote comes from a secondary source")
             if not str(q.get("url", "")).startswith("https://"):
                 errors.append(f"line {i}: quote has no source link")
         elif line.get("kind") == "paraphrase":
