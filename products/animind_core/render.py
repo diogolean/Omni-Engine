@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from . import characters, rig, scene, settings
+from . import characters, rig, scene, script as scripts, settings
 
 _LOG = logging.getLogger("animind_core")
 PARODY_DISCLAIMER = "Paródia • Gerado por IA"
@@ -37,24 +37,7 @@ _LOCK = threading.Lock()
 _RENDER_LOCK = threading.Lock()
 
 
-def default_script(template: str, topic: str, n_chars: int, lang: str) -> list[tuple[int, str]]:
-    """Deterministic script so the pipeline runs with no LLM key."""
-    pt = lang == "pt-BR"
-    if template == "debate" and n_chars >= 2:
-        return [
-            (0, f"Eu defendo que {topic} muda tudo." if pt else f"I say {topic} changes everything."),
-            (1, "Discordo. Mostre as provas." if pt else "I disagree. Show me the evidence."),
-            (0, "As provas estão em toda parte." if pt else "The evidence is everywhere."),
-        ]
-    if template == "lesson":
-        return [
-            (0, f"Hoje vamos aprender sobre {topic}." if pt else f"Today we learn about {topic}."),
-            (0, "Prestem atenção, porque isso cai na prova!" if pt else "Pay attention, this will be on the test!"),
-        ]
-    return [
-        (0, f"Olá! Vamos falar de {topic}." if pt else f"Hello! Let's talk about {topic}."),
-        (0, "Fique comigo até o final." if pt else "Stay with me until the end."),
-    ]
+FAST_RATE = "+15%"  # re-voice a line that overruns its beat budget
 
 
 def line_view(template: str, speaker: int, index: int) -> str:
@@ -73,10 +56,24 @@ def role_line(char: dict[str, Any], template: str, topic: str, lang: str) -> str
     return f"{kind[0] if lang == 'pt-BR' else kind[1]} · {topic}"[:60]
 
 
-async def _tts(text: str, voice: str, out: Path) -> None:
+async def _tts(text: str, voice: str, out: Path, rate: str = "+0%") -> None:
     import edge_tts  # noqa: PLC0415
 
-    await edge_tts.Communicate(text, voice).save(str(out))
+    await edge_tts.Communicate(text, voice, rate=rate).save(str(out))
+
+
+def _voice_line(text: str, voice: str, mp3: Path, clip: Path, max_s: float) -> tuple[np.ndarray, str]:
+    """edge-tts clip as PCM; re-voiced faster once when it overruns ``max_s``."""
+    rate = "+0%"
+    asyncio.run(_tts(text, voice, mp3))
+    _to_wav(mp3, clip)
+    pcm = _read_pcm(clip)
+    if len(pcm) / SAMPLE_RATE > max_s:
+        rate = FAST_RATE
+        asyncio.run(_tts(text, voice, mp3, rate))
+        _to_wav(mp3, clip)
+        pcm = _read_pcm(clip)
+    return pcm, rate
 
 
 def _to_wav(src: Path, dst: Path) -> None:
@@ -143,22 +140,22 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         topic = (req.get("topic") or "inteligência artificial").strip()[:200]
         work = settings.data_dir() / "jobs" / job_id
         work.mkdir(parents=True, exist_ok=True)
-        lines = default_script(template, topic, len(chars), lang)
+        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang)
+        lines = written["lines"]
         voices = VOICES[lang]
-        gap = np.zeros(int(GAP_S * SAMPLE_RATE), dtype=np.int16)
         pcm_parts, script, sources, t = [], [], set(), 0.0
-        for i, (speaker, text) in enumerate(lines):
+        for i, planned in enumerate(lines):
+            speaker, text = planned["speaker"], planned["text"]
             mp3, clip = work / f"line_{i}.mp3", work / f"line_{i}.wav"
-            asyncio.run(_tts(text, voices[speaker % 2], mp3))
-            _to_wav(mp3, clip)
-            pcm = _read_pcm(clip)
+            pcm, rate = _voice_line(text, voices[speaker % 2], mp3, clip, planned["maxS"])
             dur = len(pcm) / SAMPLE_RATE
             cues, src = line_visemes(clip, text, t)
             sources.add(src)
-            script.append({"speaker": speaker, "text": text, "startMs": int(t * 1000), "endMs": int((t + dur) * 1000),
-                           "visemes": cues, "view": line_view(template, speaker, i)})
-            pcm_parts += [pcm, gap]
-            t += dur + GAP_S
+            gap_s = planned.get("pauseAfterS", GAP_S)
+            script.append({**planned, "startMs": int(t * 1000), "endMs": int((t + dur) * 1000),
+                           "visemes": cues, "view": line_view(template, speaker, i), "ttsRate": rate})
+            pcm_parts += [pcm, np.zeros(int(gap_s * SAMPLE_RATE), dtype=np.int16)]
+            t += dur + gap_s
             _set(job_id, progress=0.1 + 0.4 * (i + 1) / len(lines))
         track = np.concatenate(pcm_parts)
         audio = work / "voice.wav"
@@ -173,7 +170,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         rigs = [_rig_views(c, template, i, scenario) for i, c in enumerate(cast)]
         sc = scene.Scene(template=template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
                          env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER,
-                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, topic, lang) for c in cast])
+                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang)
         video = work / "preview.mp4"
         _set(job_id, progress=0.55)
         with _RENDER_LOCK:
@@ -189,6 +186,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "videoUrl": f"{files}/preview.mp4", "disclaimer": PARODY_DISCLAIMER,
             # Additive: which viseme source ran, and which characters had a core rig.
             "visemeSource": sorted(sources), "rigged": [r is not None for r in rigs],
+            # Additive: who wrote the script and the persona sheets behind the quotes.
+            "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
         })
     except Exception as exc:  # noqa: BLE001 — surfaced on the job
         _LOG.exception("render job %s failed", job_id)
