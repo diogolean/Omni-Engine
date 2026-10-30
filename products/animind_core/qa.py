@@ -158,8 +158,9 @@ def mouth_range(view: Path) -> dict[str, Any]:
     return {"pass": ok, "value": diffs.get("D", 0.0), "limit": lim, "moving": moving, "diffs": diffs}
 
 
-def _stacked(ink: np.ndarray, mw: int, mh: int) -> bool:
-    """Two wide mouth-ink blobs one above the other with skin between them: a second mouth."""
+def _stacked(ink: np.ndarray, mw: int, mh: int, rgb: np.ndarray | None = None) -> bool:
+    """Two wide mouth-ink blobs one above the other with skin between them: a second mouth
+    (teeth or tongue between the lips of an open mouth are not skin)."""
     import cv2  # noqa: PLC0415
     n, _lab, st, _c = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
     big = [st[i] for i in range(1, n) if st[i][4] >= max(10, 0.03 * mw * mh) and st[i][2] >= 0.3 * mw]
@@ -169,7 +170,13 @@ def _stacked(ink: np.ndarray, mw: int, mh: int) -> bool:
             overlap = min(top[0] + top[2], low[0] + low[2]) - max(top[0], low[0])
             gap = low[1] - (top[1] + top[3])
             if overlap >= 0.5 * min(top[2], low[2]) and gap >= max(3, 0.12 * mh):
-                return True
+                if rgb is None:
+                    return True
+                gx0, gx1 = max(top[0], low[0]), min(top[0] + top[2], low[0] + low[2])
+                g = rgb[top[1] + top[3]:low[1], gx0:gx1].reshape(-1, 3).astype(int)
+                sk = skin_of(rgb.reshape(-1, 3))
+                if len(g) and (np.abs(g - sk).max(axis=1) < 30).mean() >= 0.7:
+                    return True
     return False
 
 
@@ -197,8 +204,16 @@ def double_mouth(view: Path) -> dict[str, Any]:
     k = np.ones((2, 2), np.uint8)
 
     yy, xx = np.mgrid[ry0:ry1, rx0:rx1]
-    # around the mouth only: the nose tip above and the jaw line / collar below are not mouth ink
-    zone = ((xx - (mx0 + mx1) / 2) / (mw * 0.75)) ** 2 + ((yy - (my0 + my1) / 2 - mh * 0.15) / (mh * 1.05)) ** 2 <= 1
+    # where the real lips are: the rest mouth X sprite (detector boxes are loose and reach the nose / jaw);
+    # a ghost mouth sits there, the nose tip above and the jaw line / collar below are not mouth ink
+    zx0, zy0, zx1, zy1 = mx0, my0, mx1, my1
+    xs = v["visemes"].get("X")
+    if xs and (view / xs["url"]).exists():
+        bb = Image.open(view / xs["url"]).convert("RGBA").getchannel("A").point(lambda q: 255 if q > 128 else 0).getbbox()
+        if bb:
+            zx0, zy0, zx1, zy1 = xs["x"] + bb[0], xs["y"] + bb[1], xs["x"] + bb[2], xs["y"] + bb[3]
+    zw, zh = max(4, zx1 - zx0), max(4, zy1 - zy0)
+    zone = ((xx - (zx0 + zx1) / 2) / (zw * 0.65)) ** 2 + ((yy - (zy0 + zy1) / 2) / (zh * 0.8 + 4)) ** 2 <= 1
 
     def ink_of(rgba: np.ndarray) -> np.ndarray:
         m = ink_mask(rgba[..., :3], skin) & (rgba[..., 3] > 128) & zone
@@ -221,7 +236,7 @@ def double_mouth(view: Path) -> dict[str, Any]:
         outside = int((ink & (a < 40)).sum())
         if outside >= min_px:
             bad[name] = f"{outside}px ink outside sprite"
-        elif _stacked(ink & (a >= 40), mw, mh):
+        elif _stacked(ink & (a >= 40), mw, mh, c[..., :3]):
             bad[name] = "stacked lip lines"
         elif mq.get("cellGhost", {}).get(name, 0) > 0.05:
             bad[name] = f"cell ghost {mq['cellGhost'][name]}"

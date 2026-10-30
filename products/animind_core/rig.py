@@ -915,6 +915,15 @@ def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, s
     ring = ok & (ell > 1.6)
     shift = np.median(M[ring][:, :3] - S[ring][:, :3], axis=0) if ring.sum() > 30 else np.zeros(3)
     Sc = np.clip(S[..., :3] + shift, 0, 255).astype(np.uint8)
+    # sheet cells: white teeth keyed out with the background leave enclosed alpha holes -> fill them
+    opq = (S[..., 3] > 128).astype(np.uint8)
+    filled = opq.copy()
+    cs, _hh = cv2.findContours(opq, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(filled, cs, -1, 1, thickness=cv2.FILLED)
+    holes = ((filled > 0) & (opq == 0)).astype(np.uint8)
+    if holes.any():
+        Sc = cv2.inpaint(np.ascontiguousarray(Sc), holes, 3, cv2.INPAINT_TELEA)
+        ok = ok | ((holes > 0) & (M[..., 3] > 128))
     diff = ((np.abs(Sc.astype(np.int16) - M[..., :3]).max(axis=2) > 28) & ok).astype(np.uint8)
     diff = cv2.morphologyEx(diff, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
     diff = cv2.morphologyEx(diff, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
@@ -925,6 +934,7 @@ def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, s
         sx0, sy0, sw, sh, _a = st[i]
         if sx0 <= cx1 and sx0 + sw >= cx0 and sy0 <= cy1 and sy0 + sh >= cy0:
             keep[lab == i] = 1
+    keep[ell > 1] = 0  # never past the mouth ellipse (misaligned glasses / hair edges can join through close)
     if keep.sum() < 10:
         return None, 0.0
     cnts, _h = cv2.findContours(keep, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -933,7 +943,11 @@ def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, s
     near = cv2.dilate(keep, np.ones((9, 9), np.uint8)).astype(bool)
     raw_diff = (np.abs(Sc.astype(np.int16) - M[..., :3]).max(axis=2) > 28)
     zone = ((xx - (mx0 + mx1) / 2) / (mw * 0.75)) ** 2 + ((yy - (my0 + my1) / 2 - mh * 0.15) / (mh * 1.05)) ** 2 <= 1
-    dropped = float((ink & raw_diff & ~near & ok & zone).sum()) / max(1, int(keep.sum()))
+    # a ghost mouth is a wide lip/mouth stroke left out of the cut; small specks and the short lip shadow are not
+    left = (ink & raw_diff & ~near & ok & zone).astype(np.uint8)
+    n2, lab2, st2, _c2 = cv2.connectedComponentsWithStats(left, connectivity=8)
+    wide = sum(int(st2[i][4]) for i in range(1, n2) if st2[i][2] >= 0.35 * mw)
+    dropped = float(wide) / max(1, int(keep.sum()))
     r = max(2, mw // 25)
     mask = cv2.dilate(keep * 255, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
     pad = 3 * r
@@ -975,6 +989,11 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     x_sprite, _ = _iso_sprite(base, clean, mbox, mouth)
     if x_sprite is None:  # nothing to cut (mouthless edit kept the mouth): soft-ellipse sprite of the master
         x_sprite = _mouth_sprite(base, None, mbox, mouth)
+        lips = mouth
+    else:  # the real lips (detector boxes are loose, reach the nose): every other mouth is cut around them,
+        lb = x_sprite.getchannel("A").point(lambda q: 255 if q > 128 else 0).getbbox() or (0, 0, 1, 1)
+        lw, lh = lb[2] - lb[0], lb[3] - lb[1]  # open jaws drop down: at least 0.6 x width tall, mostly below
+        lips = (mbox[0] + lb[0], mbox[1] + lb[1] - lh // 4, mbox[0] + lb[2], mbox[1] + lb[1] + max(lh, int(lw * 0.6)))
     warp = {"X": (1, 1), "A": (1, 1), "B": (1, 1.06), "C": (1, 1.12), "D": (1.02, 1.25), "E": (0.92, 1.15),
             "F": (0.82, 1.05), "G": (1, 1), "H": (1, 1.08)}
 
@@ -993,7 +1012,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     ghost: dict[str, float] = {}
     for name, shapes in (("open", "CDH"), ("round", "EF")):
         if aligned[name] is not None:
-            got, g = _iso_sprite(aligned[name], clean, mbox, mouth)
+            got, g = _iso_sprite(aligned[name], clean, mbox, lips)
             if got is not None:
                 sprites |= {v: got for v in shapes}
                 ghost |= {v: g for v in shapes}
@@ -1008,9 +1027,11 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         ms = parts_from_sheet["mouths"]
         for v in "ABCDEFGH":
             if v in good:
-                got, g = _iso_sprite(ms[v], clean, mbox, mouth)
-                if got is not None:
+                got, g = _iso_sprite(ms[v], clean, mbox, lips)
+                if got is not None and g <= 0.05:  # a cell with a second mouth stroke is dropped, fallback kept
                     sprites[v], ghost[v] = got, g
+                elif got is not None:
+                    ghost[f"{v}_rejected"] = g
     skin_rgb, ink = _skin_and_ink(base, face)
     eyes_boxes = [_grow(boxes[k], size, 0.18, 0.25, 0.25) for k in ("left_eye", "right_eye")]
     eyes_open = Image.new("RGBA", size, (0, 0, 0, 0))
