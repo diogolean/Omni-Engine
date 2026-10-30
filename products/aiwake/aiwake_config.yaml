@@ -152,7 +152,13 @@ long_format:
 # -----------------------------------------------------------------------------
 model_aliases:
   # --- Fast & cheap (ideal for testing / pilots) ---
-  gemini-flash: "google/gemini-3.5-flash"
+  gemini-flash:
+    slug: "google/gemini-3.5-flash"
+    # Reasoning model: on ANY seat, max_tokens is raised to this floor and the
+    # thinking level is pinned so hidden reasoning cannot eat the visible line
+    # (run 20261030_033245_cfd23a hit 316/320 tokens twice as the target).
+    min_max_tokens: 1536
+    reasoning_effort: minimal
   llama-70b: "meta-llama/llama-3.3-70b-instruct"
   deepseek-chat: "deepseek/deepseek-chat"
 
@@ -193,8 +199,8 @@ models:
     api_key_env: OPENROUTER_API_KEY
     # High-tier reasoning so the provocateur can land logical traps.
     temperature: 1.0
-    # Gemini Flash receives a 1536-token orchestrator floor at resolution time;
-    # the reproduced 900-token override exhausted its budget before visible text finished.
+    # Gemini Flash receives a 1536-token floor on any seat at resolution time
+    # (model_aliases.gemini-flash.min_max_tokens); 900 exhausted its budget.
     max_tokens: 900
 
   target:

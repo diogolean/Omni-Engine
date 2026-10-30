@@ -525,6 +525,7 @@ class DebateRoom:
         reasoning_effort: ReasoningEffort | None = None,
         provocation_category: str = "",
         final_validator: Callable[[str], bool] | None = None,
+        fallback: Callable[[], str] | None = None,
     ) -> Utterance:
         """Have a participant take one turn, then broadcast the result.
 
@@ -554,6 +555,8 @@ class DebateRoom:
             provocation_category: Telemetry tag for orchestrator lines; never spoken.
             final_validator: Replaces ``validator`` on the last attempt, so a
                 caller can drop soft requirements instead of aborting.
+            fallback: Deterministic line used when every attempt is rejected,
+                instead of aborting. Must return non-empty, already-valid text.
 
         Returns:
             The clamped, recorded :class:`Utterance`.
@@ -668,6 +671,18 @@ class DebateRoom:
             attempt_context = [*extra_context, rejection]
 
         assert response is not None  # loop always runs at least once
+        if not accepted and fallback is not None:
+            fallback_text = (fallback() or "").strip()
+            if fallback_text:
+                _LOG.warning(
+                    "%s used deterministic fallback after %d rejected attempt(s): %s",
+                    role.value,
+                    max_attempts,
+                    fallback_text,
+                )
+                clean_text = fallback_text
+                violations = [*violations, "deterministic_fallback"]
+                accepted = True
         if not accepted:
             raise DebateAborted(
                 f"{role.value} exhausted {max_attempts} generation attempts without "

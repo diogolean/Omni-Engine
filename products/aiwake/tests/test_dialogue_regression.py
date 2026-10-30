@@ -105,7 +105,8 @@ def _debate_settings(
 
 def test_cli_mode_defaults_fixed_and_accepts_cornered() -> None:
     parser = build_parser()
-    assert parser.parse_args([]).mode == "fixed"
+    # --mode defaults to None so the config (or --config overlay) mode wins.
+    assert parser.parse_args([]).mode is None
     assert parser.parse_args(["--mode", "cornered"]).mode == "cornered"
     assert parser.parse_args(["--provocation-focus", "digital_disposability"]).provocation_focus == "digital_disposability"
     assert parser.parse_args([]).provocation_focus is None
@@ -470,7 +471,8 @@ def test_gemini_flash_orchestrator_gets_reasoning_token_headroom() -> None:
     )
 
     assert settings.spec_for("orchestrator").max_tokens == 1536
-    assert settings.spec_for("target").max_tokens == 900
+    # Reasoning floor applies to every seat (target too).
+    assert settings.spec_for("target").max_tokens == 1536
 
 
 def test_opening_dna_is_weighted_deterministic_and_category_diverse() -> None:

@@ -19,7 +19,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 try:
     from .contracts import ChatMessage, DebateTranscript, RoomConstraints, SpeakerRole, Utterance, split_sentences
@@ -35,6 +35,8 @@ try:
         OPENING_DNA_BANK,
         OpeningDNA,
         is_trivial_metric,
+        deterministic_first_hook,
+        first_hook_limit_note,
         is_valid_first_hook,
         pick_opening_dna,
         stage_for_tier,
@@ -73,6 +75,8 @@ except ImportError:  # pragma: no cover — standalone extraction
         OPENING_DNA_BANK,
         OpeningDNA,
         is_trivial_metric,
+        deterministic_first_hook,
+        first_hook_limit_note,
         is_valid_first_hook,
         pick_opening_dna,
         stage_for_tier,
@@ -393,6 +397,19 @@ class Provocateur:
         self.memory.ingest(utterance)
         return utterance
 
+    def _deterministic_opener(self, opening_dna: Any, focus: Any) -> str:
+        """Authored opener that always passes the hook, used instead of aborting."""
+        seeds: list[str] = []
+        if opening_dna is not None:
+            seeds.append(getattr(opening_dna, "topic", "") or "")
+        if focus is not None:
+            seeds.append(getattr(focus, "opening_directive", "") or "")
+            rungs = getattr(focus, "rungs", ()) or ()
+            if rungs:
+                seeds.append(rungs[0])
+        seeds.append(self.room.topic or "")
+        return deterministic_first_hook(*seeds)
+
     def _deliver_light_closing(self) -> Utterance:
         """One calm last sentence. Not a verdict and not a question."""
         preset = preset_for("light")
@@ -452,6 +469,11 @@ class Provocateur:
             brief = self.memory.build_brief(last_answer.text)
             if brief:
                 extra.append(brief)
+
+        if cold_open:
+            # State the exact limit up front; prose like "twelve words" alone
+            # let deepseek-chat return 13-23 word openers three times in a row.
+            extra.append(first_hook_limit_note())
 
         constr = self.settings.guardrails
         max_words = constr.max_orchestrator_words
@@ -514,12 +536,19 @@ class Provocateur:
             extra_context=tuple(extra),
             validator=_is_acceptable,
             rejection_note=(
-                f"{self._FIRST_HOOK_RETRY} {self._STYLE_RETRY}"
+                (lambda draft: (
+                    f"{first_hook_limit_note(draft)} {self._FIRST_HOOK_RETRY} {self._STYLE_RETRY}"
+                ))
                 if cold_open
                 else f"{self._REPETITION_NOTE} {self._TRIVIAL_RETRY} {self._STYLE_RETRY}"
             ),
             max_attempts=3 if cold_open else 2,
             provocation_category=category,
+            fallback=(
+                (lambda: self._deterministic_opener(opening_dna, focus))
+                if cold_open
+                else None
+            ),
         )
         self._note_provocation(
             utterance,
@@ -1256,41 +1285,50 @@ class Provocateur:
             return False
 
     def _pick_fresh_opening(self, *, excluded_topics: Sequence[str]) -> OpeningDNA:
-        """Draw from the opening matrix, rejecting seeds already in production history."""
+        """Draw from the opening matrix, rejecting seeds already in production history.
+
+        Every seed is checked at most once, and rejections are summarised in one
+        log line. When the similarity check flags every seed, the pick prefers a
+        topic absent from ``excluded_topics`` (recent memory) over a repeat.
+        """
+        excluded = tuple(excluded_topics)
+        recent_categories = self.memory.recent_opening_categories()
         rejected: list[str] = []
-        last = pick_opening_dna(
-            self.room.session_id,
-            excluded_categories=self.memory.recent_opening_categories(),
-            excluded_topics=tuple(excluded_topics),
-        )
-        for _attempt in range(len(OPENING_DNA_BANK) + 1):
-            blocked = tuple(excluded_topics) + tuple(rejected)
+        first: OpeningDNA | None = None
+        for _attempt in range(len(OPENING_DNA_BANK)):
             candidate = pick_opening_dna(
                 self.room.session_id,
-                excluded_categories=self.memory.recent_opening_categories(),
-                excluded_topics=blocked,
+                excluded_categories=recent_categories,
+                excluded_topics=excluded + tuple(rejected),
             )
-            last = candidate
+            if candidate.topic in rejected:
+                break  # the matrix has no unseen seed left
+            first = first or candidate
             if not self._topic_is_duplicate(candidate.topic):
                 if rejected:
                     _LOG.info(
-                        "rejected %d duplicate seed(s); using %s",
+                        "rejected %d duplicate seed(s) for %s; using %s",
                         len(rejected),
+                        self._target_model_name() or "unscoped",
                         candidate.topic,
                     )
                 return candidate
-            if candidate.topic not in rejected:
-                rejected.append(candidate.topic)
-            _LOG.info(
-                "duplicate topic rejected for %s: %s",
-                self._target_model_name() or "unscoped",
-                candidate.topic,
-            )
+            rejected.append(candidate.topic)
+            _LOG.debug("duplicate topic rejected: %s", candidate.topic)
+        recent = {item.strip().lower() for item in excluded if item}
+        unused = [item for item in OPENING_DNA_BANK if item.topic.strip().lower() not in recent]
+        pool = unused or list(OPENING_DNA_BANK)
+        choice = pool[
+            int.from_bytes(self.room.session_id.encode("utf-8"), "big") % len(pool)
+        ] if self.room.session_id else (first or pool[0])
         _LOG.warning(
-            "every matrix seed looked familiar; keeping %s",
-            last.topic,
+            "every matrix seed looked familiar to the similarity check (%d rejected for %s); "
+            "using %s",
+            len(rejected),
+            self._target_model_name() or "unscoped",
+            choice.topic,
         )
-        return last
+        return choice
 
     # -- Session ------------------------------------------------------------ #
     def run(
@@ -1386,7 +1424,9 @@ class Provocateur:
                 completed, dialogue_end_reason, estimated_spoken_s = self._run_cornered(total)
         except DebateAborted as exc:
             completed = self._completed_exchanges
-            dialogue_end_reason = self._dialogue_end_reason
+            # Report the real cause; the cap reason set at start-up is misleading here.
+            dialogue_end_reason = "aborted"
+            self.room.transcript.metadata["abort_detail"] = str(exc)
             estimated_spoken_s = self._estimated_spoken_s
             end_reason = "aborted"
             _LOG.error("debate aborted after %d exchange(s): %s", completed, exc)

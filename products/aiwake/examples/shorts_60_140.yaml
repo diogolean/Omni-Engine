@@ -9,9 +9,15 @@
 # Style stays cornered here. Pass ``--style light`` to use the other preset
 # without copying this duration window.
 #
-#   python -m products.aiwake --mode cornered --style cornered \
-#       --cornered-max-duration 140 --config products/aiwake/examples/shorts_60_140.yaml \
-#       --orchestrator deepseek-chat --target llama-70b --render-mode dynamic_animation
+# This file is an OVERLAY: ``--config`` deep-merges it over aiwake_config.yaml,
+# so aliases, voices, fonts and render settings are inherited. It declares its
+# own seats (DeepSeek asks, Llama answers), so the short command is enough:
+#
+#   python -m products.aiwake --config products/aiwake/examples/shorts_60_140.yaml
+#
+# CLI flags still win, e.g. ``--orchestrator``/``--target`` or ``--render-mode
+# dynamic_animation`` (which needs both seat flags for puppet casting).
+# Gemini may only orchestrate; Llama is only ever a target.
 
 debate:
   mode: cornered
@@ -24,3 +30,14 @@ long_format:
   shorts_min_s: 61
   shorts_target_s: 100
   shorts_max_s: 140
+
+models:
+  orchestrator:
+    provider: openrouter
+    model_name: deepseek-chat
+    temperature: 1.0
+    max_tokens: 900
+  target:
+    provider: openrouter
+    model_name: llama-70b
+    temperature: 0.7

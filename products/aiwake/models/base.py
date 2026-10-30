@@ -122,6 +122,8 @@ class LLMProvider(ABC):
 
         tokens = max_tokens if max_tokens is not None else self.spec.max_tokens
         temp = temperature if temperature is not None else self.spec.temperature
+        if reasoning_effort is None:
+            reasoning_effort = getattr(self.spec, "reasoning_effort", None)
         last_error: Exception | None = None
 
         for attempt in range(1, max_retries + 1):
