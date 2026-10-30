@@ -55,3 +55,15 @@ pip install -r requirements.txt -r products/animind_core/requirements.txt
 CORE_API_KEY=... RHUBARB_PATH=/path/to/rhubarb uvicorn products.animind_core.app:app --port 8787
 pytest products/animind_core/tests
 ```
+
+## End-to-end over HTTP (opt-in)
+
+`tests/test_e2e_http.py` runs persona sheet -> script -> rig -> render against a real core (spawns
+uvicorn on a free port with a temp data dir, or uses `ANIMIND_E2E_CORE_URL`/`ANIMIND_E2E_CORE_KEY`)
+and checks the MP4 with ffprobe (video + audio, 1280x720, >15 s) and that every quote line is on the
+live Wikiquote page. Skips cleanly without network (Wikiquote, Edge TTS) or ffmpeg; the Gemini art
+check skips without `GEMINI_API_KEY` (`ANIMIND_E2E_MOCK_ART=1` forces mock art). ~2-6 min.
+
+```bash
+ANIMIND_E2E=1 RHUBARB_PATH=/path/to/rhubarb pytest products/animind_core/tests/test_e2e_http.py -v -rs
+```
