@@ -140,7 +140,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         topic = (req.get("topic") or "inteligência artificial").strip()[:200]
         work = settings.data_dir() / "jobs" / job_id
         work.mkdir(parents=True, exist_ok=True)
-        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang)
+        mode = "deep" if req.get("personaMode") == "deep" else "quick"
+        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang, mode=mode)
         lines = written["lines"]
         fmt = "9:16" if req.get("format") == "9:16" else "16:9"
         n = 2 if template == "debate" else 1
@@ -191,6 +192,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "format": fmt, "width": sc.OW, "height": sc.OH,
             "voices": [{k: v[k] for k in ("voice", "pitchHz", "ratePct", "auto", "traits")} for v in voices],
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
+            "personaMode": mode,
         })
     except Exception as exc:  # noqa: BLE001 — surfaced on the job
         _LOG.exception("render job %s failed", job_id)

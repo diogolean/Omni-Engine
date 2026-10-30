@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from . import personas, settings
+from . import knowledge, personas, settings
 
 _LOG = logging.getLogger("animind_core")
 WRITER_MODEL = "gemini-2.5-flash"
@@ -180,14 +180,17 @@ def _template_text(beat: Beat, i: int, lang: str, topic: str, names: list[str]) 
 # ---------------------------------------------------------------- Gemini writer
 
 
-def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], topic: str, lang: str, template: str) -> str:
+def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], topic: str, lang: str, template: str,
+            passages: list[list[dict[str, Any]]] | None = None) -> str:
     who = []
     for k, (name, sheet) in enumerate(zip(names, sheets)):
+        bg = "\n".join(f'    [{p["source"]}] {p["text"][:600]}' for p in (passages[k] if passages else []))
         qs = "\n".join(
             f'    {q["id"]}: {q["text"]}' + ("   [on topic]" if topic_score(q, topic) else "")
             for q in _rank(_quotable(sheet), topic)
         ) or "    (no quotes)"
-        who.append(f"Speaker {k}: {name}\n  Real quotes from primary sources, best for the topic first (id: text):\n{qs}")
+        who.append(f"Speaker {k}: {name}\n  Real quotes from primary sources, best for the topic first (id: text):\n{qs}"
+                   + (f"\n  Background passages about {name} (ideas, facts and vocabulary only; NOT quotes):\n{bg}" if bg else ""))
     beats = "\n".join(
         f"  {i}. speaker {b.speaker}, beat '{b.name}', "
         + (f"PICK a quoteId of speaker {b.speaker} (only quotes of at most {b.max_words} words), do not write text"
@@ -212,6 +215,8 @@ Rules:
 - Never reword a famous line of the speaker in a written beat: if you want it, it must be a quote beat with its quoteId.
 - Written beats: spoken lines in the character's voice and ideas, reacting to the line before. Short sentences, concrete words,
   no stage directions, no emoji, no quotation marks. Never present your text as a quote and never copy a quote into it.
+- Background passages are research notes: use their ideas, facts and vocabulary in written beats, but in your own words.
+  Never copy a sentence from them and never present them as something the speaker said.
 - If a written line restates one of the speaker's quotes, give that quoteId as basisId; else basisId is null.
 - The hook grabs in 3 seconds: a provocative question or claim about the topic, aimed at the other speaker when there is one.
 - Each reply answers the line right before it (name the idea you attack). The rebuttal turns the opponent's own words.
@@ -249,8 +254,12 @@ def plan_for(template: str, n_chars: int) -> list[Beat]:
 
 
 def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
-          sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None) -> dict[str, Any]:
-    """Script lines (before TTS) plus the sheets used. ``use_llm`` None -> Gemini when a key is set."""
+          sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
+          indexes: list[Any] | None = None) -> dict[str, Any]:
+    """Script lines (before TTS) plus the sheets used. ``use_llm`` None -> Gemini when a key is set.
+
+    ``mode`` picks the knowledge index behind written lines (:mod:`knowledge`): ``quick`` (key terms,
+    shallow) or ``deep`` (full texts). Retrieved passages only feed ideas; quotes stay verbatim from the sheet."""
     template = template if template in PLANS else "solo"
     topic = (topic or "").strip() or ("inteligência artificial" if lang == "pt-BR" else "artificial intelligence")
     n = 2 if template == "debate" and len(names) >= 2 else 1
@@ -258,6 +267,10 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
     if sheets is None:
         sheets = [personas.load(nm, lang, fetch=settings.personas_online()) for nm in names]
     plan = plan_for(template, n)
+    mode = mode if mode in knowledge.MODES else "quick"
+    if indexes is None:
+        indexes = [knowledge.ensure(nm, lang, mode, sheet=sh) for nm, sh in zip(names, sheets)]
+    passages = [knowledge.retrieve(ix, f"{topic} {nm}", k=4 if mode == "deep" else 2) for ix, nm in zip(indexes, names)]
     if use_llm is None:
         use_llm = settings.gemini_available()
 
@@ -265,7 +278,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
     writer = "template"
     if use_llm:
         try:
-            for entry in _gemini(_prompt(plan, sheets, names, topic, lang, template)):
+            for entry in _gemini(_prompt(plan, sheets, names, topic, lang, template, passages)):
                 if isinstance(entry, dict) and isinstance(entry.get("i"), int):
                     drafted[entry["i"]] = entry
             writer = "gemini"
@@ -298,7 +311,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
             line["maxS"] = max(line["maxS"], max_seconds(words(quote["text"])))
         else:
             text = _clean_paraphrase(draft.get("text") or "", beat.max_words)
-            if not text or copies_quote(text, sheet):
+            if not text or copies_quote(text, sheet) or knowledge.copies_passage(text, passages[sp]):
                 text = _template_text(beat, i, lang, topic, names)
             line.update(kind="paraphrase", text=text)
             basis = by_id.get(draft.get("basisId") or "")
@@ -307,8 +320,10 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
         lines.append(line)
     personas_out = [
         {"name": nm, "found": bool(s.get("found")), "wikiquote": s.get("wikiquote"), "wikipedia": s.get("wikipedia"),
-         "quotes": len(s.get("quotes") or []), "primaryQuotes": len(_quotable(s)), "license": s.get("license")}
-        for nm, s in zip(names, sheets)
+         "quotes": len(s.get("quotes") or []), "primaryQuotes": len(_quotable(s)), "license": s.get("license"),
+         "mode": ix[0].get("mode", mode), "chunks": len(ix[0].get("chunks") or []),
+         "passages": [{"source": p["source"], "url": p["url"], "score": p["score"]} for p in ps]}
+        for nm, s, ix, ps in zip(names, sheets, indexes, passages)
     ]
     return {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic}
 

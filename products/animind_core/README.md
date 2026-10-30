@@ -78,3 +78,15 @@ check skips without `GEMINI_API_KEY` (`ANIMIND_E2E_MOCK_ART=1` forces mock art).
 ```bash
 ANIMIND_E2E=1 RHUBARB_PATH=/path/to/rhubarb pytest products/animind_core/tests/test_e2e_http.py -v -rs
 ```
+
+## Persona modes: quick vs deep
+
+`personaMode` on `POST /v1/render` (`"quick"` default, or `"deep"`), implemented in `knowledge.py`:
+
+- **quick**: a few key terms. The index holds the Wikiquote sheet plus the Wikipedia intro, up to 40 chunks. It is built inline on first use and cached next to the persona sheet (`personas/<lang>/<slug>.quick.json/.npy`).
+- **deep**: a background job builds a per-character index from the full Wikipedia article, the cleaned Wikiquote page and up to 6 Wikisource texts, up to 600 chunks. It is cached as `personas/<lang>/<slug>.deep.*`. If no deep index is ready when a render asks for one, the render uses quick.
+  - `POST /v1/personas/deep {name, lang}` starts the job, or joins one already running.
+  - `GET /v1/personas/deep?name=&lang=` returns `ready | building | failed | missing`, with the chunk count and the source counts.
+  - `GET /v1/personas/jobs/{id}` returns the job.
+
+Chunks are about 110 words with a 25-word overlap. They are embedded locally with hashed stem and bigram vectors (numpy, 1024 dimensions), so there are no API calls and no extra Gemini cost. For each speaker, the top passages for the topic go into the script prompt as background notes only. Quotes still come only from sheet ids, verbatim. Written lines that copy 7 or more consecutive words from a passage are rejected. `result.personas[]` reports `mode`, `chunks` and the `passages` used (source, url and score).

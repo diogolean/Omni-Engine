@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import API_VERSION, characters, render, settings
+from . import API_VERSION, characters, knowledge, render, settings
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
@@ -49,6 +49,29 @@ def post_render(body: dict, request: Request) -> dict:
 @app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_key)])
 def get_job(job_id: str) -> dict:
     job = render.get(job_id)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    return job
+
+
+@app.post("/v1/personas/deep", dependencies=[Depends(require_key)])
+def post_deep(body: dict) -> dict:
+    """Start (or join) the background deep-knowledge build for one persona."""
+    try:
+        return knowledge.submit_deep(str(body.get("name") or ""), body.get("lang") or "pt-BR")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/v1/personas/deep", dependencies=[Depends(require_key)])
+def get_deep(name: str, lang: str = "pt-BR") -> dict:
+    """Deep index state for a persona: ready, building, failed or missing."""
+    return knowledge.status(name, lang)
+
+
+@app.get("/v1/personas/jobs/{job_id}", dependencies=[Depends(require_key)])
+def get_deep_job(job_id: str) -> dict:
+    job = knowledge.get_job(job_id)
     if job is None:
         raise HTTPException(404, "job not found")
     return job
