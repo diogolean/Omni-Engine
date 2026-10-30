@@ -761,6 +761,36 @@ def load_view(skin: Path, view: str) -> dict[str, Any]:
     return data
 
 
+def _refine_mouth(base: Image.Image, mouth: Box) -> Box:
+    """Grow the detector's mouth box to the drawn lips: pixels redder than the surrounding skin that touch
+    the box (full, glossy or painted lips often spill past the detector box and survive the erase)."""
+    import cv2  # noqa: PLC0415
+
+    x0, y0, x1, y1 = mouth
+    w, h = x1 - x0, y1 - y0
+    W, H = base.size
+    rx0, ry0, rx1, ry1 = max(0, x0 - w // 2), max(0, y0 - h), min(W, x1 + w // 2), min(H, y1 + h)
+    a = np.asarray(base.crop((rx0, ry0, rx1, ry1))).astype(np.int16)
+    red = a[..., 0] - a[..., 1]
+    opaque = a[..., 3] > 128
+    if opaque.sum() < 20:
+        return mouth
+    skin_red = float(np.median(red[opaque]))
+    lips = ((red > skin_red + 25) & (a[..., 0] > a[..., 2] + 20) & opaque).astype(np.uint8)
+    n, labels, stats, _c = cv2.connectedComponentsWithStats(lips, connectivity=8)
+    bx0, by0, bx1, by1 = x0 - rx0, y0 - ry0, x1 - rx0, y1 - ry0
+    out = list(mouth)
+    for i in range(1, n):
+        sx, sy, sw, sh, area = stats[i]
+        if area < 6 or sx > bx1 or sx + sw < bx0 or sy > by1 or sy + sh < by0:
+            continue  # must touch the detector box
+        out = [min(out[0], rx0 + sx), min(out[1], ry0 + sy), max(out[2], rx0 + sx + sw), max(out[3], ry0 + sy + sh)]
+    # never more than 1.5x the detector box per side (blush / tongue-red clothing nearby)
+    out[0], out[1] = max(out[0], x0 - w // 4), max(out[1], y0 - h // 2)
+    out[2], out[3] = min(out[2], x1 + w // 4), min(out[3], y1 + h // 2)
+    return tuple(int(v) for v in out)  # type: ignore[return-value]
+
+
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
              matte: Callable[[Image.Image], Image.Image], front: bool = False,
              sheet: Path | None = None) -> dict[str, Any]:
@@ -775,7 +805,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
                 cut = _despill(matte(im).convert("RGBA"))
             dx, dy = _shift(np.asarray(base), np.asarray(cut))
             aligned[name] = _translate(cut, dx, dy) if abs(dx) < 40 and abs(dy) < 40 else None
-    face, mouth = boxes["face"], boxes["mouth"]
+    face, mouth = boxes["face"], _refine_mouth(base, boxes["mouth"])
     mbox = _grow(mouth, size, 0.6, 0.7, 1.3)  # open jaws drop down
     mbox = (mbox[0], mbox[1], mbox[2], min(mbox[3], max(face[3] + 6, mouth[3] + 4)))
     mbox = _union(mbox, _grow(mouth, size, 0.3, 0.3, 0.6))
