@@ -68,6 +68,12 @@ FRONT_PROMPT = (
     "closed, lips together, eyes open, neutral friendly expression. Solid flat pure magenta #FF00FF background. "
     "No text."
 )
+MOUTHLESS_PROMPT = (
+    "Edit this image: the same character, identical pose, framing, scale, lighting, colours, outlines and art "
+    "style, but remove the mouth and lips completely: smooth clean skin where the mouth was, no mouth, no lips, "
+    "no lines, no shadow, no teeth. Keep the nose, chin, jaw, facial hair, eyes, glasses and everything else exactly "
+    "as they are. Same solid flat background. No text."
+)
 DETECT_PROMPT = (
     "Detect, in this cartoon character image, the face (whole head without hair or ears), the left eye, "
     "the right eye and the mouth. Return JSON only: "
@@ -176,6 +182,51 @@ def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict
     return final
 
 
+def _mouthless_shot(src: Path, work: Path, boxes: dict[str, Box], tag: str, attempts: dict[str, int],
+                    notes: dict[str, str], tries: int = 2) -> Path | None:
+    """Gemini edit of ``src`` with the mouth removed (the head is drawn mouthless instead of inpainted).
+    Gated: no lip/cavity ink may remain around the mouth; re-drawn once while the cap allows."""
+    from . import qa  # noqa: PLC0415
+    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    size = Image.open(src).size
+    best: tuple[float, Path] | None = None
+    prev = work / f"source_{tag}.png"
+    if prev.exists():  # a re-draw only replaces an earlier attempt that left more ink
+        keep = prev.replace(work / f"source_{tag}_0.png")
+        with Image.open(keep) as im, Image.open(src) as ref:
+            best = (qa.ink_share(np.asarray(im.convert("RGB")), np.asarray(ref.convert("RGB")), boxes["mouth"]), keep)
+    for attempt in range(tries):
+        if _budget_left() < qa.IMAGE_USD:
+            notes[tag] = notes.get(tag, "") + f" | no budget for attempt {attempt + 1}"
+            break
+        attempts[tag] = attempts.get(tag, 0) + 1
+        raw = work / f"_gen_{tag}"
+        try:
+            generate_character_image(MOUTHLESS_PROMPT, raw, aspect_ratio="4:5", reference_path=src)
+            out = _png(raw, work / f"source_{tag}_{attempts[tag]}.png", size)
+            with Image.open(out) as im, Image.open(src) as ref:
+                left = qa.ink_share(np.asarray(im.convert("RGB")), np.asarray(ref.convert("RGB")), boxes["mouth"])
+        except (Exception, SystemExit) as exc:  # noqa: BLE001
+            notes[tag] = f"failed: {str(exc)[:160]}"
+            continue
+        finally:
+            raw.unlink(missing_ok=True)
+        if best is None or left < best[0]:
+            best = (left, out)
+        ok = left <= qa.LIMITS["residualMouth"]
+        notes[tag] = f"gemini ({'pass' if ok else 'FAIL'} residual ink {left:.3f}, tries {attempts[tag]})"
+        if ok:
+            break
+    if best is None:
+        return None
+    final = work / f"source_{tag}.png"
+    best[1].replace(final)
+    for f in work.glob(f"source_{tag}_*.png"):
+        f.unlink()
+    return final
+
+
 def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, style: str = "cartoon",
                    front: bool = True, attempts: dict[str, int] | None = None) -> dict[str, Any]:
     """Generate-then-verify: master (closed mouth) -> parts sheet (all mouths + lids, gated) -> front view
@@ -195,22 +246,40 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
     shots: dict[str, Path] = {"closed": closed}
     notes: dict[str, str] = {}
     boxes = detect_features(closed)
-    sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=2)
+    # priority under the cap: master, mouthless master, front (retries keep 3 images in reserve),
+    # mouthless front, side sheet, front sheet; leftover budget re-draws a sheet that failed its gate
+    ml = _mouthless_shot(closed, work, boxes, "mouthless", attempts, notes, tries=1)
     front_boxes: dict[str, Box] | None = None
     if front and _budget_left() >= 0.039:
-        front_boxes = _front_shot(closed, work, size, shots, notes, attempts=MAX_RETRIES, side_boxes=boxes, counter=attempts)
-    if sheet is None and _budget_left() >= 0.039:  # gate failed: re-draw while the cap has room
+        front_boxes = _front_shot(closed, work, size, shots, notes, attempts=MAX_RETRIES, side_boxes=boxes,
+                                  counter=attempts, reserve=3)
+    fml = None
+    if front_boxes is not None and "front" in shots:
+        fml = _mouthless_shot(shots["front"], work, front_boxes, "front_mouthless", attempts, notes, tries=1)
+    sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=1)
+    fs = None
+    if front_boxes is not None and "front" in shots and _budget_left() >= 0.039:
+        fs = _parts_sheet(shots["front"], work, front_boxes, attempts, notes, tries=1, tag="sheet_front")
+    # leftovers: the mouthless heads first (they decide double mouths), then the sheets
+    for tag, src, bx in (("mouthless", closed, boxes), ("front_mouthless", shots.get("front"), front_boxes)):
+        if src is not None and bx is not None and "pass" not in notes.get(tag, "") and _budget_left() >= 0.039:
+            got = _mouthless_shot(src, work, bx, tag, attempts, notes, tries=1)
+            if tag == "mouthless":
+                ml = got or ml
+            else:
+                fml = got or fml
+    if sheet is None and _budget_left() >= 0.039:
         sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=MAX_RETRIES - 1)
+    if fs is None and front_boxes is not None and "front" in shots and _budget_left() >= 0.039:
+        fs = _parts_sheet(shots["front"], work, front_boxes, attempts, notes, tries=1, tag="sheet_front")
+    if ml is not None:
+        shots["mouthless"] = ml
+    if fml is not None:
+        shots["front_mouthless"] = fml
     if sheet is not None:
         shots["sheet"] = sheet
-    if front_boxes is not None and "front" in shots:  # front mouths/lids drawn on the front art itself
-        fs = None
-        for _ in range(MAX_RETRIES - 1):
-            if _budget_left() < 0.039 or fs is not None:
-                break
-            fs = _parts_sheet(shots["front"], work, front_boxes, attempts, notes, tries=2, tag="sheet_front")
-        if fs is not None:
-            shots["sheet_front"] = fs
+    if fs is not None:
+        shots["sheet_front"] = fs
     return {"shots": shots, "notes": notes, "frontBoxes": front_boxes, "boxes": boxes}
 
 
@@ -244,7 +313,7 @@ def frontality(boxes: dict[str, Box]) -> dict[str, float | bool]:
 
 def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str, Path], notes: dict[str, str],
                 *, attempts: int = 2, side_boxes: dict[str, Box] | None = None,
-                counter: dict[str, int] | None = None) -> dict[str, Box] | None:
+                counter: dict[str, int] | None = None, reserve: int = 0) -> dict[str, Box] | None:
     """Draw the front view (side as reference), check it is frontal, retry once with a firmer prompt.
 
     Runs before the mouth edits so the retry spends the budget the open mouth would have used (that
@@ -256,7 +325,7 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
 
     drift_bad = False
     for attempt in range(attempts):
-        if attempt and _budget_left() < qa.IMAGE_USD:
+        if attempt and _budget_left() < qa.IMAGE_USD * (1 + reserve):
             notes["frontBudget"] = f"no budget for front attempt {attempt + 1}"
             break
         if counter is not None:
@@ -736,6 +805,13 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
         img, xy = place(*parts["visemes"][v])
         visemes[v] = _layer(f"mouth_{v}", img, xy, 10, out / "mouths" / f"{v}.png", url)
     view = {"canvas": {"w": W, "h": H}, "layers": layers, "visemes": visemes}
+    if "mouthQA" in parts:
+        mq = dict(parts["mouthQA"])
+        if mirror:
+            for k in ("mouthBox", "mouth"):
+                b = mq[k]
+                mq[k] = [W - b[2], b[1], W - b[0], b[3]]
+        view["mouthQA"] = mq
     if "eyeRig" in parts:  # screen-space travel; irises mirrored with the view
         meta = parts["eyeRig"]
         view["eyeRig"] = {"maxShift": meta["maxShift"],
@@ -791,6 +867,92 @@ def _refine_mouth(base: Image.Image, mouth: Box) -> Box:
     return tuple(int(v) for v in out)  # type: ignore[return-value]
 
 
+def _clean_base(base: Image.Image, shots: dict[str, Path], key: str, mbox: Box, mouth: Box) -> tuple[Image.Image, str]:
+    """``base`` with no mouth: the mouth area comes from the Gemini mouthless edit (``shots[key]``, aligned
+    and colour-matched, blended in a soft ellipse so eyes/hair stay the master's), else an inpaint fallback."""
+    if key in shots and shots[key].exists():
+        with Image.open(shots[key]) as im:
+            ml = im.convert("RGBA").resize(base.size, Image.LANCZOS)
+        with Image.open(shots["closed"]) as im:
+            ref = im.convert("RGBA").resize(base.size)
+        dx, dy = _shift(np.asarray(ref), np.asarray(ml))
+        if abs(dx) < 40 and abs(dy) < 40:
+            ml = _translate(ml, dx, dy)
+        W, H = base.size
+        mw, mh = mouth[2] - mouth[0], mouth[3] - mouth[1]
+        ell = (mouth[0] - mw * 0.55, mouth[1] - mh * 0.8, mouth[2] + mw * 0.55, mouth[3] + mh * 1.1)
+        m = Image.new("L", base.size, 0)
+        ImageDraw.Draw(m).ellipse(ell, fill=255)
+        m = m.filter(ImageFilter.GaussianBlur(max(3, mw // 8)))
+        a, b = np.asarray(ref).astype(np.int16), np.asarray(ml).astype(np.int16)
+        ring = (np.asarray(m) > 5) & (np.asarray(m) < 120)
+        shift = np.median(a[ring][:, :3] - b[ring][:, :3], axis=0) if ring.sum() > 30 else np.zeros(3)
+        fixed = np.asarray(base).copy()
+        k = (np.asarray(m).astype(np.float32) / 255)[..., None]
+        src = np.clip(b[..., :3] + shift, 0, 255)
+        fixed[..., :3] = (fixed[..., :3] * (1 - k) + src * k).astype(np.uint8)
+        return Image.fromarray(fixed), "gemini mouthless"
+    return _mouthless(base, mbox, mouth), "inpaint (no mouthless shot)"
+
+
+def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, sx: float = 1.0,
+                sy: float = 1.0) -> tuple[Image.Image | None, float]:
+    """The mouth alone, cut from ``src`` by a mask (pixels that differ from the mouthless ``clean`` head,
+    connected to the detected mouth, holes filled), never a rectangle with the chin. Returns the sprite and
+    the share of mouth ink in ``src`` that lies outside that mask (a second / ghost mouth in the cell)."""
+    import cv2  # noqa: PLC0415
+    from . import qa  # noqa: PLC0415
+
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    S = np.asarray(src.convert("RGBA").crop(box)).astype(np.int16)
+    M = np.asarray(clean.crop(box)).astype(np.int16)
+    ok = (M[..., 3] > 128) & (S[..., 3] > 128)
+    mx0, my0, mx1, my1 = mouth[0] - x0, mouth[1] - y0, mouth[2] - x0, mouth[3] - y0
+    mw, mh = max(1, mx1 - mx0), max(1, my1 - my0)
+    yy, xx = np.mgrid[0:h, 0:w]
+    ell = ((xx - (mx0 + mx1) / 2) / (mw * 0.75)) ** 2 + ((yy - (my0 + my1) / 2 - mh * 0.3) / (mh * 1.3)) ** 2
+    ring = ok & (ell > 1.6)
+    shift = np.median(M[ring][:, :3] - S[ring][:, :3], axis=0) if ring.sum() > 30 else np.zeros(3)
+    Sc = np.clip(S[..., :3] + shift, 0, 255).astype(np.uint8)
+    diff = ((np.abs(Sc.astype(np.int16) - M[..., :3]).max(axis=2) > 28) & ok).astype(np.uint8)
+    diff = cv2.morphologyEx(diff, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    diff = cv2.morphologyEx(diff, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n, lab, st, _c = cv2.connectedComponentsWithStats(diff, connectivity=8)
+    cx0, cy0, cx1, cy1 = mx0 + mw * 0.1, my0 + mh * 0.1, mx1 - mw * 0.1, my1 - mh * 0.1
+    keep = np.zeros_like(diff)
+    for i in range(1, n):
+        sx0, sy0, sw, sh, _a = st[i]
+        if sx0 <= cx1 and sx0 + sw >= cx0 and sy0 <= cy1 and sy0 + sh >= cy0:
+            keep[lab == i] = 1
+    if keep.sum() < 10:
+        return None, 0.0
+    cnts, _h = cv2.findContours(keep, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(keep, cnts, -1, 1, thickness=cv2.FILLED)
+    ink = qa.ink_mask(Sc, qa.skin_of(M[..., :3][ok] if ok.any() else Sc.reshape(-1, 3)))
+    near = cv2.dilate(keep, np.ones((9, 9), np.uint8)).astype(bool)
+    raw_diff = (np.abs(Sc.astype(np.int16) - M[..., :3]).max(axis=2) > 28)
+    zone = ((xx - (mx0 + mx1) / 2) / (mw * 0.75)) ** 2 + ((yy - (my0 + my1) / 2 - mh * 0.15) / (mh * 1.05)) ** 2 <= 1
+    dropped = float((ink & raw_diff & ~near & ok & zone).sum()) / max(1, int(keep.sum()))
+    r = max(2, mw // 25)
+    mask = cv2.dilate(keep * 255, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+    pad = 3 * r
+    mask[:pad] = 0; mask[-pad:] = 0; mask[:, :pad] = 0; mask[:, -pad:] = 0  # noqa: E702
+    alpha = np.asarray(Image.fromarray(mask).filter(ImageFilter.GaussianBlur(r)))
+    sprite = Image.fromarray(np.dstack([Sc, np.minimum(alpha, M[..., 3]).astype(np.uint8)]))
+    if sx != 1.0 or sy != 1.0:
+        bx = sprite.getchannel("A").getbbox()
+        if bx:
+            part = sprite.crop(bx)
+            nw, nh = max(1, int(part.width * sx)), max(1, int(part.height * sy))
+            out = Image.new("RGBA", sprite.size, (0, 0, 0, 0))
+            px = bx[0] + (part.width - nw) // 2
+            py = min(bx[1], h - pad - nh)
+            out.paste(part.resize((nw, nh), Image.LANCZOS), (max(0, px), max(0, py)))
+            sprite = out
+    return sprite, round(dropped, 3)
+
+
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
              matte: Callable[[Image.Image], Image.Image], front: bool = False,
              sheet: Path | None = None) -> dict[str, Any]:
@@ -809,18 +971,32 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     mbox = _grow(mouth, size, 0.6, 0.7, 1.3)  # open jaws drop down
     mbox = (mbox[0], mbox[1], mbox[2], min(mbox[3], max(face[3] + 6, mouth[3] + 4)))
     mbox = _union(mbox, _grow(mouth, size, 0.3, 0.3, 0.6))
-    op, rd = aligned["open"], aligned["round"]
-    sprites = {
-        "X": _mouth_sprite(base, None, mbox, mouth),
-        "A": _mouth_sprite(base, None, mbox, mouth),
-        "B": _mouth_sprite(base, op, mbox, mouth, sy=0.45) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.06),
-        "C": _mouth_sprite(base, op, mbox, mouth, sy=0.72) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.12),
-        "D": _mouth_sprite(base, op, mbox, mouth) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.2),
-        "E": _mouth_sprite(base, rd, mbox, mouth) if rd else _mouth_sprite(base, op, mbox, mouth, sx=0.8, sy=0.8),
-        "F": _mouth_sprite(base, rd, mbox, mouth, sx=0.82, sy=0.85) if rd else _mouth_sprite(base, None, mbox, mouth, sx=0.85),
-        "G": _mouth_sprite(base, op, mbox, mouth, sy=0.3) if op else _mouth_sprite(base, None, mbox, mouth),
-        "H": _mouth_sprite(base, op, mbox, mouth, sy=0.6) if op else _mouth_sprite(base, None, mbox, mouth, sy=1.08),
-    }
+    clean, head_src = _clean_base(base, shots, "mouthless", mbox, mouth)
+    x_sprite, _ = _iso_sprite(base, clean, mbox, mouth)
+    if x_sprite is None:  # nothing to cut (mouthless edit kept the mouth): soft-ellipse sprite of the master
+        x_sprite = _mouth_sprite(base, None, mbox, mouth)
+    warp = {"X": (1, 1), "A": (1, 1), "B": (1, 1.06), "C": (1, 1.12), "D": (1.02, 1.25), "E": (0.92, 1.15),
+            "F": (0.82, 1.05), "G": (1, 1), "H": (1, 1.08)}
+
+    def scaled(v: str) -> Image.Image:
+        sx_, sy_ = warp[v]
+        bx = x_sprite.getchannel("A").getbbox()
+        if not bx or (sx_, sy_) == (1, 1):
+            return x_sprite
+        part = x_sprite.crop(bx)
+        nw, nh = max(1, int(part.width * sx_)), max(1, int(part.height * sy_))
+        out = Image.new("RGBA", x_sprite.size, (0, 0, 0, 0))
+        out.paste(part.resize((nw, nh), Image.LANCZOS), (bx[0] + (part.width - nw) // 2, bx[1]))
+        return out
+
+    sprites = {v: scaled(v) for v in VISEMES}
+    ghost: dict[str, float] = {}
+    for name, shapes in (("open", "CDH"), ("round", "EF")):
+        if aligned[name] is not None:
+            got, g = _iso_sprite(aligned[name], clean, mbox, mouth)
+            if got is not None:
+                sprites |= {v: got for v in shapes}
+                ghost |= {v: g for v in shapes}
     parts_from_sheet: dict[str, Any] | None = None
     if sheet is not None and sheet.exists():
         from . import partsheet  # noqa: PLC0415
@@ -830,8 +1006,11 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     good = set(parts_from_sheet.get("good", [])) if parts_from_sheet else set()
     if parts_from_sheet:  # per-cell: only cells that registered well replace the fallback mouths
         ms = parts_from_sheet["mouths"]
-        ref = ms["X"] if "X" in good else None
-        sprites |= {v: _mouth_sprite(base, ms[v], mbox, mouth, ref=ref) for v in "ABCDEFGH" if v in good}
+        for v in "ABCDEFGH":
+            if v in good:
+                got, g = _iso_sprite(ms[v], clean, mbox, mouth)
+                if got is not None:
+                    sprites[v], ghost[v] = got, g
     skin_rgb, ink = _skin_and_ink(base, face)
     eyes_boxes = [_grow(boxes[k], size, 0.18, 0.25, 0.25) for k in ("left_eye", "right_eye")]
     eyes_open = Image.new("RGBA", size, (0, 0, 0, 0))
@@ -844,12 +1023,12 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         eyes_closed = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_closed"], eyes_boxes) or eyes_closed
     eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
     chin = max(face[3], mouth[3]) + int((face[3] - face[1]) * 0.04)
-    torso, neck, head = _slice_bust(base, face, chin)
+    torso, neck, head = _slice_bust(clean, face, chin)
     parts = {
         "size": size,
         "torso": _crop_layer(torso),
         "neck": _crop_layer(neck),
-        "head": _crop_layer(_mouthless(head, mbox, mouth)),
+        "head": _crop_layer(head),
         "eyes": _crop_layer(eyes_open),
         "eyes_closed": _crop_layer(eyes_closed),
         "eye_white": _crop_layer(eye["eye_white"]),
@@ -858,6 +1037,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "eyes_half": _crop_layer(eye["eyes_half"]),
         "eyeRig": eye["meta"],
         "visemes": {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()},
+        "mouthQA": {"head": head_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth)},
     }
     (skin / ("sheet_front.json" if front else "sheet.json")).write_text(json.dumps(
         {"used": sorted(good), "ncc": parts_from_sheet.get("cellNcc") if parts_from_sheet else None}), encoding="utf-8")
@@ -937,9 +1117,10 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
     try:
         views = assemble(skin, gen["shots"], boxes, url, matte=matte, sheet=sheet)
         fr = gen["shots"].get("front")
+        fshots = {"closed": fr} | ({"mouthless": gen["shots"]["front_mouthless"]} if "front_mouthless" in gen["shots"] else {})
         if fr:
             try:
-                views |= assemble(skin, {"closed": fr}, gen.get("frontBoxes") or detect_features(fr), url, matte=matte,
+                views |= assemble(skin, fshots, gen.get("frontBoxes") or detect_features(fr), url, matte=matte,
                                   front=True, sheet=gen["shots"].get("sheet_front") or sheet)
                 status["front"] = "ready (gemini front view, side as reference; sheet mouths where cells register)"
             except Exception as exc:  # noqa: BLE001 — detection/cut failure keeps the side art
@@ -950,7 +1131,7 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
             attempts["sheetFallback"] = 1  # free retry: deterministic mouths/lids instead of the sheet
             views |= assemble(skin, gen["shots"], boxes, url, matte=matte)
             if fr:
-                views |= assemble(skin, {"closed": fr}, gen.get("frontBoxes") or detect_features(fr), url, matte=matte, front=True)
+                views |= assemble(skin, fshots, gen.get("frontBoxes") or detect_features(fr), url, matte=matte, front=True)
             gen["notes"]["sheet"] = gen["notes"].get("sheet", "") + " | QA fallback to warped mouths"
             report = qa.finalize(skin, spent_usd(), attempts)
     finally:
