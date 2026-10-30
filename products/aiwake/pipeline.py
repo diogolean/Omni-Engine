@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 try:
-    from .contracts import DebateTranscript, PostType, Utterance
+    from .contracts import DebateTranscript, PostType, SpeakerRole, Utterance
     from .media.audio import (
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -52,7 +52,7 @@ try:
         emit,
     )
 except ImportError:  # pragma: no cover — standalone extraction
-    from contracts import DebateTranscript, PostType, Utterance  # type: ignore[no-redef]
+    from contracts import DebateTranscript, PostType, SpeakerRole, Utterance  # type: ignore[no-redef]
     from media.audio import (  # type: ignore[no-redef]
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -241,10 +241,37 @@ class PipelineResult:
     qa_warnings: tuple[str, ...] = ()
     cost_estimate_usd: float | None = None
     cost_actual_usd: float | None = None
+    #: Why the run produced nothing publishable (abort cause, silent audio).
+    failure: str | None = None
 
     @property
     def succeeded(self) -> bool:
-        return self.end_reason == "complete" and self.exchanges > 0
+        return self.end_reason == "complete" and self.exchanges > 0 and not self.failure
+
+
+def render_blocker(
+    *,
+    end_reason: str,
+    exchanges: int,
+    spoken_lines: int,
+    voiced_lines: int | None,
+) -> str | None:
+    """Return why a debate must not be rendered, or ``None`` when it may.
+
+    An aborted or empty debate would publish a title card with no dialogue,
+    and a run where TTS failed on every line would publish a silent video.
+    ``voiced_lines`` is ``None`` when audio was not requested.
+    """
+    if end_reason == "aborted":
+        return "debate aborted; refusing to render a partial episode"
+    if exchanges <= 0:
+        return "debate produced 0 exchanges; nothing to render"
+    if voiced_lines is not None and spoken_lines > 0 and voiced_lines == 0:
+        return (
+            f"TTS failed for all {spoken_lines} spoken line(s); refusing to publish a "
+            "silent video (try: pip install -U \"edge-tts>=7.3.1\")"
+        )
+    return None
 
 
 @dataclass(slots=True)
@@ -651,6 +678,7 @@ def run_pipeline(
     audio_seconds = 0.0
     end_reason = "interrupted"
     exchanges = 0
+    failure: str | None = None
     try:
         result = provocateur.run(
             topic=topic,
@@ -685,7 +713,19 @@ def run_pipeline(
                 typewriter_core_only=True,
             )
 
-        if with_video and result.transcript.utterances:
+        render_block = render_blocker(
+            end_reason=result.end_reason,
+            exchanges=result.exchanges,
+            spoken_lines=sum(
+                1 for item in result.transcript.utterances
+                if item.role is not SpeakerRole.SYSTEM and item.text.strip()
+            ),
+            voiced_lines=len(voice_observer.assets) if voice_observer is not None else None,
+        )
+        if render_block:
+            failure = render_block
+            _LOG.error("not rendering: %s", render_block)
+        if with_video and result.transcript.utterances and not render_block:
             if dynamic_animation:
                 # New parametric avatar battle path. Imported lazily so the
                 # classic pipeline never needs numpy/soundfile/ffmpeg-pipe
@@ -815,6 +855,7 @@ def run_pipeline(
             end_reason=result.end_reason,
             audio_seconds=audio_seconds,
             dialogue_end_reason=result.dialogue_end_reason,
+            failure=failure or result.transcript.metadata.get("abort_detail"),
             thumbnail_path=thumbnail_path if thumbnail_path and thumbnail_path.is_file() else None,
             metadata_path=metadata_path if metadata_path and metadata_path.is_file() else None,
         )

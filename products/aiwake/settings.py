@@ -158,6 +158,10 @@ class DebateConfig(_Frozen):
         return self
 
 
+#: Thinking levels accepted by OpenRouter's ``reasoning.effort``.
+ReasoningEffortName = Literal["minimal", "low", "medium", "high", "xhigh"]
+
+
 class ModelAlias(_Frozen):
     """One entry in the master model reference dictionary.
 
@@ -178,6 +182,11 @@ class ModelAlias(_Frozen):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=32, le=4096)
     timeout_s: float | None = Field(default=None, gt=0.0)
+    # Floor for ``max_tokens`` on ANY seat. Reasoning models spend the budget
+    # thinking before the visible answer, so a seat-level 320 must not starve them.
+    min_max_tokens: int | None = Field(default=None, ge=32, le=4096)
+    # OpenRouter ``reasoning.effort`` applied when the caller does not pass one.
+    reasoning_effort: ReasoningEffortName | None = None
     note: str = ""
 
     @model_validator(mode="before")
@@ -192,6 +201,7 @@ class ModelAlias(_Frozen):
             ("temperature", self.temperature),
             ("max_tokens", self.max_tokens),
             ("timeout_s", self.timeout_s),
+            ("reasoning_effort", self.reasoning_effort),
         )
         return {name: value for name, value in candidates if value is not None}
 
@@ -210,9 +220,20 @@ _DEFAULT_MODEL_ALIASES: dict[str, str] = {
 
 # Flash models can spend most of a small completion allowance on reasoning
 # before exposing a short visible answer. The reproduced 20260831_201854_42b572
-# run stopped at 896/900 tokens twice, so the orchestrator seat needs headroom
-# even when a CLI model override inherits a lower explicit seat value.
-_GEMINI_FLASH_ORCHESTRATOR_MIN_TOKENS = 1536
+# run stopped at 896/900 tokens twice (orchestrator), and 20261030_033245_cfd23a
+# stopped at 316/320 twice as the target, so EVERY seat running a Gemini Flash
+# model gets this floor even when an alias in the YAML does not declare one.
+_GEMINI_FLASH_MIN_TOKENS = 1536
+# Kept for callers/tests that imported the old name.
+_GEMINI_FLASH_ORCHESTRATOR_MIN_TOKENS = _GEMINI_FLASH_MIN_TOKENS
+
+
+def _builtin_min_tokens(slug: str) -> int | None:
+    """Token floor for model families known to reason before answering."""
+    model = slug.lower()
+    if "gemini" in model and "flash" in model:
+        return _GEMINI_FLASH_MIN_TOKENS
+    return None
 
 
 class ModelSpec(_Frozen):
@@ -238,6 +259,8 @@ class ModelSpec(_Frozen):
     temperature: float = Field(default=0.9, ge=0.0, le=2.0)
     max_tokens: int = Field(default=320, ge=32, le=4096)
     timeout_s: float = Field(default=90.0, gt=0.0)
+    # Default OpenRouter thinking level for this seat; a per-call value wins.
+    reasoning_effort: ReasoningEffortName | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1033,18 +1056,17 @@ class AiwakeSettings(_Frozen):
         return spec.model_copy(update=update)
 
     def spec_for(self, role: DebateRole) -> ModelSpec:
-        """Return the resolved :class:`ModelSpec` bound to a debate seat."""
-        spec = self.resolve_spec(getattr(self.models, role))
-        model = spec.model.lower()
-        if (
-            role == "orchestrator"
-            and "gemini" in model
-            and "flash" in model
-            and spec.max_tokens < _GEMINI_FLASH_ORCHESTRATOR_MIN_TOKENS
-        ):
-            return spec.model_copy(
-                update={"max_tokens": _GEMINI_FLASH_ORCHESTRATOR_MIN_TOKENS}
-            )
+        """Return the resolved :class:`ModelSpec` bound to a debate seat.
+
+        The reasoning floor applies to every seat, not only the orchestrator:
+        an alias's ``min_max_tokens`` wins, else the built-in family floor.
+        """
+        authored = getattr(self.models, role)
+        spec = self.resolve_spec(authored)
+        alias = self.model_aliases.get(authored.model.strip())
+        floor = (alias.min_max_tokens if alias else None) or _builtin_min_tokens(spec.model)
+        if floor is not None and spec.max_tokens < floor:
+            spec = spec.model_copy(update={"max_tokens": floor})
         return spec
 
     def configured_name_for(self, role: DebateRole) -> str:
@@ -1093,6 +1115,53 @@ def _interpolate(node: Any) -> Any:
     return node
 
 
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Return ``base`` with ``overlay`` merged in; mappings merge, the rest replace."""
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _read_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Parse one YAML mapping; empty or missing PyYAML yields ``{}``."""
+    try:
+        import yaml  # noqa: PLC0415 — optional at runtime
+    except ImportError:
+        _LOG.warning("PyYAML absent; falling back to built-in Aiwake defaults")
+        return {}
+    parsed = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
+    if not isinstance(parsed, dict):
+        raise TypeError(f"{path} must contain a YAML mapping, got {type(parsed).__name__}")
+    return parsed
+
+
+def load_settings_with_overlay(overlay_path: Path | str | None) -> AiwakeSettings:
+    """Load ``aiwake_config.yaml`` and deep-merge an alternate file over it.
+
+    Backs ``--config``: an example such as ``examples/shorts_60_140.yaml`` only
+    declares what it changes (debate window, seats), and inherits aliases,
+    voices, fonts and render settings from the main config.
+
+    Raises:
+        FileNotFoundError: ``overlay_path`` does not exist.
+    """
+    if overlay_path is None:
+        return load_settings()
+    overlay = Path(overlay_path)
+    if not overlay.is_file():
+        raise FileNotFoundError(f"config overlay not found: {overlay}")
+    load_environment()
+    base = _read_yaml_mapping(CONFIG_PATH) if CONFIG_PATH.is_file() else {}
+    if overlay.resolve() == CONFIG_PATH.resolve():
+        return AiwakeSettings.model_validate(_interpolate(base))
+    merged = _deep_merge(base, _read_yaml_mapping(overlay))
+    return AiwakeSettings.model_validate(_interpolate(merged))
+
+
 def load_settings(config_path: Path | str | None = None) -> AiwakeSettings:
     """Parse and validate the YAML config.
 
@@ -1111,15 +1180,7 @@ def load_settings(config_path: Path | str | None = None) -> AiwakeSettings:
     raw: dict[str, Any] = {}
 
     if path.is_file():
-        try:
-            import yaml  # noqa: PLC0415 — optional at runtime
-        except ImportError:
-            _LOG.warning("PyYAML absent; falling back to built-in Aiwake defaults")
-        else:
-            parsed = yaml.safe_load(path.read_text(encoding="utf-8-sig")) or {}
-            if not isinstance(parsed, dict):
-                raise TypeError(f"{path} must contain a YAML mapping, got {type(parsed).__name__}")
-            raw = parsed
+        raw = _read_yaml_mapping(path)
     else:
         _LOG.warning("Config %s not found; using built-in defaults", path)
 

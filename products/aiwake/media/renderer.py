@@ -31,6 +31,7 @@ import logging
 import math
 import os
 import textwrap
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -354,23 +355,83 @@ class Segment:
 # --------------------------------------------------------------------------- #
 # Font resolution
 # --------------------------------------------------------------------------- #
+#: Monospace fonts tried after ``render.font_candidates``. Bare names resolve
+#: against the platform font folders from :func:`_font_dirs`.
+_FALLBACK_FONT_NAMES: tuple[str, ...] = (
+    "consola.ttf",
+    "CascadiaMono.ttf",
+    "CascadiaCode.ttf",
+    "lucon.ttf",
+    "cour.ttf",
+    "DejaVuSansMono.ttf",
+    "LiberationMono-Regular.ttf",
+    "NotoSansMono-Regular.ttf",
+    "Menlo.ttc",
+)
+_FONT_WARNED = False
+
+
+def _font_dirs() -> tuple[Path, ...]:
+    """Platform font folders, Windows per-user installs included."""
+    dirs: list[Path] = []
+    windir = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+    if windir:
+        dirs.append(Path(windir) / "Fonts")
+    dirs.append(Path("C:/Windows/Fonts"))
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        dirs.append(Path(local) / "Microsoft" / "Windows" / "Fonts")
+    dirs += [
+        Path("/usr/share/fonts/truetype/dejavu"),
+        Path("/usr/share/fonts/dejavu"),
+        Path("/usr/share/fonts/truetype/liberation"),
+        Path("/usr/share/fonts/truetype/noto"),
+        Path("/System/Library/Fonts"),
+        Path.home() / ".fonts",
+    ]
+    return tuple(dirs)
+
+
+def font_search_paths(config: RenderConfig) -> tuple[Path, ...]:
+    """Ordered candidate font files: configured paths first, then fallbacks."""
+    paths = [Path(candidate) for candidate in config.font_candidates]
+    for name in _FALLBACK_FONT_NAMES:
+        paths.extend(folder / name for folder in _font_dirs())
+    return tuple(dict.fromkeys(paths))
+
+
+@lru_cache(maxsize=None)
+def _first_font_file(candidates: tuple[Path, ...]) -> Path | None:
+    from PIL import ImageFont  # noqa: PLC0415
+
+    for path in candidates:
+        try:
+            if path.is_file():
+                ImageFont.truetype(str(path), 12)
+                return path
+        except OSError:
+            continue
+    return None
+
+
 def _load_font(config: RenderConfig, size: int) -> Any:
     """Load the first available monospace font, else PIL's bitmap default.
 
     The default is ugly but keeps a headless container renderable, which matters
-    more than typography in CI.
+    more than typography in CI. The fallback is warned about once per process.
     """
+    global _FONT_WARNED  # noqa: PLW0603 — one warning per process, not per size
     from PIL import ImageFont  # noqa: PLC0415
 
-    for candidate in config.font_candidates:
-        path = Path(candidate)
-        if not path.is_file():
-            continue
-        try:
-            return ImageFont.truetype(str(path), size)
-        except OSError:
-            continue
-    _LOG.warning("no configured font resolved; falling back to PIL default bitmap font")
+    path = _first_font_file(font_search_paths(config))
+    if path is not None:
+        return ImageFont.truetype(str(path), size)
+    if not _FONT_WARNED:
+        _FONT_WARNED = True
+        _LOG.warning(
+            "no monospace font found (render.font_candidates and system fallbacks); "
+            "falling back to PIL default bitmap font"
+        )
     return ImageFont.load_default()
 
 
