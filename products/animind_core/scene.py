@@ -508,7 +508,9 @@ class Scene:
                 a = look.ease((since - 0.25) / 0.35) * (1 - look.ease((since - hold) / 0.3))
                 if a > 0.01:
                     lt = self._lower_third(line["speaker"])
-                    right = self.template == "debate" and line["speaker"] == 1
+                    # wide/two: under the speaker; close debate shots: on the open side, off the face
+                    close = shot is not None and shot.kind in ("ots", "cu")
+                    right = self.template == "debate" and (line["speaker"] == 1) != close
                     slide = round(30 * (1 - a)) * (1 if right else -1)
                     x = (W - 64 - lt.width if right else 64) + slide
                     frame.alpha_composite(_fade(lt, a), (x, H - 262))
