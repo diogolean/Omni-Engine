@@ -117,11 +117,12 @@ class Scene:
 
     def __init__(self, *, template: str, scenario: str, rigs: list[dict[str, RigView] | None], script: list[dict[str, Any]],
                  envelope: np.ndarray, env_fps: int, duration_s: float, disclaimer: str, fps: int = FPS,
-                 names: list[str] | None = None, roles: list[str] | None = None) -> None:
+                 names: list[str] | None = None, roles: list[str] | None = None, lang: str = "pt-BR") -> None:
         self.template = template if template in PLACES else "solo"
         self.scenario = scenario if scenario in SCENARIOS else "studio"
         self.rigs, self.script, self.env, self.env_fps = rigs, script, envelope, env_fps
         self.duration_s, self.disclaimer, self.fps = duration_s, disclaimer, fps
+        self.lang = lang
         self.places = PLACES[self.template]
         self.far, self.mid = look.plates(self.scenario, self.template, [p[0] for p in self.places])
         self.lut = look.grade_lut(self.scenario)
@@ -129,6 +130,9 @@ class Scene:
         self.scrim = look.scrim()
         self.accent = look.ACCENT[self.scenario]
         self.caption_font = _font("SemiBold", 34)
+        self.quote_font = _font("SemiBoldItalic", 34)
+        self.tag_font = _font("Bold", 15)
+        self.source_font = _font("Medium", 17)
         self.label_font = _font("SemiBold", 18)
         self.brand_font = _font("Medium", 16)
         self.board_font = _font("Medium", 30)
@@ -238,7 +242,7 @@ class Scene:
 
     def _board(self, stage: Image.Image, t: float) -> None:
         cur = self._line_at(t, 0.35) or (self.script[0] if self.script else None)
-        key = ("board", cur["text"] if cur else "")
+        key = ("board", cur["text"] if cur else "", cur.get("kind") if cur else None)
         if key not in self._cache:
             bw, bh = int(W * 0.44 * SS), int(H * 0.48 * SS)
             img = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
@@ -248,10 +252,27 @@ class Scene:
                 d.rounded_rectangle((int(12 * SS), int(12 * SS), bw - int(12 * SS), bh - int(12 * SS)), int(6 * SS), fill=(24, 44, 36, 255))
             else:  # glass panel
                 d.rounded_rectangle((0, 0, bw - 1, bh - 1), int(16 * SS), fill=(255, 255, 255, 16), outline=(255, 255, 255, 46), width=2)
-            font = _font("Medium", int(30 * SS))
             ink = (236, 238, 228, 235) if self.scenario == "classroom" else (255, 255, 255, 225)
-            for i, s in enumerate(_wrap(d, key[1], font, W * 0.38 * SS)):
-                d.text((W * 0.03 * SS, H * 0.08 * SS + i * 44 * SS), s, font=font, fill=ink)
+            quote = bool(cur) and cur.get("kind") == "quote"
+            x, top, width = W * 0.03 * SS, H * 0.05 * SS, W * 0.38 * SS
+            if cur and cur.get("beat"):
+                _tracked(d, (x, top), str(cur["beat"]).upper(), _font("Bold", int(18 * SS)), (*self.accent, 255), 3 * SS)
+            src = (cur.get("quote") or {}).get("source", "") if quote else ""
+            text = f"“{key[1]}”" if quote else key[1]
+            room = bh - top - H * (0.16 if src else 0.08) * SS
+            for size in (30, 27, 24, 21):  # largest size whose rows fit the board
+                font = _font("MediumItalic" if quote else "Medium", int(size * SS))
+                rows, step = _wrap(d, text, font, width), size * 1.42 * SS
+                if len(rows) * step <= room:
+                    break
+            for i, s in enumerate(rows):
+                d.text((x, top + H * 0.07 * SS + i * step), s, font=font, fill=ink)
+            if src:
+                sf = _font("Medium", int(16 * SS))
+                src = "— " + src
+                while d.textlength(src, font=sf) > width and len(src) > 8:
+                    src = src.rstrip("…")[:-2].rstrip(" ,·") + "…"
+                d.text((x, bh - H * 0.07 * SS), src, font=sf, fill=(*ink[:3], 170))
             self._cache[key] = img
         stage.alpha_composite(self._cache[key], (int(W * 0.48 * SS), int(H * 0.14 * SS)))
 
@@ -275,20 +296,78 @@ class Scene:
             out = Image.blend(out, smear, min(0.92, blur))
         return out
 
-    def _caption(self, line: dict[str, Any]) -> Image.Image:
-        key = ("cap", line["text"])
+    def _pages(self, line: dict[str, Any]) -> list[list[str]]:
+        """Caption rows in pages of up to two, quote text wrapped in “ ” and set in italics."""
+        key = ("pages", line["text"], line.get("kind"))
         if key not in self._cache:
+            quote = line.get("kind") == "quote"
+            text = f"“{line['text']}”" if quote else line["text"]
+            d = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+            rows = _wrap(d, text, self.quote_font if quote else self.caption_font, W * 0.72)
+            self._cache[key] = [rows[i:i + 2] for i in range(0, len(rows), 2)] or [[]]
+        return self._cache[key]
+
+    def _page_at(self, line: dict[str, Any], t: float) -> int:
+        """Which caption page is on screen: pages advance in proportion to their word count."""
+        pages = self._pages(line)
+        if len(pages) == 1:
+            return 0
+        start, end = line["startMs"] / 1000, line["endMs"] / 1000
+        frac = (t - start) / max(0.1, end - start)
+        sizes = [sum(len(r.split()) for r in p) for p in pages]
+        acc = 0.0
+        for i, n in enumerate(sizes):
+            acc += n / max(1, sum(sizes))
+            if frac < acc:
+                return i
+        return len(pages) - 1
+
+    def _caption(self, line: dict[str, Any], page: int = 0) -> Image.Image:
+        key = ("cap", line["text"], line.get("kind"), page)
+        if key not in self._cache:
+            font = self.quote_font if line.get("kind") == "quote" else self.caption_font
+            rows = self._pages(line)[page]
             img = Image.new("RGBA", (W, 150), (0, 0, 0, 0))
             d = ImageDraw.Draw(img)
-            rows = _wrap(d, line["text"], self.caption_font, W * 0.7)[:3]
             y0 = 150 - 20 - len(rows) * 44
             for i, s in enumerate(rows):
-                d.text((W / 2, y0 + i * 44), s, font=self.caption_font, fill=(0, 0, 0, 230), anchor="mt")
+                d.text((W / 2, y0 + i * 44), s, font=font, fill=(0, 0, 0, 230), anchor="mt")
             shadow = img.filter(ImageFilter.GaussianBlur(5))
             d = ImageDraw.Draw(shadow)
             for i, s in enumerate(rows):
-                d.text((W / 2, y0 + i * 44), s, font=self.caption_font, fill=(255, 255, 255, 255), anchor="mt")
+                d.text((W / 2, y0 + i * 44), s, font=font, fill=(255, 255, 255, 255), anchor="mt")
             self._cache[key] = shadow
+        return self._cache[key]
+
+    def _tag(self, line: dict[str, Any]) -> Image.Image | None:
+        """Top-center chip: CITAÇÃO + source for a real quote, PARÁFRASE for written lines."""
+        kind = line.get("kind")
+        if kind not in ("quote", "paraphrase"):
+            return None
+        key = ("tag", kind, (line.get("quote") or line.get("basis") or {}).get("source", ""))
+        if key not in self._cache:
+            pt = self.lang == "pt-BR"
+            if kind == "quote":
+                head = "CITAÇÃO REAL" if pt else "REAL QUOTE"
+                src = f"{line['quote'].get('source') or ''} · Wikiquote".lstrip(" ·")
+            else:
+                head = "PARÁFRASE" if pt else "PARAPHRASE"
+                basis = (line.get("basis") or {}).get("source")
+                src = (("inspirada em " if pt else "after ") + basis) if basis else ("fala escrita para a cena" if pt else "written for the scene")
+            d = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+            while d.textlength(src, font=self.source_font) > 560 and len(src) > 12:
+                src = src[:-2].rstrip(" ,·") + "…" if not src.endswith("…") else src[:-3].rstrip(" ,·") + "…"
+            hw = sum(d.textlength(c, font=self.tag_font) + 2.0 for c in head)
+            sw = d.textlength(src, font=self.source_font)
+            w = int(hw + sw + 66)
+            img = Image.new("RGBA", (w, 40), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            d.rounded_rectangle((0, 0, w - 1, 39), 20, fill=(8, 8, 10, 175))
+            dot = (*self.accent, 255) if kind == "quote" else (200, 200, 205, 255)
+            d.ellipse((16, 15, 26, 25), fill=dot)
+            _tracked(d, (36, 12), head, self.tag_font, dot, 2.0)
+            d.text((36 + hw + 12, 20), src, font=self.source_font, fill=(255, 255, 255, 220), anchor="lm")
+            self._cache[key] = img
         return self._cache[key]
 
     def _lower_third(self, idx: int) -> Image.Image:
@@ -315,7 +394,10 @@ class Scene:
         if line and self.template != "lesson":
             since = t - line["startMs"] / 1000
             a = look.ease(since / 0.18)
-            frame.alpha_composite(_fade(self._caption(line), a), (0, H - 150 + round(6 * (1 - a))))
+            frame.alpha_composite(_fade(self._caption(line, self._page_at(line, t)), a), (0, H - 150 + round(6 * (1 - a))))
+        if line and (tag := self._tag(line)) is not None:
+            a = look.ease((t - line["startMs"] / 1000) / 0.25)
+            frame.alpha_composite(_fade(tag, a), ((W - tag.width) // 2, 22 - round(8 * (1 - a))))
         if line:
             first = next(l for l in self.script if l["speaker"] == line["speaker"])
             since = t - line["startMs"] / 1000
