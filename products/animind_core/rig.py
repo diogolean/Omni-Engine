@@ -139,6 +139,7 @@ def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict
 
     with Image.open(closed) as im:
         base = im.convert("RGBA")
+    best: tuple[int, Path] | None = None
     for attempt in range(tries):
         if _budget_left() < qa.IMAGE_USD:
             notes[tag] = notes.get(tag, "") + f" | no budget for attempt {attempt + 1}"
@@ -154,12 +155,25 @@ def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict
             continue
         finally:
             raw.unlink(missing_ok=True)
-        good = [k for k in (got or {}).get("good", []) if k in partsheet.VISEMES]
+        allgood = (got or {}).get("good", [])
+        good = [k for k in allgood if k in partsheet.VISEMES]
+        lids = all(e in allgood for e in ("eyes_closed", "eyes_half"))
         if len(good) >= partsheet.MIN_GOOD_MOUTHS:
-            notes[tag] = f"gemini (cells ok {''.join(good)}, tries {attempt + 1})"
-            return out
-        notes[tag] = f"rejected (cells ok {''.join(good) or '-'}, tries {attempt + 1})"
-    return None
+            n = len(good) + 3 * lids
+            if best is None or n > best[0]:
+                keep = work / f"source_{tag}_best.png"
+                out.replace(keep)
+                best = (n, keep)
+                notes[tag] = f"gemini (cells ok {''.join(good)}{' +lids' if lids else ' no lids'}, tries {attempt + 1})"
+            if lids and len(good) == len(partsheet.VISEMES):
+                break  # perfect sheet: stop spending
+        else:
+            notes[tag] = f"rejected (cells ok {''.join(good) or '-'}, tries {attempt + 1})"
+    if best is None:
+        return None
+    final = work / f"source_{tag}.png"
+    best[1].replace(final)
+    return final
 
 
 def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, style: str = "cartoon",
@@ -181,7 +195,7 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
     shots: dict[str, Path] = {"closed": closed}
     notes: dict[str, str] = {}
     boxes = detect_features(closed)
-    sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=1)
+    sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=2)
     front_boxes: dict[str, Box] | None = None
     if front and _budget_left() >= 0.039:
         front_boxes = _front_shot(closed, work, size, shots, notes, attempts=MAX_RETRIES, side_boxes=boxes, counter=attempts)
@@ -194,7 +208,7 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
         for _ in range(MAX_RETRIES - 1):
             if _budget_left() < 0.039 or fs is not None:
                 break
-            fs = _parts_sheet(shots["front"], work, front_boxes, attempts, notes, tries=1, tag="sheet_front")
+            fs = _parts_sheet(shots["front"], work, front_boxes, attempts, notes, tries=2, tag="sheet_front")
         if fs is not None:
             shots["sheet_front"] = fs
     return {"shots": shots, "notes": notes, "frontBoxes": front_boxes, "boxes": boxes}
@@ -461,6 +475,26 @@ def _lid_skin(base: Image.Image, box: Box, fallback: tuple[int, int, int]) -> tu
     return tuple(int(v) for v in np.median(px[lum >= np.percentile(lum, 50)], axis=0))  # type: ignore[return-value]
 
 
+def _eye_opening(base: Image.Image, box: Box) -> tuple[float, float, float, float]:
+    """Bounding box (box-relative) of the visible eye: sclera (bright, unsaturated) plus the iris disc,
+    padded 12%. Falls back to the inner ellipse of the box when nothing is found."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    arr = np.asarray(base.crop(box).convert("RGB")).astype(np.int16)
+    mx, mn = arr.max(axis=2), arr.min(axis=2)
+    sclera = (mn > 190) & (mx - mn < 40)
+    ix, iy, ir = _iris(base, box)
+    ys, xs = np.nonzero(sclera)
+    pts_x = list(xs) + [ix - x0 - ir, ix - x0 + ir]
+    pts_y = list(ys) + [iy - y0 - ir, iy - y0 + ir]
+    if len(xs) < 6:
+        return w * 0.06, h * 0.1, w * 0.94, h * 0.9
+    ax0, ax1 = float(np.percentile(pts_x, 2)), float(np.percentile(pts_x, 98))
+    ay0, ay1 = float(min(pts_y)), float(max(pts_y))
+    px, py = (ax1 - ax0) * 0.12, (ay1 - ay0) * 0.12
+    return max(w * 0.06, ax0 - px), max(h * 0.08, ay0 - py), min(w * 0.94, ax1 + px), min(h * 0.92, ay1 + py)
+
+
 def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], ink: tuple[int, int, int]) -> Image.Image:
     """Closed lids at full resolution: lid-coloured skin over the eye opening with a 1 px
     edge, plus a crisp lash line (drawn 4x and downsampled for clean anti-aliasing)."""
@@ -469,13 +503,15 @@ def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int],
         w, h = x1 - x0, y1 - y0
         tone = _lid_skin(base, (x0, y0, x1, y1), skin)
         k = 4
+        ex0, ey0, ex1, ey1 = _eye_opening(base, (x0, y0, x1, y1))
         m = Image.new("L", (w * k, h * k), 0)
-        ImageDraw.Draw(m).ellipse((w * k * 0.06, h * k * 0.1, w * k * 0.94, h * k * 0.9), fill=255)
+        ImageDraw.Draw(m).ellipse((ex0 * k, ey0 * k, ex1 * k, ey1 * k), fill=255)
         lid = Image.new("RGBA", (w, h), tone + (255,))
         lid.putalpha(m.resize((w, h), Image.LANCZOS))
         line = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
-        ImageDraw.Draw(line).arc((w * k * 0.1, h * k * 0.05, w * k * 0.9, h * k * 0.75), 20, 160,
-                                 fill=ink + (255,), width=max(2 * k, h * k // 12))
+        ow, oh = ex1 - ex0, ey1 - ey0
+        ImageDraw.Draw(line).arc(((ex0 + ow * 0.05) * k, (ey0 - oh * 0.1) * k, (ex1 - ow * 0.05) * k, (ey0 + oh * 0.75) * k),
+                                 20, 160, fill=ink + (255,), width=int(max(1.5 * k, oh * k / 14)))
         lid.alpha_composite(line.resize((w, h), Image.LANCZOS))
         layer.alpha_composite(lid, (x0, y0))
     alpha = np.minimum(np.asarray(layer.getchannel("A")), np.asarray(base.getchannel("A")))
