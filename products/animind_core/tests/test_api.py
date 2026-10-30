@@ -119,3 +119,9 @@ def test_despill_removes_magenta():
     img.putpixel((1, 0), (200, 40, 40, 255))  # a red tie stays
     out = _despill(img)
     assert out.getpixel((0, 0))[3] == 0 and out.getpixel((1, 0))[3] == 255
+
+
+def test_slug_folds_accents():
+    from products.animind_core.characters import _slug
+
+    assert _slug("Pirata filósofo de chapéu") == "pirata_filosofo_de_chapeu"

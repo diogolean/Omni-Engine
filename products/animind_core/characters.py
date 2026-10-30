@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import threading
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,8 @@ _BUILD_LOCK = threading.Lock()  # one character at a time: BiRefNet needs ~8 GB 
 
 
 def _slug(text: str) -> str:
-    return (re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "character")[:32]
+    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return (re.sub(r"[^a-z0-9]+", "_", ascii_text.lower()).strip("_") or "character")[:32]
 
 
 def puppets_dir() -> Path:
