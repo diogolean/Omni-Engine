@@ -192,6 +192,10 @@ NIETZSCHE_PAGE = """{{Info/Biografia/Wikidata}}
 * "Sem música a vida seria um erro."
 ::- [https://books.google.com.br/books?id=br4&pg=PA13 Página 13] Máximas e Sátiras, 33
 
+=== Humano, Demasiado Humano ===
+* "As convicções são inimigas mais perigosas da verdade do que as mentiras."
+::- Aforismo 483
+
 ==Atribuídas==
 * "A [[fé]] é querer ignorar tudo aquilo que é [[verdade]]."
 ::- ''[[Nietzsche]] como citado in Vidas e Obras - Página 281, Ferrari, 2007
@@ -235,7 +239,22 @@ def test_sheet_ranks_primary_sources_first_and_drops_disputed():
     assert "Apologia de Sócrates" in by["Prefiro morrer tendo falado a minha maneira, do que falar da sua maneira e viver."]["source"]
     n = {q["text"]: q for q in nietzsche()["quotes"]}
     assert n["O que não me mata me fortalece."]["source"].startswith("O Crepúsculo dos Ídolos · Página 10")
-    assert all(q["sourceKind"] == "primary" for q in n.values()) and not any("fé é querer" in t for t in n)
+    assert n["Não há fatos eternos, como não há verdades absolutas"]["sourceKind"] == "secondary"  # an index page
+    assert all(q["sourceKind"] == "primary" for t, q in n.items() if not t.startswith("Não há fatos"))
+    assert not any("fé é querer" in t for t in n)
+
+
+def test_index_or_register_pages_are_not_primary_sources():
+    """A "Sachregister"/"Índice" page lists where words occur; it is not the work, so never a "Citação real"."""
+    n = {q["text"]: q for q in nietzsche()["quotes"]}
+    q = n["Não há fatos eternos, como não há verdades absolutas"]
+    assert q["source"].startswith("Sachregister") and not personas.is_primary(q)
+    # sheets cached before the fix still say "primary": judged by the source text
+    assert not personas.is_primary({"source": "Sachregister - Volume 23 de Gesammelte Werke - Página 289", "sourceKind": "primary"})
+    assert not personas.is_primary({"source": "Índice remissivo, p. 12", "sourceKind": "primary"})
+    assert personas.is_primary({"source": "O Crepúsculo dos Ídolos · Página 10", "sourceKind": "primary"})
+    assert personas.is_primary({"source": "Ecce Homo, Por que sou tão sábio, §1", "sourceKind": "primary"})
+    assert personas.SHEET_VERSION >= 3  # cached sheets get rebuilt with the new rule
 
 
 def test_real_quote_lines_never_use_secondary_sources(monkeypatch):
@@ -257,7 +276,7 @@ def test_written_line_that_is_a_real_quote_is_marked_with_its_source(monkeypatch
     # Nietzsche's quote beats take two other quotes; then the writer puts his real line in a written beat
     # (fechamento, speaker 1) with other casing/punctuation, and a 7-word excerpt of Sócrates in another
     monkeypatch.setattr(script, "_gemini", lambda prompt: [
-        {"i": 2, "quoteId": ids["Não há fatos"]}, {"i": 4, "quoteId": ids["Sem música a"]},
+        {"i": 2, "quoteId": ids["As convicçõe"]}, {"i": 4, "quoteId": ids["Sem música a"]},
         {"i": 6, "text": "o que NÃO me mata, me fortalece!"},
         {"i": 3, "text": "Prefiro morrer tendo falado a minha maneira"}])
     lines = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)["lines"]
@@ -278,8 +297,10 @@ def test_quote_beats_prefer_the_topic_and_pacing_stays_tight(monkeypatch):
     monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 2, "quoteId": off_topic}])
     out = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
     lines = out["lines"]
-    assert lines[2]["kind"] == "quote" and lines[2]["text"] == "Não há fatos eternos, como não há verdades absolutas"
-    assert "Gesammelte Werke" in lines[2]["quote"]["source"]
+    # the index-page quote ("Sachregister") also matches the topic but is not primary
+    assert lines[2]["kind"] == "quote" and lines[2]["text"] == "As convicções são inimigas mais perigosas da verdade do que as mentiras."
+    assert "Humano, Demasiado Humano" in lines[2]["quote"]["source"]
+    assert all("Sachregister" not in line["quote"]["source"] for line in lines if line["kind"] == "quote")
     assert [line["beat"] for line in lines][0] == "gancho" and lines[-1]["beat"] == "fechamento"
     assert all(a["speaker"] != b["speaker"] for a, b in zip(lines[1:-1], lines[2:-1]))  # alternating after the hook
     for line in lines:

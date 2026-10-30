@@ -12,7 +12,8 @@ strings on screen as quotes (see :mod:`products.animind_core.script`).
 Each quote also gets ``sourceKind``: ``primary`` when its source names a work
 by or about the person (book, dialogue, letter, speech: a title, a page, a §
 or a section named after the work) and ``secondary`` when it only comes from a
-magazine, website, anthology or "citado em" chain, or has no work at all.
+magazine, website, anthology or "citado em" chain, from an index or register
+page ("Sachregister", "Índice") rather than the work, or has no work at all.
 Entries flagged as attributed, disputed or misattributed are dropped. Primary
 quotes rank first and only they may be shown as a real quote.
 
@@ -39,7 +40,7 @@ _LOG = logging.getLogger("animind_core")
 UA = "AnimindCore/1.0 (github.com/diogolean/animind; persona quotes)"
 SITES = {"pt-BR": "pt", "en-US": "en"}
 MAX_QUOTES = 24
-SHEET_VERSION = 2  # bump when parsing/ranking changes; older cached sheets are rebuilt
+SHEET_VERSION = 3  # bump when parsing/ranking changes; older cached sheets are rebuilt
 MIN_WORDS, MAX_WORDS = 4, 45
 NEGATIVE_TTL_S = 7 * 24 * 3600
 SKIP_SECTION = re.compile(
@@ -54,6 +55,12 @@ SECONDARY = re.compile(
     r"revista|magazine|jornal|newspaper|\bfolha\b|nova escola|citad[oa]s? (em|in|por)|como citad|quoted in|cited in|as quoted|"
     r"handbook|epigram|antologia|anthology|dicionário de citações|dictionary of quotations|frases para|pensador|"
     r"\bsite\b|\bblog\b|www\.|\.com\b|times\b|internet",
+    re.I,
+)
+# back-of-book apparatus: an index/register page lists where a phrase occurs, it is not the work itself
+INDEX = re.compile(
+    r"sachregister|namenregister|personenregister|wortregister|\bregister\b|\bregistro remissivo|\bindex\b|"
+    r"\b[íi]ndice\b|inhaltsverzeichnis|verzeichnis|concord[aâ]ncia|concordance|\bsum[áa]rio\b|table of contents",
     re.I,
 )
 DISAMBIG = re.compile(r"\{\{\s*(desambigua|disambig)", re.I)
@@ -125,7 +132,8 @@ def parse_quotes(wikitext: str, *, site_lang: str = "pt", page_url: str = "") ->
                 source = source[:110].rsplit(",", 1)[0].rstrip(" -,") + "…"
             grp = "" if GENERIC_SECTION.search(group) or fold(source).startswith(fold(group) or "\0") else group
             raw_src = " ".join(src_lines)
-            secondary = bool(SECONDARY.search(source) or SECONDARY.search(" ".join(clean(s) for s in src_lines)))
+            joined = " ".join(clean(s) for s in src_lines)
+            secondary = bool(SECONDARY.search(source) or SECONDARY.search(joined) or INDEX.search(source) or INDEX.search(joined))
             # the section names the work ("Apologia de Sócrates") unless the source already does or is secondary
             sec_words = {w for w in fold(section).split() if len(w) > 3 and w.isalpha()}
             sec = section if section and not secondary and not (sec_words & set(fold(source).split())) else ""
@@ -273,10 +281,13 @@ def persona_name(name: str) -> str:
 
 def is_primary(q: dict[str, Any]) -> bool:
     """A quote that may be shown as a real quote (sheets cached before ``sourceKind`` are judged by their source)."""
+    src = q.get("source", "") or ""
+    if INDEX.search(src):  # an index/register page, even on a sheet cached as primary
+        return False
     kind = q.get("sourceKind")
     if kind:
         return kind == "primary"
-    return bool(q.get("source")) and not SECONDARY.search(q.get("source", "")) and not DISPUTED.search(q.get("source", ""))
+    return bool(src) and not SECONDARY.search(src) and not DISPUTED.search(src)
 
 
 def cache_path(name: str, lang: str) -> Path:

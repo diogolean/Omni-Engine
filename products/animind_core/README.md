@@ -21,8 +21,9 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
 "not found" is cached for 7 days; sheets from an older `SHEET_VERSION` are rebuilt on the next load).
 
 - Sheet quotes carry `sourceKind`: `primary` (the source names a work by or about the person: book,
-  dialogue, letter, speech, page or §) or `secondary` (magazine, website, anthology, "citado em", or no
-  work at all). Entries in "Atribuídas/Disputed/Misattributed/Sobre/Quotes about" sections, or whose
+  dialogue, letter, speech, page or §) or `secondary` (magazine, website, anthology, "citado em", no
+  work at all, or an index/register page such as "Sachregister" or "Índice", which only lists where words
+  occur; `is_primary` also rejects those on sheets cached before `SHEET_VERSION` 3). Entries in "Atribuídas/Disputed/Misattributed/Sobre/Quotes about" sections, or whose
   source line says "atribuída/disputada", are dropped. Up to 24 quotes, primary first, short (6–20 words)
   first, one per work per round so every book gets a chance.
 
