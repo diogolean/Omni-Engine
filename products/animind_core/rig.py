@@ -131,7 +131,7 @@ def spent_usd() -> float:
 
 
 def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict[str, int], notes: dict[str, str],
-                 tries: int = 2) -> Path | None:
+                 tries: int = 2, tag: str = "sheet") -> Path | None:
     """Draw the 4x3 parts sheet (9 mouths + 3 eye states) and gate it: 12 cells must slice out and
     the closed-mouth and open-eye cells must register on the master (NCC). Re-drawn while the cap allows."""
     from . import partsheet, qa  # noqa: PLC0415
@@ -141,24 +141,24 @@ def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict
         base = im.convert("RGBA")
     for attempt in range(tries):
         if _budget_left() < qa.IMAGE_USD:
-            notes["sheet"] = notes.get("sheet", "") + f" | no budget for attempt {attempt + 1}"
+            notes[tag] = notes.get(tag, "") + f" | no budget for attempt {attempt + 1}"
             break
-        attempts["sheet"] = attempts.get("sheet", 0) + 1
-        raw = work / "_gen_sheet"
+        attempts[tag] = attempts.get(tag, 0) + 1
+        raw = work / f"_gen_{tag}"
         try:
             generate_character_image(partsheet.SHEET_PROMPT, raw, aspect_ratio="4:3", reference_path=closed)
-            out = _png(raw, work / "source_sheet.png")
+            out = _png(raw, work / f"source_{tag}.png")
             got = partsheet.load(out, base, boxes)
         except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stop / bad image
-            notes["sheet"] = f"failed: {str(exc)[:160]}"
+            notes[tag] = f"failed: {str(exc)[:160]}"
             continue
         finally:
             raw.unlink(missing_ok=True)
         good = [k for k in (got or {}).get("good", []) if k in partsheet.VISEMES]
         if len(good) >= partsheet.MIN_GOOD_MOUTHS:
-            notes["sheet"] = f"gemini (cells ok {''.join(good)}, tries {attempt + 1})"
+            notes[tag] = f"gemini (cells ok {''.join(good)}, tries {attempt + 1})"
             return out
-        notes["sheet"] = f"rejected (cells ok {''.join(good) or '-'}, tries {attempt + 1})"
+        notes[tag] = f"rejected (cells ok {''.join(good) or '-'}, tries {attempt + 1})"
     return None
 
 
@@ -189,6 +189,14 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
         sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=MAX_RETRIES - 1)
     if sheet is not None:
         shots["sheet"] = sheet
+    if front_boxes is not None and "front" in shots:  # front mouths/lids drawn on the front art itself
+        fs = None
+        for _ in range(MAX_RETRIES - 1):
+            if _budget_left() < 0.039 or fs is not None:
+                break
+            fs = _parts_sheet(shots["front"], work, front_boxes, attempts, notes, tries=1, tag="sheet_front")
+        if fs is not None:
+            shots["sheet_front"] = fs
     return {"shots": shots, "notes": notes, "frontBoxes": front_boxes, "boxes": boxes}
 
 
@@ -866,7 +874,7 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
         if fr:
             try:
                 views |= assemble(skin, {"closed": fr}, gen.get("frontBoxes") or detect_features(fr), url, matte=matte,
-                                  front=True, sheet=sheet)
+                                  front=True, sheet=gen["shots"].get("sheet_front") or sheet)
                 status["front"] = "ready (gemini front view, side as reference; sheet mouths where cells register)"
             except Exception as exc:  # noqa: BLE001 — detection/cut failure keeps the side art
                 _LOG.warning("front view rig failed: %s", exc)
@@ -882,7 +890,7 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
     finally:
         matte.close()
     views.setdefault("front", views["left"])
-    return {"views": views, "viewStatus": status, "mouthShots": {"sheet": gen["notes"].get("sheet", "none")},
+    return {"views": views, "viewStatus": status, "mouthShots": {"sheet": gen["notes"].get("sheet", "none"), "sheetFront": gen["notes"].get("sheet_front", "none")},
             "frontShot": gen["notes"].get("front", "skipped"),
             "qa": {"score": report["score"], "costUsd": report["costUsd"], "attempts": attempts,
                    "failed": [k for k, g in report["gates"].items() if not g["pass"]]}}

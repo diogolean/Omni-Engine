@@ -127,6 +127,9 @@ def run(skin: Path) -> dict[str, Any]:
     if front and (skin / "views" / "front" / "view.json").exists():
         fs = skin_delta_e(skin / "views" / "front")
         gates["skin"] = fs if fs["value"] > gates["skin"]["value"] else gates["skin"]
+        fe = alpha_edges(skin / "views" / "front")  # rectangles on the front sprites fail the same gate
+        if not fe["pass"]:
+            gates["edges"] = fe | {"view": "front"}
     return gates
 
 
