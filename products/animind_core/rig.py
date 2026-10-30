@@ -21,6 +21,7 @@ touches git. ``build_mock_rig`` draws the same layer set with PIL, no network.
 from __future__ import annotations
 
 import json
+import math
 import logging
 import os
 import re
@@ -230,6 +231,105 @@ def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int],
     return layer
 
 
+def _iris(base: Image.Image, box: Box) -> tuple[float, float, float]:
+    """Iris centre and radius in ``box``: the largest dark blob near the middle of the eye."""
+    import cv2  # noqa: PLC0415
+
+    x0, y0, x1, y1 = box
+    w, h = max(2, x1 - x0), max(2, y1 - y0)
+    arr = np.asarray(base.crop(box)).astype(np.float32)
+    lum = arr[..., :3].mean(axis=2)
+    inside = (np.asarray(_feather_ellipse(w, h, 0.1)) > 128) & (arr[..., 3] > 128)
+    fallback = (x0 + w / 2, y0 + h / 2, max(2.0, min(w, h) * 0.3))
+    if inside.sum() < 12:
+        return fallback
+    dark = (lum < min(np.percentile(lum[inside], 45), 140)) & inside
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
+    best, score = None, 0.0
+    for i in range(1, n):
+        cx, cy = cents[i]
+        area = stats[i, cv2.CC_STAT_AREA]
+        central = 1 - min(1.0, math.hypot((cx - w / 2) / (w / 2), (cy - h / 2) / (h / 2)))
+        s = area * (0.3 + central)
+        if s > score:
+            best, score = i, s
+    if best is None:
+        return fallback
+    cx, cy = cents[best]
+    r = math.sqrt(stats[best, cv2.CC_STAT_AREA] / math.pi) * 1.1
+    r = min(max(r, min(w, h) * 0.16), min(w, h) * 0.45)
+    return (x0 + float(cx), y0 + float(cy), float(r))
+
+
+def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], ink: tuple[int, int, int]) -> dict[str, Any]:
+    """Movable eyes cut from the art.
+
+    ``eye_white``: the eye with its iris painted out (sclera colour + inpaint);
+    ``iris``: each iris/pupil disc at rest; ``eye_socket``: the opening the iris
+    is clipped to; ``eyes_half``: upper lids half down. ``meta`` gives the iris
+    travel in canvas px (``maxShift``) so a gaze of +-1 stays inside the socket.
+    """
+    import cv2  # noqa: PLC0415
+
+    size = base.size
+    white = Image.new("RGBA", size, (0, 0, 0, 0))
+    iris = Image.new("RGBA", size, (0, 0, 0, 0))
+    socket = Image.new("RGBA", size, (0, 0, 0, 0))
+    half = Image.new("RGBA", size, (0, 0, 0, 0))
+    shifts, centres = [], []
+    for b in eyes:
+        x0, y0, x1, y1 = b
+        w, h = x1 - x0, y1 - y0
+        cx, cy, r = _iris(base, b)
+        centres.append([round(cx, 1), round(cy, 1), round(r, 1)])
+        patch = base.crop(b)
+        arr = np.asarray(patch).copy()
+        lum = arr[..., :3].astype(np.float32).mean(axis=2)
+        disc = np.zeros((h, w), np.uint8)
+        cv2.circle(disc, (round(cx - x0), round(cy - y0)), round(r * 1.12), 255, -1)
+        bright = arr[(lum > np.percentile(lum, 75)) & (arr[..., 3] > 200)][..., :3]
+        sclera = tuple(int(v) for v in np.median(bright, axis=0)) if len(bright) else skin
+        rgb = np.ascontiguousarray(arr[..., :3])
+        rgb[disc > 0] = sclera
+        rgb = cv2.inpaint(rgb, cv2.dilate(disc, np.ones((3, 3), np.uint8)) - disc, 3, cv2.INPAINT_TELEA)
+        arr[..., :3] = rgb
+        ell = np.asarray(_feather_ellipse(w, h, 0.18))
+        arr[..., 3] = np.minimum(arr[..., 3], ell)
+        white.alpha_composite(Image.fromarray(arr), (x0, y0))
+        # iris disc from the original art
+        rr = round(r * 1.12)
+        ib = (round(cx) - rr, round(cy) - rr, round(cx) + rr, round(cy) + rr)
+        ip = base.crop(ib)
+        m = Image.new("L", ip.size, 0)
+        ImageDraw.Draw(m).ellipse((1, 1, ip.width - 2, ip.height - 2), fill=255)
+        m = m.filter(ImageFilter.GaussianBlur(1))
+        ip.putalpha(Image.fromarray(np.minimum(np.asarray(ip.getchannel("A")), np.asarray(m))))
+        iris.alpha_composite(ip, (ib[0], ib[1]))
+        # socket: the inner opening of the eye
+        sk = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(sk).ellipse((w * 0.1, h * 0.14, w * 0.9, h * 0.86), fill=255)
+        sk = sk.filter(ImageFilter.GaussianBlur(max(1, min(w, h) // 20)))
+        sock = Image.new("RGBA", (w, h), (255, 255, 255, 0))
+        sock.putalpha(sk)
+        socket.alpha_composite(sock, (x0, y0))
+        shifts.append((max(w * 0.12, w * 0.42 - r * 0.6), max(h * 0.08, h * 0.36 - r * 0.7)))
+        # half lid: skin over the upper socket, curved lash line
+        lid = Image.new("RGBA", (w, h), skin + (255,))
+        lm = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(lm).ellipse((w * 0.04, h * 0.02, w * 0.96, h * 0.98), fill=255)
+        ImageDraw.Draw(lm).ellipse((w * 0.02, h * 0.42, w * 0.98, h * 1.3), fill=0)
+        lid.putalpha(lm.filter(ImageFilter.GaussianBlur(max(1, h // 30))))
+        ImageDraw.Draw(lid).arc((w * 0.1, h * 0.42, w * 0.9, h * 1.3), 215, 325,
+                                fill=ink + (255,), width=max(2, h // 14))
+        half.alpha_composite(lid, (x0, y0))
+    for layer in (white, iris, half):
+        layer.putalpha(Image.fromarray(np.minimum(np.asarray(layer.getchannel("A")), np.asarray(base.getchannel("A")))))
+    mx = min(s[0] for s in shifts)
+    my = min(s[1] for s in shifts)
+    return {"eye_white": white, "iris": iris, "eye_socket": socket, "eyes_half": half,
+            "meta": {"maxShift": [round(mx, 1), round(my, 1)], "irises": centres}}
+
+
 def _split(base: Image.Image, cut: int, overlap: int) -> tuple[Image.Image, Image.Image]:
     """Head above ``cut`` (soft bottom edge), body below ``cut - overlap``."""
     h = base.size[1]
@@ -280,14 +380,23 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
         return ImageOps.mirror(img), (W - xy[0] - img.width, xy[1])
 
     layers = []
-    for z, name in enumerate(("body", "head", "eyes", "eyes_closed")):
-        img, xy = place(*parts[name])
-        layers.append(_layer(name, img, xy, z, out / f"{name}.png", url))
+    # z: eyes (rest pose, for older clients) and eye_white share a slot; renderers that know
+    # eye_white draw white -> iris (shifted by gaze, clipped to eye_socket) -> lids instead.
+    order = (("body", 0), ("head", 1), ("eyes", 2), ("eye_white", 2), ("iris", 3), ("eye_socket", 3),
+             ("eyes_half", 4), ("eyes_closed", 5))
+    for name, z in order:
+        if name in parts:
+            img, xy = place(*parts[name])
+            layers.append(_layer(name, img, xy, z, out / f"{name}.png", url))
     visemes = {}
     for v in VISEMES:
         img, xy = place(*parts["visemes"][v])
         visemes[v] = _layer(f"mouth_{v}", img, xy, 10, out / "mouths" / f"{v}.png", url)
     view = {"canvas": {"w": W, "h": H}, "layers": layers, "visemes": visemes}
+    if "eyeRig" in parts:  # screen-space travel; irises mirrored with the view
+        meta = parts["eyeRig"]
+        view["eyeRig"] = {"maxShift": meta["maxShift"],
+                          "irises": [[W - c[0] if mirror else c[0], c[1], c[2]] for c in meta["irises"]]}
     # Same geometry with file names instead of URLs, for the server renderer.
     local = json.loads(json.dumps(view))
     for layer in local["layers"]:
@@ -343,6 +452,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         patch.putalpha(Image.fromarray(np.minimum(np.asarray(patch.getchannel("A")), np.asarray(_feather_ellipse(b[2] - b[0], b[3] - b[1], 0.18)))))
         eyes_open.alpha_composite(patch, (b[0], b[1]))
     eyes_closed = _eyes_closed(base, eyes_boxes, skin_rgb, ink)
+    eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
     chin = max(face[3], mouth[3])
     head, body = _split(base, chin + int((face[3] - face[1]) * 0.04), max(16, (face[3] - face[1]) // 10))
     parts = {
@@ -351,6 +461,11 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "head": _crop_layer(head),
         "eyes": _crop_layer(eyes_open),
         "eyes_closed": _crop_layer(eyes_closed),
+        "eye_white": _crop_layer(eye["eye_white"]),
+        "iris": _crop_layer(eye["iris"]),
+        "eye_socket": _crop_layer(eye["eye_socket"]),
+        "eyes_half": _crop_layer(eye["eyes_half"]),
+        "eyeRig": eye["meta"],
         "visemes": {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()},
     }
     base.save(skin / "character.png", format="PNG", optimize=True)
@@ -430,7 +545,9 @@ def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[st
     d.rounded_rectangle((110, 520, 530, H + 80), 140, fill=(70, 90, 140, 255), outline=(25, 25, 35, 255), width=6)
     d.ellipse((170, 150, 470, 520), fill=(240, 200, 160, 255), outline=(25, 25, 35, 255), width=6)
     for x in (265, 375):
-        d.ellipse((x - 20, 300, x + 20, 344), fill=(30, 30, 40, 255))
+        d.ellipse((x - 26, 298, x + 26, 346), fill=(250, 250, 248, 255), outline=(25, 25, 35, 255), width=3)
+        d.ellipse((x - 16, 306, x + 8, 338), fill=(60, 40, 30, 255))
+        d.ellipse((x - 10, 314, x + 2, 330), fill=(10, 10, 12, 255))
     d.line((285, 440, 355, 440), fill=(120, 40, 50, 255), width=8)
     shot = base.copy()
     ImageDraw.Draw(shot).ellipse((280, 420, 360, 480), fill=(120, 30, 40, 255))
@@ -438,7 +555,7 @@ def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[st
     shots_dir.mkdir(exist_ok=True)
     base.save(shots_dir / "closed.png")
     shot.save(shots_dir / "open.png")
-    boxes = {"face": (170, 150, 470, 520), "left_eye": (245, 300, 285, 344), "right_eye": (355, 300, 395, 344), "mouth": (285, 425, 355, 455)}
+    boxes = {"face": (170, 150, 470, 520), "left_eye": (237, 296, 293, 348), "right_eye": (347, 296, 403, 348), "mouth": (285, 425, 355, 455)}
     views = assemble(skin, {"closed": shots_dir / "closed.png", "open": shots_dir / "open.png"}, boxes, url, matte=lambda im: im.convert("RGBA"))
     status = {"left": "mock", "right": "mock (mirror)", "front": "mock (left art)"}
     return {"views": {**views, "front": views["left"]}, "viewStatus": status, "mouthShots": {"open": "mock", "round": "warped"}}

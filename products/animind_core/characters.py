@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import rig, settings
+from . import rig, settings, sheet
 
 _LOG = logging.getLogger("animind_core")
 _BUILD_LOCK = threading.Lock()  # one character at a time: BiRefNet needs ~8 GB on CPU
@@ -87,6 +87,8 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "viewStatus": built["viewStatus"],
         "mouthShots": built["mouthShots"],
         "imageUrl": url(skin / "character.png"),
+        # Review sheet: every viseme and eye state per view, for a human check.
+        "reviewSheetUrl": url(sheet.build(skin, name)),
     }
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     return character

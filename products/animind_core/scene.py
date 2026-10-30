@@ -20,7 +20,7 @@ from typing import Any, Iterator
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-from . import look
+from . import eyes, look
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
@@ -53,6 +53,7 @@ class RigView:
     layers: list[tuple[str, Image.Image, tuple[int, int], int]] = field(default_factory=list)
     visemes: dict[str, tuple[Image.Image, tuple[int, int], int]] = field(default_factory=dict)
     side: int = 1
+    eye_shift: tuple[float, float] = (0.0, 0.0)  # iris travel (stage px) for a gaze of +-1
 
 
 def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None) -> RigView:
@@ -69,6 +70,9 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
         return (look.lit_layer(img, xy, size, light, rim) if light else img), xy
 
     rv = RigView(size=size, side=light.side if light else 1)
+    if view.get("eyeRig"):
+        mx, my = view["eyeRig"]["maxShift"]
+        rv.eye_shift = (mx * scale, my * scale)
     for layer in sorted(view["layers"], key=lambda l: l["z"]):
         img, xy = sized(layer, rim=layer["name"] in {"body", "head", "hair"})
         rv.layers.append((layer["name"], img, xy, layer["z"]))
@@ -250,7 +254,7 @@ class Scene:
             mouth = rv.visemes.get("X")
             parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
             for name, layer, xy, _z in sorted(parts, key=lambda p: p[3]):
-                if name != "eyes_closed":
+                if name not in ("eyes_closed", "eyes_half", "eye_white", "iris", "eye_socket"):
                     img.alpha_composite(layer, xy)
             img = img.filter(ImageFilter.GaussianBlur(7 * SS))
             r, g, b, a = img.split()
@@ -297,14 +301,51 @@ class Scene:
         if soft:
             stage.alpha_composite(self._soft(idx, view, rv), (x0, y0 + round(breathe * 0.4)))
             return
-        blink = (t + seed) % 3.6 < 0.12
+        lids = eyes.blink(t, 7 + idx * 13)
+        gx, gy = self.gaze(idx, t, view)
         mouth = rv.visemes.get(vis) or rv.visemes.get("X")
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
+        names = {p[0] for p in parts}
+        movable = {"eye_white", "iris", "eye_socket"} <= names
+        socket = next((p for p in parts if p[0] == "eye_socket"), None)
         for name, img, (lx, ly), _z in sorted(parts, key=lambda p: p[3]):
-            if (name == "eyes" and blink) or (name == "eyes_closed" and not blink):
+            if name == "eye_socket" or (movable and name == "eyes"):
+                continue
+            if (name == "eyes" and lids == "closed") or (name == "eyes_closed" and lids != "closed") \
+                    or (name == "eyes_half" and lids != "half"):
                 continue
             dy = breathe * 0.4 if name == "body" else breathe - amp * 4 * SS - (amp * 6 * SS if name == "brows" else 0)
+            if name == "iris" and socket is not None:
+                img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
             stage.alpha_composite(img, (x0 + lx, y0 + ly + round(dy)))
+
+    def gaze(self, idx: int, t: float, view: str) -> tuple[float, float]:
+        """Where character ``idx`` looks: at the other speaker by default, sometimes at the lens
+        (more in the front view and on close-ups), short wanders; see :mod:`eyes`."""
+        line = self._line_at(t, 0.35)
+        shot = self.camera(t)[-1][1]
+        if self.template == "debate":
+            toward = 1 if self.places[min(idx, len(self.places) - 1)][0] < 0.5 else -1
+        elif self.template == "lesson":
+            toward = 1  # the board is on the right
+        else:
+            toward = 0
+        bias = 0.0
+        if line and line["speaker"] == idx:
+            bias += 0.3 if shot.kind == "cu" else 0.08
+        if self.template == "solo":
+            bias += 0.35
+        facing = {"left": -1, "right": 1}.get(view, 0)
+        return eyes.gaze(t, 101 + idx * 57, toward=toward, view=view, facing=facing, camera_bias=bias)
+
+    def _iris(self, iris: Image.Image, xy: tuple[int, int], socket: tuple, shift: tuple[float, float],
+              gx: float, gy: float) -> tuple[Image.Image, tuple[int, int]]:
+        """The iris layer moved by the gaze and clipped to the eye opening."""
+        _n, sock, (sx, sy), _z = socket
+        out = Image.new("RGBA", sock.size, (0, 0, 0, 0))
+        out.paste(iris, (xy[0] - sx + round(gx * shift[0]), xy[1] - sy + round(gy * shift[1])))
+        out.putalpha(ImageChops.multiply(out.getchannel("A"), sock.getchannel("A")))
+        return out, (sx, sy)
 
     def _board(self, stage: Image.Image, t: float, soft: bool = False) -> None:
         """Lesson board: beat label, the line set as large as the board allows (vertically
