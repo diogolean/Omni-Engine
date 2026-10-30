@@ -290,7 +290,9 @@ def _mouth_sprite(base: Image.Image, shot: Image.Image | None, box: Box, *, sy: 
     w, h = x1 - x0, y1 - y0
     patch = base.crop(box)
     src = (shot or base).crop(box)
-    if sx != 1.0 or sy != 1.0:
+    if shot is not None:
+        src = _open_cavity(patch, src, sx, sy)
+    elif sx != 1.0 or sy != 1.0:
         nw, nh = max(1, int(w * sx)), max(1, int(h * sy))
         scaled = src.resize((nw, nh), Image.LANCZOS)
         src = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -304,6 +306,29 @@ def _mouth_sprite(base: Image.Image, shot: Image.Image | None, box: Box, *, sy: 
     )
     out = src.copy()
     out.putalpha(alpha)
+    return out
+
+
+def _open_cavity(patch: Image.Image, shot: Image.Image, sx: float, sy: float) -> Image.Image:
+    """Base ``patch`` with only the part of ``shot`` that differs (the open
+    mouth) pasted in, scaled about its own top edge. Scaling the whole crop
+    instead squashed the mustache and lips into a second copy over the base
+    one, which read as a horizontal tear in close-ups."""
+    a, b = np.asarray(patch, np.int16), np.asarray(shot, np.int16)
+    diff = (np.abs(a[..., :3] - b[..., :3]).max(axis=2) > 40) & (b[..., 3] > 128)
+    out = patch.copy()
+    if not diff.any():
+        return out
+    m = Image.fromarray((diff * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(2))
+    cav = shot.copy()
+    cav.putalpha(Image.fromarray(np.minimum(np.asarray(m), np.asarray(shot.getchannel("A")))))
+    bx = m.getbbox()
+    if bx and (sx != 1.0 or sy != 1.0):
+        part = cav.crop(bx)
+        nw, nh = max(1, int(part.width * sx)), max(1, int(part.height * sy))
+        cav = Image.new("RGBA", patch.size, (0, 0, 0, 0))
+        cav.paste(part.resize((nw, nh), Image.LANCZOS), (bx[0] + (part.width - nw) // 2, bx[1]))
+    out.alpha_composite(cav)
     return out
 
 
@@ -432,17 +457,49 @@ def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], i
             "meta": {"maxShift": [round(mx, 1), round(my, 1)], "irises": centres}}
 
 
-def _split(base: Image.Image, cut: int, overlap: int) -> tuple[Image.Image, Image.Image]:
-    """Head above ``cut`` (soft bottom edge), body below ``cut - overlap``."""
-    h = base.size[1]
-    y = np.arange(h, dtype=np.float32)[:, None]
-    a = np.asarray(base.getchannel("A"), np.float32)
-    head_w = np.clip((cut + overlap / 2 - y) / max(1, overlap / 2), 0, 1)
-    body_w = (y >= cut - overlap).astype(np.float32)
-    head, body = base.copy(), base.copy()
-    head.putalpha(Image.fromarray((a * head_w).astype(np.uint8)))
-    body.putalpha(Image.fromarray((a * body_w).astype(np.uint8)))
-    return head, body
+def _slice_bust(base: Image.Image, face: Box, chin: int) -> tuple[Image.Image, Image.Image, Image.Image]:
+    """Torso, neck and head, sliced like the Aiwake puppets
+    (``animation.parametric.factory.layer_slicer.slice_character_layers``): the head ends at the
+    jaw, the body owns the neck, which rises ``overlap`` px behind the jaw so a head tilt never
+    opens a gap. The neck is then lifted out of the body as its own layer (the torso keeps it too)."""
+    from animation.parametric.factory.layer_slicer import slice_character_layers  # noqa: PLC0415
+
+    fw, fh = face[2] - face[0], face[3] - face[1]
+    collar = chin + int(fh * 0.32)
+    sl = slice_character_layers(base, neck_pivot=((face[0] + face[2]) // 2, collar), chin_boundary=chin,
+                                facing="left", overlap_px=max(8, fh // 10),
+                                # the robots' "facial plate" is the lower face; sampling the head's
+                                # width above it must reach the crown, also on bald or long-haired heads
+                                facial_plate_bbox=(face[0], face[1] + fh // 2, face[2], face[3]))
+    # Under the jaw line the torso also keeps the head pixels, so the head's breath offset
+    # slides over art instead of opening a seam.
+    a = np.asarray(base.getchannel("A"))
+    under = (np.arange(base.size[1])[:, None] >= chin - sl.overlap_px) * a
+    torso = sl.body.copy()
+    torso.putalpha(Image.fromarray(np.maximum(np.asarray(sl.body.getchannel("A")), under).astype(np.uint8)))
+    nx0, nx1 = face[0] + int(fw * 0.18), face[2] - int(fw * 0.18)
+    m = Image.new("L", base.size, 0)
+    ImageDraw.Draw(m).rectangle((nx0, min(chin, sl.collar_y) - sl.overlap_px, nx1, sl.collar_y), fill=255)
+    m = m.filter(ImageFilter.GaussianBlur(max(2, fw // 40)))
+    neck = torso.copy()
+    neck.putalpha(Image.fromarray(np.minimum(np.asarray(m), np.asarray(torso.getchannel("A")))))
+    return torso, neck, sl.head
+
+
+def _mouthless(head: Image.Image, mbox: Box) -> Image.Image:
+    """``head`` with the mouth region (ellipse in ``mbox``) inpainted from the surrounding skin,
+    so the face stays clean and the mouth layer alone carries the lips."""
+    import cv2  # noqa: PLC0415
+
+    arr = np.asarray(head).copy()
+    hole = np.zeros(arr.shape[:2], np.uint8)
+    x0, y0, x1, y1 = mbox
+    w, h = x1 - x0, y1 - y0
+    cv2.ellipse(hole, ((x0 + x1) // 2, (y0 + y1) // 2), (int(w * 0.42), int(h * 0.42)), 0, 0, 360, 255, -1)
+    hole &= (arr[..., 3] > 128).astype(np.uint8) * 255
+    rgb = cv2.inpaint(np.ascontiguousarray(arr[..., :3]), hole, max(3, w // 12), cv2.INPAINT_TELEA)
+    arr[..., :3] = rgb
+    return Image.fromarray(arr)
 
 
 # ---------------------------------------------------------------- assembly
@@ -484,8 +541,8 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
     layers = []
     # z: eyes (rest pose, for older clients) and eye_white share a slot; renderers that know
     # eye_white draw white -> iris (shifted by gaze, clipped to eye_socket) -> lids instead.
-    order = (("body", 0), ("head", 1), ("eyes", 2), ("eye_white", 2), ("iris", 3), ("eye_socket", 3),
-             ("eyes_half", 4), ("eyes_closed", 5))
+    order = (("body", 0), ("torso", 0), ("neck", 1), ("head", 2), ("eyes", 3), ("eye_white", 3), ("iris", 4), ("eye_socket", 4),
+             ("eyes_half", 5), ("eyes_closed", 6))
     for name, z in order:
         if name in parts:
             img, xy = place(*parts[name])
@@ -558,12 +615,13 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         eyes_open.alpha_composite(patch, (b[0], b[1]))
     eyes_closed = _eyes_closed(base, eyes_boxes, skin_rgb, ink)
     eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
-    chin = max(face[3], mouth[3])
-    head, body = _split(base, chin + int((face[3] - face[1]) * 0.04), max(16, (face[3] - face[1]) // 10))
+    chin = max(face[3], mouth[3]) + int((face[3] - face[1]) * 0.04)
+    torso, neck, head = _slice_bust(base, face, chin)
     parts = {
         "size": size,
-        "body": _crop_layer(body),
-        "head": _crop_layer(head),
+        "torso": _crop_layer(torso),
+        "neck": _crop_layer(neck),
+        "head": _crop_layer(_mouthless(head, mbox)),
         "eyes": _crop_layer(eyes_open),
         "eyes_closed": _crop_layer(eyes_closed),
         "eye_white": _crop_layer(eye["eye_white"]),

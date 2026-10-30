@@ -38,7 +38,7 @@ def test_character_contract_v2_shape(client):
     assert c["status"] == "ready" and c["style"] == "rig" and c["generator"] == "mock"
     assert set(c["views"]) == {"front", "left", "right"}
     for view in c["views"].values():
-        assert {"body", "head", "eyes", "eyes_closed"} <= {layer["name"] for layer in view["layers"]}
+        assert {"torso", "neck", "head", "eyes", "eyes_closed"} <= {layer["name"] for layer in view["layers"]}
         assert set(view["visemes"]) == set("XABCDEFGH")
         for layer in [*view["layers"], *view["visemes"].values()]:
             assert {"name", "url", "x", "y", "w", "h", "z"} <= set(layer)

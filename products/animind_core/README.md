@@ -109,3 +109,13 @@ of the face width from the face centre and both eyes match in width (3/4 art mea
 the Gemini cap (the open mouth then falls back to a warp). `POST /v1/characters/{id}/front` redraws
 only the front of an existing character. In 9:16, singles put faces at 34% height and close-ups at
 29%, so chins stay above the captions (70%).
+
+### Rig layers (v4)
+Each view (front/left/right) is `torso` → `neck` → `head` (mouthless: the mouth region is inpainted
+with the surrounding skin) → eyes (`eye_white`, `iris`, lids) → mouth viseme (`mouths/X..H`, its own
+layer on top). The bust is sliced with the Aiwake robots' slicer
+(`animation.parametric.factory.layer_slicer.slice_character_layers`: head ends at the jaw, the body
+owns the neck, which rises behind the jaw). The face no longer rides the jaw: only the mouth layer
+changes with speech; torso/neck follow 40%/70% of the breath. Partial openings scale only the open
+cavity (pixels that differ from the closed mouth) about its top edge, so mustaches and lips are
+never squashed into a second copy (the old "tear" in close-ups).

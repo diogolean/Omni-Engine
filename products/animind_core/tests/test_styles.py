@@ -52,3 +52,33 @@ def test_realista_and_aquarela_have_their_own_look():
     for st in ("realista", "aquarela"):
         assert styles.texture(st, (64, 64)) is not None
         assert styles.tint_plate(plate, st).size == (64, 64)
+
+
+def test_squashed_open_mouth_keeps_mustache_rows_intact():
+    from PIL import Image, ImageDraw
+    from products.animind_core.rig import _mouth_sprite
+    base = Image.new("RGBA", (120, 120), (230, 190, 160, 255))
+    ImageDraw.Draw(base).rectangle((20, 40, 100, 55), fill=(30, 30, 30, 255))  # mustache
+    shot = base.copy()
+    ImageDraw.Draw(shot).ellipse((45, 60, 75, 90), fill=(120, 20, 30, 255))  # open mouth
+    box = (10, 30, 110, 100)
+    for sy in (0.3, 0.45, 0.6):
+        spr = np.asarray(_mouth_sprite(base, shot, box, sy=sy))[..., :3].astype(int)
+        ref = np.asarray(base.crop(box))[..., :3].astype(int)
+        assert np.abs(spr[:20] - ref[:20]).max() == 0  # mustache (rows 10-25) not squashed or doubled
+        assert (spr[30:] != ref[30:]).any()  # mouth still opens
+
+
+def test_rig_has_torso_neck_mouthless_head_and_mouth_layer(tmp_path):
+    from products.animind_core.rig import build_mock_rig
+    views = build_mock_rig("Test", tmp_path, lambda p: str(p))["views"]
+    for name in ("front", "left", "right"):
+        layers = {l["name"]: l for l in views[name]["layers"]}
+        assert {"torso", "neck", "head"} <= set(layers)
+        assert layers["torso"]["z"] < layers["neck"]["z"] < layers["head"]["z"] < views[name]["visemes"]["X"]["z"]
+    left = tmp_path / "views" / "left"
+    head = Image.open(left / "head.png").convert("RGBA")
+    hx, hy = next((l["x"], l["y"]) for l in views["left"]["layers"] if l["name"] == "head")
+    # the mock's lip line (dark red at y=440, x 285..355) is gone from the face layer
+    px = np.asarray(head)[440 - hy, 320 - hx]
+    assert not (px[0] < 160 and px[1] < 80), px

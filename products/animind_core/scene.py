@@ -48,6 +48,9 @@ def _font(weight: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFon
     return ImageFont.truetype(str(path), size) if path.is_file() else ImageFont.load_default()
 
 
+BREATH_SHARE = {"body": 0.4, "torso": 0.4, "neck": 0.7}  # head, eyes, mouth: 1.0
+
+
 @dataclass
 class RigView:
     """One view, layers pre-scaled (and pre-lit) to the stage scale."""
@@ -77,7 +80,7 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
         mx, my = view["eyeRig"]["maxShift"]
         rv.eye_shift = (mx * scale, my * scale)
     for layer in sorted(view["layers"], key=lambda l: l["z"]):
-        img, xy = sized(layer, rim=layer["name"] in {"body", "head", "hair"})
+        img, xy = sized(layer, rim=layer["name"] in {"body", "torso", "neck", "head", "hair"})
         rv.layers.append((layer["name"], img, xy, layer["z"]))
     for v, layer in view["visemes"].items():
         img, xy = sized(layer, rim=False)
@@ -355,7 +358,8 @@ class Scene:
             if (name == "eyes" and lids == "closed") or (name == "eyes_closed" and lids != "closed") \
                     or (name == "eyes_half" and lids != "half"):
                 continue
-            dy = breathe * 0.4 if name == "body" else breathe - amp * 4 * SS - (amp * 6 * SS if name == "brows" else 0)
+            # The face no longer rides the jaw: only the mouth layer changes with speech.
+            dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 6 * SS if name == "brows" else 0)
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
             stage.alpha_composite(img, (x0 + lx, y0 + ly + round(dy)))
