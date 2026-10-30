@@ -14,8 +14,8 @@ from PIL import Image, ImageDraw
 
 IMAGE_USD = 0.039
 LIMITS = {"skinDeltaE": 6.0, "residualMouth": 0.04, "frontOffset": 0.05, "landmarkDrift": 0.08,
-          "hardEdge": 0.0, "faceWidthPx": 200}
-WEIGHTS = {"skin": 25, "mouthless": 20, "front": 15, "landmarks": 15, "edges": 15, "resolution": 10}
+          "hardEdge": 0.0, "mouthRange": 10.0, "faceWidthPx": 200}
+WEIGHTS = {"skin": 20, "mouthless": 20, "mouths": 10, "front": 15, "landmarks": 15, "edges": 15, "resolution": 5}
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -91,6 +91,34 @@ def landmark_alignment(side: dict[str, list[int]], front: dict[str, list[int]] |
     return {"pass": d <= LIMITS["landmarkDrift"], "value": round(d, 3), "limit": LIMITS["landmarkDrift"]}
 
 
+def mouth_range(view: Path) -> dict[str, Any]:
+    """The visemes must actually move: the widest shape D changes the mouth sprite by >= ``mouthRange``
+    (mean colour change over the sprite vs. rest X) and at least 4 of A-H change by >= a third of that.
+    Catches warped or mis-assigned mouths that barely open."""
+    v = json.loads((view / "view.json").read_text())
+    vis = v.get("visemes", {})
+    if "X" not in vis or not (view / vis["X"]["url"]).exists():
+        return {"pass": True, "value": None, "limit": LIMITS["mouthRange"], "note": "no sprites"}
+
+    def rgba(name: str) -> np.ndarray:
+        return np.asarray(Image.open(view / vis[name]["url"]).convert("RGBA")).astype(np.float32)
+
+    x = rgba("X")
+    diffs: dict[str, float] = {}
+    for k in "ABCDEFGH":
+        if k in vis and (view / vis[k]["url"]).exists():
+            y = rgba(k)
+            if y.shape != x.shape:
+                continue
+            core = np.maximum(x[..., 3], y[..., 3]) > 128
+            d = np.abs(x[..., :3] * x[..., 3:] / 255 - y[..., :3] * y[..., 3:] / 255).mean(axis=2)
+            diffs[k] = round(float(d[core].mean()) if core.any() else 0.0, 1)
+    lim = LIMITS["mouthRange"]
+    moving = sum(d >= lim / 3 for d in diffs.values())
+    ok = diffs.get("D", 0.0) >= lim and moving >= 4
+    return {"pass": ok, "value": diffs.get("D", 0.0), "limit": lim, "moving": moving, "diffs": diffs}
+
+
 def alpha_edges(view: Path) -> dict[str, Any]:
     """Mouth sprites and eye layers must fade to 0 before their bounding box (no rectangles)."""
     v = json.loads((view / "view.json").read_text())
@@ -122,11 +150,15 @@ def run(skin: Path) -> dict[str, Any]:
         "front": front_symmetry(front["boxes"] if front else None),
         "landmarks": landmark_alignment(rig["boxes"], front["boxes"] if front else None),
         "edges": alpha_edges(left),
+        "mouths": mouth_range(left),
         "resolution": resolution(rig["boxes"]),
     }
     if front and (skin / "views" / "front" / "view.json").exists():
         fs = skin_delta_e(skin / "views" / "front")
         gates["skin"] = fs if fs["value"] > gates["skin"]["value"] else gates["skin"]
+        fm = mouth_range(skin / "views" / "front")
+        if not fm["pass"]:
+            gates["mouths"] = fm | {"view": "front"}
         fe = alpha_edges(skin / "views" / "front")  # rectangles on the front sprites fail the same gate
         if not fe["pass"]:
             gates["edges"] = fe | {"view": "front"}
