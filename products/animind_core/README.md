@@ -90,3 +90,15 @@ ANIMIND_E2E=1 RHUBARB_PATH=/path/to/rhubarb pytest products/animind_core/tests/t
   - `GET /v1/personas/jobs/{id}` returns the job.
 
 Chunks are about 110 words with a 25-word overlap. They are embedded locally with hashed stem and bigram vectors (numpy, 1024 dimensions), so there are no API calls and no extra Gemini cost. For each speaker, the top passages for the topic go into the script prompt as background notes only. Quotes still come only from sheet ids, verbatim. Written lines that copy 7 or more consecutive words from a passage are rejected. `result.personas[]` reports `mode`, `chunks` and the `passages` used (source, url and score).
+
+## Art styles and the front view
+
+`GET /v1/styles` lists `cartoon, anime, retro, realista, cyberpunk, aquarela` (`styles.py`).
+`POST /v1/characters {"artStyle": "anime", ...}` puts the style into the Gemini prompt; render takes
+`style` (default: first character's `artStyle`) and applies a scene look on the same sets: plate
+tint, LUT, saturation and paper/scanline texture. No extra Gemini calls per style.
+
+Each Gemini rig also gets a real front view: a second image generated with the side view as
+reference (nose centred, both ears visible), cut and rigged like the side (`views/front`,
+`character_front.png`, `frontImageUrl`). Camera-address beats (`gancho`, `fechamento`, `resumo`)
+use it; the review sheet shows side and front with the style label. Budget: see `.env.example`.
