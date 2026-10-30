@@ -43,3 +43,16 @@ def test_vertical_debate_has_shot_countershot(client, monkeypatch):  # noqa: F81
     assert len(res["voices"]) == 2
     path = client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1])
     assert path.status_code == 200
+
+
+def test_vertical_plan_inserts_reaction_cutaway_on_long_lines():
+    import numpy as np
+
+    from products.animind_core import scene
+
+    script = [{"speaker": 0, "text": "a " * 40, "kind": "line", "startMs": 0, "endMs": 8000},
+              {"speaker": 1, "text": "b", "kind": "quote", "startMs": 8000, "endMs": 10000}]
+    sc = scene.Scene(template="debate", scenario="studio", rigs=[None, None], script=script, envelope=np.ones(1100) * 0.5,
+                     env_fps=100, duration_s=11.0, disclaimer="x", fmt="9:16")
+    kinds = [s.kind for _, s, _ in sc.shots]
+    assert "react" in kinds and "wide" not in kinds

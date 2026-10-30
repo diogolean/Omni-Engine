@@ -13,7 +13,7 @@ The parody label is always baked in. Frames go to
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -251,7 +251,7 @@ class Scene:
             if self.template == "debate" and end - start > 5.5:
                 other = 1 - line["speaker"]
                 mid = start + (end - start) * 0.55
-                shots.append((mid, clamp(Shot(*self.shot_for(other, i)[:3], "react")), "cut"))
+                shots.append((mid, clamp(replace(self.shot_for(other, i), kind="react")), "cut"))
                 shots.append((mid + 1.3, shot, "cut"))
         return shots
 
