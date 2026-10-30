@@ -184,10 +184,9 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
     sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=1)
     front_boxes: dict[str, Box] | None = None
     if front and _budget_left() >= 0.039:
-        attempts["front"] = 1
-        front_boxes = _front_shot(closed, work, size, shots, notes, attempts=2 if _budget_left() >= 0.078 + 0.002 else 1)
-    if sheet is None and _budget_left() >= 0.039:
-        sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=1)
+        front_boxes = _front_shot(closed, work, size, shots, notes, attempts=MAX_RETRIES, side_boxes=boxes, counter=attempts)
+    if sheet is None and _budget_left() >= 0.039:  # gate failed: re-draw while the cap has room
+        sheet = _parts_sheet(closed, work, boxes, attempts, notes, tries=MAX_RETRIES - 1)
     if sheet is not None:
         shots["sheet"] = sheet
     return {"shots": shots, "notes": notes, "frontBoxes": front_boxes, "boxes": boxes}
@@ -198,6 +197,11 @@ FRONT_RETRY = (
     "mirror-symmetric: the nose exactly in the middle between the eyes, both eyes the same size, both cheeks and "
     "both ears equally wide."
 )
+FRONT_LANDMARKS = (
+    " Keep the eye line and the mouth at exactly the same height on the face as in the reference image "
+    "(same proportions, same muzzle/jaw length)."
+)
+MAX_RETRIES = 3  # per asset (sheet, front); each retry still needs budget left under the cap
 FRONT_MAX_OFFSET = 0.04  # eyes/mouth centre off the face centre, as a share of face width (3/4 views: >= 0.065)
 FRONT_MIN_EYE_RATIO = 0.8  # narrower eye / wider eye
 
@@ -217,7 +221,8 @@ def frontality(boxes: dict[str, Box]) -> dict[str, float | bool]:
 
 
 def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str, Path], notes: dict[str, str],
-                *, attempts: int = 2) -> dict[str, Box] | None:
+                *, attempts: int = 2, side_boxes: dict[str, Box] | None = None,
+                counter: dict[str, int] | None = None) -> dict[str, Box] | None:
     """Draw the front view (side as reference), check it is frontal, retry once with a firmer prompt.
 
     Runs before the mouth edits so the retry spends the budget the open mouth would have used (that
@@ -225,13 +230,28 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
     from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
 
     best: tuple[float, Path, dict[str, Box], dict[str, Any]] | None = None
+    from . import qa  # noqa: PLC0415
+
+    drift_bad = False
     for attempt in range(attempts):
+        if attempt and _budget_left() < qa.IMAGE_USD:
+            notes["frontBudget"] = f"no budget for front attempt {attempt + 1}"
+            break
+        if counter is not None:
+            counter["front"] = counter.get("front", 0) + 1
         raw = work / "_gen_front"
         try:
-            generate_character_image(FRONT_PROMPT + (FRONT_RETRY if attempt else ""), raw, aspect_ratio="4:5", reference_path=closed)
+            prompt = FRONT_PROMPT + (FRONT_RETRY if attempt else "") + (FRONT_LANDMARKS if drift_bad else "")
+            generate_character_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
             out = _png(raw, work / f"source_front{'' if not attempt else f'_{attempt + 1}'}.png", size)
             boxes = detect_features(out)
             check = frontality(boxes)
+            drift = 0.0
+            if side_boxes is not None:
+                drift = qa.landmark_alignment({k: list(v) for k, v in side_boxes.items()},
+                                              {k: list(v) for k, v in boxes.items()})["value"]
+            check["drift"] = drift
+            drift_bad = drift > qa.LIMITS["landmarkDrift"]
         except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stop or detection failure
             _LOG.warning("front attempt %d failed: %s", attempt + 1, exc)
             if best is None:
@@ -239,10 +259,10 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
             break
         finally:
             raw.unlink(missing_ok=True)
-        score = max(check["eyesOffset"], check["mouthOffset"]) + (1 - check["eyeRatio"]) * 0.1
+        score = max(check["eyesOffset"], check["mouthOffset"]) + (1 - check["eyeRatio"]) * 0.1 + check["drift"] * 0.5
         if best is None or score < best[0]:
             best = (score, out, boxes, check)
-        if check["frontal"]:
+        if check["frontal"] and not drift_bad:
             break
     if best is None:
         return None
@@ -253,7 +273,7 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
     shots["front"] = out
     tries = attempt + 1
     notes["front"] = (f"gemini ({'frontal' if check['frontal'] else 'still 3/4, best of ' + str(tries)}; "
-                      f"eyes {check['eyesOffset']}, mouth {check['mouthOffset']}, eye ratio {check['eyeRatio']}; tries {tries})")
+                      f"eyes {check['eyesOffset']}, mouth {check['mouthOffset']}, eye ratio {check['eyeRatio']}; drift {check.get('drift', 0)}; tries {tries})")
     return boxes
 
 
@@ -845,8 +865,9 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
         fr = gen["shots"].get("front")
         if fr:
             try:
-                views |= assemble(skin, {"closed": fr}, gen.get("frontBoxes") or detect_features(fr), url, matte=matte, front=True)
-                status["front"] = "ready (gemini front view, side as reference; mouths warped)"
+                views |= assemble(skin, {"closed": fr}, gen.get("frontBoxes") or detect_features(fr), url, matte=matte,
+                                  front=True, sheet=sheet)
+                status["front"] = "ready (gemini front view, side as reference; sheet mouths where cells register)"
             except Exception as exc:  # noqa: BLE001 — detection/cut failure keeps the side art
                 _LOG.warning("front view rig failed: %s", exc)
                 status["front"] = f"ready (left art; front rig failed: {str(exc)[:120]})"
@@ -854,6 +875,8 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
         if sheet is not None and not (report["gates"]["skin"]["pass"] and report["gates"]["edges"]["pass"]):
             attempts["sheetFallback"] = 1  # free retry: deterministic mouths/lids instead of the sheet
             views |= assemble(skin, gen["shots"], boxes, url, matte=matte)
+            if fr:
+                views |= assemble(skin, {"closed": fr}, gen.get("frontBoxes") or detect_features(fr), url, matte=matte, front=True)
             gen["notes"]["sheet"] = gen["notes"].get("sheet", "") + " | QA fallback to warped mouths"
             report = qa.finalize(skin, spent_usd(), attempts)
     finally:
