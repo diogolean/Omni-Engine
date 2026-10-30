@@ -61,8 +61,9 @@ EDIT_PROMPTS = {
     ),
 }
 FRONT_PROMPT = (
-    "Redraw this exact same character, same art style, colors, outfit, hair and outlines, but facing the "
-    "camera straight on (front view, symmetric), looking directly at the viewer. Medium bust shot, head and "
+    "Redraw this exact same character, same art style, colors, outfit, hair and outlines, but rotate the head "
+    "and shoulders to face the camera straight on: full frontal view, nose on the vertical center line of the "
+    "face, both eyes and both ears equally visible, symmetric shoulders, looking directly at the viewer. Medium bust shot, head and "
     "shoulders, same scale and framing, head in the upper half, shoulders reaching the bottom edge. Mouth "
     "closed, lips together, eyes open, neutral friendly expression. Solid flat pure magenta #FF00FF background. "
     "No text."
