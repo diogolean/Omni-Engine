@@ -28,7 +28,11 @@ def _base(request: Request) -> str:
 
 @app.get("/v1/health")
 def health() -> dict:
-    return {"ok": True, "version": API_VERSION, "generator": "gemini" if settings.gemini_available() else "mock"}
+    gen = "gemini" if settings.gemini_available() else "mock"
+    out = {"ok": True, "version": API_VERSION, "generator": gen}
+    if settings.gemini_dead_reason():  # a 402 / depleted credit seen in this process: art falls back to mock
+        out["generatorNote"] = f"Gemini indisponível: {settings.gemini_dead_reason()[:200]}"
+    return out
 
 
 @app.post("/v1/characters/{character_id}/front", dependencies=[Depends(require_key)])

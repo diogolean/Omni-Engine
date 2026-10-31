@@ -17,6 +17,10 @@ generating a new image. Send `"reuse": false` (or a `rawPrompt`) to force a new 
 
 Without a Gemini key (or with `ANIMIND_FORCE_MOCK=1`) characters are a flat PIL
 drawing cut into the same layers; the response says `"generator": "mock"`.
+The same happens when Gemini answers 402 / depleted credit / bad key: the request still returns 200
+with mock art and `generatorNote` ("Gemini indisponível: ..."), and from then on this process stops
+calling Gemini (`/v1/health` reports `generator: mock` plus the same `generatorNote`). Other build
+errors still fail.
 
 ## Scripts: real quotes, marked paraphrases
 

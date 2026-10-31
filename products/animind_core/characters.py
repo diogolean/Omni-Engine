@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import threading
 import unicodedata
 import uuid
@@ -106,10 +107,20 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             _LOG.info("character %s reused for %r (no image generated)", found["id"], name)
             return found
     mode = "gemini" if settings.gemini_available() else "mock"
+    note = None if mode == "gemini" else _mock_note()
     with _BUILD_LOCK:
+        built = None
         if mode == "gemini":
-            built = rig.build_rig(subject, skin, url, raw_prompt=req.get("rawPrompt"), style=art_style)
-        else:
+            try:
+                built = rig.build_rig(subject, skin, url, raw_prompt=req.get("rawPrompt"), style=art_style)
+            except Exception as exc:  # noqa: BLE001
+                if not settings.is_billing_error(exc):
+                    raise
+                # No credit / bad key: never a 500. Draw the mock rig and say why, so the app can show it.
+                _LOG.warning("character %s: Gemini unavailable (%s); mock art instead", character_id, str(exc)[:160])
+                shutil.rmtree(skin, ignore_errors=True)
+                mode, note = "mock", f"Gemini indisponível: {str(exc)[:200]}"
+        if built is None:
             built = rig.build_mock_rig(name, skin, url)
 
     character = {
@@ -121,6 +132,8 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "createdAt": datetime.now(timezone.utc).isoformat(),
         # Additive fields beyond lib/contract.ts v2:
         "generator": mode,
+        # Why the art is mock (no key, ANIMIND_FORCE_MOCK, or Gemini 402/depleted credit); None when Gemini drew it.
+        "generatorNote": note,
         "viewStatus": built["viewStatus"],
         "mouthShots": built["mouthShots"],
         "artStyle": art_style,
@@ -135,6 +148,12 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     }
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     return character
+
+
+def _mock_note() -> str:
+    if settings.gemini_dead_reason():
+        return f"Gemini indisponível: {settings.gemini_dead_reason()[:200]}"
+    return "sem GEMINI_API_KEY (ou ANIMIND_FORCE_MOCK=1): arte mock"
 
 
 def regenerate_front(character_id: str, base_url: str) -> dict[str, Any] | None:
