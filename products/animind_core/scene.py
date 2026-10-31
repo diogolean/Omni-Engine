@@ -2,9 +2,10 @@
 
 Same scene as the app's browser preview (``lib/engine.ts``), with the
 cinematic look of :mod:`products.animind_core.look`: parallax scenario
-plates with depth-of-field blur, rim/key light and soft shadows baked into
+plates with a zoom-dependent depth of field (close-ups throw the set out of focus), rim/key light and soft shadows baked into
 the rig layers, a camera that pushes in, drifts and reframes on the speaker
-(cross-dissolves and whip pans between lines), a colour grade, a vignette,
+(eased push-ins, glides and whip pans between lines), a colour grade, a highlight bloom, a vignette
+centred on the subject,
 captions and lower-thirds. Per frame: blink, breathing, the speaker's head
 lifting with the voice and the mouth sprite of the current Rhubarb viseme.
 The parody label is always baked in. Frames go to
@@ -51,10 +52,13 @@ LECTERN_TOP, LECTERN_BASE, LECTERN_W = 0.645, 0.835, 0.27
 FACE_Y = 0.42  # where the faces sit, for close framings
 BOARD = (0.45, 0.08, 0.94, 0.62)  # lesson board on the stage (x0, y0, x1, y1)
 DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.25, 0.6
+PUSH, PUSH_CU = 0.04, 0.075  # push-in over a shot (fraction of its zoom); quote close-ups lean in further
+CU_Y = 0.45  # debate quote close-ups: the face sits higher, so mouth and beard clear the captions
 # The opening frame is the thumbnail and the first thing a viewer sees: it starts at this brightness
 # (scenario and characters already visible), never on black.
 FADE_IN_FLOOR = 0.85
 CAP_H = 180  # caption strip height (speaker label + two rows)
+CAPTION_PLATE_A = 120  # opacity of the soft plate behind caption rows
 V_FACE_AT = 0.34  # 9:16: faces sit this high in the output so the chin clears the captions (cap_y 0.70)
 V_CU_FACE_AT = 0.29  # close-ups: bigger head, so it sits higher still
 VWIN = H * 9 / 16  # vertical camera window width in frame px at zoom 1
@@ -176,10 +180,13 @@ class Scene:
         self.style = styles.pick(style)
         self.far, self.mid = look.plates(self.scenario, self.template, [p[0] for p in self.places])
         self.far, self.mid = styles.tint_plate(self.far, self.style), styles.tint_plate(self.mid, self.style)
+        self.far_dof, self.mid_dof = look.dof_stack(self.far, look.DOF_FAR), look.dof_stack(self.mid, look.DOF_MID)
         self.lut = styles.lut(look.grade_lut(self.scenario), self.style)
         self.sat = styles.saturation(self.style)
         self.texture = styles.texture(self.style, (self.OW, self.OH))
         self.vig = look.vignette(0.55, (self.OW, self.OH))
+        self.vig_field = look.vignette_field(0.6, (self.OW, self.OH))
+        self.bloom = look.BLOOM.get(self.scenario, 0.2)
         self.scrim = look.scrim((self.OW, self.OH), 0.62 if self.vertical else 0.68)
         self.accent = look.ACCENT[self.scenario]
         self.caption_font = _font("SemiBold", round(34 * k))
@@ -236,7 +243,7 @@ class Scene:
             if last:
                 return Shot(W / 2, H * 0.47, 1.24, "two")
             if quote:
-                return Shot(W * (px + 0.035 * toward), H * FACE_Y, 2.1, "cu")
+                return Shot(W * (px + 0.035 * toward), H * CU_Y, 2.1, "cu")
             return Shot(W * (px + 0.115 * toward), H * 0.47, 1.6, "ots")
         if self.template == "lesson":
             if quote:
@@ -296,15 +303,21 @@ class Scene:
         k = max(i for i, s in enumerate(self.shots) if s[0] <= t)
         start, shot, kind = self.shots[k]
 
-        def pushed(s: Shot, since: float) -> Shot:
-            return Shot(s.cx, s.cy, s.zoom * (1 + 0.045 * min(1.0, since / 7.0)), s.kind)
+        def pushed(j: int, since: float) -> Shot:
+            """Slow push-in over the whole shot, eased in and out (a quote close-up pushes further),
+            so the camera never starts or stops with a jolt."""
+            s_start, s, _ = self.shots[j]
+            end = self.shots[j + 1][0] if j + 1 < len(self.shots) else self.duration_s
+            span = max(2.0, end - s_start)
+            amount = PUSH_CU if s.kind in ("cu", "board") else PUSH
+            return Shot(s.cx, s.cy, s.zoom * (1 + amount * look.ease(since / span)), s.kind)
 
         local = t - start
-        cur = pushed(shot, local)
+        cur = pushed(k, local)
         if k == 0:
             return [(1.0, cur, 0.0)]
         p_start, prev, _ = self.shots[k - 1]
-        before = pushed(prev, start - p_start)
+        before = pushed(k - 1, start - p_start)
         if kind == "dissolve" and local < DISSOLVE_S:
             # a glide, not a cross-dissolve: blending two framings of the same stage doubles every face
             a = look.ease(local / DISSOLVE_S)
@@ -569,14 +582,32 @@ class Scene:
         xs, ys = [q[0] for q in pts], [q[1] for q in pts]
         return [round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys))]
 
+    def _focus(self, shot: Shot, drift: tuple[float, float, float]) -> tuple[float, float]:
+        """Output px the vignette centres on: the face nearest the camera in singles and close-ups,
+        the middle of the frame in wide, two and board shots."""
+        if shot.kind in ("wide", "two", "board", ""):
+            return self.OW / 2, self.OH * 0.46
+        px = min((p[0] for p in self.places), key=lambda p: abs(W * p - shot.cx))
+        x, y = W * px * SS, H * FACE_Y * SS
+        box = self._to_output((x, y, x, y), shot, drift)
+        return float(box[0]), float(box[1])
+
     def _shoot(self, stage: Image.Image, shot: Shot, drift: tuple[float, float, float], blur: float) -> Image.Image:
         size = (self.OW, self.OH)
 
         def aff(depth: str, scale: float = 1.0) -> tuple[float, ...]:
             return self._aff(shot, depth, drift, scale)
 
-        out = self.far.transform(size, Image.AFFINE, aff("far"), Image.BILINEAR).convert("RGBA")
-        out.alpha_composite(self.mid.transform(size, Image.AFFINE, aff("mid"), Image.BILINEAR))
+        lo, hi, w = look.dof_level(shot.zoom, len(self.far_dof))
+
+        def plate(stack: list[Image.Image], depth: str) -> Image.Image:
+            img = stack[lo].transform(size, Image.AFFINE, aff(depth), Image.BILINEAR)
+            if hi != lo and w > 0.02:  # between two lens settings: blend them (continuous focus pull)
+                img = Image.blend(img, stack[hi].transform(size, Image.AFFINE, aff(depth), Image.BILINEAR), w)
+            return img
+
+        out = plate(self.far_dof, "far").convert("RGBA")
+        out.alpha_composite(plate(self.mid_dof, "mid"))
         out.alpha_composite(stage.transform(size, Image.AFFINE, aff("stage", SS), Image.BILINEAR))
         if blur > 0.05:  # whip pan: horizontal motion blur
             smear = out.resize((self.OW // 40, self.OH), Image.BOX).resize(size, Image.BICUBIC)
@@ -626,6 +657,16 @@ class Scene:
             if label:
                 d.text((self.OW / 2, y0 - round(26 * self.k)), label, font=self.speaker_font, fill=(0, 0, 0, 200), anchor="mt")
             shadow = img.filter(ImageFilter.GaussianBlur(5))
+            # soft dark plate behind the block, so white text stays legible over a white beard or a lit set
+            tw = max([d.textlength(r, font=font) for r in rows] + [lw])
+            pad_x, top = round(30 * self.k), y0 - round((34 if label else 12) * self.k)
+            plate = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            ImageDraw.Draw(plate).rounded_rectangle(
+                (self.OW / 2 - tw / 2 - pad_x, top, self.OW / 2 + tw / 2 + pad_x, y0 + len(rows) * round(44 * self.k) + round(4 * self.k)),
+                round(22 * self.k), fill=(6, 6, 9, CAPTION_PLATE_A))
+            plate = plate.filter(ImageFilter.GaussianBlur(round(14 * self.k)))
+            plate.alpha_composite(shadow)
+            shadow = plate
             d = ImageDraw.Draw(shadow)
             if label:
                 _tracked(d, (self.OW / 2 - lw / 2, y0 - round(26 * self.k)), label, self.speaker_font, (*self.accent, 255), 2.6)
@@ -737,7 +778,8 @@ class Scene:
         rgb = out.convert("RGB").point(self.lut)
         if abs(self.sat - 1.0) > 1e-3:
             rgb = ImageEnhance.Color(rgb).enhance(self.sat)
-        rgb = ImageChops.multiply(rgb, self.vig)
+        rgb = look.bloom(rgb, self.bloom)
+        rgb = ImageChops.multiply(rgb, look.vignette_at(self.vig_field, self._focus(cam[-1][1], drift)))
         if self.texture is not None:
             rgb = rgb.convert("RGBA")
             rgb.alpha_composite(self.texture)
