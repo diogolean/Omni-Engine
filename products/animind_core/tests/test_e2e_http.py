@@ -154,7 +154,7 @@ def test_script_follows_beats_and_marks_kinds(run):
     beats = [line["beat"] for line in res["script"]]
     assert beats[0] == "gancho"
     if TEMPLATE == "lesson":
-        assert {"ponto 1", "ponto 2", "ponto 3", "resumo"} <= set(beats)
+        assert {"pergunta", "citação", "exemplo", "síntese"} <= set(beats)
     if TEMPLATE == "debate":
         assert {"tese", "réplica", "tréplica"} <= set(beats)
         assert {line["speaker"] for line in res["script"]} == {0, 1}

@@ -73,14 +73,17 @@ def test_debate_shape_and_pacing():
     assert all(a["speaker"] != b["speaker"] for a, b in zip(lines[1:-1], lines[2:-1]) if a["beat"] == "réplica")
     for line in lines:
         assert script.words(line["text"]) / script.WORDS_PER_S <= line["maxS"]
-        assert 0 <= line["pauseAfterS"] <= 0.5
+        assert 0 <= line["pauseAfterS"] <= 0.8
         if line["kind"] == "paraphrase":
             assert script.words(line["text"]) <= 16 + 1
 
 
-def test_lesson_has_hook_three_points_example_summary():
+LESSON_BEATS = ["gancho", "pergunta", "citação", "exemplo", "citação", "síntese"]
+
+
+def test_lesson_progresses_question_quote_example_synthesis():
     beats = [line["beat"] for line in script.write("lesson", "IA", ["S"], sheets=[sheet()], use_llm=False)["lines"]]
-    assert beats == ["gancho", "ponto 1", "ponto 2", "ponto 3", "exemplo", "resumo"]
+    assert beats == LESSON_BEATS
 
 
 def test_no_sheet_means_marked_paraphrase_only():
@@ -345,8 +348,40 @@ def test_offline_debate_quotes_reply_and_never_repeats():
 
 def test_offline_lesson_has_two_real_quotes():
     out = script.write("lesson", "a verdade existe?", ["Sócrates"], sheets=[socrates()], use_llm=False)
-    assert [line["beat"] for line in out["lines"]] == ["gancho", "ponto 1", "ponto 2", "ponto 3", "exemplo", "resumo"]
-    assert out["quoteLines"] >= 2
+    lines = out["lines"]
+    assert [line["beat"] for line in lines] == LESSON_BEATS
+    assert out["quoteLines"] >= 2 and all(line["kind"] == "quote" for line in lines if line["beat"] == "citação")
+    assert lines[1]["text"].endswith("?")  # the lesson opens on a question, not on "Segundo:" without a "Primeiro"
+    assert not any(t in line["text"] for line in lines for t in ("Segundo", "sobre verdade"))
+
+
+def test_offline_debate_has_a_turn_and_closes_on_the_strongest_quote():
+    out = script.write("debate", "A verdade existe?", ["Sócrates", "Nietzsche"], sheets=[socrates(), nietzsche()], use_llm=False)
+    lines = out["lines"]
+    texts = " ".join(line["text"] for line in lines)
+    assert "Sem música" not in texts  # v17 used an off-topic quote as a reply
+    assert " de a " not in texts and " em o " not in texts  # molds contract articles in pt-BR
+    assert lines[-1]["kind"] == "quote" and lines[-1]["speaker"] == 0 and lines[-1]["pauseAfterS"] == 0
+    # the counter-reply answers the opponent's line: its key word, or his certainty when he quoted
+    tre = next(i for i, line in enumerate(lines) if line["beat"] == "tréplica")
+    assert lines[tre - 1]["speaker"] == 1
+
+
+def test_lines_carry_rhythm_quotes_slower_jabs_faster():
+    lines = script.write("debate", "a verdade existe?", ["Sócrates", "Nietzsche"], sheets=[socrates(), nietzsche()], use_llm=False)["lines"]
+    assert all(isinstance(line["rateAdj"], int) and -10 <= line["rateAdj"] <= 10 for line in lines)
+    assert all(line["rateAdj"] < 0 for line in lines if line["beat"] == "tese")
+    assert any(line["rateAdj"] > 0 for line in lines if line["kind"] == "paraphrase")
+    assert len({line["pauseAfterS"] for line in lines}) >= 3  # pauses vary with the beat, not one flat gap
+
+
+@pytest.mark.parametrize("topic", ["A verdade existe?", "O que é a felicidade?", "inteligência artificial", "A morte é o fim?"])
+def test_offline_molds_never_repeat_inside_a_script(topic):
+    for template, names, sheets in (("debate", ["Sócrates", "Nietzsche"], [socrates(), nietzsche()]),
+                                    ("lesson", ["Sócrates"], [socrates()])):
+        lines = script.write(template, topic, names, sheets=sheets, use_llm=False)["lines"]
+        heads = [" ".join(line["text"].split()[:2]) for line in lines if line["kind"] == "paraphrase"]
+        assert len(set(heads)) == len(heads), heads
 
 
 def test_keyword_prefers_nouns():

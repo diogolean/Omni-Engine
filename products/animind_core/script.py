@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from . import knowledge, personas, settings
@@ -42,32 +42,38 @@ class Beat:
     kind: str  # "quote" (falls back to "paraphrase" when the sheet has none that fits) or "paraphrase"
     max_words: int
     pause_s: float = 0.2
+    rate: int = 0  # edge-tts pace for this beat, on top of the cast voice (quotes a bit slower, jabs a bit faster)
+    optional: bool = False  # offline: a quote beat that becomes a written line when no quote answers the line before
+    strong: bool = False  # closing quote: short and punchy (a contrast, a turn) beats long and explanatory
 
 
+# Dramatic shape. Debate: hook (provocation) -> thesis (quote) -> reply that answers it (quote) -> two quick
+# jabs -> the turn (the challenger uses the opponent's own words) -> punchline -> closing real quote.
+# Lesson: hook question -> the right question -> quote -> everyday example -> quote -> synthesis.
 PLANS: dict[str, tuple[Beat, ...]] = {
     "debate": (
-        Beat("gancho", 0, "paraphrase", 14, 0.35),
-        Beat("tese", 0, "quote", 30, 0.25),
-        Beat("réplica", 1, "quote", 30, 0.2),
-        Beat("réplica", 0, "paraphrase", 16, 0.15),
-        Beat("réplica", 1, "quote", 20, 0.15),
-        Beat("tréplica", 0, "quote", 30, 0.45),
-        Beat("fechamento", 1, "paraphrase", 16, 0.3),
-        Beat("fechamento", 0, "paraphrase", 14, 0.0),
+        Beat("gancho", 0, "paraphrase", 14, 0.5),
+        Beat("tese", 0, "quote", 30, 0.45, -5),
+        Beat("réplica", 1, "quote", 30, 0.3, -3),
+        Beat("réplica", 0, "paraphrase", 16, 0.2, 6),
+        Beat("réplica", 1, "quote", 20, 0.25, 4, optional=True),
+        Beat("tréplica", 0, "paraphrase", 17, 0.6, 2),
+        Beat("fechamento", 1, "paraphrase", 12, 0.45, 4),
+        Beat("fechamento", 0, "quote", 24, 0.0, -8, optional=True, strong=True),
     ),
     "lesson": (
-        Beat("gancho", 0, "paraphrase", 14, 0.4),
-        Beat("ponto 1", 0, "quote", 34, 0.3),
-        Beat("ponto 2", 0, "paraphrase", 20, 0.3),
-        Beat("ponto 3", 0, "quote", 34, 0.3),
-        Beat("exemplo", 0, "paraphrase", 22, 0.35),
-        Beat("resumo", 0, "paraphrase", 18, 0.0),
+        Beat("gancho", 0, "paraphrase", 14, 0.55),
+        Beat("pergunta", 0, "paraphrase", 18, 0.45, -2),
+        Beat("citação", 0, "quote", 34, 0.5, -6),
+        Beat("exemplo", 0, "paraphrase", 22, 0.4, 4),
+        Beat("citação", 0, "quote", 34, 0.5, -6),
+        Beat("síntese", 0, "paraphrase", 18, 0.0, -2),
     ),
     "solo": (
-        Beat("gancho", 0, "paraphrase", 14, 0.3),
-        Beat("tese", 0, "quote", 30, 0.3),
-        Beat("argumento", 0, "paraphrase", 18, 0.3),
-        Beat("fechamento", 0, "paraphrase", 14, 0.0),
+        Beat("gancho", 0, "paraphrase", 14, 0.45),
+        Beat("tese", 0, "quote", 30, 0.4, -5),
+        Beat("argumento", 0, "paraphrase", 18, 0.3, 3),
+        Beat("fechamento", 0, "paraphrase", 14, 0.0, -3),
     ),
 }
 
@@ -76,8 +82,9 @@ def words(text: str) -> int:
     return len(text.split())
 
 
-def max_seconds(max_words: int) -> float:
-    return round(max_words / WORDS_PER_S + 0.8, 1)
+def max_seconds(max_words: int, rate: int = 0) -> float:
+    """Clip budget for ``max_words`` at the beat's pace (a slower quote gets more time)."""
+    return round(max_words / (WORDS_PER_S * (1 + rate / 100)) + 0.8, 1)
 
 
 _SOURCE_TAIL = re.compile(r",?\s*(?:Friedrich\b|Traduzido|tradução|Translated|Alfred\b|NuVisio|Hemus\b|Editora\b)|\s+-\s+\d+\s+páginas")
@@ -134,13 +141,13 @@ def _eligible(sheet: dict[str, Any], max_words: int) -> list[dict[str, Any]]:
 
 # Related stems (folded, 6 letters), so "a verdade existe?" also meets "palavras falsas" or "convicções".
 CONCEPTS: tuple[frozenset[str], ...] = tuple(frozenset(g.split()) for g in (
-    "verdad falsa falsas falso falsos mentir menti certez convic conhec saber sabedo ignora engano ilusao realid duvida erro "
+    "verdad falsa falsas falso falsos mentir menti certez convic conhec saber sabedo ignora engano ilusao realid duvida "
     "truth true false lies knowle wisdom",
     "vida viver vive morte morrer morrem mortal mata matar life live death dying",
     "moral virtud bondad maldad justic etica pecado culpa remors good evil virtue justice",
     "felici alegri prazer sofrim desejo happin pleasu suffer",
     "deus deuses divino religi alma igreja santos god gods divine soul",
-    "poder potenc vontad forca forte fraco fracos vitori guerra power will strong weak",
+    "potenc vontad forca forte fraco fracos vitori guerra power will strong weak",
     "amor amar paixao odio odiar inimig love hate",
     "arte artist musica poesia poeta poetas beleza belo art music poetry beauty",
     "educac ensino ensina aprend mestre aluno escola teach learn school",
@@ -170,7 +177,34 @@ def chain_score(q: dict[str, Any], topic: str, previous: str) -> int:
 
 def _rank(quotes: list[dict[str, Any]], topic: str, previous: str = "") -> list[dict[str, Any]]:
     """On-topic (and answering the previous line) first, then shorter (tight pacing), then sheet order."""
-    return sorted(quotes, key=lambda q: (-chain_score(q, topic, previous), words(q["text"])))
+    return sorted(quotes, key=lambda q: (-chain_score(q, topic, previous), -focus(q, topic), words(q["text"])))
+
+
+def answers(q: dict[str, Any], topic: str, previous: str) -> bool:
+    """An optional quote beat keeps its quote only when it answers the line before (shares one of its ideas) or is
+    really about the topic; a quote that merely brushes it ("Sem música a vida seria um erro") becomes a written line."""
+    return bool(_related(_tokens(previous)) & _tokens(q["text"])) or focus(q, topic) >= 0.3
+
+
+def focus(q: dict[str, Any], topic: str) -> float:
+    """Share of a quote's content words that belong to the topic's concepts: between two quotes that both
+    touch the topic, the one that is *about* it ("homens do conhecimento") beats one that only brushes it."""
+    toks = _tokens(q["text"])
+    return round(len(toks & _related(_tokens(topic))) / max(1, len(toks)), 3)
+
+
+_TURN = re.compile(r"\b(?:mas|do que|nem|porém|senão|but|than|nor|rather)\b|[;—]|\s-\s", re.I)
+
+
+def punch(q: dict[str, Any]) -> int:
+    """How well a quote closes a video: a contrast or a turn ("prefiro morrer ... do que ... viver"), short."""
+    w = words(q["text"])
+    return (2 if _TURN.search(q["text"]) else 0) + (1 if w <= 16 else 0) - (1 if w > 22 else 0)
+
+
+def _rank_strong(quotes: list[dict[str, Any]], topic: str, previous: str = "") -> list[dict[str, Any]]:
+    """Closing quote: answers the line before / the topic, then has a turn, then is short."""
+    return sorted(quotes, key=lambda q: (-(chain_score(q, topic, previous) + punch(q)), words(q["text"])))
 
 
 def matching_quote(text: str, pool: list[dict[str, Any]], max_words: int) -> dict[str, Any] | None:
@@ -211,7 +245,7 @@ def tidy(text: str) -> str:
     if not t:
         return t
     t = t[0].upper() + t[1:]
-    t = re.sub(r"([.?!…]\s+)([a-zà-ÿ])", lambda m: m.group(1) + m.group(2).upper(), t)
+    t = re.sub(r"([.?!]\s+)([a-zà-ÿ])", lambda m: m.group(1) + m.group(2).upper(), t)  # "…" is a breath, not a stop
     return t if t[-1] in ".?!…" else t + "."
 
 
@@ -225,10 +259,12 @@ def copies_quote(text: str, sheet: dict[str, Any], run: int = 7) -> bool:
 # ---------------------------------------------------------------- template writer
 #
 # Without the LLM (no key, no credit, offline) written lines still answer the line before: each reply
-# names a word from the previous line (usually the opponent's real quote), the hook asks the topic,
-# and the close strikes once and ends. No line repeats inside a script.
+# picks up an idea from the previous line (usually the opponent's real quote), the turn uses the
+# opponent's own words against him, and the close lands once. Every beat has several molds; a seed from
+# topic and cast picks among them, so scripts vary, and no mold or line is used twice in one script.
+# Sentences are short with commas, "?" and "…" where edge-tts should breathe.
 
-_NOUN_END = ("dade", "ção", "são", "ência", "ância", "ismo", "eza", "ura", "mento", "ia", "or", "ude", "agem",
+_NOUN_END = ("ade", "ção", "são", "ência", "ância", "ismo", "eza", "ura", "mento", "ia", "or", "ude", "agem",
              "ness", "ity", "tion", "ment", "ism")
 
 
@@ -250,10 +286,12 @@ _DET = set("a o as os um uma uns umas da do das dos na no nas nos pela pelo pela
            "the a an my your his her our".split())
 
 
-def keyword(text: str, topic: str = "", *, related_only: bool = False) -> str:
+def keyword(text: str, topic: str = "", *, related_only: bool = False, avoid: str = "") -> str:
     """The word a reply picks up from ``text``: topic-related nouns first, then nouns (after an article or
-    a noun ending), then longer words; singular, never verbs or function words."""
+    a noun ending), then longer words; singular, never verbs or function words. ``avoid`` (the topic noun)
+    is skipped so a reply names the *new* idea; very long words (mouthfuls on screen and in TTS) rank lower."""
     near = _related(_tokens(topic))
+    skip = {personas.fold(singular(w) or w) for w in re.findall(r"[A-Za-zÀ-ÿ]+", avoid or "")}
     best, score = "", -99.0
     prev = ""
     for raw in re.findall(r"[A-Za-zÀ-ÿ]+(?:-[A-Za-zÀ-ÿ]+)?", text or ""):
@@ -261,12 +299,15 @@ def keyword(text: str, topic: str = "", *, related_only: bool = False) -> str:
         w = singular(raw)
         if "-" in raw or not w or raw.lower().endswith("mos") or w in _STOP_KW or personas.fold(w) in _STOP_FOLD or len(w) < 4:
             continue
+        if personas.fold(w) in skip:
+            continue
         stem = personas.fold(w)[:6]
         related = stem in near
         if (len(w) == 4 and not related) or (related_only and not related):
             continue
-        sc = (3.0 if related else 0.0) + (2.0 if w.endswith(_NOUN_END) else 0.0) + (2.0 if after_det else 0.0) + len(w) / 10
+        sc = (3.0 if related else 0.0) + (2.0 if w.endswith(_NOUN_END) else 0.0) + (2.0 if after_det else 0.0) + min(len(w), 9) / 10
         sc -= 2.5 if w.endswith(_VERB_END) and not w.endswith(_NOUN_END) and not after_det else 0.0
+        sc -= 1.5 if len(w) > 12 else 0.0
         if sc > score:
             best, score = w, sc
     return best
@@ -281,67 +322,123 @@ def topic_parts(topic: str) -> tuple[str, str, bool]:
     return head, noun, is_q
 
 
+def noun_phrase(topic: str, noun: str) -> str:
+    """The noun with the article the topic gives it ("A verdade existe?" -> "a verdade"), so templates
+    say "sobre a verdade" and not "sobre verdade"; bare noun when the topic has none."""
+    toks = re.findall(r"[A-Za-zÀ-ÿ]+", (topic or "").lower())
+    first = noun.split()[0] if noun else ""
+    for i, w in enumerate(toks):
+        if w == first and i > 0 and toks[i - 1] in ("a", "o", "as", "os", "the"):
+            return f"{toks[i - 1]} {noun}"
+    return noun
+
+
 def _bank(lang: str) -> dict[str, list[str]]:
+    """Molds per beat. Fields: {Q} topic as asked, {noun} bare key noun, {the}/{The} noun with its article,
+    {a}/{b} speakers, {kw}/{Kw} the idea picked up from the line before, {kt} a topic word the other used."""
     if lang == "en-US":
         return {
-            "gancho2q": ["{Q} {b}, today you do not dodge the question."],
-            "gancho2": ["Today the subject is {noun}. {b}, this time you do not dodge it."],
-            "gancho1q": ["{Q} I answer with my own words, not with slogans."],
-            "gancho1": ["{Q} Let me answer with my own words."],
-            "tese": ["My thesis: {noun} is not accepted, it is examined."],
-            "réplica0": ["You speak of {kw}, {b}. But who decides what {kw} is?",
-                         "{Kw}, {b}? That is a word, not an answer about {noun}."],
-            "réplica1": ["Nice words about {kw}, {a}. Words are not proof.",
-                         "{Kw}? You keep circling, {a}. Say it plainly."],
-            "tréplica": ["You changed the subject, {b}. I am still waiting for an answer about {noun}."],
-            "fechamento1": ["Talk about {kt} all you want, {a}. I bow to no one."],
-            "fechamento0": ["Then let the audience decide, {b}. I only asked questions."],
-            "fechamento": ["Think about it before you trust the next certainty about {noun}."],
-            "argumento": ["Look at {kw}: without it, {noun} is only an opinion."],
-            "ponto 1": ["First: {noun} is not what everyone repeats, it is what survives the question."],
-            "ponto 2": ["Second: notice the word {kw}. Without it, everything turns into opinion."],
-            "ponto 3": ["Third: whoever knows everything about {noun} has stopped learning."],
-            "exemplo": ["Example: facing a certainty about {noun}, ask why three times in a row."],
-            "resumo": ["Summary: {noun} is examined, not repeated. Keep asking."],
+            "gancho2q": ["{Q} A simple question, {b}. I want an answer, not a speech.",
+                         "{Q} Today, {b}, nobody leaves without answering.",
+                         "One question, {b}, and no dodging. {Q}"],
+            "gancho2": ["Today the subject is {the}, {b}. And I only brought questions.",
+                        "{The}. Everyone is sure about it, {b}. Let us see if it survives one question."],
+            "gancho1q": ["{Q} Sounds easy. It is not.", "{Q} Take three seconds before you answer."],
+            "gancho1": ["Today: {the}. Everything you think you know is about to be tested."],
+            "tese": ["My thesis is simple: {the} is not accepted. It is examined."],
+            "réplica0": ["{Kw}, {b}? Then tell me: who decides what {noun} is?",
+                         "Easy, {b}. If everything is {kw}, so is your sentence. Why should I believe it?",
+                         "You swap {noun} for {kw}, {b}. Is that an answer… or an escape?",
+                         "{Kw}? Lovely word, {b}. Now define it."],
+            "réplica1": ["Questions, questions, {a}. Do you ever risk an answer?",
+                         "You call {kw} what is only habit, {a}.",
+                         "{Kw}, {a}? That is fear of admitting nobody knows.",
+                         "There you go again, {a}. A pretty question is not proof."],
+            "tréplicaq": ["Notice, {b}: you just stated something as certain. You used the very thing you wanted to destroy.",
+                          "So you are certain of that, {b}? You, who doubt everything?"],
+            "tréplica": ["Notice, {b}: you just stated something as certain. You used the very thing you wanted to destroy.",
+                         "So you admit it, {b}: doubting {the} is already looking for an answer.",
+                         "See, {b}? Many words, and no answer about {the}. I am still waiting."],
+            "fechamento1": ["Keep asking, {a}. I would rather live.",
+                            "Keep your questions, {a}. Life does not wait for answers.",
+                            "Talk about {kt} all you want, {a}. I bow to no one."],
+            "fechamento0": ["Then let the audience decide, {b}. I only asked questions.",
+                            "The question stays, {b}. And it is stronger than both of us."],
+            "fechamento": ["Think about it before you trust the next certainty about {the}."],
+            "argumento": ["Look at {kw}: without it, {the} is only an opinion."],
+            "pergunta": ["Start with the right question: how do you know something is {noun}?",
+                         "Before the answer, a better question: who vouches for what you call {noun}?"],
+            "citação": ["The ancients already suspected it: {the} does not come ready-made. You look for it."],
+            "exemplo": ["An everyday example: someone swears they know all about {the}. Ask calmly: how do you know? And why?",
+                        "Example: at a family lunch, everyone is sure about {the}. Ask one question… and see who stays firm."],
+            "síntese": ["Summary: {the} is not memorized, it is examined. And the next question is yours.",
+                        "Keep this: whoever asks about {the} learns. Whoever is already sure… stopped learning."],
         }
     return {
-        "gancho2q": ["{Q} {b}, hoje você não foge da pergunta."],
-        "gancho2": ["Hoje o assunto é {noun}. {b}, desta vez você não foge."],
-        "gancho1q": ["{Q} Eu respondo com as minhas próprias palavras."],
-        "gancho1": ["{Q} Eu respondo com as minhas próprias palavras."],
-        "tese": ["Minha tese: {noun} não se aceita, se examina."],
-        "réplica0": ["Você fala em {kw}, {b}. Mas quem decide o que é {kw}?",
-                     "{Kw}, {b}? Isso é uma palavra, não uma resposta sobre {noun}."],
-        "réplica1": ["Bonito falar em {kw}, {a}. Mas palavra bonita não é prova.",
-                     "{Kw}? Você anda em círculos, {a}. Diga de uma vez."],
-        "tréplica": ["Você mudou de assunto, {b}. Eu continuo esperando a resposta sobre {noun}."],
-        "fechamento1": ["Fale de {kt} o quanto quiser, {a}. Eu não me curvo a ninguém."],
-        "fechamento0": ["Então que o público decida, {b}. Eu só fiz perguntas."],
-        "fechamento": ["Pense nisso antes de acreditar na próxima certeza sobre {noun}."],
-        "argumento": ["Repare em {kw}: sem isso, {noun} vira só opinião."],
-        "ponto 1": ["Primeiro: {noun} não é o que todo mundo repete, é o que resiste à pergunta."],
-        "ponto 2": ["Segundo: repare na palavra {kw}. Sem ela, tudo vira opinião."],
-        "ponto 3": ["Terceiro: quem acha que já sabe tudo sobre {noun} parou de aprender."],
-        "exemplo": ["Exemplo: diante de uma certeza sobre {noun}, pergunte por quê três vezes seguidas."],
-        "resumo": ["Resumo: {noun} se examina, não se repete. Continue perguntando."],
+        "gancho2q": ["{Q} Pergunta simples, {b}. Quero resposta, não discurso.",
+                     "{Q} Hoje, {b}, ninguém sai daqui sem responder.",
+                     "Uma pergunta, {b}, e sem fugir. {Q}"],
+        "gancho2": ["Hoje o assunto é {the}, {b}. E eu só trouxe perguntas.",
+                    "{The}. Todo mundo tem certeza, {b}. Vamos ver se resiste a uma pergunta."],
+        "gancho1q": ["{Q} Parece fácil. Não é.", "{Q} Pense três segundos antes de responder."],
+        "gancho1": ["Hoje: {the}. Tudo o que você acha que sabe vai passar por um teste."],
+        "tese": ["Minha tese é simples: {the} não se aceita. Se examina."],
+        "réplica0": ["{Kw}, {b}? Então me diga: quem decide o que é {noun}?",
+                     "Calma, {b}. Se tudo é {kw}, sua frase também é. Por que eu acreditaria nela?",
+                     "Você troca {noun} por {kw}, {b}. Isso é resposta… ou fuga?",
+                     "{Kw}? Bonita palavra, {b}. Agora defina."],
+        "réplica1": ["Perguntas, perguntas, {a}. Você nunca arrisca uma resposta?",
+                     "Você chama de {kw} o que é só costume, {a}.",
+                     "{Kw}, {a}? Isso é medo de admitir que ninguém sabe.",
+                     "Lá vem você de novo, {a}. Pergunta bonita não é prova."],
+        "tréplicaq": ["Repare, {b}: você acabou de afirmar algo como certo. Usou justamente o que queria derrubar.",
+                      "Então disso você tem certeza, {b}? Logo você, que duvida de tudo?"],
+        "tréplica": ["Repare, {b}: você acabou de afirmar algo como certo. Usou justamente o que queria derrubar.",
+                     "Então você admite, {b}: duvidar de {the} já é procurar uma resposta.",
+                     "Viu só, {b}? Muita palavra e nenhuma resposta sobre {the}. Eu continuo esperando."],
+        "fechamento1": ["Continue perguntando, {a}. Eu prefiro viver.",
+                        "Fique com suas perguntas, {a}. A vida não espera resposta.",
+                        "Fale de {kt} o quanto quiser, {a}. Eu não me curvo a ninguém."],
+        "fechamento0": ["Então que o público decida, {b}. Eu só fiz perguntas.",
+                        "Fica a pergunta, {b}. E ela é mais forte que nós dois."],
+        "fechamento": ["Pense nisso antes de acreditar na próxima certeza sobre {the}."],
+        "argumento": ["Repare em {kw}: sem isso, {the} vira só opinião."],
+        "pergunta": ["Comece pela pergunta certa: como você sabe que algo é {noun}?",
+                     "Antes da resposta, uma pergunta melhor: quem garante o que você chama de {noun}?"],
+        "citação": ["Os antigos já desconfiavam: {the} não vem pronta. Se procura."],
+        "exemplo": ["Exemplo do dia a dia: alguém jura que sabe tudo sobre {the}. Pergunte com calma: como você sabe? E por quê?",
+                    "Exemplo: no almoço de família, todo mundo tem certeza sobre {the}. Faça uma pergunta só… e veja quem continua firme."],
+        "síntese": ["Síntese: {the} não se decora, se examina. E a próxima pergunta é sua.",
+                    "Guarde isto: quem pergunta sobre {the} aprende. Quem já tem certeza… parou de aprender."],
     }
 
 
+def _seed(topic: str, names: list[str], lang: str) -> int:
+    import hashlib  # noqa: PLC0415
+
+    return int(hashlib.sha1(f"{personas.fold(topic)}|{'|'.join(names)}|{lang}".encode()).hexdigest()[:8], 16)
+
+
 def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: list[dict[str, Any]], n: int,
-                   taken: set[str]) -> str:
-    """A written line for ``beat`` that answers ``before`` (the lines so far), never one already in ``taken``."""
+                   taken: set[str], molds: set[str] | None = None, seed: int = 0, index: int = 0) -> str:
+    """A written line for ``beat`` that answers ``before`` (the lines so far), never one already in ``taken``
+    and never a mold already in ``molds`` (updated in place)."""
+    molds = set() if molds is None else molds
     head, noun, is_q = topic_parts(topic)
+    the = noun_phrase(topic, noun)
     a = names[0] if names else ""
     b = names[1] if len(names) > 1 else a
     sp = min(beat.speaker, n - 1)
     prev = before[-1]["text"] if before else ""
     own = [ln["text"] for ln in before if ln["speaker"] == sp and ln.get("kind") == "quote"]
     other = [ln["text"] for ln in before if ln["speaker"] != sp]
-    kw = keyword(prev, topic) if prev and (n == 1 or before[-1]["speaker"] != sp) else ""
+    # words already said in written lines are not picked up again ("Convicção?" once, not three times)
+    said = " ".join([noun] + [ln["text"] for ln in before if ln.get("kind") != "quote"])
+    kw = keyword(prev, topic, avoid=said) if prev and (n == 1 or before[-1]["speaker"] != sp) else ""
     if not kw and other:
-        kw = keyword(other[-1], topic)
+        kw = keyword(other[-1], topic, avoid=said)
     if not kw and own:
-        kw = keyword(own[-1], topic)
+        kw = keyword(own[-1], topic, avoid=said)
     kw = kw or noun
     kt = next((k for k in (keyword(t, topic, related_only=True) for t in reversed(other)) if k), noun)
     bank = _bank(lang)
@@ -349,16 +446,30 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
         key = ("gancho2" if n > 1 else "gancho1") + ("q" if is_q else "")
     elif beat.name in ("réplica", "fechamento") and n > 1:
         key = f"{beat.name}{sp}"
+    elif beat.name == "tréplica" and before and before[-1].get("kind") == "quote" and before[-1]["speaker"] != sp:
+        key = "tréplicaq"  # the opponent just stated something as true: turn his own certainty against him
     else:
         key = beat.name if beat.name in bank else ("réplica0" if sp == 0 else "réplica1")
-    options = list(bank[key])
-    fields = {"Q": head, "noun": noun, "a": a, "b": b, "kw": kw, "Kw": kw[:1].upper() + kw[1:], "kt": kt}
-    for pool in (options, [o for k, v in bank.items() if k.startswith(beat.name.split(" ")[0]) for o in v], bank["réplica0" if sp == 0 else "réplica1"]):
-        for opt in pool:
-            text = tidy(opt.format(**fields))
-            if personas.fold(text) not in taken:
+    fields = {"Q": head, "noun": noun, "the": the, "The": the[:1].upper() + the[1:], "a": a, "b": b, "kw": kw,
+              "Kw": kw[:1].upper() + kw[1:], "kt": kt}
+    fallback = "réplica0" if sp == 0 else "réplica1"
+    for k in dict.fromkeys((key, *[k for k in bank if k.startswith(beat.name.split(" ")[0])], fallback)):
+        opts = bank[k]
+        start = (seed + 7 * index) % len(opts)
+        for j in range(len(opts)):
+            m = (start + j) % len(opts)
+            text = tidy(_contract(opts[m].format(**fields), lang))
+            if f"{k}:{m}" not in molds and personas.fold(text) not in taken and words(text) <= beat.max_words + 1:
+                molds.add(f"{k}:{m}")
                 return text
-    return tidy(options[0].format(**fields))
+    return tidy(_contract(bank[key][0].format(**fields), lang))
+
+
+def _contract(text: str, lang: str) -> str:
+    """pt-BR contractions a filled mold needs: "fugiu de a verdade" -> "fugiu da verdade"."""
+    if lang == "en-US":
+        return text
+    return re.sub(r"\b([Dd]e|[Ee]m) (a|o|as|os)\b", lambda m: {"d": "d", "e": "n"}[m.group(1)[0].lower()] + m.group(2), text)
 
 
 # ---------------------------------------------------------------- Gemini writer
@@ -366,7 +477,8 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
 
 EMOTIONS = ("neutro", "alegre", "irritado", "surpreso", "triste", "desdenhoso", "pensativo")
 BEAT_EMOTION = {"gancho": "surpreso", "tese": "pensativo", "réplica": "irritado", "tréplica": "irritado",
-                "fechamento": "desdenhoso", "argumento": "pensativo", "exemplo": "alegre", "resumo": "neutro"}
+                "fechamento": "desdenhoso", "argumento": "pensativo", "exemplo": "alegre", "resumo": "neutro",
+                "pergunta": "pensativo", "citação": "pensativo", "síntese": "alegre"}
 
 
 def emotion_of(draft: dict[str, Any], beat_name: str) -> str:
@@ -389,13 +501,14 @@ def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], to
     beats = "\n".join(
         f"  {i}. speaker {b.speaker}, beat '{b.name}', "
         + (f"PICK a quoteId of speaker {b.speaker} (only quotes of at most {b.max_words} words), do not write text"
+           + (" (if no quote answers the previous line, WRITE text of at most 16 words instead)" if b.optional else "")
            if b.kind == "quote" else f"WRITE text of at most {b.max_words} words")
         for i, b in enumerate(plan)
     )
     language = "Brazilian Portuguese" if lang == "pt-BR" else "American English"
     shape = {
         "debate": "a tight debate for a 60-second vertical video: hook, short alternating replies that answer each other, a rebuttal, a punchy close",
-        "lesson": "a short lesson: a hook question, three points, one concrete example, a one-line summary",
+        "lesson": "a short lesson that progresses: a hook question, the right question, a real quote, one concrete everyday example, a second quote, a one-line synthesis",
         "solo": "a short monologue: hook, thesis, one argument, close",
     }[template]
     from . import styles  # noqa: PLC0415
@@ -418,8 +531,12 @@ Rules:
 - If a written line restates one of the speaker's quotes, give that quoteId as basisId; else basisId is null.
 - The hook grabs in 3 seconds: a provocative question or claim about the topic, aimed at the other speaker when there is one.
 - Each reply answers the line right before it (name the idea you attack). The rebuttal turns the opponent's own words.
-- Closing: the second-to-last line concedes nothing and strikes once; the last line is a punchline that ends the video.
-- In a lesson, each point opens with "Primeiro", "Segundo", "Terceiro" (or First/Second/Third) in written beats; the example is concrete and everyday.
+- The turn (tréplica) uses the opponent's own words against him. Closing: the second-to-last line concedes nothing and
+  strikes once; the last line is the strongest quote, a punchline that ends the video.
+- Rhythm: one idea per sentence, sentences of 3 to 9 words, commas and "…" where the voice should breathe; never two
+  lines built on the same pattern; address the other speaker by name in replies.
+- In a lesson, the question beat reframes the hook, the example is concrete and everyday and ties to the quote before it,
+  and the synthesis closes the loop in one line.
 
 - Every line gets the speaker's emotion while saying it, one of: {", ".join(EMOTIONS)}.
 
@@ -506,21 +623,26 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
 
     used: set[tuple[int, str]] = set()
     lines: list[dict[str, Any]] = []
+    molds: set[str] = set()
+    seed = _seed(topic, names, lang)
     for i, beat in enumerate(plan):
         sp = min(beat.speaker, n - 1)
         sheet = sheets[sp]
         by_id = {q["id"]: q for q in _quotable(sheet)}
         draft = drafted.get(i) or {}
-        line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words), "pauseAfterS": beat.pause_s,
-                                "emotion": emotion_of(draft, beat.name)}
+        line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words, beat.rate),
+                                "pauseAfterS": beat.pause_s, "rateAdj": beat.rate, "emotion": emotion_of(draft, beat.name)}
         quote = None
         if beat.kind == "quote":
             pool = [q for q in _eligible(sheet, beat.max_words) if (sp, q["id"]) not in used]
             qid = draft.get("quoteId")
-            ranked = _rank(pool, topic, lines[-1]["text"] if lines else "")
+            previous = lines[-1]["text"] if lines else ""
+            ranked = _rank_strong(pool, topic, previous) if beat.strong else _rank(pool, topic, previous)
             quote = next((q for q in pool if q["id"] == qid), None)
             if quote is None or (ranked and not (_tokens(topic) & _tokens(quote["text"])) and topic_score(quote, topic) < topic_score(ranked[0], topic)):
                 quote = next(iter(ranked), None)  # unknown/reused id, or off-topic while an on-topic quote fits
+                if quote is not None and beat.optional and not qid and not answers(quote, topic, previous):
+                    quote = None  # offline: no quote answers the line before -> a written line, not a non sequitur
         else:
             # a written line that *is* one of the speaker's real quotes is shown as that quote, with its source
             pool = [q for q in _quotable(sheet) if (sp, q["id"]) not in used]
@@ -528,13 +650,15 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
         if quote is not None:
             used.add((sp, quote["id"]))
             line.update(kind="quote", text=quote["text"], quote=cite(quote))
-            line["maxS"] = max(line["maxS"], max_seconds(words(quote["text"])))
+            line["maxS"] = max(line["maxS"], max_seconds(words(quote["text"]), beat.rate))
         else:
+            if beat.kind == "quote":  # a quote beat without a fitting quote gets a short written line
+                beat = replace(beat, max_words=min(beat.max_words, 16))
             text = tidy(_clean_paraphrase(draft.get("text") or "", beat.max_words))
             taken = {personas.fold(ln["text"]) for ln in lines}
             if (not text or personas.fold(text) in taken or copies_quote(text, sheet)
                     or knowledge.copies_passage(text, passages[sp])):
-                text = _template_text(beat, lang, topic, names, lines, n, taken)
+                text = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i)
             line.update(kind="paraphrase", text=text)
             basis = by_id.get(draft.get("basisId") or "")
             if basis is not None:
