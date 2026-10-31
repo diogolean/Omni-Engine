@@ -56,3 +56,25 @@ def test_vertical_plan_inserts_reaction_cutaway_on_long_lines():
                      env_fps=100, duration_s=11.0, disclaimer="x", fmt="9:16")
     kinds = [s.kind for _, s, _ in sc.shots]
     assert "react" in kinds and "wide" not in kinds
+
+
+@pytest.mark.parametrize("dur, adj, want", [(0.6, -6, ["-1%"]), (0.6, 4, ["+9%"]), (3.0, -6, ["-1%", "+20%"]),
+                                            (3.0, 4, ["+9%", "+24%"])])
+def test_beat_pace_nudges_the_cast_rate(monkeypatch, tmp_path, dur, adj, want):
+    """A quote is voiced a bit slower and a jab a bit faster than the cast pace; an overrun re-voice speeds up from
+    the jab pace (never from a slowed quote), so a line can never end slower than it was budgeted."""
+    from products.animind_core import render
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    rates = []
+
+    async def fake_tts(text, voice, out, rate="+0%", pitch="+0Hz"):
+        rates.append(rate)
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", f"sine=frequency=220:duration={dur}", str(out)],
+                       check=True)
+
+    monkeypatch.setattr(render, "_tts", fake_tts)
+    pick = {"voice": "pt-BR-AntonioNeural", "ratePct": 5, "pitchHz": 0}
+    _, used = render._voice_line("x", pick, tmp_path / "a.mp3", tmp_path / "a.wav", 2.0, adj)
+    assert rates == want and used == want[-1]

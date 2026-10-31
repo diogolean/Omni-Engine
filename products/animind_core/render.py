@@ -42,7 +42,7 @@ _RENDER_LOCK = threading.Lock()
 FAST_PCT = 15  # re-voice a line that overruns its beat budget (on top of the cast pace)
 
 
-CAMERA_BEATS = ("gancho", "fechamento", "resumo")
+CAMERA_BEATS = ("gancho", "fechamento", "resumo", "síntese")
 
 
 def line_view(template: str, speaker: int, index: int, beat: str = "") -> str:
@@ -70,14 +70,16 @@ async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str =
     await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
 
 
-def _voice_line(text: str, pick: dict[str, Any], mp3: Path, clip: Path, max_s: float) -> tuple[np.ndarray, str]:
-    """edge-tts clip as PCM in the cast voice; re-voiced faster once when it overruns ``max_s``."""
-    args = casting.edge_args(pick)
+def _voice_line(text: str, pick: dict[str, Any], mp3: Path, clip: Path, max_s: float,
+                rate_adj: int = 0) -> tuple[np.ndarray, str]:
+    """edge-tts clip as PCM in the cast voice, nudged by the beat's ``rateAdj`` (quotes slower, jabs faster);
+    re-voiced faster once when it overruns ``max_s``."""
+    args = casting.edge_args(pick, rate_adj)
     asyncio.run(_tts(text, pick["voice"], mp3, **args))
     _to_wav(mp3, clip)
     pcm = _read_pcm(clip)
     if len(pcm) / SAMPLE_RATE > max_s:
-        args = casting.edge_args(pick, FAST_PCT)
+        args = casting.edge_args(pick, max(rate_adj, 0) + FAST_PCT)
         asyncio.run(_tts(text, pick["voice"], mp3, **args))
         _to_wav(mp3, clip)
         pcm = _read_pcm(clip)
@@ -183,7 +185,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         for i, planned in enumerate(lines):
             speaker, text = planned["speaker"], planned["text"]
             mp3, clip = work / f"line_{i}.mp3", work / f"line_{i}.wav"
-            pcm, rate = _voice_line(text, voices[min(speaker, len(voices) - 1)], mp3, clip, planned["maxS"])
+            pcm, rate = _voice_line(text, voices[min(speaker, len(voices) - 1)], mp3, clip, planned["maxS"],
+                                    int(planned.get("rateAdj", 0)))
             dur = len(pcm) / SAMPLE_RATE
             cues, src = line_visemes(clip, text, t)
             sources.add(src)
