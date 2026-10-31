@@ -36,7 +36,8 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
 - Rhythm: each beat has a word budget (`maxS` = words / (2.6 × pace) + 0.8 s), a pause after it (0–0.6 s: longer
   after a hook, a quote or the turn, short between quick jabs) and a pace nudge `rateAdj` (quotes −5…−8 %, jabs
   +2…+6 %) added to the cast voice's rate. A clip that overruns `maxS` is voiced again at `max(rateAdj, 0) + 15%`
-  (`ttsRate` keeps what was used). Offline (no LLM) lines come from several molds per beat, rotated by a seed of
+  (`ttsRate` keeps what was used). Each clip is tightened first: edge-tts' ~0.9 s silences after "."/"?"
+  are cut to 0.38 s and lead/tail silence to 0.06 s (`render.tighten`), so short jabs do not drag. Offline (no LLM) lines come from several molds per beat, rotated by a seed of
   the topic and cast; no mold, and no picked-up word, repeats inside one script.
 - `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
   `quote {id, text, source, label, url, site, wikisource?}` (`label` is the short on-screen source: no

@@ -72,18 +72,69 @@ async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str =
 
 def _voice_line(text: str, pick: dict[str, Any], mp3: Path, clip: Path, max_s: float,
                 rate_adj: int = 0) -> tuple[np.ndarray, str]:
-    """edge-tts clip as PCM in the cast voice, nudged by the beat's ``rateAdj`` (quotes slower, jabs faster);
-    re-voiced faster once when it overruns ``max_s``."""
+    """edge-tts clip as PCM in the cast voice, nudged by the beat's ``rateAdj`` (quotes slower, jabs faster),
+    with its dead air tightened (see ``tighten``); re-voiced faster once when it still overruns ``max_s``."""
     args = casting.edge_args(pick, rate_adj)
-    asyncio.run(_tts(text, pick["voice"], mp3, **args))
-    _to_wav(mp3, clip)
-    pcm = _read_pcm(clip)
+    pcm = _voice(text, pick["voice"], mp3, clip, args)
     if len(pcm) / SAMPLE_RATE > max_s:
         args = casting.edge_args(pick, max(rate_adj, 0) + FAST_PCT)
-        asyncio.run(_tts(text, pick["voice"], mp3, **args))
-        _to_wav(mp3, clip)
-        pcm = _read_pcm(clip)
+        pcm = _voice(text, pick["voice"], mp3, clip, args)
     return pcm, args["rate"]
+
+
+def _voice(text: str, voice: str, mp3: Path, clip: Path, args: dict[str, str]) -> np.ndarray:
+    asyncio.run(_tts(text, voice, mp3, **args))
+    _to_wav(mp3, clip)
+    pcm = tighten(_read_pcm(clip))
+    _write_pcm(clip, pcm)  # visemes are read from the clip, so it must match the tightened audio
+    return pcm
+
+
+SENTENCE_GAP_S = 0.38  # edge-tts leaves ~0.9 s after every "." / "?"; a spoken beat is ~0.3-0.4 s
+EDGE_S = 0.06
+
+
+def tighten(pcm: np.ndarray, gap_s: float = SENTENCE_GAP_S, edge_s: float = EDGE_S) -> np.ndarray:
+    """Short multi-sentence lines ("Vontade? Bonita palavra. Agora defina.") sound slow with edge-tts' long
+    sentence pauses: every silent run longer than ``gap_s`` is cut to ``gap_s`` and lead/tail silence to
+    ``edge_s`` (the script's ``pauseAfterS`` sets the gap between lines). Cuts fall inside silence, so no clicks."""
+    if len(pcm) == 0:
+        return pcm
+    hop = SAMPLE_RATE // 100
+    n = len(pcm) // hop
+    if n == 0:
+        return pcm
+    rms = np.sqrt(np.mean(pcm[: n * hop].astype(np.float64).reshape(n, hop) ** 2, axis=1))
+    quiet = rms < max(120.0, 0.03 * float(rms.max()))
+    keep = np.ones(n, dtype=bool)
+    i = 0
+    while i < n:
+        if not quiet[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and quiet[j]:
+            j += 1
+        limit = int(round((edge_s if i == 0 or j == n else gap_s) * 100))
+        if j - i > limit:
+            if i == 0:
+                keep[: j - limit] = False  # keep the silence right before speech
+            elif j == n:
+                keep[i + limit:] = False
+            else:
+                half = limit // 2
+                keep[i + half: j - (limit - half)] = False
+        i = j
+    mask = np.repeat(keep, hop)
+    return np.concatenate([pcm[: n * hop][mask], pcm[n * hop:] if keep[-1] else pcm[:0]])
+
+
+def _write_pcm(path: Path, pcm: np.ndarray) -> None:
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(pcm.astype(np.int16).tobytes())
 
 
 def _to_wav(src: Path, dst: Path) -> None:
@@ -198,11 +249,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             _set(job_id, progress=0.1 + 0.4 * (i + 1) / len(lines))
         track = np.concatenate(pcm_parts)
         audio = work / "voice.wav"
-        with wave.open(str(audio), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(SAMPLE_RATE)
-            w.writeframes(track.tobytes())
+        _write_pcm(audio, track)
         duration = len(track) / SAMPLE_RATE
         rigs = [_rig_views(c, template, i, scenario) for i, c in enumerate(cast)]
         sc = scene.Scene(template=template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),

@@ -78,3 +78,19 @@ def test_beat_pace_nudges_the_cast_rate(monkeypatch, tmp_path, dur, adj, want):
     pick = {"voice": "pt-BR-AntonioNeural", "ratePct": 5, "pitchHz": 0}
     _, used = render._voice_line("x", pick, tmp_path / "a.mp3", tmp_path / "a.wav", 2.0, adj)
     assert rates == want and used == want[-1]
+
+
+def test_tighten_cuts_dead_air_but_keeps_speech_and_short_pauses():
+    import numpy as np
+
+    from products.animind_core import render
+
+    sr = render.SAMPLE_RATE
+    tone = (np.sin(np.arange(int(0.5 * sr)) * 0.2) * 8000).astype(np.int16)
+    gap = lambda s: np.zeros(int(s * sr), dtype=np.int16)  # noqa: E731
+    pcm = np.concatenate([gap(0.4), tone, gap(0.9), tone, gap(0.2), tone, gap(0.8)])
+    out = render.tighten(pcm)
+    speech = 3 * 0.5
+    want = speech + render.EDGE_S + render.SENTENCE_GAP_S + 0.2 + render.EDGE_S
+    assert abs(len(out) / sr - want) < 0.05  # 0.9 s -> 0.38 s, the 0.2 s comma pause stays
+    assert int(np.abs(out).astype(np.int64).sum()) == int(np.abs(pcm).astype(np.int64).sum())  # no speech sample lost
