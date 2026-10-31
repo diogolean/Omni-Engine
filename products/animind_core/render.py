@@ -172,7 +172,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         work.mkdir(parents=True, exist_ok=True)
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
         art = styles.pick(req.get("style") or (chars[0].get("artStyle") if chars else None))
-        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang, mode=mode)
+        tone = styles.pick_tone(req.get("tone"))
+        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang, mode=mode, tone=tone)
         lines = written["lines"]
         fmt = "9:16" if req.get("format") == "9:16" else "16:9"
         n = 2 if template == "debate" else 1
@@ -236,6 +237,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
             "personaMode": mode,
             "style": art,
+            "tone": tone,
             "frameQa": frame_qa,
             "frameQaUrl": f"{files}/frame_qa.json",
         })

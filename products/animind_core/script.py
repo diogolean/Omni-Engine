@@ -180,8 +180,19 @@ def _template_text(beat: Beat, i: int, lang: str, topic: str, names: list[str]) 
 # ---------------------------------------------------------------- Gemini writer
 
 
+EMOTIONS = ("neutro", "alegre", "irritado", "surpreso", "triste", "desdenhoso", "pensativo")
+BEAT_EMOTION = {"gancho": "surpreso", "tese": "pensativo", "réplica": "irritado", "tréplica": "irritado",
+                "fechamento": "desdenhoso", "argumento": "pensativo", "exemplo": "alegre", "resumo": "neutro"}
+
+
+def emotion_of(draft: dict[str, Any], beat_name: str) -> str:
+    """The writer's emotion for a line when it is one of :data:`EMOTIONS`, else the beat's default."""
+    e = str(draft.get("emotion") or "").strip().lower()
+    return e if e in EMOTIONS else BEAT_EMOTION.get(beat_name.split(" ")[0], "neutro")
+
+
 def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], topic: str, lang: str, template: str,
-            passages: list[list[dict[str, Any]]] | None = None) -> str:
+            passages: list[list[dict[str, Any]]] | None = None, tone: str = "comedia") -> str:
     who = []
     for k, (name, sheet) in enumerate(zip(names, sheets)):
         bg = "\n".join(f'    [{p["source"]}] {p["text"][:600]}' for p in (passages[k] if passages else []))
@@ -203,7 +214,10 @@ def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], to
         "lesson": "a short lesson: a hook question, three points, one concrete example, a one-line summary",
         "solo": "a short monologue: hook, thesis, one argument, close",
     }[template]
+    from . import styles  # noqa: PLC0415
+    tone_line = styles.TONES[styles.pick_tone(tone)]["prompt"]
     return f"""You write {shape}, in {language}, about: {topic}
+Tone: {tone_line}.
 
 {chr(10).join(who)}
 
@@ -223,7 +237,9 @@ Rules:
 - Closing: the second-to-last line concedes nothing and strikes once; the last line is a punchline that ends the video.
 - In a lesson, each point opens with "Primeiro", "Segundo", "Terceiro" (or First/Second/Third) in written beats; the example is concrete and everyday.
 
-Answer JSON only: {{"lines": [{{"i": 0, "quoteId": null, "basisId": null, "text": "..."}}, ...]}} with one entry per beat."""
+- Every line gets the speaker's emotion while saying it, one of: {", ".join(EMOTIONS)}.
+
+Answer JSON only: {{"lines": [{{"i": 0, "quoteId": null, "basisId": null, "text": "...", "emotion": "neutro"}}, ...]}} with one entry per beat."""
 
 
 def _gemini(prompt: str) -> list[dict[str, Any]]:
@@ -255,7 +271,7 @@ def plan_for(template: str, n_chars: int) -> list[Beat]:
 
 def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
-          indexes: list[Any] | None = None) -> dict[str, Any]:
+          indexes: list[Any] | None = None, tone: str = "comedia") -> dict[str, Any]:
     """Script lines (before TTS) plus the sheets used. ``use_llm`` None -> Gemini when a key is set.
 
     ``mode`` picks the knowledge index behind written lines (:mod:`knowledge`): ``quick`` (key terms,
@@ -278,7 +294,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
     writer = "template"
     if use_llm:
         try:
-            for entry in _gemini(_prompt(plan, sheets, names, topic, lang, template, passages)):
+            for entry in _gemini(_prompt(plan, sheets, names, topic, lang, template, passages, tone)):
                 if isinstance(entry, dict) and isinstance(entry.get("i"), int):
                     drafted[entry["i"]] = entry
             writer = "gemini"
@@ -292,7 +308,8 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
         sheet = sheets[sp]
         by_id = {q["id"]: q for q in _quotable(sheet)}
         draft = drafted.get(i) or {}
-        line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words), "pauseAfterS": beat.pause_s}
+        line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words), "pauseAfterS": beat.pause_s,
+                                "emotion": emotion_of(draft, beat.name)}
         quote = None
         if beat.kind == "quote":
             pool = [q for q in _eligible(sheet, beat.max_words) if (sp, q["id"]) not in used]
@@ -325,7 +342,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
          "passages": [{"source": p["source"], "url": p["url"], "score": p["score"]} for p in ps]}
         for nm, s, ix, ps in zip(names, sheets, indexes, passages)
     ]
-    return {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic}
+    return {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic, "tone": tone}
 
 
 def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]]) -> list[str]:
