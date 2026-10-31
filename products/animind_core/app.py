@@ -43,6 +43,18 @@ def post_character_front(character_id: str, request: Request) -> dict:
     return saved
 
 
+@app.post("/v1/characters/{character_id}/rerig", dependencies=[Depends(require_key)])
+def post_character_rerig(character_id: str, request: Request) -> dict:
+    """Rebuild a saved character on the current layered rig from its stored shots (no image API cost)."""
+    try:
+        saved = characters.rerig(character_id, _base(request))
+    except FileNotFoundError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if saved is None:
+        raise HTTPException(404, "unknown character")
+    return saved
+
+
 @app.post("/v1/characters", dependencies=[Depends(require_key)])
 def post_characters(body: dict, request: Request) -> dict:
     try:

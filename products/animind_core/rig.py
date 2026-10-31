@@ -392,6 +392,41 @@ def regenerate_front(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     return {"views": views, "frontShot": notes["front"]}
 
 
+def rebuild_rig(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
+    """Re-rig a saved character offline (no Gemini): the stored source shots and detector boxes go
+    through today's layered assembly (mouthless head, drawn X/A-H set, lids, brows) and the QA gates."""
+    from . import qa  # noqa: PLC0415
+
+    def boxes_of(name: str, img: Path) -> dict[str, Box]:
+        f = skin / name
+        if f.exists():
+            return {k: tuple(v) for k, v in json.loads(f.read_text())["boxes"].items()}  # type: ignore[misc]
+        return detect_features(img)
+
+    closed = skin / "source_closed.png"
+    if not closed.exists():
+        raise FileNotFoundError(f"{skin.name}: no source_closed.png to re-rig from")
+    side = {"closed": closed} | {k: skin / f"source_{k}.png" for k in ("mouthless", "sheet") if (skin / f"source_{k}.png").exists()}
+    status = {"left": "re-rigged offline", "right": "re-rigged offline (mirror of left)", "front": "left art (no front shot saved)"}
+    matte = BiRefNetMatte()
+    try:
+        views = assemble(skin, side, boxes_of("rig.json", closed), url, matte=matte, sheet=side.get("sheet"))
+        fr = skin / "source_front.png"
+        if fr.exists():
+            fshots = {"closed": fr} | ({"mouthless": skin / "source_front_mouthless.png"} if (skin / "source_front_mouthless.png").exists() else {})
+            fsheet = skin / "source_sheet_front.png"
+            views |= assemble(skin, fshots, boxes_of("rig_front.json", fr), url, matte=matte, front=True,
+                              sheet=fsheet if fsheet.exists() else side.get("sheet"))
+            status["front"] = "re-rigged offline (saved gemini front)"
+        report = qa.finalize(skin, 0.0, {"rerig": 1})
+    finally:
+        matte.close()
+    views.setdefault("front", views["left"])
+    return {"views": views, "viewStatus": status,
+            "qa": {"score": report["score"], "costUsd": 0.0, "attempts": {"rerig": 1},
+                   "failed": [k for k, g in report["gates"].items() if not g["pass"]]}}
+
+
 # ---------------------------------------------------------------- geometry
 
 

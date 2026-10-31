@@ -124,3 +124,26 @@ def regenerate_front(character_id: str, base_url: str) -> dict[str, Any] | None:
         saved["reviewSheetUrl"] = url(sheet.build(skin, saved["name"], saved.get("artStyle", "cartoon")))
     (skin / "character.json").write_text(json.dumps(saved, indent=2), encoding="utf-8")
     return saved
+
+
+def rerig(character_id: str, base_url: str) -> dict[str, Any] | None:
+    """Rebuild a saved character on the current layered rig from its stored shots (no image API)."""
+    saved = load(character_id)
+    if not saved:
+        return None
+    assets = settings.data_dir() / "assets"
+    skin = puppets_dir() / character_id
+
+    def url(path: Path) -> str:
+        return f"{base_url}/v1/files/{path.relative_to(assets).as_posix()}"
+
+    with _BUILD_LOCK:
+        built = rig.rebuild_rig(skin, url)
+    saved["views"], saved["qa"] = built["views"], built["qa"]
+    saved["viewStatus"] = built["viewStatus"]
+    saved["style"] = "rig"
+    if (skin / "qa_sheet.png").exists():
+        saved["qaSheetUrl"] = url(skin / "qa_sheet.png")
+    saved["reviewSheetUrl"] = url(sheet.build(skin, saved.get("name", character_id), saved.get("artStyle", "cartoon")))
+    (skin / "character.json").write_text(json.dumps(saved, indent=2), encoding="utf-8")
+    return saved
