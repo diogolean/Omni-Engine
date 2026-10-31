@@ -36,6 +36,7 @@ def _make(client, prompt="owl professor"):
 def test_character_contract_v2_shape(client):
     c = _make(client)
     assert c["status"] == "ready" and c["style"] == "rig" and c["generator"] == "mock"
+    assert c["qa"]["score"] == 100 and c["qa"]["failed"] == []
     assert set(c["views"]) == {"front", "left", "right"}
     for view in c["views"].values():
         assert {"torso", "neck", "head", "eyes", "eyes_closed", "brows"} <= {

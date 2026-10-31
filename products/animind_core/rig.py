@@ -1059,7 +1059,9 @@ def _cap_open(sprites: dict[str, Image.Image], under: Image.Image, face_h: int) 
         bb = spr.getchannel("A").getbbox()
         if not bb:
             continue
-        k = cap / h
+        # Leave a small rasterisation margin: resizing a soft cavity exactly to
+        # the limit can retain one extra dark row after LANCZOS resampling.
+        k = min(1.0, cap / h * 0.94)
         part = spr.crop(bb)
         nh = max(1, round(part.height * k))
         img = Image.new("RGBA", spr.size, (0, 0, 0, 0))
@@ -1273,6 +1275,8 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
 
 def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     """No-network rig with the same layers, for tests and dev without a key."""
+    from . import qa  # noqa: PLC0415
+
     W, H = 640, 800
     skin.mkdir(parents=True, exist_ok=True)
     base = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -1295,4 +1299,16 @@ def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[st
     views = assemble(skin, {"closed": shots_dir / "closed.png", "open": shots_dir / "open.png"}, boxes, url, matte=lambda im: im.convert("RGBA"))
     views |= assemble(skin, {"closed": shots_dir / "closed.png"}, boxes, url, matte=lambda im: im.convert("RGBA"), front=True)
     status = {"left": "mock", "right": "mock (mirror)", "front": "mock (front rig)"}
-    return {"views": views, "viewStatus": status, "mouthShots": {"open": "mock", "round": "warped"}, "frontShot": "mock"}
+    report = qa.finalize(skin, 0.0, {})
+    return {
+        "views": views,
+        "viewStatus": status,
+        "mouthShots": {"open": "mock", "round": "warped"},
+        "frontShot": "mock",
+        "qa": {
+            "score": report["score"],
+            "costUsd": 0.0,
+            "attempts": {},
+            "failed": [key for key, gate in report["gates"].items() if not gate["pass"]],
+        },
+    }
