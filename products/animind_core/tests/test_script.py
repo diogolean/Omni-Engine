@@ -307,3 +307,58 @@ def test_quote_beats_prefer_the_topic_and_pacing_stays_tight(monkeypatch):
         limit = 16 if line["kind"] == "paraphrase" else 30
         assert script.words(line["text"]) <= limit + 1
     assert sum(script.words(line["text"]) for line in lines) <= 140  # about a minute of speech
+
+
+def test_tidy_cleans_punctuation():
+    assert script.tidy("a verdade existe ?.") == "A verdade existe?"
+    assert script.tidy("verdade ,  existe ..") == "Verdade, existe."
+    assert script.tidy("existe? barba, responda") == "Existe? Barba, responda."
+
+
+def test_source_label_is_short_and_readable():
+    assert script.source_label("Nietzsches Werke\u200e - Página 183, Friedrich Wilhelm Nietzsche - Alfred Kröner, 1921") == "Nietzsches Werke"
+    assert script.source_label("Humano, demasiado humano, página 9, Friedrich Nietzsche, Traduzido por X") == "Humano, demasiado humano"
+    assert script.source_label("Platão · Apologia de Sócrates · 38e-39a") == "Platão · Apologia de Sócrates · 38e-39a"
+    assert len(script.source_label("x" * 200)) <= 48
+
+
+def test_offline_debate_quotes_reply_and_never_repeats():
+    s, n = socrates(), nietzsche()
+    out = script.write("debate", "a verdade existe?", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=False)
+    lines = out["lines"]
+    texts = [line["text"] for line in lines]
+    assert len(set(texts)) == len(texts)  # no line twice
+    quotes = [line for line in lines if line["kind"] == "quote"]
+    assert out["quoteLines"] == len(quotes) >= 2
+    for q in quotes:  # every quote is the sheet's own text, with a short on-screen label
+        sheet = s if q["speaker"] == 0 else n
+        assert any(q["text"] == item["text"] for item in sheet["quotes"])
+        assert q["quote"]["label"] and len(q["quote"]["label"]) <= 48
+    for line in lines:
+        assert line["text"][0].isupper() and line["text"][-1] in ".?!…" and " ," not in line["text"]
+    # written replies address the other speaker by name
+    names = ["Sócrates", "Nietzsche"]
+    for line in lines[1:]:
+        if line["kind"] == "paraphrase":
+            assert names[1 - line["speaker"]] in line["text"]
+
+
+def test_offline_lesson_has_two_real_quotes():
+    out = script.write("lesson", "a verdade existe?", ["Sócrates"], sheets=[socrates()], use_llm=False)
+    assert [line["beat"] for line in out["lines"]] == ["gancho", "ponto 1", "ponto 2", "ponto 3", "exemplo", "resumo"]
+    assert out["quoteLines"] >= 2
+
+
+def test_keyword_prefers_nouns():
+    assert script.keyword("Prefiro morrer tendo falado a minha maneira", "a verdade") == "maneira"
+    assert script.keyword("É preciso que nunca avaliemos um artista pela medida de suas obras.", "arte") == "artista"
+    assert script.keyword("As palavras falsas infectam a alma", "a verdade") == "falsa"
+
+
+def test_gemini_answers_are_cached(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(script, "_gemini_call", lambda prompt: calls.append(prompt) or [{"i": 0, "text": "Olá."}])
+    assert script._gemini("p1") == [{"i": 0, "text": "Olá."}]
+    assert script._gemini("p1") == [{"i": 0, "text": "Olá."}]
+    assert len(calls) == 1 and list((tmp_path / "cache" / "script").glob("*.json"))

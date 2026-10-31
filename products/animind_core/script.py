@@ -80,16 +80,47 @@ def max_seconds(max_words: int) -> float:
     return round(max_words / WORDS_PER_S + 0.8, 1)
 
 
+_SOURCE_TAIL = re.compile(r",?\s*(?:Friedrich\b|Traduzido|tradução|Translated|Alfred\b|NuVisio|Hemus\b|Editora\b)|\s+-\s+\d+\s+páginas")
+_PAGE = re.compile(r"\b(?:[Pp]ágina|[Pp]age|p\.)\s*\d+,?\s*")
+
+
+def source_label(source: str, limit: int = 48) -> str:
+    """Short on-screen form of a sheet source: work and passage, without page numbers, translators or
+    publishers ("Humano, demasiado humano, página 9, Friedrich Nietzsche, Traduzido por ..." ->
+    "Humano, demasiado humano"). The full ``source`` stays in the result and the transcript."""
+    parts = []
+    for part in re.split(r"\s+·\s+", (source or "").replace("\u200e", "")):
+        part = re.split(r"\s+[-–—]\s+", _SOURCE_TAIL.split(part, maxsplit=1)[0], maxsplit=1)[0]
+        part = re.sub(r"\s*\([^)]*\)", "", _PAGE.sub("", part)).strip(" ,;:.-–—")
+        if part and part not in parts:
+            parts.append(part)
+    while len(parts) > 1 and len(" · ".join(parts)) > limit:
+        parts.pop()
+    label = " · ".join(parts)
+    return label if len(label) <= limit else label[: limit - 1].rstrip(" ,;:·-") + "…"
+
+
 def cite(q: dict[str, Any]) -> dict[str, Any]:
-    out = {"id": q["id"], "text": q["text"], "source": q.get("source", ""), "url": q.get("url", ""), "site": "Wikiquote"}
+    out = {"id": q["id"], "text": q["text"], "source": q.get("source", ""), "label": source_label(q.get("source", "")),
+           "url": q.get("url", ""), "site": "Wikiquote"}
     if q.get("wikisource"):
         out["wikisource"] = q["wikisource"]
     return out
 
 
+_STOP_KW = set("""porque quando sobre também apenas mesmo mesma todos todas outro outra outros nossa nosso nossos
+entre depois antes sempre nunca coisas coisa muito muita muitos pouco ainda assim então onde aquele aquela
+aqueles isto aquilo estes estas esses essas deve devem pode podem seria seriam sendo sido estar estou está
+tenho temos fazer feito cada qual quais tudo nada algum alguma ninguém melhor maior menor primeiro
+única único forma espécie existe existem existir você vocês hoje isso esse essa este esta pergunta
+about there their which would could should these those other every thing things people being exists
+today question""".split())
+_STOP_FOLD = {personas.fold(w) for w in _STOP_KW}
+
+
 def _tokens(text: str) -> set[str]:
     """Content words, cut to a 6-letter stem so "verdade" meets "verdades"."""
-    return {w[:6] for w in personas.fold(text).split() if len(w) > 3}
+    return {w[:6] for w in personas.fold(text).split() if len(w) > 3 and w not in _STOP_FOLD}
 
 
 def _quotable(sheet: dict[str, Any]) -> list[dict[str, Any]]:
@@ -101,13 +132,45 @@ def _eligible(sheet: dict[str, Any], max_words: int) -> list[dict[str, Any]]:
     return [q for q in _quotable(sheet) if words(q["text"]) <= max_words]
 
 
+# Related stems (folded, 6 letters), so "a verdade existe?" also meets "palavras falsas" or "convicções".
+CONCEPTS: tuple[frozenset[str], ...] = tuple(frozenset(g.split()) for g in (
+    "verdad falsa falsas falso falsos mentir menti certez convic conhec saber sabedo ignora engano ilusao realid duvida erro "
+    "truth true false lies knowle wisdom",
+    "vida viver vive morte morrer morrem mortal mata matar life live death dying",
+    "moral virtud bondad maldad justic etica pecado culpa remors good evil virtue justice",
+    "felici alegri prazer sofrim desejo happin pleasu suffer",
+    "deus deuses divino religi alma igreja santos god gods divine soul",
+    "poder potenc vontad forca forte fraco fracos vitori guerra power will strong weak",
+    "amor amar paixao odio odiar inimig love hate",
+    "arte artist musica poesia poeta poetas beleza belo art music poetry beauty",
+    "educac ensino ensina aprend mestre aluno escola teach learn school",
+    "liberd livre escrav free freedo slave",
+    "intel inteli maquin tecnol artifi robo comput machin",
+))
+
+
+def _related(tokens: set[str]) -> set[str]:
+    out = set(tokens)
+    for group in CONCEPTS:
+        if tokens & group:
+            out |= group
+    return out
+
+
 def topic_score(q: dict[str, Any], topic: str) -> int:
-    return len(_tokens(topic) & _tokens(q["text"]))
+    """Shared stems with the topic, counted twice, plus stems of related concepts."""
+    t, words_q = _tokens(topic), _tokens(q["text"])
+    return 2 * len(t & words_q) + len((_related(t) - t) & words_q)
 
 
-def _rank(quotes: list[dict[str, Any]], topic: str) -> list[dict[str, Any]]:
-    """On-topic first, then shorter (tight pacing), then sheet order."""
-    return sorted(quotes, key=lambda q: (-topic_score(q, topic), words(q["text"])))
+def chain_score(q: dict[str, Any], topic: str, previous: str) -> int:
+    """Topic fit plus overlap with the line before (a reply that answers what was just said)."""
+    return 2 * topic_score(q, topic) + len(_related(_tokens(previous)) & _tokens(q["text"]))
+
+
+def _rank(quotes: list[dict[str, Any]], topic: str, previous: str = "") -> list[dict[str, Any]]:
+    """On-topic (and answering the previous line) first, then shorter (tight pacing), then sheet order."""
+    return sorted(quotes, key=lambda q: (-chain_score(q, topic, previous), words(q["text"])))
 
 
 def matching_quote(text: str, pool: list[dict[str, Any]], max_words: int) -> dict[str, Any] | None:
@@ -135,6 +198,23 @@ def _clean_paraphrase(text: str, max_words: int) -> str:
     return text
 
 
+def tidy(text: str) -> str:
+    """Clean punctuation for a written line: no space before marks, no "?." or ",.", a capital first
+    letter and a final mark ("a verdade existe?." -> "A verdade existe?")."""
+    t = " ".join(str(text or "").split())
+    t = re.sub(r"\s+([,.;:!?…])", r"\1", t)
+    t = re.sub(r"([?!…])[.,;:]+", r"\1", t)
+    t = re.sub(r"[,;:]+([.?!…])", r"\1", t)
+    t = re.sub(r"(?<!\.)\.\.(?!\.)", ".", t)
+    t = re.sub(r"([,;:])(?=[A-Za-zÀ-ÿ])", r"\1 ", t)
+    t = t.strip(" ,;:")
+    if not t:
+        return t
+    t = t[0].upper() + t[1:]
+    t = re.sub(r"([.?!…]\s+)([a-zà-ÿ])", lambda m: m.group(1) + m.group(2).upper(), t)
+    return t if t[-1] in ".?!…" else t + "."
+
+
 def copies_quote(text: str, sheet: dict[str, Any], run: int = 7) -> bool:
     """True when ``text`` repeats >= ``run`` consecutive words of a sheet quote (an unmarked quote)."""
     t = personas.fold(text).split()
@@ -143,38 +223,142 @@ def copies_quote(text: str, sheet: dict[str, Any], run: int = 7) -> bool:
 
 
 # ---------------------------------------------------------------- template writer
+#
+# Without the LLM (no key, no credit, offline) written lines still answer the line before: each reply
+# names a word from the previous line (usually the opponent's real quote), the hook asks the topic,
+# and the close strikes once and ends. No line repeats inside a script.
+
+_NOUN_END = ("dade", "ção", "são", "ência", "ância", "ismo", "eza", "ura", "mento", "ia", "or", "ude", "agem",
+             "ness", "ity", "tion", "ment", "ism")
 
 
-def _templates(lang: str, topic: str, names: list[str]) -> dict[str, list[str]]:
-    a = names[0] if names else ""
-    b = names[1] if len(names) > 1 else ""
+_VERB_END = ("am", "em", "ar", "er", "ir", "ou", "ava", "iam", "ndo")
+
+
+def singular(word: str) -> str:
+    """Plain pt-BR/en singular of a plural noun or adjective, or "" when unsure."""
+    w = word.lower()
+    for end, rep in (("ões", "ão"), ("ães", "ão"), ("ais", "al"), ("éis", "el"), ("eis", "el")):
+        if w.endswith(end):
+            return w[: -len(end)] + rep
+    if w.endswith(("as", "os", "des", "tes", "ces", "ges", "ves", "nes", "ies")) and not w.endswith("ies"):
+        return w[:-1]
+    return "" if w.endswith("s") and not w.endswith(("ss", "us", "is")) else w
+
+
+_DET = set("a o as os um uma uns umas da do das dos na no nas nos pela pelo pelas pelos minha meu sua seu tua teu nossa nosso "
+           "the a an my your his her our".split())
+
+
+def keyword(text: str, topic: str = "", *, related_only: bool = False) -> str:
+    """The word a reply picks up from ``text``: topic-related nouns first, then nouns (after an article or
+    a noun ending), then longer words; singular, never verbs or function words."""
+    near = _related(_tokens(topic))
+    best, score = "", -99.0
+    prev = ""
+    for raw in re.findall(r"[A-Za-zÀ-ÿ]+(?:-[A-Za-zÀ-ÿ]+)?", text or ""):
+        after_det, prev = prev in _DET, raw.lower()
+        w = singular(raw)
+        if "-" in raw or not w or raw.lower().endswith("mos") or w in _STOP_KW or personas.fold(w) in _STOP_FOLD or len(w) < 4:
+            continue
+        stem = personas.fold(w)[:6]
+        related = stem in near
+        if (len(w) == 4 and not related) or (related_only and not related):
+            continue
+        sc = (3.0 if related else 0.0) + (2.0 if w.endswith(_NOUN_END) else 0.0) + (2.0 if after_det else 0.0) + len(w) / 10
+        sc -= 2.5 if w.endswith(_VERB_END) and not w.endswith(_NOUN_END) and not after_det else 0.0
+        if sc > score:
+            best, score = w, sc
+    return best
+
+
+def topic_parts(topic: str) -> tuple[str, str, bool]:
+    """``(question/headline, key noun, is_question)`` for "a verdade existe?" -> ("A verdade existe?", "verdade", True)."""
+    t = " ".join((topic or "").split()).strip(" .")
+    is_q = t.endswith("?")
+    head = tidy(t)
+    noun = t.rstrip("?").lower() if not is_q and len(t.split()) <= 4 else (keyword(t, t) or t.rstrip("?").lower())
+    return head, noun, is_q
+
+
+def _bank(lang: str) -> dict[str, list[str]]:
     if lang == "en-US":
         return {
-            "gancho": [f"{topic}: what if everything you believe about it is wrong?"],
-            "réplica": [f"Nice line. But it does not answer the question about {topic}.", "Then prove it. Words are cheap, examples are not."],
-            "fechamento": [f"Keep the slogans, {a}. I keep the doubt.", f"Then let the audience decide, {b}."],
-            "ponto 2": [f"Second point: {topic} only makes sense when you test it yourself."],
-            "exemplo": [f"Example: take one belief about {topic} and ask why, three times in a row."],
-            "resumo": [f"Summary: question, test, and only then believe. That is {topic}."],
-            "argumento": [f"Look at {topic} up close and the easy answers fall apart."],
+            "gancho2q": ["{Q} {b}, today you do not dodge the question."],
+            "gancho2": ["Today the subject is {noun}. {b}, this time you do not dodge it."],
+            "gancho1q": ["{Q} I answer with my own words, not with slogans."],
+            "gancho1": ["{Q} Let me answer with my own words."],
+            "tese": ["My thesis: {noun} is not accepted, it is examined."],
+            "réplica0": ["You speak of {kw}, {b}. But who decides what {kw} is?",
+                         "{Kw}, {b}? That is a word, not an answer about {noun}."],
+            "réplica1": ["Nice words about {kw}, {a}. Words are not proof.",
+                         "{Kw}? You keep circling, {a}. Say it plainly."],
+            "tréplica": ["You changed the subject, {b}. I am still waiting for an answer about {noun}."],
+            "fechamento1": ["Talk about {kt} all you want, {a}. I bow to no one."],
+            "fechamento0": ["Then let the audience decide, {b}. I only asked questions."],
+            "fechamento": ["Think about it before you trust the next certainty about {noun}."],
+            "argumento": ["Look at {kw}: without it, {noun} is only an opinion."],
+            "ponto 1": ["First: {noun} is not what everyone repeats, it is what survives the question."],
+            "ponto 2": ["Second: notice the word {kw}. Without it, everything turns into opinion."],
+            "ponto 3": ["Third: whoever knows everything about {noun} has stopped learning."],
+            "exemplo": ["Example: facing a certainty about {noun}, ask why three times in a row."],
+            "resumo": ["Summary: {noun} is examined, not repeated. Keep asking."],
         }
     return {
-        "gancho": [f"{topic.capitalize()}: e se tudo o que você acha disso estiver errado?"],
-        "réplica": [f"Bonita frase. Mas ela não responde nada sobre {topic}.", "Então prove. Frase de efeito é barata, exemplo não."],
-        "fechamento": [f"Fique com os slogans, {a}. Eu fico com a dúvida.", f"Então que o público decida, {b}."],
-        "ponto 2": [f"Segundo ponto: {topic} só faz sentido quando você mesmo testa."],
-        "exemplo": [f"Exemplo: pegue uma certeza sobre {topic} e pergunte por quê, três vezes seguidas."],
-        "resumo": [f"Resumo: perguntar, testar e só então acreditar. Isso é {topic}."],
-        "argumento": [f"Olhe {topic} de perto e as respostas fáceis desmoronam."],
+        "gancho2q": ["{Q} {b}, hoje você não foge da pergunta."],
+        "gancho2": ["Hoje o assunto é {noun}. {b}, desta vez você não foge."],
+        "gancho1q": ["{Q} Eu respondo com as minhas próprias palavras."],
+        "gancho1": ["{Q} Eu respondo com as minhas próprias palavras."],
+        "tese": ["Minha tese: {noun} não se aceita, se examina."],
+        "réplica0": ["Você fala em {kw}, {b}. Mas quem decide o que é {kw}?",
+                     "{Kw}, {b}? Isso é uma palavra, não uma resposta sobre {noun}."],
+        "réplica1": ["Bonito falar em {kw}, {a}. Mas palavra bonita não é prova.",
+                     "{Kw}? Você anda em círculos, {a}. Diga de uma vez."],
+        "tréplica": ["Você mudou de assunto, {b}. Eu continuo esperando a resposta sobre {noun}."],
+        "fechamento1": ["Fale de {kt} o quanto quiser, {a}. Eu não me curvo a ninguém."],
+        "fechamento0": ["Então que o público decida, {b}. Eu só fiz perguntas."],
+        "fechamento": ["Pense nisso antes de acreditar na próxima certeza sobre {noun}."],
+        "argumento": ["Repare em {kw}: sem isso, {noun} vira só opinião."],
+        "ponto 1": ["Primeiro: {noun} não é o que todo mundo repete, é o que resiste à pergunta."],
+        "ponto 2": ["Segundo: repare na palavra {kw}. Sem ela, tudo vira opinião."],
+        "ponto 3": ["Terceiro: quem acha que já sabe tudo sobre {noun} parou de aprender."],
+        "exemplo": ["Exemplo: diante de uma certeza sobre {noun}, pergunte por quê três vezes seguidas."],
+        "resumo": ["Resumo: {noun} se examina, não se repete. Continue perguntando."],
     }
 
 
-def _template_text(beat: Beat, i: int, lang: str, topic: str, names: list[str]) -> str:
-    bank = _templates(lang, topic, names)
-    options = bank.get(beat.name) or bank["réplica"]
-    if beat.name == "fechamento":
-        return options[0 if beat.speaker == 1 else 1] if len(names) > 1 else options[0]
-    return options[i % len(options)]
+def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: list[dict[str, Any]], n: int,
+                   taken: set[str]) -> str:
+    """A written line for ``beat`` that answers ``before`` (the lines so far), never one already in ``taken``."""
+    head, noun, is_q = topic_parts(topic)
+    a = names[0] if names else ""
+    b = names[1] if len(names) > 1 else a
+    sp = min(beat.speaker, n - 1)
+    prev = before[-1]["text"] if before else ""
+    own = [ln["text"] for ln in before if ln["speaker"] == sp and ln.get("kind") == "quote"]
+    other = [ln["text"] for ln in before if ln["speaker"] != sp]
+    kw = keyword(prev, topic) if prev and (n == 1 or before[-1]["speaker"] != sp) else ""
+    if not kw and other:
+        kw = keyword(other[-1], topic)
+    if not kw and own:
+        kw = keyword(own[-1], topic)
+    kw = kw or noun
+    kt = next((k for k in (keyword(t, topic, related_only=True) for t in reversed(other)) if k), noun)
+    bank = _bank(lang)
+    if beat.name == "gancho":
+        key = ("gancho2" if n > 1 else "gancho1") + ("q" if is_q else "")
+    elif beat.name in ("réplica", "fechamento") and n > 1:
+        key = f"{beat.name}{sp}"
+    else:
+        key = beat.name if beat.name in bank else ("réplica0" if sp == 0 else "réplica1")
+    options = list(bank[key])
+    fields = {"Q": head, "noun": noun, "a": a, "b": b, "kw": kw, "Kw": kw[:1].upper() + kw[1:], "kt": kt}
+    for pool in (options, [o for k, v in bank.items() if k.startswith(beat.name.split(" ")[0]) for o in v], bank["réplica0" if sp == 0 else "réplica1"]):
+        for opt in pool:
+            text = tidy(opt.format(**fields))
+            if personas.fold(text) not in taken:
+                return text
+    return tidy(options[0].format(**fields))
 
 
 # ---------------------------------------------------------------- Gemini writer
@@ -242,7 +426,26 @@ Rules:
 Answer JSON only: {{"lines": [{{"i": 0, "quoteId": null, "basisId": null, "text": "...", "emotion": "neutro"}}, ...]}} with one entry per beat."""
 
 
+def _cache_path(prompt: str):
+    import hashlib  # noqa: PLC0415
+
+    key = hashlib.sha256(f"{WRITER_MODEL}\n{prompt}".encode()).hexdigest()[:24]
+    return settings.data_dir() / "cache" / "script" / f"{key}.json"
+
+
 def _gemini(prompt: str) -> list[dict[str, Any]]:
+    """One Gemini text call per distinct prompt; answers are cached on disk (``<data>/cache/script``), so a
+    repeated render of the same topic and cast costs nothing."""
+    cached = _cache_path(prompt)
+    if cached.is_file():
+        return list(json.loads(cached.read_text(encoding="utf-8")).get("lines") or [])
+    lines = _gemini_call(prompt)
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_text(json.dumps({"model": WRITER_MODEL, "lines": lines}, ensure_ascii=False), encoding="utf-8")
+    return lines
+
+
+def _gemini_call(prompt: str) -> list[dict[str, Any]]:
     from google.genai import types  # noqa: PLC0415
 
     from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client  # noqa: PLC0415
@@ -314,9 +517,9 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
         if beat.kind == "quote":
             pool = [q for q in _eligible(sheet, beat.max_words) if (sp, q["id"]) not in used]
             qid = draft.get("quoteId")
-            ranked = _rank(pool, topic)
+            ranked = _rank(pool, topic, lines[-1]["text"] if lines else "")
             quote = next((q for q in pool if q["id"] == qid), None)
-            if quote is None or (ranked and topic_score(quote, topic) == 0 < topic_score(ranked[0], topic)):
+            if quote is None or (ranked and not (_tokens(topic) & _tokens(quote["text"])) and topic_score(quote, topic) < topic_score(ranked[0], topic)):
                 quote = next(iter(ranked), None)  # unknown/reused id, or off-topic while an on-topic quote fits
         else:
             # a written line that *is* one of the speaker's real quotes is shown as that quote, with its source
@@ -327,9 +530,11 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
             line.update(kind="quote", text=quote["text"], quote=cite(quote))
             line["maxS"] = max(line["maxS"], max_seconds(words(quote["text"])))
         else:
-            text = _clean_paraphrase(draft.get("text") or "", beat.max_words)
-            if not text or copies_quote(text, sheet) or knowledge.copies_passage(text, passages[sp]):
-                text = _template_text(beat, i, lang, topic, names)
+            text = tidy(_clean_paraphrase(draft.get("text") or "", beat.max_words))
+            taken = {personas.fold(ln["text"]) for ln in lines}
+            if (not text or personas.fold(text) in taken or copies_quote(text, sheet)
+                    or knowledge.copies_passage(text, passages[sp])):
+                text = _template_text(beat, lang, topic, names, lines, n, taken)
             line.update(kind="paraphrase", text=text)
             basis = by_id.get(draft.get("basisId") or "")
             if basis is not None:
@@ -342,7 +547,8 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
          "passages": [{"source": p["source"], "url": p["url"], "score": p["score"]} for p in ps]}
         for nm, s, ix, ps in zip(names, sheets, indexes, passages)
     ]
-    return {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic, "tone": tone}
+    return {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic, "tone": tone,
+            "quoteLines": sum(1 for ln in lines if ln["kind"] == "quote")}
 
 
 def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]]) -> list[str]:
