@@ -95,24 +95,24 @@ def test_writer_cannot_invent_or_steal_quotes(monkeypatch):
     s = sheet()
     real = s["quotes"][0]
 
-    def fake(prompt):
+    def fake(prompt):  # debate arc: 0 hook (A), 1 thesis quote (B), 4 turn quote (A), 5 reply (B)
         return [
             {"i": 0, "text": "“Eu inventei esta frase”, disse ele, e é falsa."},
             {"i": 1, "quoteId": "q999", "text": "Citação inventada pelo modelo."},  # unknown id -> a real sheet quote
-            {"i": 2, "quoteId": real["id"]},  # other speaker's id must not be used for speaker 1
+            {"i": 4, "quoteId": real["id"]},  # the other speaker's id must not be used for speaker 0
             {"i": 3, "text": "Uma fala escrita, sem citação."},
-            {"i": 4, "text": "Curta e boa.", "basisId": real["id"]},
+            {"i": 6, "text": "Curta e boa.", "basisId": real["id"]},
         ]
 
     monkeypatch.setattr(script, "_gemini", fake)
     other = {"quotes": []}
-    lines = script.write("debate", "IA", ["Sócrates", "B"], sheets=[s, other], use_llm=True)["lines"]
-    assert script.check(lines, [s, other]) == []
+    lines = script.write("debate", "IA", ["B", "Sócrates"], sheets=[other, s], use_llm=True)["lines"]
+    assert script.check(lines, [other, s]) == []
     assert not any(c in lines[0]["text"] for c in script.QUOTE_MARKS)
-    assert lines[1]["kind"] == "quote" and lines[1]["text"] in {q["text"] for q in s["quotes"]}
-    assert lines[2]["speaker"] == 1 and lines[2]["kind"] == "paraphrase"
+    assert lines[1]["speaker"] == 1 and lines[1]["kind"] == "quote" and lines[1]["text"] in {q["text"] for q in s["quotes"]}
+    assert lines[4]["speaker"] == 0 and lines[4]["kind"] == "paraphrase"
     assert lines[3]["kind"] == "paraphrase"
-    assert lines[4]["kind"] == "paraphrase" and "basis" not in lines[4]  # basis must be the speaker's own quote
+    assert lines[6]["kind"] == "paraphrase" and "basis" not in lines[6]  # basis must be the speaker's own quote
 
 
 def test_offline_load_does_not_fetch(tmp_path, monkeypatch):
@@ -263,7 +263,7 @@ def test_index_or_register_pages_are_not_primary_sources():
 def test_real_quote_lines_never_use_secondary_sources(monkeypatch):
     s, n = socrates(), nietzsche()
     secondary = {q["id"] for q in s["quotes"] if q["sourceKind"] == "secondary"}
-    monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 1, "quoteId": sorted(secondary)[0]}, {"i": 5, "quoteId": sorted(secondary)[-1]}])
+    monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 4, "quoteId": sorted(secondary)[0]}, {"i": 8, "quoteId": sorted(secondary)[-1]}])
     # the topic matches the magazine quote best; it still must not be a "Citação real"
     out = script.write("debate", "o raciocínio e a essência das coisas", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
     assert script.check(out["lines"], [s, n]) == []
@@ -276,20 +276,20 @@ def test_real_quote_lines_never_use_secondary_sources(monkeypatch):
 def test_written_line_that_is_a_real_quote_is_marked_with_its_source(monkeypatch):
     s, n = socrates(), nietzsche()
     ids = {q["text"][:12]: q["id"] for q in n["quotes"]}
-    # Nietzsche's quote beats take two other quotes; then the writer puts his real line in a written beat
+    # Nietzsche's quote beat takes another quote; then the writer puts his real line in a written beat
     # (fechamento, speaker 1) with other casing/punctuation, and a 7-word excerpt of Sócrates in another
     monkeypatch.setattr(script, "_gemini", lambda prompt: [
-        {"i": 2, "quoteId": ids["As convicçõe"]}, {"i": 4, "quoteId": ids["Sem música a"]},
-        {"i": 6, "text": "o que NÃO me mata, me fortalece!"},
-        {"i": 3, "text": "Prefiro morrer tendo falado a minha maneira"}])
+        {"i": 1, "quoteId": ids["As convicçõe"]},
+        {"i": 7, "text": "o que NÃO me mata, me fortalece!"},
+        {"i": 2, "text": "Prefiro morrer tendo falado a minha maneira"}])
     lines = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)["lines"]
     assert script.check(lines, [s, n]) == []
-    close = lines[6]
+    close = lines[7]
     assert close["speaker"] == 1 and close["kind"] == "quote"
     assert close["text"] == "O que não me mata me fortalece."  # the sheet's literal text, not the writer's
     assert "Crepúsculo dos Ídolos" in close["quote"]["source"] and close["quote"]["url"].startswith("https://")
     # 7 of 15 words is too little to call it the quote: it stays a marked paraphrase and is not an unmarked copy
-    assert lines[3]["kind"] == "paraphrase" and not script.copies_quote(lines[3]["text"], s)
+    assert lines[2]["kind"] == "paraphrase" and not script.copies_quote(lines[2]["text"], s)
     texts = [line["text"] for line in lines if line["kind"] == "quote"]
     assert len(texts) == len(set(texts))  # never the same quote twice
 
@@ -297,15 +297,15 @@ def test_written_line_that_is_a_real_quote_is_marked_with_its_source(monkeypatch
 def test_quote_beats_prefer_the_topic_and_pacing_stays_tight(monkeypatch):
     s, n = socrates(), nietzsche()
     off_topic = next(q["id"] for q in n["quotes"] if q["text"].startswith("Sem música"))
-    monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 2, "quoteId": off_topic}])
+    monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 1, "quoteId": off_topic}])
     out = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
     lines = out["lines"]
     # the index-page quote ("Sachregister") also matches the topic but is not primary
-    assert lines[2]["kind"] == "quote" and lines[2]["text"] == "As convicções são inimigas mais perigosas da verdade do que as mentiras."
-    assert "Humano, Demasiado Humano" in lines[2]["quote"]["source"]
+    assert lines[1]["kind"] == "quote" and lines[1]["text"] == "As convicções são inimigas mais perigosas da verdade do que as mentiras."
+    assert "Humano, Demasiado Humano" in lines[1]["quote"]["source"]
     assert all("Sachregister" not in line["quote"]["source"] for line in lines if line["kind"] == "quote")
     assert [line["beat"] for line in lines][0] == "gancho" and lines[-1]["beat"] == "fechamento"
-    assert all(a["speaker"] != b["speaker"] for a, b in zip(lines[1:-1], lines[2:-1]))  # alternating after the hook
+    assert all(a["speaker"] != b["speaker"] for a, b in zip(lines, lines[1:]))  # strict alternation, hook included
     for line in lines:
         limit = 16 if line["kind"] == "paraphrase" else 30
         assert script.words(line["text"]) <= limit + 1
@@ -397,3 +397,83 @@ def test_gemini_answers_are_cached(monkeypatch, tmp_path):
     assert script._gemini("p1") == [{"i": 0, "text": "Olá."}]
     assert script._gemini("p1") == [{"i": 0, "text": "Olá."}]
     assert len(calls) == 1 and list((tmp_path / "cache" / "script").glob("*.json"))
+
+
+PAIRS = [(["Sócrates", "Nietzsche"], lambda: [socrates(), nietzsche()]),
+         (["Nietzsche", "Sócrates"], lambda: [nietzsche(), socrates()])]
+TOPICS = ["A verdade existe?", "O que é a felicidade?", "inteligência artificial", "A morte é o fim?", "o amor"]
+
+
+@pytest.mark.parametrize("pair", range(len(PAIRS)))
+@pytest.mark.parametrize("topic", TOPICS)
+def test_debate_is_a_real_exchange_with_an_arc(topic, pair):
+    names, make = PAIRS[pair]
+    sheets = make()
+    out = script.write("debate", topic, names, sheets=sheets, use_llm=False)
+    lines = out["lines"]
+    assert out["scriptQA"] == {"pass": True, "problems": []}, out["scriptQA"]
+    # every spoken quote is literally in the speaker's own sheet, with its source
+    for line in lines:
+        if line["kind"] == "quote":
+            own = {q["id"]: q["text"] for q in sheets[line["speaker"]]["quotes"]}
+            assert own[line["quote"]["id"]] == line["text"] == line["quote"]["text"]
+            assert line["quote"]["source"] and line["quote"]["url"].startswith("https://")
+    # each speaker uses at least one real quote of his own
+    assert {line["speaker"] for line in lines if line["kind"] == "quote"} == {0, 1}
+    # every line answers the one before: speakers alternate and the reply picks up an idea of the previous line
+    for i in range(1, len(lines)):
+        assert lines[i]["speaker"] != lines[i - 1]["speaker"]
+        reply = lines[i]["replyTo"]
+        assert reply["line"] == i - 1 and reply["idea"], (i, lines[i - 1]["text"], lines[i]["text"])
+        assert reply["idea"] == script.link(lines[i - 1]["text"], lines[i]["text"], quote=lines[i]["kind"] == "quote", names=names)
+    # arc: hook, clash, a turn in the middle, a close
+    acts = [line["act"] for line in lines]
+    assert acts[0] == "abertura" and acts[-1] == "fechamento" and lines[0]["beat"] == "gancho"
+    turn = next(i for i, line in enumerate(lines) if line["beat"] == "virada")
+    assert len(lines) / 4 <= turn <= 3 * len(lines) / 4 and lines[turn]["kind"] == "quote"
+    # short, varied lines
+    counts = [script.words(line["text"]) for line in lines]
+    for line, w in zip(lines, counts):
+        assert w <= (script.QUOTE_MAX_WORDS if line["kind"] == "quote" else script.PARAPHRASE_MAX_WORDS + 1)
+    assert min(counts) <= 9 and len(set(counts)) >= len(counts) // 2
+
+
+def test_link_needs_a_shared_idea_not_a_name_or_a_mold_word():
+    assert script.link("Vontade de potência, Sócrates.", "Vontade? Prove, Nietzsche.") == "vontade"
+    assert script.link("Prove, Nietzsche.", "Sócrates, você de novo.", names=["Sócrates", "Nietzsche"]) == ""
+    assert script.link("Isso é medo de admitir.", "Não te acovardes diante de tuas ações!", quote=True) == "medo~acovardes"
+    assert script.link("Isso é medo de admitir.", "Não te acovardes diante de tuas ações!") == ""  # concepts only for quotes
+
+
+def test_check_debate_flags_monologues_fake_quotes_and_long_lines():
+    s, n = socrates(), nietzsche()
+    good = script.write("debate", "A verdade existe?", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=False)["lines"]
+    bad = [dict(line) for line in good]
+    bad[2] = {**bad[2], "kind": "paraphrase", "text": "Gatos dormem muito durante a tarde inteira, Nietzsche."}
+    bad[3] = {**bad[3], "speaker": 0}
+    bad[5] = {**bad[5], "text": " ".join(["palavra"] * 20) + "."}
+    fake = {**bad[4], "text": "Uma frase que Sócrates nunca disse."}
+    fake["quote"] = {**bad[4]["quote"], "text": fake["text"]}
+    bad[4] = fake
+    problems = script.check(bad, [s, n]) + script.check_debate(bad, [s, n], ["Sócrates", "Nietzsche"])
+    assert "line 4: quote is not literally in the sheet" in problems
+    assert "line 2: does not answer line 1" in problems
+    assert "line 3: same speaker twice in a row" in problems
+    assert "line 5: 20 words is too long" in problems
+
+
+def test_llm_lines_that_ignore_the_previous_line_are_rewritten(monkeypatch):
+    s, n = socrates(), nietzsche()
+    monkeypatch.setattr(script, "_gemini", lambda prompt: [
+        {"i": i, "text": "Gatos dormem muito durante a tarde."} for i in (0, 2, 3, 5, 6, 7)])
+    out = script.write("debate", "A verdade existe?", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+    assert all(line["replyTo"]["idea"] for line in out["lines"][1:])
+    assert sum("Gatos" in line["text"] for line in out["lines"]) <= 1  # only the hook may ignore the (empty) past
+
+
+def test_prompt_describes_the_arc():
+    names = ["Sócrates", "Nietzsche"]
+    prompt = script._prompt(script.plan_for("debate", 2), [socrates(), nietzsche()], names, "a verdade", "pt-BR", "debate")
+    assert "act: virada" in prompt and "act: abertura" in prompt
+    assert "repeat one content word" in prompt and "at least one of his real quotes" in prompt
