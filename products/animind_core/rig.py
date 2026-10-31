@@ -1137,6 +1137,19 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
                     ghost[f"{v}_rejected"] = g
     sprites = _cap_open(sprites, clean.crop(mbox), face[3] - face[1])
     skin_rgb, ink = _skin_and_ink(base, face)
+    placed = {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()}
+    mouth_src = "cut"
+    if os.environ.get("ANIMIND_MOUTHS", "drawn") == "drawn":  # Aiwake Rhubarb set over the mouthless head
+        from . import mouthset  # noqa: PLC0415
+        from . import qa  # noqa: PLC0415
+        xb = x_sprite.getchannel("A").point(lambda q: 255 if q > 128 else 0).getbbox()
+        rest = (mbox[0] + xb[0], mbox[1] + xb[1], mbox[0] + xb[2], mbox[1] + xb[3]) if xb else mouth
+        fw = face[2] - face[0]
+        lw = min(max(rest[2] - rest[0], 0.28 * fw), 0.42 * fw) * (1.0 if front else 0.9)
+        cols = mouthset.tones(np.asarray(x_sprite), skin_rgb)
+        drawn = mouthset.draw_set(lw, cols, squeeze=1.0 if front else 0.85, open_cap={k: 0.95 * c * (face[3] - face[1]) for k, c in qa.OPEN_DRAWN.items()})
+        placed = mouthset.place(rest, drawn)
+        mouth_src = "aiwake drawn set"
     raw_eye_boxes = [boxes[k] for k in ("left_eye", "right_eye")]
     eyes_boxes = [_grow(b, size, 0.18, 0.12, 0.25) for b in raw_eye_boxes]
     eyes_open = Image.new("RGBA", size, (0, 0, 0, 0))
@@ -1166,8 +1179,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "eyes_half": _crop_layer(eye["eyes_half"]),
         "brows": _crop_layer(brows),
         "eyeRig": eye["meta"],
-        "visemes": {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()},
-        "mouthQA": {"head": head_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth)},
+        "visemes": placed,
+        "mouthQA": {"head": head_src, "mouths": mouth_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth)},
     }
     (skin / ("sheet_front.json" if front else "sheet.json")).write_text(json.dumps(
         {"used": sorted(good), "ncc": parts_from_sheet.get("cellNcc") if parts_from_sheet else None}), encoding="utf-8")

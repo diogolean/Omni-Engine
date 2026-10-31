@@ -31,6 +31,8 @@ def skin_delta_e(view: Path) -> dict[str, Any]:
     canvas = Image.new("RGBA", (v["canvas"]["w"], v["canvas"]["h"]), (0, 0, 0, 0))
     for layer in sorted(v["layers"], key=lambda l: l["z"]):
         canvas.alpha_composite(Image.open(view / layer["url"]).convert("RGBA"), (layer["x"], layer["y"]))
+    if (v.get("mouthQA") or {}).get("mouths") == "aiwake drawn set":  # inked lips, not a cut skin patch
+        return {"pass": True, "value": 0.0, "limit": LIMITS["skinDeltaE"], "note": "drawn mouths: no skin rim"}
     worst = 0.0
     for name, m in v["visemes"].items():
         p = view / m["url"]
@@ -71,6 +73,11 @@ def residual_mouth(view: Path, mouth_box: list[int]) -> dict[str, Any]:
 def skin_of(rgb: np.ndarray) -> np.ndarray:
     """Local skin colour: median of the brighter half of the pixels (lips, lines and cavity are darker)."""
     px = rgb.reshape(-1, 3).astype(np.float32)
+    # facial hair (white / grey / black beard, mustache) is desaturated: when the patch has enough coloured
+    # pixels, skin comes from those only, else a white beard becomes "skin" and every outline turns into lip ink
+    chroma = px.max(axis=1) - px.min(axis=1)
+    if (chroma > 22).sum() >= max(30, 0.15 * len(px)):
+        px = px[chroma > 22]
     lum = px.mean(axis=1)
     return np.median(px[lum >= np.median(lum)], axis=0)
 
@@ -233,7 +240,7 @@ def double_mouth(view: Path) -> dict[str, Any]:
         c = np.asarray(comp)[ry0:ry1, rx0:rx1]
         a = np.asarray(layer)[ry0:ry1, rx0:rx1, 3]
         ink = ink_of(c)
-        outside = int((ink & (a < 40)).sum())
+        outside = int((ink & (a < (8 if mq.get("mouths") == "aiwake drawn set" else 40))).sum())
         if outside >= min_px:
             bad[name] = f"{outside}px ink outside sprite"
         elif _stacked(ink & (a >= 40), mw, mh, c[..., :3]):
@@ -268,6 +275,8 @@ def resolution(boxes: dict[str, list[int]]) -> dict[str, Any]:
 # and never past OPEN_ABS of the face height. Natural speech, never a scream; A (MBP) stays near closed.
 OPEN_REL = {"X": 1.0, "A": 1.15, "B": 1.3, "G": 1.35, "H": 1.4, "C": 1.45, "F": 1.5, "E": 1.55, "D": 1.7}
 OPEN_ABS = 0.2
+# drawn Aiwake set (no rest-lip reference to scale from): per-viseme cap as a share of the face height
+OPEN_DRAWN = {"X": 0.03, "A": 0.03, "B": 0.055, "G": 0.065, "H": 0.075, "C": 0.085, "F": 0.07, "E": 0.095, "D": 0.115}
 # a mouth hidden under a beard or mustache rests tiny; below this share of the face any viseme is fine
 OPEN_FLOOR = 0.07
 OPEN_SLACK = 0.01
@@ -312,6 +321,10 @@ def mouth_open(view: Path, face: list[int]) -> dict[str, Any]:
     rest = max(1, hs.get("X", 0))
     ratios = {k: round(h / rest, 2) for k, h in hs.items()}
     face_share = {k: round(h / fh, 3) for k, h in hs.items()}
+    if (v.get("mouthQA") or {}).get("mouths") == "aiwake drawn set":
+        bad = {k: face_share[k] for k in hs if face_share[k] > OPEN_DRAWN.get(k, 0.115) + OPEN_SLACK}
+        return {"pass": not bad, "value": max(face_share.values(), default=0), "limit": OPEN_DRAWN, "ratios": ratios,
+                "faceShare": face_share, "bad": bad, "mode": "drawn"}
     bad = {k: ratios[k] for k in hs if (ratios[k] > OPEN_REL.get(k, 1.7) + 0.05 and face_share[k] > OPEN_FLOOR) or face_share[k] > OPEN_ABS + OPEN_SLACK}
     return {"pass": not bad, "value": max(ratios.values(), default=0), "limit": OPEN_REL, "ratios": ratios,
             "faceShare": face_share, "bad": bad}
