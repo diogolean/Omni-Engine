@@ -86,3 +86,21 @@ def test_caption_plate_darkens_behind_text():
     rows = a[a.shape[0] // 2:, cap.width // 2 - 200: cap.width // 2 + 200]
     assert np.median(rows) > 60  # a plate, not only a 5 px text shadow
     assert a[:, :20].max() < 5  # and it stays off the frame edges
+
+
+def test_agora_set_is_a_lit_landscape_not_a_blank_plate():
+    far, mid = look.plates("agora", "debate", [0.29, 0.71])
+    win = np.asarray(far.crop((round(look.OX), round(look.OY), round(look.OX) + look.W, round(look.OY) + look.H)), np.float32)
+    sky, floor = win[: int(look.H * 0.25)], win[int(look.H * 0.7):]
+    assert win.std() > 25  # a built set (sky, hills, columns, floor), not a flat fill
+    assert sky[..., 2].mean() > sky[..., 0].mean() - 40 and sky.mean() > 150  # bright daylight sky
+    assert floor[..., 0].mean() > floor[..., 2].mean() + 20  # warm, sunlit stone underfoot
+    left, right = win[:, : look.W // 3].mean(), win[:, -look.W // 3:].mean()
+    assert left > right - 5  # the sun (key light) is on the left, like the rim of the left speaker
+    assert np.asarray(mid)[..., 3].max() > 0  # mid layer carries light shafts, dust and the olive branch
+    assert "agora" in scene.SCENARIOS and look.light_for("agora", "debate", 0, 0.29).side == -1
+
+
+def test_agora_frame_has_set_and_lecterns():
+    frame = np.asarray(_scene("agora").frame(5.0).convert("RGB"), np.float32)
+    assert frame.std() > 25 and 40 < frame.mean() < 230

@@ -42,7 +42,7 @@ def viseme_mix(cues: list[dict[str, Any]], t: float, fade: float = XFADE_S) -> t
 SS = 2.0  # characters are composited supersampled so close-ups stay sharp
 _REPO = Path(__file__).resolve().parents[2]
 _FONT_DIR = _REPO / "Fonts" / "Montserrat" / "static"
-SCENARIOS = ("studio", "classroom", "arena", "space")
+SCENARIOS = ("studio", "classroom", "arena", "space", "agora")
 # (x centre as a fraction of W, scale on top of BUST_H)
 PLACES = {"debate": [(0.29, 1.0), (0.71, 1.0)], "lesson": [(0.25, 1.0)], "solo": [(0.5, 1.06)]}
 # Set geometry (fractions of H / W). The rigs are busts: each stands behind a lectern whose top hides

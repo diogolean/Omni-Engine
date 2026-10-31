@@ -49,6 +49,7 @@ RIM = {
     "classroom": [(1.0, 0.9, 0.72), (1.0, 0.9, 0.72)],
     "arena": [(1.0, 0.38, 0.42), (0.42, 0.62, 1.0)],
     "space": [(0.55, 0.85, 1.0), (0.85, 0.6, 1.0)],
+    "agora": [(1.0, 0.84, 0.58), (1.0, 0.9, 0.74)],  # low sun from the left, warm sky bounce on the right
 }
 # lift (shadows) and gain (highlights) per channel, S-curve amount
 GRADE = {
@@ -56,6 +57,7 @@ GRADE = {
     "classroom": ((0.03, 0.022, 0.012), (1.05, 1.0, 0.9), 0.3),
     "arena": ((0.02, 0.008, 0.04), (1.06, 0.97, 1.0), 0.45),
     "space": ((0.0, 0.02, 0.05), (0.96, 1.0, 1.08), 0.4),
+    "agora": ((0.035, 0.03, 0.045), (1.03, 1.0, 0.93), 0.22),  # soft painted contrast, lifted violet shadows
 }
 # the set's bounce light, multiplied into the characters so they sit in the same air as the plates
 AMBIENT = {
@@ -63,8 +65,10 @@ AMBIENT = {
     "classroom": (1.0, 0.92, 0.8),
     "arena": (0.98, 0.84, 0.95),
     "space": (0.82, 0.9, 1.04),
+    "agora": (1.0, 0.95, 0.86),
 }
-ACCENT = {"studio": (245, 176, 66), "classroom": (240, 196, 110), "arena": (255, 84, 96), "space": (96, 214, 255)}
+ACCENT = {"studio": (245, 176, 66), "classroom": (240, 196, 110), "arena": (255, 84, 96), "space": (96, 214, 255),
+          "agora": (224, 162, 74)}
 
 
 def light_for(scenario: str, template: str, idx: int, place_x: float) -> Light:
@@ -127,6 +131,13 @@ def _floor(arr: np.ndarray, color: tuple[float, float, float], reflect: float, p
         seam = (np.abs(((u / 22.0) % 1.0) - 0.5) > 0.47).astype(np.float32)
         joint = (np.abs(((v + plank * 37.0) / 160.0) % 1.0 - 0.5) > 0.493).astype(np.float32)
         floor *= (tone * (1 - 0.35 * aa * np.maximum(seam, joint)))[..., None]
+    elif pattern == "stone":  # sun-warmed flagstones, each a slightly different tone
+        cu = np.floor(u / 15.0)
+        cv = np.floor(v / 4.5 + (cu % 2) * 0.5)  # rows staggered like laid stone
+        tone = 0.86 + 0.14 * np.sin(cu * 12.9898 + cv * 78.233) ** 2
+        su = (np.abs(((u / 15.0) % 1.0) - 0.5) > 0.48).astype(np.float32)
+        sv = (np.abs(((v / 4.5 + (cu % 2) * 0.5) % 1.0) - 0.5) > 0.46).astype(np.float32)
+        floor *= (tone * (1 - 0.2 * aa * np.maximum(su, sv)))[..., None]
     elif pattern == "tiles":
         su = (np.abs(((u / 30.0) % 1.0) - 0.5) > 0.475).astype(np.float32)
         sv = (np.abs(((v / 30.0) % 1.0) - 0.5) > 0.47).astype(np.float32)
@@ -159,6 +170,8 @@ def _far(scenario: str, places: list[float]) -> np.ndarray:
     x, y = _grid(PW, PH)
     t = np.clip((y - _py(0.0)) / (_py(HORIZON) - _py(0.0)), 0, 1)[..., None]
     rims = RIM.get(scenario, RIM["studio"])
+    if scenario == "agora":
+        return _agora_far(x, y, places)
     if scenario == "classroom":
         arr = np.array((0.34, 0.29, 0.22), np.float32) * (1 - t) + np.array((0.27, 0.22, 0.16), np.float32) * t
         arr = arr * (0.94 + 0.06 * _noise(PW, PH, 9, 11)[..., None])
@@ -254,11 +267,103 @@ def _far(scenario: str, places: list[float]) -> np.ndarray:
     return arr
 
 
+def _cloud(arr: np.ndarray, x: np.ndarray, y: np.ndarray, cx: float, cy: float, size: float, seed: int) -> None:
+    """A painted cumulus: overlapping puffs, warm lit top fading into a lavender belly (retro anime sky)."""
+    rng = np.random.default_rng(seed)
+    m = np.zeros(x.shape, np.float32)
+    for _ in range(14):
+        dx, dy = rng.uniform(-1.0, 1.0) * size, rng.uniform(-0.3, 0.12) * size
+        r = rng.uniform(0.28, 0.55) * size * (1.0 - abs(dx) / (2.2 * size))
+        m = np.maximum(m, np.clip((1 - np.sqrt((x - _px(cx) - dx * W) ** 2 + ((y - _py(cy) - dy * W) * 1.35) ** 2)
+                                   / (r * W)) * 18, 0, 1))
+    m *= np.clip((_py(cy) + 0.12 * size * W - y) / 6.0, 0, 1)  # flat cloud base
+    k = np.clip((y - (_py(cy) - 0.45 * size * W)) / (0.6 * size * W), 0, 1)[..., None]
+    col = np.array((1.0, 0.97, 0.9), np.float32) * (1 - k) + np.array((0.8, 0.74, 0.84), np.float32) * k
+    _paint(arr, m, col)
+
+
+def _agora_far(x: np.ndarray, y: np.ndarray, places: list[float]) -> np.ndarray:
+    """Ancient set: a stone portico open on a golden-hour landscape (sky with painted clouds,
+    hazy hills with a temple, cypresses), a parapet on the horizon and a flagstone floor.
+    Classical personas (Sócrates, Platão...) debate here; the sun sits on the left like the key light."""
+    t = np.clip((y - _py(-0.15)) / (_py(HORIZON) - _py(-0.15)), 0, 1)[..., None]
+    arr = np.array((0.42, 0.62, 0.82), np.float32) * (1 - t) ** 1.3 + np.array((0.99, 0.86, 0.66), np.float32) * (1 - (1 - t) ** 1.3)
+    arr += _blob(x, y, _px(0.05), _py(0.36), 0.35 * W, 0.3 * H)[..., None] * np.array((0.35, 0.22, 0.06), np.float32)
+    for cx, cy, size, seed in ((0.3, 0.13, 0.1, 61), (0.62, 0.09, 0.13, 62), (0.97, 0.2, 0.08, 63), (0.06, 0.06, 0.07, 64)):
+        _cloud(arr, x, y, cx, cy, size, seed)
+    fx = (x - OX) / W  # frame-space x for the silhouettes
+    ridge = 0.43 + 0.025 * np.sin(fx * 5.1 + 0.6) + 0.015 * np.sin(fx * 13.7 + 2.0)  # far hills, hazy
+    _paint(arr, np.clip((y - _py(ridge)) / 1.5, 0, 1), np.array((0.62, 0.7, 0.72), np.float32))
+    temple = (0.74, 0.4)  # a small temple on the far ridge, washed out by the haze
+    _paint(arr, _rect(x, y, temple[0] - 0.04, temple[1] - 0.012, temple[0] + 0.04, temple[1] + 0.004), (0.86, 0.84, 0.8))
+    for k in range(7):
+        cx0 = temple[0] - 0.034 + k * 0.0113
+        _paint(arr, _rect(x, y, cx0, temple[1] + 0.004, cx0 + 0.005, temple[1] + 0.03), (0.86, 0.84, 0.8))
+    tri = (y < _py(temple[1] - 0.012)) & (y > _py(temple[1] - 0.012) - (0.045 * W - np.abs(x - _px(temple[0])) ) * 0.25)
+    _paint(arr, tri.astype(np.float32), (0.88, 0.86, 0.82))
+    ridge2 = 0.5 + 0.02 * np.sin(fx * 3.3 + 2.4) + 0.01 * np.sin(fx * 17.0)  # nearer hills with olive groves
+    near = np.clip((y - _py(ridge2)) / 1.5, 0, 1)
+    _paint(arr, near, np.array((0.44, 0.55, 0.4), np.float32))
+    arr += (near * (_noise(PW, PH, 40, 65) > 0.62))[..., None] * np.array((-0.08, -0.06, -0.06), np.float32)  # tree clumps
+    for cx, h in ((0.17, 0.3), (0.205, 0.24), (0.82, 0.34), (0.86, 0.26)):  # cypresses behind the parapet
+        r = np.sqrt(((x - _px(cx)) / (0.016 * W)) ** 2 + ((y - _py(HORIZON - 0.05 - h / 2)) / (h / 2 * H)) ** 2)
+        m = np.clip((1 - r) * 12, 0, 1)
+        side = np.clip((x - _px(cx)) / (0.016 * W), -1, 1)[..., None]  # lit on the sun side
+        _paint(arr, m, np.array((0.2, 0.3, 0.19), np.float32) * (1.15 - 0.3 * (side + 1) / 2))
+    stone = np.array((0.86, 0.76, 0.6), np.float32)
+    _paint(arr, _rect(x, y, -0.2, HORIZON - 0.06, 1.2, HORIZON + 0.003), stone * 0.82)  # parapet
+    _add(arr, _rect(x, y, -0.2, HORIZON - 0.064, 1.2, HORIZON - 0.054), (0.1, 0.08, 0.04))  # its sunlit coping
+    for cx in (-0.07, 0.07, 0.93, 1.07):  # portico columns framing the view, fluted, lit from the left
+        x0, x1 = cx - 0.03, cx + 0.03
+        u = np.clip((x - _px(x0)) / (_px(x1) - _px(x0)), 0, 1)
+        shade = (1.08 - 0.42 * u ** 1.4) * (0.94 + 0.06 * np.cos(u * np.pi * 12) ** 2)
+        _paint(arr, _rect(x, y, x0, -0.2, x1, HORIZON + 0.003), stone[None, None, :] * shade[..., None])
+        _paint(arr, _rect(x, y, x0 - 0.012, 0.0, x1 + 0.012, 0.03), stone * 0.95)  # capital
+        _paint(arr, _rect(x, y, x0 - 0.008, HORIZON - 0.02, x1 + 0.008, HORIZON + 0.003), stone * 0.78)  # base
+    _paint(arr, _rect(x, y, -0.2, -0.2, 1.2, -0.0), stone * 0.72)  # architrave, mostly above frame
+    _add(arr, _rect(x, y, -0.2, -0.02, 1.2, -0.0), (0.06, 0.05, 0.03))
+    for px in places:  # warm pools where the speakers stand
+        arr += _blob(x, y, _px(px), _py(0.55), 0.2 * W, 0.2 * H)[..., None] * np.array((0.06, 0.045, 0.02), np.float32)
+    _floor(arr, (0.6, 0.49, 0.36), 0.08, "stone")
+    arr += _blob(x, y, _px(0.15), _py(0.9), 0.45 * W, 0.14 * H)[..., None] * np.array((0.12, 0.08, 0.03), np.float32)
+    for cx in (0.07, 0.93):  # column shadows raking across the floor, away from the sun
+        sh = Image.new("L", (PW, PH), 0)
+        ImageDraw.Draw(sh).polygon([(_px(cx - 0.03), _py(HORIZON)), (_px(cx + 0.03), _py(HORIZON)),
+                                    (_px(cx + 0.36), _py(1.15)), (_px(cx + 0.2), _py(1.15))], fill=90)
+        m = np.asarray(sh.filter(ImageFilter.GaussianBlur(14)), np.float32) / 255.0
+        arr *= 1 - m[..., None] * np.array((0.36, 0.34, 0.29), np.float32)  # darker, a little cooler
+    return arr
+
+
 def _mid(scenario: str, template: str) -> Image.Image:
     """RGBA middle layer: haze and fixtures between the back wall and the characters."""
     img = Image.new("RGBA", (PW, PH), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    rng = np.random.default_rng({"studio": 1, "classroom": 2, "arena": 3, "space": 4}.get(scenario, 1))
+    rng = np.random.default_rng({"studio": 1, "classroom": 2, "arena": 3, "space": 4, "agora": 5}.get(scenario, 1))
+    if scenario == "agora":
+        shaft = Image.new("L", (PW, PH), 0)  # late sun through the portico, raking to the right
+        ds = ImageDraw.Draw(shaft)
+        for x0, x1 in ((-0.04, 0.04), (0.1, 0.22)):
+            ds.polygon([(_px(x0), _py(-0.05)), (_px(x1), _py(-0.05)), (_px(x1 + 0.55), _py(1.05)), (_px(x0 + 0.45), _py(1.05))], fill=26)
+        shaft = shaft.filter(ImageFilter.GaussianBlur(44))
+        img.alpha_composite(Image.merge("RGBA", (*Image.new("RGB", (PW, PH), (255, 226, 170)).split(), shaft)))
+        for _ in range(70):  # pollen and dust drifting in the light
+            cx, cy, r = rng.uniform(0, PW), rng.uniform(_py(0.05), _py(0.75)), rng.uniform(1.5, 4.0)
+            d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(255, 240, 205, int(rng.uniform(40, 110))))
+        leaf = Image.new("RGBA", (PW, PH), (0, 0, 0, 0))  # an olive branch hanging into the top right
+        dl = ImageDraw.Draw(leaf)
+        bx0, by0, bx1, by1 = _px(1.12), _py(-0.12), _px(0.8), _py(0.06)
+        dl.line([(bx0, by0), ((bx0 + bx1) / 2, by0 + 40), (bx1, by1)], fill=(66, 52, 38, 255), width=7, joint="curve")
+        for k in range(16):
+            f = k / 15
+            lx, ly = bx0 + (bx1 - bx0) * f, by0 + (by1 - by0) * f + 40 * math.sin(f * math.pi)
+            side = 1 if k % 2 else -1
+            ex, ey = lx + side * 34 + rng.uniform(-8, 8), ly + 44 + rng.uniform(-8, 12)
+            g = int(rng.uniform(0, 26))
+            dl.polygon([(lx, ly), ((lx + ex) / 2 + 11, (ly + ey) / 2 - 8), (ex, ey), ((lx + ex) / 2 - 11, (ly + ey) / 2 + 8)],
+                       fill=(96 + g, 118 + g, 82 + g // 2, 255))
+        img.alpha_composite(leaf.filter(ImageFilter.GaussianBlur(3.2)))  # nearer than the set: out of focus
+        return img.filter(ImageFilter.GaussianBlur(1.2))
     if scenario == "classroom":
         if template != "lesson":  # the lesson draws its own board on the stage, with the text
             box = (_px(0.35), _py(0.1), _px(0.65), _py(0.44))
@@ -340,7 +445,7 @@ def dof_level(zoom: float, levels: int) -> tuple[int, int, float]:
     return lo, min(levels - 1, lo + 1), u - lo
 
 
-BLOOM = {"studio": 0.22, "classroom": 0.2, "arena": 0.3, "space": 0.3}
+BLOOM = {"studio": 0.22, "classroom": 0.2, "arena": 0.3, "space": 0.3, "agora": 0.26}
 
 
 def bloom(rgb: Image.Image, strength: float, threshold: int = 178) -> Image.Image:
@@ -364,6 +469,7 @@ LECTERN = {
     "classroom": ((0.36, 0.22, 0.12), (0.5, 0.33, 0.19), None),
     "arena": ((0.04, 0.035, 0.05), (0.14, 0.13, 0.16), "rim"),
     "space": ((0.16, 0.19, 0.23), (0.3, 0.35, 0.4), (0.3, 0.85, 1.0)),
+    "agora": ((0.74, 0.65, 0.52), (0.88, 0.8, 0.66), None),  # a marble plinth
 }
 
 
@@ -382,6 +488,11 @@ def lectern(scenario: str, size: tuple[int, int], light: Light) -> Image.Image:
     shade = np.where(y < slab, 1.0, 0.95 - 0.45 * np.clip((y - slab) / (1 - slab), 0, 1))  # darker toward the floor
     col = np.where((y < slab)[:, None, None], np.array(top, np.float32), np.array(body, np.float32))
     rgb = col * key[None, :, None] * shade[:, None, None]
+    if scenario == "agora":  # marble veins and fluting
+        veins = _noise(w, h, 4, 23)
+        rgb *= (0.95 + 0.07 * np.sin(x[None, :] * 40 + veins * 14) ** 8)[..., None]
+        flute = (y >= slab)[:, None] * (np.cos(x[None, :] * np.pi * 18) ** 2)
+        rgb *= (1 - 0.06 * flute)[..., None]
     if scenario == "classroom":  # wood grain and panel inlay
         grain = _noise(w, h, 3, 17)
         rgb *= (0.88 + 0.2 * np.sin(x[None, :] * 90 + grain * 9) * 0.5)[..., None]
