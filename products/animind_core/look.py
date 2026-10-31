@@ -11,7 +11,12 @@ only randomness is ``numpy.random.default_rng`` with fixed seeds.
   ramp and a bottom falloff that hides the bust cut; soft drop shadow per view.
 - Camera: shots with slow push-in, handheld drift and roll, solved into PIL
   affine coefficients (output -> source) per parallax depth.
-- Grade: per-scenario lift/gain + S-curve LUT and a vignette.
+- Depth of field: the plates are pre-blurred at a few lens settings
+  (:data:`DOF_FAR`, :data:`DOF_MID`); the frame blends the two nearest to
+  the shot's zoom, so close-ups throw the set out of focus and a glide racks
+  focus smoothly instead of popping.
+- Grade: per-scenario lift/gain + S-curve LUT, a soft highlight bloom and a
+  vignette centred on the subject of the shot.
 """
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 W, H = 1280, 720
 MARGIN = 1.3  # plate size / frame size
@@ -314,6 +319,43 @@ def plates(scenario: str, template: str, places: list[float]) -> tuple[Image.Ima
     return far, _mid(scenario, template)
 
 
+# Extra blur (plate px) per lens setting, from the wide shot (index 0) to the tightest close-up.
+# The far wall sits deeper than the mid layer (crowd, haze, fixtures), so it defocuses more.
+DOF_FAR = (0.0, 2.6, 5.2, 8.0)
+DOF_MID = (0.0, 1.8, 3.6, 5.6)
+DOF_ZOOM = (1.06, 2.15)  # zoom of the sharpest and of the softest setting
+
+
+def dof_stack(img: Image.Image, sigmas: tuple[float, ...]) -> list[Image.Image]:
+    """``img`` blurred once per lens setting (the first setting is ``img`` itself when its sigma is 0)."""
+    return [img if s <= 0 else img.filter(ImageFilter.GaussianBlur(s)) for s in sigmas]
+
+
+def dof_level(zoom: float, levels: int) -> tuple[int, int, float]:
+    """``(lower, upper, weight of upper)`` lens settings for a camera ``zoom``: continuous, so a push-in
+    or a glide racks focus without steps."""
+    u = min(1.0, max(0.0, (zoom - DOF_ZOOM[0]) / (DOF_ZOOM[1] - DOF_ZOOM[0])))
+    u = u ** 0.85 * (levels - 1)  # over-the-shoulder singles already go noticeably soft
+    lo = min(levels - 1, int(u))
+    return lo, min(levels - 1, lo + 1), u - lo
+
+
+BLOOM = {"studio": 0.22, "classroom": 0.2, "arena": 0.3, "space": 0.3}
+
+
+def bloom(rgb: Image.Image, strength: float, threshold: int = 178) -> Image.Image:
+    """Soft halation around highlights (practicals, LED boards, rim light): the bright part of a
+    quarter-size copy, blurred and screened back at ``strength``."""
+    if strength <= 0:
+        return rgb
+    w, h = rgb.size
+    small = rgb.resize((w // 4, h // 4), Image.BILINEAR)
+    lut = [0 if v < threshold else round((v - threshold) * 255 / (255 - threshold)) for v in range(256)] * 3
+    glow = small.point(lut).filter(ImageFilter.GaussianBlur(6)).resize((w, h), Image.BILINEAR)
+    glow = glow.point([round(v * strength) for v in range(256)] * 3)
+    return ImageChops.screen(rgb, glow)
+
+
 # ---------------------------------------------------------------- set pieces on the stage
 
 # lectern finish per scenario: (body rgb, top rgb, accent strip rgb or None)
@@ -407,6 +449,25 @@ def grade_lut(scenario: str) -> list[int]:
         y = y + s * (y * y * (3 - 2 * y) - y)
         lut += list(np.clip(y * 255 + 0.5, 0, 255).astype(np.uint8).tolist())
     return lut
+
+
+def vignette_field(strength: float = 0.5, size: tuple[int, int] = (W, H)) -> Image.Image:
+    """A vignette twice the frame size; :func:`vignette_at` crops a frame-sized window from it so the
+    falloff centres on the subject (the speaker's face in singles and close-ups)."""
+    W, H = size  # noqa: N806
+    x, y = _grid(2 * W, 2 * H)
+    r = np.sqrt(((x - W) / (W / 2)) ** 2 + ((y - H) / (H / 2)) ** 2) / math.sqrt(2)
+    v = 1 - strength * np.clip((r - 0.45) / 0.55, 0, 1) ** 1.6
+    return Image.fromarray((np.clip(v, 0, 1) * 255).astype(np.uint8)).convert("RGB")
+
+
+def vignette_at(field: Image.Image, centre: tuple[float, float]) -> Image.Image:
+    """Frame-sized vignette from :func:`vignette_field` centred at ``centre`` (output px)."""
+    W, H = field.width // 2, field.height // 2  # noqa: N806
+    cx = min(max(centre[0], W * 0.25), W * 0.75)
+    cy = min(max(centre[1], H * 0.3), H * 0.7)
+    x0, y0 = round(W - cx), round(H - cy)  # the field's centre (W, H) lands on ``centre``
+    return field.crop((x0, y0, x0 + W, y0 + H))
 
 
 def vignette(strength: float = 0.5, size: tuple[int, int] = (W, H)) -> Image.Image:
