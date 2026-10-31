@@ -13,6 +13,10 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 STYLES: dict[str, dict[str, Any]] = {
+    "ghibli": {"label": "Ghibli retrô",
+               "prompt": "Retro hand-drawn Japanese animated film look of the late 1980s, soft painterly cel shading, warm muted "
+                         "palette, gentle thin brown-ink lineart, delicate eyebrows, natural eyelids, calm expressive faces",
+               "grade": ((0.04, 0.03, 0.01), (1.0, 0.97, 0.88), 0.15, 0.9), "tint": ((240, 220, 180), 0.14), "grain": 0.025, "lines": 0.0},
     "cartoon": {"label": "Cartoon",
                 "prompt": "Expressive 2D cartoon character design, clean flat cel shading, bold dark outlines",
                 "grade": None, "tint": None, "grain": 0.0, "lines": 0.0},
@@ -36,7 +40,24 @@ STYLES: dict[str, dict[str, Any]] = {
                  # washes: soft posterised sets, paper fibre blotches, pale paper edges
                  "blur": 2.5, "wash": 6, "paper": 0.16, "vignette": ((246, 238, 222), 0.6)},
 }
-DEFAULT = "cartoon"
+DEFAULT = "ghibli"
+
+# Narrative tone of the script (writer prompt + default emotion per beat); independent of the drawing style.
+TONES: dict[str, dict[str, Any]] = {
+    "comedia": {"label": "Comédia", "prompt": "comedic: witty, light, timing on the punchline, never cruel"},
+    "ficcao": {"label": "Ficção", "prompt": "fictional drama: vivid stakes, characters fully in role"},
+    "horror": {"label": "Horror", "prompt": "horror: eerie, slow dread, unsettling images, no gore"},
+    "serio": {"label": "Sério", "prompt": "serious and respectful: rigorous arguments, calm intensity"},
+}
+DEFAULT_TONE = "comedia"
+
+
+def pick_tone(tone: Any) -> str:
+    return tone if isinstance(tone, str) and tone in TONES else DEFAULT_TONE
+
+
+def tone_catalog() -> list[dict[str, str]]:
+    return [{"id": k, "label": v["label"]} for k, v in TONES.items()]
 
 
 def pick(style: Any) -> str:

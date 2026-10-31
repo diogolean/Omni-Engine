@@ -8,7 +8,16 @@ from products.animind_core import look, rig, styles
 def test_catalog_and_pick():
     ids = [s["id"] for s in styles.catalog()]
     assert {"cartoon", "anime", "retro", "realista", "cyberpunk"} <= set(ids)
-    assert styles.pick("nope") == "cartoon" and styles.pick("retro") == "retro"
+    assert styles.pick("nope") == "ghibli" and styles.pick("retro") == "retro"
+
+
+def test_tones_and_line_emotion():
+    from products.animind_core import script
+    assert styles.pick_tone("horror") == "horror" and styles.pick_tone("x") == "comedia"
+    assert script.emotion_of({"emotion": "Irritado"}, "gancho") == "irritado"
+    assert script.emotion_of({"emotion": "furioso"}, "fechamento") == "desdenhoso"
+    out = script.write("debate", "a verdade existe?", ["Sócrates", "Nietzsche"], use_llm=False, sheets=[{}, {}], indexes=[({}, __import__("numpy").zeros((0, 8))), ({}, __import__("numpy").zeros((0, 8)))], tone="horror")
+    assert out["tone"] == "horror" and all(l["emotion"] in script.EMOTIONS for l in out["lines"])
 
 
 def test_style_feeds_the_gemini_prompt():

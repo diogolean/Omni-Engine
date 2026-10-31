@@ -84,6 +84,12 @@ def get_styles() -> dict:
     return {"styles": styles.catalog(), "default": styles.DEFAULT}
 
 
+@app.get("/v1/tones")
+def get_tones() -> dict:
+    """Script tones accepted as ``tone`` (render)."""
+    return {"tones": styles.tone_catalog(), "default": styles.DEFAULT_TONE}
+
+
 @app.post("/v1/personas/deep", dependencies=[Depends(require_key)])
 def post_deep(body: dict) -> dict:
     """Start (or join) the background deep-knowledge build for one persona."""
