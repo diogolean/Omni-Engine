@@ -42,6 +42,11 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
     lip = colours.pop("lip", None)
     raw = {v: _draw_ghibli_mouth_patch(v, plate_width=_REF_PLATE[0], plate_height=_REF_PLATE[1], organic=True, **colours)
            for v in VISEMES}
+    # Aiwake's F pucker is a ringed bullseye that reads as two stacked mouths at video size: use a small round O
+    e = raw["E"]; bb = e.getchannel("A").getbbox()
+    if bb:
+        o = e.crop(bb); o = o.resize((max(1, round(o.width * 0.55)), max(1, round(o.height * 0.75))), Image.LANCZOS)
+        f = Image.new("RGBA", e.size, (0, 0, 0, 0)); f.paste(o, ((e.width - o.width) // 2, (e.height - o.height) // 2)); raw["F"] = f
     pw = raw["X"].width
     k = lip_width / (0.73 * pw)
     out: dict[str, Image.Image] = {}
