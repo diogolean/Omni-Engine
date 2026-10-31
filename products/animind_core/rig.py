@@ -1105,6 +1105,26 @@ def _cap_open(sprites: dict[str, Image.Image], under: Image.Image, face_h: int) 
     return out
 
 
+def _half_from_closed(closed: Image.Image, boxes, ink) -> Image.Image:
+    """Half lid from the closed-lid layer: its upper part down to ~half the eye (soft cut) plus a thin
+    curved lash at the cut, so glasses and skin match the closed frame exactly."""
+    from PIL import ImageDraw, ImageFilter  # noqa: PLC0415
+    m = Image.new("L", closed.size, 0)
+    d = ImageDraw.Draw(m)
+    lash = Image.new("RGBA", closed.size, (0, 0, 0, 0))
+    dl = ImageDraw.Draw(lash)
+    for x0, y0, x1, y1 in boxes:
+        w, h = x1 - x0, y1 - y0
+        cut = y0 + 0.58 * h
+        d.rectangle((x0 - w * .2, y0 - h * .6, x1 + w * .2, cut), fill=255)
+        dl.arc((x0 + w * .05, cut - h * .25, x1 - w * .05, cut + h * .12), 195, 345, fill=tuple(ink[:3]) + (235,), width=max(2, round(h / 16)))
+    m = m.filter(ImageFilter.GaussianBlur(max(1, (boxes[0][3] - boxes[0][1]) // 14)))
+    half = closed.copy()
+    half.putalpha(Image.fromarray(np.minimum(np.asarray(closed.getchannel("A")), np.asarray(m))))
+    half.alpha_composite(lash.filter(ImageFilter.GaussianBlur(0.7)))
+    return half
+
+
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
              matte: Callable[[Image.Image], Image.Image], front: bool = False,
              sheet: Path | None = None) -> dict[str, Any]:
@@ -1197,7 +1217,10 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         eyes_closed = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_closed"], eyes_boxes) or eyes_closed
     eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
     if parts_from_sheet and "eyes_half" in good:  # Gemini's drawn half lids, registered, over the drawn fallback
-        eye["eyes_half"] = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_half"], eyes_boxes) or eye["eyes_half"]
+        if "eyes_closed" in good:  # consistent with the blink's closed frame (sheet "half" cells are often shut)
+            eye["eyes_half"] = _half_from_closed(eyes_closed, raw_eye_boxes, ink)
+        else:
+            eye["eyes_half"] = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_half"], eyes_boxes) or eye["eyes_half"]
     brows, clean = _eyebrows(clean, raw_eye_boxes)
     chin = max(face[3], mouth[3]) + int((face[3] - face[1]) * 0.04)
     torso, neck, head = _slice_bust(clean, face, chin)
