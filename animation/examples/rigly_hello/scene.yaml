@@ -1,0 +1,32 @@
+# Rigly hello scene. 1920x1080 is one 1080p frame; 1080x1920 and 1080x1080
+# use the same fields. Quote colors so YAML does not treat "#" as a comment.
+version: 1
+width: 1920
+height: 1080
+fps: 30
+seed: 7
+stage: solo
+lip_sync: envelope
+background:
+  color: "#141A22"
+characters:
+  - id: host
+    label: Host
+    accent: "#7EB6D9"
+    facing: right
+    pose:
+      - {t: 0.0, head_angle: -8, glow: 0.35, y_offset: 0}
+      - {t: 1.2, head_angle: 7, glow: 0.55, y_offset: -3}
+      - {t: 2.2, head_angle: 0, glow: 0.2, y_offset: 0}
+    expression:
+      - {t: 0.0, emotion: neutral}
+      - {t: 1.15, emotion: skeptical}
+camera:
+  - {t: 0.0, mode: medium, zoom: 1.0, pan_x: 0.0, pan_y: 0.02}
+  - {t: 1.3, mode: closeup, zoom: 1.08, pan_x: 0.0, pan_y: -0.02}
+lines:
+  - speaker: host
+    start: 0.0
+    end: 2.4
+    text: "Hello from Rigly."
+    emotion: neutral

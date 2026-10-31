@@ -510,37 +510,10 @@ def _placeholder_ensure_manifest(puppet_dir: Path) -> Path:
 
 
 def _placeholder_generate_assets(skin, *, missing: list[str] | None = None) -> None:
-    """Paint flat stand-in layers. A product provider replaces this."""
-    skin.root.mkdir(parents=True, exist_ok=True)
-    size = (
-        int(skin.reference_canvas_size[0]),
-        int(skin.reference_canvas_size[1]),
-    )
-    keys = list(missing) if missing is not None else list(ALL_LAYER_KEYS)
-    for key in keys:
-        path = skin.layer_path(key)
-        if path.is_file():
-            continue
-        image = Image.new("RGBA", size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        if key == "bg":
-            draw.rectangle((0, 0, size[0] - 1, size[1] - 1), fill=(18, 22, 28, 255))
-        elif key in {"body", "head"}:
-            draw.ellipse(
-                (size[0] // 6, size[1] // 10, size[0] * 5 // 6, size[1] * 7 // 10),
-                fill=(70, 84, 96, 255),
-            )
-        elif key == "glow":
-            draw.ellipse(
-                (size[0] // 4, size[1] // 5, size[0] * 3 // 4, size[1] * 3 // 5),
-                fill=(120, 160, 180, 90),
-            )
-        else:
-            draw.ellipse(
-                (size[0] // 3, size[1] // 3, size[0] * 2 // 3, size[1] // 2),
-                fill=(210, 214, 220, 255),
-            )
-        image.save(path)
+    """Paint a generated stand-in. A product provider replaces this."""
+    from .neutral_skin import paint_placeholder_layers  # noqa: PLC0415
+
+    paint_placeholder_layers(skin, missing=missing)
 
 
 def use_placeholder_asset_provider() -> None:
