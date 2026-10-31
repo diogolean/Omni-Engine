@@ -29,7 +29,7 @@ def tones(lips_rgba: np.ndarray, skin: tuple[int, int, int]) -> dict[str, tuple[
     tongue = np.clip(lip * np.array([1.0, 0.78, 0.78]), 0, 255)
     teeth = np.array([246, 242, 236], np.float32)
     f = lambda c: tuple(int(x) for x in c) + (255,)  # noqa: E731
-    return {"outline": f(outline), "cavity": f(cavity), "teeth": f(teeth), "tongue": f(tongue)}
+    return {"outline": f(outline), "cavity": f(cavity), "teeth": f(teeth), "tongue": f(tongue), "lip": f(lip)}
 
 
 def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *, squeeze: float = 1.0,
@@ -38,6 +38,8 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
     width in px; ``squeeze`` < 1 foreshortens 3/4 views; ``open_cap``: max drawn height in px."""
     from products.aiwake.animator.asset_generator import _draw_ghibli_mouth_patch  # noqa: PLC0415
 
+    colours = dict(colours)
+    lip = colours.pop("lip", None)
     raw = {v: _draw_ghibli_mouth_patch(v, plate_width=_REF_PLATE[0], plate_height=_REF_PLATE[1], organic=True, **colours)
            for v in VISEMES}
     pw = raw["X"].width
@@ -47,14 +49,43 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
         im = im.resize((max(1, round(im.width * k * squeeze)), max(1, round(im.height * k))), Image.LANCZOS)
         bb = im.getchannel("A").getbbox()
         cap = open_cap.get(v) if isinstance(open_cap, dict) else open_cap
+        if cap and lip and v not in "XA":
+            cap /= 1.3  # the lip rim adds ~0.27 of the shape height; the cap applies to the whole mouth
         if cap and bb and bb[3] - bb[1] > cap:  # proportional opening limit, centre kept
             part = im.crop(bb)
             nh = max(1, int(cap))
             canvas = Image.new("RGBA", im.size, (0, 0, 0, 0))
             canvas.paste(part.resize((part.width, nh), Image.LANCZOS), (bb[0], (bb[1] + bb[3] - nh) // 2))
             im = canvas
-        out[v] = im
+        out[v] = _lips(im, lip) if lip and v not in "XA" else im
+    W = max(i.width for i in out.values()); H = max(i.height for i in out.values())
+    for v, im in out.items():  # one shared canvas size again, centred: same anchor, comparable sprites
+        c = Image.new("RGBA", (W, H), (0, 0, 0, 0)); c.paste(im, ((W - im.width) // 2, (H - im.height) // 2)); out[v] = c
     return out
+
+
+def _lips(im: Image.Image, lip: tuple[int, int, int, int]) -> Image.Image:
+    """Soft lip-coloured rim under an open shape, so the cavity reads as a mouth in the avatar's own lips
+    instead of a flat sticker (thickest below, like a lower lip); edges feathered into the skin."""
+    from PIL import ImageFilter  # noqa: PLC0415
+    a = im.getchannel("A")
+    bb = a.getbbox()
+    if not bb:
+        return im
+    r = max(1, round((bb[3] - bb[1]) * 0.09))
+    pad = 3 * r
+    big = Image.new("RGBA", (im.width + 2 * pad, im.height + 2 * pad), (0, 0, 0, 0))
+    big.paste(im, (pad, pad))
+    ab = big.getchannel("A")
+    grown = ab.filter(ImageFilter.MaxFilter(2 * r + 1))
+    lower = Image.new("L", ab.size, 0)
+    lower.paste(grown.crop((0, 0, ab.width, ab.height - r)), (0, r))  # lower lip: one more radius down
+    rim = Image.fromarray(np.maximum(np.asarray(grown), np.asarray(lower))).filter(ImageFilter.GaussianBlur(r * 0.6))
+    rim = rim.point(lambda q: int(q * 0.78))
+    layer = Image.new("RGBA", ab.size, lip[:3] + (0,))
+    layer.putalpha(rim)
+    layer.alpha_composite(big)
+    return layer  # padded on every side: place() centres each sprite on the rest lips, so the anchor holds
 
 
 def place(lips: tuple[int, int, int, int], sprites: dict[str, Image.Image]) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
