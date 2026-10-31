@@ -27,10 +27,17 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   source line says "atribuída/disputada", are dropped. Up to 24 quotes, primary first, short (6–20 words)
   first, one per work per round so every book gets a chance.
 
-- **debate**: gancho -> tese (quote) -> réplica (quote) -> réplica -> réplica (quote, <= 20 words) -> tréplica (quote) -> two fechamentos.
-- **lesson**: gancho -> ponto 1 (quote) -> ponto 2 -> ponto 3 (quote) -> exemplo -> resumo. **solo**: gancho -> tese (quote) -> argumento -> fechamento.
-- Each beat has a word budget (`maxS` = words / 2.6 + 0.8 s) and a pause after it. A clip that overruns
-  `maxS` is voiced again at `+15%` (`ttsRate`).
+- **debate** (dramatic arc): gancho (hook, to camera) -> tese (quote) -> réplica (quote) -> réplica (picks up the
+  opponent's key word) -> réplica (quote only if it answers the line before or is really about the topic, else
+  written) -> tréplica (the turn: when the opponent just quoted, his own certainty is turned against him) ->
+  fechamento -> fechamento (the strongest remaining quote that answers the last line, else written).
+- **lesson** (progression): gancho -> pergunta -> citação (quote) -> exemplo -> citação (quote) -> síntese (to camera).
+  **solo**: gancho -> tese (quote) -> argumento -> fechamento.
+- Rhythm: each beat has a word budget (`maxS` = words / (2.6 × pace) + 0.8 s), a pause after it (0–0.6 s: longer
+  after a hook, a quote or the turn, short between quick jabs) and a pace nudge `rateAdj` (quotes −5…−8 %, jabs
+  +2…+6 %) added to the cast voice's rate. A clip that overruns `maxS` is voiced again at `max(rateAdj, 0) + 15%`
+  (`ttsRate` keeps what was used). Offline (no LLM) lines come from several molds per beat, rotated by a seed of
+  the topic and cast; no mold, and no picked-up word, repeats inside one script.
 - `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
   `quote {id, text, source, label, url, site, wikisource?}` (`label` is the short on-screen source: no
   page numbers, translators or publishers, <= 48 chars; `source` stays complete). Gemini (`gemini-2.5-flash`, one text call) only picks
