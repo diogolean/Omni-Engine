@@ -32,7 +32,8 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
 - Each beat has a word budget (`maxS` = words / 2.6 + 0.8 s) and a pause after it. A clip that overruns
   `maxS` is voiced again at `+15%` (`ttsRate`).
 - `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
-  `quote {id, text, source, url, site, wikisource?}`. Gemini (`gemini-2.5-flash`, one text call) only picks
+  `quote {id, text, source, label, url, site, wikisource?}` (`label` is the short on-screen source: no
+  page numbers, translators or publishers, <= 48 chars; `source` stays complete). Gemini (`gemini-2.5-flash`, one text call) only picks
   quote ids and writes the other lines. Only `primary` quotes can be a "Citação real". Quote beats prefer
   quotes sharing words with the topic (stemmed): an unknown/reused id, or an off-topic id while an on-topic
   quote fits, becomes the best topic match (then the shortest), never model text.
@@ -44,7 +45,14 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   (fictional characters, offline) every line is a paraphrase.
 - On screen: a chip "CITAÇÃO REAL · source · Wikiquote" or "PARÁFRASE"; quote captions in italics
   within “ ”; captions paged two rows at a time. The lesson board shows the beat, the line set as large as the board allows, and the quote source; captions carry a tracked speaker label.
-- Result adds `writer` (`gemini`|`template`), `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
+- Each quote beat ranks the speaker's quotes by topic fit (shared stems plus related concepts) and by
+  overlap with the line before it, so a quote answers the previous argument. Every line goes through
+  `tidy()` (no space before punctuation, no "?." or "..", capital first letter, final mark).
+- Without Gemini (no key, no credit, or `use_llm=False`) the template writer still uses the sheet quotes and
+  writes short replies that pick up a noun from the previous line and name the other speaker
+  (hook -> exchange -> climax -> close); no line repeats. Gemini answers are cached on disk by
+  model + prompt (`ANIMIND_DATA_DIR/cache/script/`), so re-rendering the same script costs nothing.
+- Result adds `writer` (`gemini`|`template`), `quoteLines`, `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
   The character name is cut before a comma or parenthesis to find the person ("Sócrates, de toga" -> "Sócrates").
 
 ## Env

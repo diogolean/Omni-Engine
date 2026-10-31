@@ -538,7 +538,8 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
             line.update(kind="paraphrase", text=text)
             basis = by_id.get(draft.get("basisId") or "")
             if basis is not None:
-                line["basis"] = {"id": basis["id"], "source": basis.get("source", ""), "url": basis.get("url", "")}
+                line["basis"] = {"id": basis["id"], "source": basis.get("source", ""),
+                                 "label": source_label(basis.get("source", "")), "url": basis.get("url", "")}
         lines.append(line)
     personas_out = [
         {"name": nm, "found": bool(s.get("found")), "wikiquote": s.get("wikiquote"), "wikipedia": s.get("wikipedia"),
