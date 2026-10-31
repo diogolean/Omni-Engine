@@ -20,11 +20,14 @@ from typing import Any, Iterator
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from . import eyes, look, styles
+from . import eyes, frameqa, look, styles
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
-XFADE_S = 1.5 / FPS  # visemes crossfade over ~1.5 frames instead of popping
+# Viseme changes are hard cuts: each mouth sprite has its own alpha shape, so an alpha crossfade between
+# two shapes shows both mouths at once (the "two mouths" frames). Smoothness comes from the cue timing
+# (render.smooth_visemes), not from blending sprites.
+XFADE_S = 0.0
 
 
 def viseme_mix(cues: list[dict[str, Any]], t: float, fade: float = XFADE_S) -> tuple[str, str, float]:
@@ -177,6 +180,9 @@ class Scene:
         self.names, self.roles = names or [], roles or []
         self.shots = self._plan_shots()
         self._cache: dict[Any, Image.Image] = {}
+        self.trace: list[dict[str, Any]] = []
+        self._mouth_log: list[dict[str, Any]] = []
+        self._mouth_ref: dict[Any, Any] = {}
         n = 2 if self.template == "debate" else 1
         self.lights = [look.light_for(self.scenario, self.template, i, self.places[min(i, len(self.places) - 1)][0]) for i in range(n)]
 
@@ -285,8 +291,10 @@ class Scene:
         p_start, prev, _ = self.shots[k - 1]
         before = pushed(prev, start - p_start)
         if kind == "dissolve" and local < DISSOLVE_S:
+            # a glide, not a cross-dissolve: blending two framings of the same stage doubles every face
             a = look.ease(local / DISSOLVE_S)
-            return [(1 - a, Shot(before.cx, before.cy, before.zoom * (1 + 0.01 * a), before.kind), 0.0), (a, cur, 0.0)]
+            return [(1.0, Shot(before.cx + (cur.cx - before.cx) * a, before.cy + (cur.cy - before.cy) * a,
+                               before.zoom + (cur.zoom - before.zoom) * a, cur.kind), 0.0)]
         if kind == "whip" and local < WHIP_S:
             u = local / WHIP_S
             a = look.ease(u)
@@ -358,10 +366,17 @@ class Scene:
         mouth = rv.visemes.get(cur_v) or rv.visemes.get("X")
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
         before = rv.visemes.get(prev_v) or rv.visemes.get("X")
-        if mouth and before and wv < 1.0 and before[0] is not mouth[0]:
-            fading = mouth[0].copy()  # same alpha shape for every viseme, so a plain blend is seamless
+        if XFADE_S > 0 and mouth and before and wv < 1.0 and before[0] is not mouth[0]:
+            fading = mouth[0].copy()  # only valid when all visemes share one alpha shape; off by default
             fading.putalpha(fading.getchannel("A").point(lambda a: int(a * wv)))
             parts = list(rv.layers) + [("mouth", before[0], before[1], before[2]), ("mouth", fading, mouth[1], mouth[2] + 0.001)]
+        mouths = [p for p in parts if p[0] == "mouth"]
+        if mouths:  # frame trace for the video QA: how many mouth layers were drawn, and where
+            m0 = mouths[-1]
+            bx = m0[1].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *m0[1].size)
+            ox, oy = x0 + m0[2][0], y0 + m0[2][1]
+            self._mouth_log.append({"char": idx, "v": cur_v, "layers": len(mouths), "view": view,
+                                    "box": (ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3])})
         names = {p[0] for p in parts}
         movable = {"eye_white", "iris", "eye_socket"} <= names
         socket = next((p for p in parts if p[0] == "eye_socket"), None)
@@ -372,10 +387,17 @@ class Scene:
                     or (name == "eyes_half" and lids != "half"):
                 continue
             # The face no longer rides the jaw: only the mouth layer changes with speech.
-            dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 6 * SS if name == "brows" else 0)
+            dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 2 * SS if name == "brows" else 0)
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
             stage.alpha_composite(img, (x0 + lx, y0 + ly + round(dy)))
+        if mouths:  # reference: the one mouth as drawn, measured the way the video QA measures frames
+            key = (idx, view, cur_v)
+            if key not in self._mouth_ref:
+                box = self._mouth_log[-1]["box"]
+                crop = np.asarray(stage.crop(box).convert("RGB"))
+                self._mouth_ref[key] = frameqa.measure(crop, (0, 0, crop.shape[1], crop.shape[0]))
+            self._mouth_log[-1]["ref"] = self._mouth_ref[key]
 
     def gaze(self, idx: int, t: float, view: str) -> tuple[float, float]:
         """Where character ``idx`` looks: at the other speaker by default, sometimes at the lens
@@ -479,16 +501,28 @@ class Scene:
             stage.alpha_composite(img, xy)
         return stage
 
+    def _aff(self, shot: Shot, depth: str, drift: tuple[float, float, float], scale: float = 1.0) -> tuple[float, ...]:
+        """PIL affine (output px -> layer px) for a depth plane."""
+        a, b, c, d, e, f = look.affine(shot, depth, drift, scale)
+        if not self.vertical:
+            return a, b, c, d, e, f
+        # output px -> 16:9 frame px of a centred VWIN-wide window, then the usual mapping
+        u, ox = H / self.OH, (W - self.win) / 2
+        return a * u, b * u, a * ox + c, d * u, e * u, d * ox + f
+
+    def _to_output(self, box: tuple[float, float, float, float], shot: Shot, drift: tuple[float, float, float]) -> list[int]:
+        """A stage-px box in output px (inverse of the stage affine)."""
+        a, b, c, d, e, f = self._aff(shot, "stage", drift, SS)
+        m = np.linalg.inv(np.array([[a, b, c], [d, e, f], [0, 0, 1]], dtype=np.float64))
+        pts = [m @ np.array([x, y, 1.0]) for x in (box[0], box[2]) for y in (box[1], box[3])]
+        xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+        return [round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys))]
+
     def _shoot(self, stage: Image.Image, shot: Shot, drift: tuple[float, float, float], blur: float) -> Image.Image:
         size = (self.OW, self.OH)
 
         def aff(depth: str, scale: float = 1.0) -> tuple[float, ...]:
-            a, b, c, d, e, f = look.affine(shot, depth, drift, scale)
-            if not self.vertical:
-                return a, b, c, d, e, f
-            # output px -> 16:9 frame px of a centred VWIN-wide window, then the usual mapping
-            u, ox = H / self.OH, (W - self.win) / 2
-            return a * u, b * u, a * ox + c, d * u, e * u, d * ox + f
+            return self._aff(shot, depth, drift, scale)
 
         out = self.far.transform(size, Image.AFFINE, aff("far"), Image.BILINEAR).convert("RGBA")
         out.alpha_composite(self.mid.transform(size, Image.AFFINE, aff("mid"), Image.BILINEAR))
@@ -639,8 +673,11 @@ class Scene:
         amp = float(self.env[k]) if len(self.env) else 0.0
         cam = self.camera(t)
         shot = cam[-1][1]
+        self._mouth_log: list[dict[str, Any]] = []
         stage = self._stage(t, line, amp, shot)
         drift = look.handheld(t)
+        self.trace.append({"t": round(t, 3), "takes": len(cam), "blur": round(max(c[2] for c in cam), 2),
+                           "mouths": [m | {"box": self._to_output(m["box"], shot, drift)} for m in self._mouth_log]})
         out = None
         for weight, shot, blur in cam:
             img = self._shoot(stage, shot, drift, blur)

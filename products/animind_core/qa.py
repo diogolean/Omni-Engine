@@ -15,8 +15,8 @@ from PIL import Image, ImageDraw
 IMAGE_USD = 0.039
 LIMITS = {"skinDeltaE": 6.0, "residualMouth": 0.04, "frontOffset": 0.05, "landmarkDrift": 0.08,
           "hardEdge": 0.0, "mouthRange": 10.0, "faceWidthPx": 200}
-WEIGHTS = {"skin": 15, "mouthless": 10, "doubleMouth": 20, "mouths": 10, "front": 10, "landmarks": 10, "edges": 15,
-           "resolution": 10}
+WEIGHTS = {"skin": 15, "mouthless": 10, "doubleMouth": 20, "mouthOpen": 10, "mouths": 10, "front": 10, "landmarks": 10,
+           "edges": 10, "resolution": 5}
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -264,6 +264,59 @@ def resolution(boxes: dict[str, list[int]]) -> dict[str, Any]:
     return {"pass": w >= LIMITS["faceWidthPx"], "value": int(w), "limit": LIMITS["faceWidthPx"]}
 
 
+# How far each viseme may open: drawn mouth height relative to the rest mouth X (any species / style),
+# and never past OPEN_ABS of the face height. Natural speech, never a scream; A (MBP) stays near closed.
+OPEN_REL = {"X": 1.0, "A": 1.15, "B": 1.3, "G": 1.35, "H": 1.4, "C": 1.45, "F": 1.5, "E": 1.55, "D": 1.7}
+OPEN_ABS = 0.2
+# a mouth hidden under a beard or mustache rests tiny; below this share of the face any viseme is fine
+OPEN_FLOOR = 0.07
+OPEN_SLACK = 0.01
+
+
+def open_height(sprite: np.ndarray, head: np.ndarray) -> int:
+    """Drawn mouth height in px: sprite pixels (alpha > 128) that differ from the mouthless head under them."""
+    a = sprite[..., 3] > 128
+    d = np.abs(sprite[..., :3].astype(np.int16) - head[..., :3].astype(np.int16)).max(axis=2) > 28
+    return int(_mouth_blob(a & d)[3])
+
+
+def _mouth_blob(m: np.ndarray) -> tuple[int, int, int, int]:
+    """(x, y, w, h) of the mouth in a changed-pixels mask: the largest blob plus sizeable blobs
+    centred over it (lips split by teeth); stray jaw / outline strokes at the sides are ignored."""
+    import cv2  # noqa: PLC0415
+    n, _lab, st, cen = cv2.connectedComponentsWithStats(m.astype(np.uint8), connectivity=8)
+    if n <= 1:
+        return 0, 0, 0, 0
+    big = 1 + int(np.argmax(st[1:, 4]))
+    bx, by, bw, bh, ba = st[big]
+    x0, y0, x1, y1 = bx, by, bx + bw, by + bh
+    for i in range(1, n):
+        if i != big and st[i][4] >= 0.15 * ba and bx + 0.15 * bw <= cen[i][0] <= bx + 0.85 * bw:
+            x0, y0 = min(x0, st[i][0]), min(y0, st[i][1])
+            x1, y1 = max(x1, st[i][0] + st[i][2]), max(y1, st[i][1] + st[i][3])
+    return int(x0), int(y0), int(x1 - x0), int(y1 - y0)
+
+
+def mouth_open(view: Path, face: list[int]) -> dict[str, Any]:
+    """No viseme opens past its natural share of the face height (OPEN_CAP)."""
+    v = json.loads((view / "view.json").read_text())
+    head = next(l for l in v["layers"] if l["name"] == "head")
+    canvas = Image.new("RGBA", (v["canvas"]["w"], v["canvas"]["h"]), (0, 0, 0, 0))
+    canvas.alpha_composite(Image.open(view / head["url"]).convert("RGBA"), (head["x"], head["y"]))
+    fh = max(1, face[3] - face[1])
+    hs = {}
+    for name, m in v["visemes"].items():
+        spr = np.asarray(Image.open(view / m["url"]).convert("RGBA"))
+        h, w = spr.shape[:2]
+        hs[name] = open_height(spr, np.asarray(canvas.crop((m["x"], m["y"], m["x"] + w, m["y"] + h))))
+    rest = max(1, hs.get("X", 0))
+    ratios = {k: round(h / rest, 2) for k, h in hs.items()}
+    face_share = {k: round(h / fh, 3) for k, h in hs.items()}
+    bad = {k: ratios[k] for k in hs if (ratios[k] > OPEN_REL.get(k, 1.7) + 0.05 and face_share[k] > OPEN_FLOOR) or face_share[k] > OPEN_ABS + OPEN_SLACK}
+    return {"pass": not bad, "value": max(ratios.values(), default=0), "limit": OPEN_REL, "ratios": ratios,
+            "faceShare": face_share, "bad": bad}
+
+
 def run(skin: Path) -> dict[str, Any]:
     rig = json.loads((skin / "rig.json").read_text())
     front = json.loads((skin / "rig_front.json").read_text()) if (skin / "rig_front.json").exists() else None
@@ -276,6 +329,7 @@ def run(skin: Path) -> dict[str, Any]:
         "edges": alpha_edges(left),
         "mouths": mouth_range(left),
         "doubleMouth": double_mouth(left),
+        "mouthOpen": mouth_open(left, rig["boxes"]["face"]),
         "resolution": resolution(rig["boxes"]),
     }
     if front and (skin / "views" / "front" / "view.json").exists():
@@ -288,6 +342,9 @@ def run(skin: Path) -> dict[str, Any]:
         if not fd["pass"] or not gates["doubleMouth"]["pass"]:
             gates["doubleMouth"] = {"pass": False, "value": (gates["doubleMouth"]["value"] or 0) + (fd["value"] or 0),
                                     "limit": 0, "bad": {"left": gates["doubleMouth"].get("bad"), "front": fd.get("bad")}}
+        fo = mouth_open(skin / "views" / "front", front["boxes"]["face"])
+        if not fo["pass"]:
+            gates["mouthOpen"] = fo | {"view": "front"}
         fe = alpha_edges(skin / "views" / "front")  # rectangles on the front sprites fail the same gate
         if not fe["pass"]:
             gates["edges"] = fe | {"view": "front"}

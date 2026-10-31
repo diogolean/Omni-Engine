@@ -44,7 +44,7 @@ DETECT_MODEL = "gemini-2.5-flash"
 STYLE_PROMPT = (
     "{subject}. {style}. "
     "Medium bust shot (head and shoulders), three-quarter view, head turned 25 degrees toward the left "
-    "of the image, looking left. Mouth closed, lips together, eyes open, friendly neutral expression. "
+    "of the image, looking left. Mouth closed, lips together, eyes open, friendly neutral expression, delicate thin softly drawn eyebrows. "
     "Head in the upper half of the frame, shoulders reaching the bottom edge, nothing cropped at the top. "
     "Solid flat pure magenta #FF00FF background. No text, no props in front of the face."
 )
@@ -565,12 +565,14 @@ def _eye_opening(base: Image.Image, box: Box) -> tuple[float, float, float, floa
 
 
 def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], ink: tuple[int, int, int]) -> Image.Image:
-    """Closed lids at full resolution: lid-coloured skin over the eye opening with a 1 px
-    edge, plus a crisp lash line (drawn 4x and downsampled for clean anti-aliasing)."""
+    """Fallback closed lids at full resolution: lid-coloured skin over the eye opening, plus a thin
+    soft lash line (drawn 4x and downsampled). The parts sheet's drawn lids are preferred."""
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     for x0, y0, x1, y1 in eyes:
         w, h = x1 - x0, y1 - y0
         tone = _lid_skin(base, (x0, y0, x1, y1), skin)
+        # thin lash line in a deep lid tone, not a thick black stroke
+        lash = tuple(int(0.6 * i + 0.4 * t * 0.55) for i, t in zip(ink, tone))
         k = 4
         ex0, ey0, ex1, ey1 = _eye_opening(base, (x0, y0, x1, y1))
         m = Image.new("L", (w * k, h * k), 0)
@@ -580,7 +582,7 @@ def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int],
         line = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
         ow, oh = ex1 - ex0, ey1 - ey0
         ImageDraw.Draw(line).arc(((ex0 + ow * 0.05) * k, (ey0 - oh * 0.1) * k, (ex1 - ow * 0.05) * k, (ey0 + oh * 0.75) * k),
-                                 20, 160, fill=ink + (255,), width=int(max(1.5 * k, oh * k / 14)))
+                                 20, 160, fill=lash + (255,), width=int(max(0.9 * k, oh * k / 26)))
         lid.alpha_composite(line.resize((w, h), Image.LANCZOS))
         layer.alpha_composite(lid, (x0, y0))
     alpha = np.minimum(np.asarray(layer.getchannel("A")), np.asarray(base.getchannel("A")))
@@ -695,13 +697,22 @@ def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], i
         socket.alpha_composite(sock, (x0, y0))
         shifts.append((max(1.0, min(w * 0.4 - r * 1.1, w * 0.18)), max(1.0, min(h * 0.36 - r * 1.1, h * 0.1))))  # iris stays inside the socket
         # half lid: skin over the upper socket, curved lash line
-        lid = Image.new("RGBA", (w, h), _lid_skin(base, (x0, y0, x0 + w, y0 + h), skin) + (255,))
+        # only over the eye opening (never the brows, glasses or hair above), thin soft lash line
+        tone = _lid_skin(base, (x0, y0, x0 + w, y0 + h), skin)
+        ox0, oy0, ox1, oy1 = _eye_opening(base, b)
+        ow, oh = ox1 - ox0, oy1 - oy0
+        lid = Image.new("RGBA", (w, h), tone + (255,))
         lm = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(lm).ellipse((w * 0.04, h * 0.02, w * 0.96, h * 0.98), fill=255)
-        ImageDraw.Draw(lm).ellipse((w * 0.02, h * 0.42, w * 0.98, h * 1.3), fill=0)
+        ImageDraw.Draw(lm).ellipse((ox0, oy0, ox1, oy1), fill=255)
+        ImageDraw.Draw(lm).ellipse((ox0 - ow * 0.02, oy0 + oh * 0.45, ox1 + ow * 0.02, oy1 + oh * 0.8), fill=0)
         lid.putalpha(lm.filter(ImageFilter.GaussianBlur(0.8)))
-        ImageDraw.Draw(lid).arc((w * 0.1, h * 0.42, w * 0.9, h * 1.3), 215, 325,
-                                fill=ink + (255,), width=max(2, h // 14))
+        lash = tuple(int(0.6 * i + 0.4 * t * 0.55) for i, t in zip(ink, tone))
+        ImageDraw.Draw(lid).arc((ox0 + ow * 0.04, oy0 + oh * 0.45, ox1 - ow * 0.04, oy1 + oh * 0.8), 200, 340,
+                                fill=lash + (255,), width=max(1, round(oh / 22)))
+        soft = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(soft).ellipse((ox0 + 1.5, oy0 + 1.5, ox1 - 1.5, oy1 - 1.5), fill=255)
+        soft = np.asarray(soft.filter(ImageFilter.GaussianBlur(1.5)))
+        lid.putalpha(Image.fromarray(np.minimum(np.asarray(lid.getchannel("A")), soft)))
         half.alpha_composite(lid, (x0, y0))
     for layer in (white, iris, half):
         layer.putalpha(Image.fromarray(np.minimum(np.asarray(layer.getchannel("A")), np.asarray(base.getchannel("A")))))
@@ -930,9 +941,10 @@ def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, s
     n, lab, st, _c = cv2.connectedComponentsWithStats(diff, connectivity=8)
     cx0, cy0, cx1, cy1 = mx0 + mw * 0.1, my0 + mh * 0.1, mx1 - mw * 0.1, my1 - mh * 0.1
     keep = np.zeros_like(diff)
-    for i in range(1, n):
-        sx0, sy0, sw, sh, _a = st[i]
-        if sx0 <= cx1 and sx0 + sw >= cx0 and sy0 <= cy1 and sy0 + sh >= cy0:
+    hit = [i for i in range(1, n) if st[i][0] <= cx1 and st[i][0] + st[i][2] >= cx0 and st[i][1] <= cy1 and st[i][1] + st[i][3] >= cy0]
+    top = max((st[i][4] for i in hit), default=0)
+    for i in hit:  # the mouth, not a jaw / outline stroke of the cell that grazes the core at its side
+        if i == max(hit, key=lambda j: st[j][4]) or (st[i][4] >= 0.03 * top and ell[int(_c[i][1]), int(_c[i][0])] <= 1):
             keep[lab == i] = 1
     keep[ell > 1] = 0  # never past the mouth ellipse (misaligned glasses / hair edges can join through close)
     if keep.sum() < 10:
@@ -965,6 +977,32 @@ def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, s
             out.paste(part.resize((nw, nh), Image.LANCZOS), (max(0, px), max(0, py)))
             sprite = out
     return sprite, round(dropped, 3)
+
+
+def _cap_open(sprites: dict[str, Image.Image], under: Image.Image, face_h: int) -> dict[str, Image.Image]:
+    """Natural amplitude: squash any viseme that opens past qa.OPEN_REL x the rest mouth (or qa.OPEN_ABS of
+    the face) vertically, upper lip fixed, so a short "ah" never turns into a scream."""
+    from . import qa  # noqa: PLC0415
+
+    u = np.asarray(under.convert("RGBA"))
+    rest = max(1, qa.open_height(np.asarray(sprites["X"]), u))
+    out = dict(sprites)
+    for v, spr in sprites.items():
+        a = np.asarray(spr)
+        h = qa.open_height(a, u)
+        cap = min(max(qa.OPEN_REL.get(v, 1.7) * rest, qa.OPEN_FLOOR * face_h), qa.OPEN_ABS * face_h)
+        if h <= cap or h == 0:
+            continue
+        bb = spr.getchannel("A").getbbox()
+        if not bb:
+            continue
+        k = cap / h
+        part = spr.crop(bb)
+        nh = max(1, round(part.height * k))
+        img = Image.new("RGBA", spr.size, (0, 0, 0, 0))
+        img.paste(part.resize((part.width, nh), Image.LANCZOS), (bb[0], bb[1] + round((part.height - nh) * 0.15)))
+        out[v] = img
+    return out
 
 
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
@@ -1032,6 +1070,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
                     sprites[v], ghost[v] = got, g
                 elif got is not None:
                     ghost[f"{v}_rejected"] = g
+    sprites = _cap_open(sprites, clean.crop(mbox), face[3] - face[1])
     skin_rgb, ink = _skin_and_ink(base, face)
     eyes_boxes = [_grow(boxes[k], size, 0.18, 0.25, 0.25) for k in ("left_eye", "right_eye")]
     eyes_open = Image.new("RGBA", size, (0, 0, 0, 0))
@@ -1043,6 +1082,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     if parts_from_sheet and "eyes_closed" in good:
         eyes_closed = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_closed"], eyes_boxes) or eyes_closed
     eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
+    if parts_from_sheet and "eyes_half" in good:  # Gemini's drawn half lids, registered, over the drawn fallback
+        eye["eyes_half"] = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_half"], eyes_boxes) or eye["eyes_half"]
     chin = max(face[3], mouth[3]) + int((face[3] - face[1]) * 0.04)
     torso, neck, head = _slice_bust(clean, face, chin)
     parts = {

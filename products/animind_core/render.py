@@ -9,6 +9,8 @@ placeholders from the app) are drawn as a neutral silhouette.
 """
 from __future__ import annotations
 
+import json
+
 import asyncio
 import logging
 import shutil
@@ -111,7 +113,29 @@ def line_visemes(clip: Path, text: str, offset_s: float) -> tuple[list[dict[str,
     if not cues:
         cues = rhubarb.visemes_from_envelope(envelope(_read_pcm(clip)).tolist(), ENV_FPS)
         source = "envelope"
-    return [{"t": round(offset_s + float(t), 3), "v": str(v)} for t, v in cues], source
+    return smooth_visemes([{"t": round(offset_s + float(t), 3), "v": str(v)} for t, v in cues]), source
+
+
+# Short syllables do not get the full jaw: an "ah" (D) shorter than 80 ms is drawn as C, a 40 ms blip
+# of any open shape as B, and a cue shorter than one frame is absorbed by its neighbour.
+OPEN_STEP = {"D": "C", "E": "C", "C": "B", "F": "B", "H": "B"}
+
+
+def smooth_visemes(cues: list[dict[str, Any]], frame_s: float = 1 / 24) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for i, c in enumerate(cues):
+        dur = (cues[i + 1]["t"] - c["t"]) if i + 1 < len(cues) else 1.0
+        v = c["v"]
+        if v == "D" and dur < 0.08:
+            v = "C"
+        if v in OPEN_STEP and dur < 0.045:
+            v = OPEN_STEP[v] if v != "B" else v
+        if out and dur < frame_s * 0.9 and i + 1 < len(cues):
+            continue  # shorter than a frame: the previous mouth holds
+        if out and out[-1]["v"] == v:
+            continue
+        out.append({"t": c["t"], "v": v})
+    return out
 
 
 def _set(job_id: str, **kw: Any) -> None:
@@ -188,6 +212,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                 preset="veryfast", crf=20, gop=48, tune="animation", threads=2, deterministic=True,
                 encode_timeout_s=900, retain_frames=False,
             )
+        # per-frame trace (mouth layers drawn, where, camera takes) for the frame-by-frame video QA
+        (work / "frames.json").write_text(json.dumps({"fps": scene.FPS, "size": [sc.OW, sc.OH], "frames": sc.trace}))
         files = f"{base_url}/v1/files/jobs/{job_id}"
         _set(job_id, status="done", progress=1.0, result={
             "template": template, "scenario": scenario, "characters": chars,

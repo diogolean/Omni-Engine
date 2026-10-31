@@ -107,13 +107,20 @@ def test_mouth_sprite_soft_alpha_matches_base_and_hides_seam():
     assert (head[~full] == np.asarray(base)[~full]).all()
 
 
-def test_viseme_crossfade_and_iris_clamp():
+def test_viseme_hard_cut_and_iris_clamp():
     from products.animind_core.scene import viseme_mix
     cues = [{"t": 0.0, "v": "X"}, {"t": 1.0, "v": "D"}]
     assert viseme_mix(cues, 0.5) == ("X", "X", 1.0)
-    cur, prev, w = viseme_mix(cues, 1.02)
-    assert (cur, prev) == ("D", "X") and 0 < w < 1
-    assert viseme_mix(cues, 1.5)[2] == 1.0
+    # one frame after a change only the new mouth is drawn: blending two mouth shapes shows two mouths
+    cur, _prev, w = viseme_mix(cues, 1.02)
+    assert cur == "D" and w == 1.0
+
+
+def test_short_open_cues_are_softened():
+    from products.animind_core.render import smooth_visemes
+    out = smooth_visemes([{"t": 0.0, "v": "X"}, {"t": 0.1, "v": "D"}, {"t": 0.15, "v": "B"},
+                          {"t": 0.4, "v": "D"}, {"t": 0.6, "v": "E"}, {"t": 0.62, "v": "C"}, {"t": 0.8, "v": "X"}])
+    assert [c["v"] for c in out] == ["X", "C", "B", "D", "C", "X"]
 
 
 def test_closed_lids_are_sharp():
@@ -124,3 +131,14 @@ def test_closed_lids_are_sharp():
     row = lids[50, 30:110]
     ramp = ((row > 10) & (row < 245)).sum()
     assert ramp <= 6  # edge within ~2-3 px per side, not a blurry blob
+
+
+def test_frameqa_sees_two_stacked_mouths():
+    from PIL import Image, ImageDraw
+    from products.animind_core.frameqa import measure
+    one = Image.new("RGB", (120, 80), (235, 190, 170))
+    ImageDraw.Draw(one).ellipse((30, 30, 90, 50), fill=(90, 20, 30))
+    two = one.copy()
+    ImageDraw.Draw(two).ellipse((32, 56, 88, 72), fill=(90, 20, 30))
+    a, b = measure(np.asarray(one), (0, 0, 120, 80)), measure(np.asarray(two), (0, 0, 120, 80))
+    assert a["blobs"] == 1 and b["blobs"] == 2 and b["cav"] > a["cav"]

@@ -37,8 +37,8 @@ SHEET_PROMPT = (
     "8 upper teeth on lower lip (F,V); 9 open with tongue up behind the teeth (L). "
     "Any moustache or beard stays identical in all nine cells. "
     "Cells 10-12 are close-ups of the SAME eye band (both eyes and eyebrows, identical framing): "
-    "10 eyes open as in the reference; 11 eyes half closed; 12 eyes fully closed, upper lids down with a clean "
-    "lash line. Glasses, earrings, hats, hair strands, fur, scales and every accessory stay exactly as in the "
+    "10 eyes open as in the reference; 11 eyes half closed; 12 eyes fully closed, skin-coloured upper lids down with a fine thin lash line, no thick black stroke, eyebrows unchanged. "
+    "Glasses, earrings, hats, hair strands, fur, scales and every accessory stay exactly as in the "
     "reference in ALL 12 cells (if glasses are worn, the eyes close behind the same glasses). Every cell is a "
     "crop of the same view as the reference, never a different angle. Flat clean cel shading, crisp outlines, nothing outside the cells."
 )
