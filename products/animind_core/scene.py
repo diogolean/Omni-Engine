@@ -507,7 +507,7 @@ class Scene:
             if cur and cur.get("beat"):
                 _tracked(d, (x, top), str(cur["beat"]).upper(), _font("Bold", int(17 * SS)), (*self.accent, 255), 3.5 * SS)
                 d.line((x, top + 30 * SS, x + 44 * SS, top + 30 * SS), fill=(*self.accent, 220), width=int(3 * SS))
-            src = (cur.get("quote") or {}).get("source", "") if quote else ""
+            src = ((cur.get("quote") or {}).get("label") or (cur.get("quote") or {}).get("source", "")) if quote else ""
             text = f"“{key[1]}”" if quote else key[1]
             body_top, body_bot = top + 50 * SS, o + bh - bh * (0.17 if src else 0.09)
             room = body_bot - body_top
@@ -639,15 +639,16 @@ class Scene:
         kind = line.get("kind")
         if kind not in ("quote", "paraphrase"):
             return None
-        key = ("tag", kind, (line.get("quote") or line.get("basis") or {}).get("source", ""))
+        ref = line.get("quote") or line.get("basis") or {}
+        key = ("tag", kind, ref.get("label") or ref.get("source", ""))
         if key not in self._cache:
             pt = self.lang == "pt-BR"
             if kind == "quote":
                 head = "CITAÇÃO REAL" if pt else "REAL QUOTE"
-                src = f"{line['quote'].get('source') or ''} · Wikiquote".lstrip(" ·")
+                src = f"{line['quote'].get('label') or line['quote'].get('source') or ''} · Wikiquote".lstrip(" ·")
             else:
                 head = "PARÁFRASE" if pt else "PARAPHRASE"
-                basis = (line.get("basis") or {}).get("source")
+                basis = (line.get("basis") or {}).get("label") or (line.get("basis") or {}).get("source")
                 src = (("inspirada em " if pt else "after ") + basis) if basis else ("fala escrita para a cena" if pt else "written for the scene")
             d = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
             while d.textlength(src, font=self.source_font) > 560 and len(src) > 12:
