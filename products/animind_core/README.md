@@ -7,8 +7,8 @@ Rhubarb visemes).
 
 | Endpoint | What runs |
 | --- | --- |
-| `POST /v1/characters` | `rig.py`: Gemini image via Aiwake `create_puppet.generate_character_image` (closed mouth, then "open" and "round" edits with the closed shot as reference) -> BiRefNet matte (rembg `birefnet-general`, as in the Rigly rigger) -> magenta despill -> Gemini feature boxes (face, eyes, mouth) -> layers `body`, `head`, `eyes`, `eyes_closed` + mouth sprites `X A B C D E F G H`. `right` is the mirror of `left`; `front` reuses the left art for now. |
-| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes per line (`animation.parametric.rhubarb`, envelope fallback) with absolute times and a `view` per line -> `scene.py` compositor with the cinematic look of `look.py` (built sets per scenario on parallax plates (perspective floor under a 0.6 H horizon, set pieces and practical lights that match the rim colours, depth-of-field blur), each bust standing behind a lectern that hides the cut with a contact shadow on the floor, rim/key light, set ambient and occlusion baked into the rig layers, shot grammar (wide establishing shot, over-the-shoulder singles with the listener out of focus, a close-up cutaway on every real quote, a closing two-shot; the lesson cuts to the board for quotes) with hard cuts, dissolves and whip pans plus push-in and handheld drift, grade LUT + vignette, captions and lower-thirds with name and source; all precomputed per job and deterministic, ~0.1 s/frame on CPU) -> Rigly `animation.parametric.renderer.AnimationRenderer` (ffmpeg) -> `jobs/<id>/preview.mp4` (1280x720, 24 fps, parody label baked in). |
+| `POST /v1/characters` | `rig.py`: Gemini master via Aiwake `create_puppet.generate_character_image` -> generated mouthless head + 4x3 parts sheet (nine Rhubarb mouths and three lid states) -> BiRefNet matte -> registered layers `torso`, `neck`, mouthless `head`, eyes/lids, `brows` and transparent mouth sprites `X A B C D E F G H`. A separate referenced Gemini shot supplies the frontal view; `right` mirrors the 3/4 `left` view. |
+| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame and fails the job if more than one mouth layer, a stacked second mouth, or an excessive opening is found. Successful results include `frameQa` and `frameQaUrl`. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
 Without a Gemini key (or with `ANIMIND_FORCE_MOCK=1`) characters are a flat PIL
@@ -111,8 +111,8 @@ only the front of an existing character. In 9:16, singles put faces at 34% heigh
 29%, so chins stay above the captions (70%).
 
 ### Rig layers (v4)
-Each view (front/left/right) is `torso` → `neck` → `head` (mouthless: the mouth region is inpainted
-with the surrounding skin) → eyes (`eye_white`, `iris`, lids) → mouth viseme (`mouths/X..H`, its own
+Each view (front/left/right) is `torso` → `neck` → `head` (mouthless: the mouth region is generated
+as smooth skin, with inpaint only as fallback) → eyes (`eye_white`, `iris`, lids) → `brows` → mouth viseme (`mouths/X..H`, its own
 layer on top). The bust is sliced with the Aiwake robots' slicer
 (`animation.parametric.factory.layer_slicer.slice_character_layers`: head ends at the jaw, the body
 owns the neck, which rises behind the jaw). The face no longer rides the jaw: only the mouth layer
@@ -132,9 +132,11 @@ never squashed into a second copy (the old "tear" in close-ups).
    landmark drift vs. the side art. The front rig also uses the sheet mouths whose cells register.
 4. **Retries:** a failed sheet/front gate is re-drawn (up to 3 per asset, firmer prompts) while the
    Gemini cap (`MAX_GOOGLE_COST_PER_RUN_USD`, `REEL_REEL_BUDGET_USD`) has room for another image.
-5. **QA** (`qa.py`): skin deltaE, residual mouth (skin-relative), front symmetry, landmarks, alpha
-   edges, resolution -> score 0–100. `qa.json` + `qa_sheet.png` are stored with the character; a failed
+5. **QA** (`qa.py`): skin deltaE, residual/double mouth, mouth opening, front symmetry, landmarks,
+   alpha edges and resolution -> score 0–100. `qa.json` + `qa_sheet.png` are stored with the character; a failed
    skin/edge gate on sheet mouths rebuilds with deterministic mouths (free).
+6. **Render QA** (`frameqa.py`): the encoded MP4 is decoded frame by frame; the render fails closed
+   unless every frame has exactly one mouth and stays within the natural opening cap.
 
 **Cost:** $0.039/image. No retries = 3 images = ~$0.12. Test-phase cap 0.30 allows up to ~7 images;
 production should use a lower cap (see `.env.example`).

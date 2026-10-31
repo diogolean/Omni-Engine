@@ -38,7 +38,9 @@ def test_character_contract_v2_shape(client):
     assert c["status"] == "ready" and c["style"] == "rig" and c["generator"] == "mock"
     assert set(c["views"]) == {"front", "left", "right"}
     for view in c["views"].values():
-        assert {"torso", "neck", "head", "eyes", "eyes_closed"} <= {layer["name"] for layer in view["layers"]}
+        assert {"torso", "neck", "head", "eyes", "eyes_closed", "brows"} <= {
+            layer["name"] for layer in view["layers"]
+        }
         assert set(view["visemes"]) == set("XABCDEFGH")
         for layer in [*view["layers"], *view["visemes"].values()]:
             assert {"name", "url", "x", "y", "w", "h", "z"} <= set(layer)
@@ -81,6 +83,8 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
     assert res["rigged"] == [True]
     assert all(line["visemes"] and line["view"] in {"front", "left", "right"} for line in res["script"])
     assert res["writer"] == "template" and res["personas"][0]["found"] is False
+    assert res["frameQa"]["pass"] and res["frameQa"]["badFrames"] == 0
+    assert client.get("/v1/files/" + res["frameQaUrl"].split("/v1/files/")[1]).status_code == 200
     assert {line["kind"] for line in res["script"]} == {"paraphrase"}  # no sheet offline: nothing passes as a quote
     assert [line["beat"] for line in res["script"]][0] == "gancho"
     assert client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1]).status_code == 200

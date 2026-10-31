@@ -357,7 +357,24 @@ class Scene:
             return
         x0, y0 = round(cx - rv.size[0] / 2), round(bottom) - rv.size[1]
         if soft:
-            stage.alpha_composite(self._soft(idx, view, rv), (x0, y0 + round(breathe * 0.4)))
+            sy = y0 + round(breathe * 0.4)
+            stage.alpha_composite(self._soft(idx, view, rv), (x0, sy))
+            mouth = rv.visemes.get("X")
+            if mouth:
+                bb = mouth[0].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (
+                    0, 0, *mouth[0].size
+                )
+                box = (
+                    x0 + mouth[1][0] + bb[0], sy + mouth[1][1] + bb[1],
+                    x0 + mouth[1][0] + bb[2], sy + mouth[1][1] + bb[3],
+                )
+                key = (idx, view, "X", "soft")
+                if key not in self._mouth_ref:
+                    crop = np.asarray(stage.crop(box).convert("RGB"))
+                    self._mouth_ref[key] = frameqa.measure(crop, (0, 0, crop.shape[1], crop.shape[0]))
+                self._mouth_log.append(
+                    {"char": idx, "v": "X", "layers": 1, "view": view, "box": box, "ref": self._mouth_ref[key]}
+                )
             return
         lids = eyes.blink(t, 7 + idx * 13)
         gx, gy = self.gaze(idx, t, view)
@@ -374,7 +391,8 @@ class Scene:
         if mouths:  # frame trace for the video QA: how many mouth layers were drawn, and where
             m0 = mouths[-1]
             bx = m0[1].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *m0[1].size)
-            ox, oy = x0 + m0[2][0], y0 + m0[2][1]
+            # Mouth follows the head's breathing offset; trace the actual painted position.
+            ox, oy = x0 + m0[2][0], y0 + m0[2][1] + round(breathe)
             self._mouth_log.append({"char": idx, "v": cur_v, "layers": len(mouths), "view": view,
                                     "box": (ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3])})
         names = {p[0] for p in parts}

@@ -9,9 +9,8 @@ placeholders from the app) are drawn as a neutral silhouette.
 """
 from __future__ import annotations
 
-import json
-
 import asyncio
+import json
 import logging
 import shutil
 import subprocess
@@ -23,7 +22,8 @@ from typing import Any
 
 import numpy as np
 
-from . import casting, characters, rig, scene, script as scripts, settings, styles
+from . import casting, characters, frameqa, rig, scene, settings, styles
+from . import script as scripts
 
 _LOG = logging.getLogger("animind_core")
 PARODY_DISCLAIMER = "Paródia • Gerado por IA"
@@ -212,8 +212,17 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                 preset="veryfast", crf=20, gop=48, tune="animation", threads=2, deterministic=True,
                 encode_timeout_s=900, retain_frames=False,
             )
-        # per-frame trace (mouth layers drawn, where, camera takes) for the frame-by-frame video QA
-        (work / "frames.json").write_text(json.dumps({"fps": scene.FPS, "size": [sc.OW, sc.OH], "frames": sc.trace}))
+        # Fail closed: decode the encoded MP4 and verify every measurable mouth, not only the
+        # pre-encode stage.  The report stays beside the render for diagnosis.
+        trace = {"fps": scene.FPS, "size": [sc.OW, sc.OH], "frames": sc.trace}
+        (work / "frames.json").write_text(json.dumps(trace))
+        frame_qa = frameqa.check(video, trace)
+        (work / "frame_qa.json").write_text(json.dumps(frame_qa, indent=2))
+        if not frame_qa["pass"]:
+            raise RuntimeError(
+                f"frame mouth QA failed: {frame_qa['badFrames']} bad frames; "
+                f"{frame_qa['examples'][:3]}"
+            )
         files = f"{base_url}/v1/files/jobs/{job_id}"
         _set(job_id, status="done", progress=1.0, result={
             "template": template, "scenario": scenario, "characters": chars,
@@ -227,6 +236,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
             "personaMode": mode,
             "style": art,
+            "frameQa": frame_qa,
+            "frameQaUrl": f"{files}/frame_qa.json",
         })
     except Exception as exc:  # noqa: BLE001 — surfaced on the job
         _LOG.exception("render job %s failed", job_id)

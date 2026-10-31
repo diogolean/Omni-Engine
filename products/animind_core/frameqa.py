@@ -14,9 +14,9 @@ import sys
 from pathlib import Path
 from typing import Any, Iterator
 
+import cv2
 import numpy as np
 from PIL import Image
-from scipy import ndimage
 
 CAV_ABS = 0.62  # cavity height / mouth width, any viseme
 CAV_GROW = 1.3  # x the drawn sprite's own cavity, plus CAV_SLACK, before a frame counts as over-open
@@ -39,28 +39,26 @@ def measure(img: np.ndarray, box: Any) -> dict[str, Any] | None:
     lum = c @ np.array([0.299, 0.587, 0.114], np.float32)
     border = np.concatenate([lum[0], lum[-1], lum[:, 0], lum[:, -1]])
     dark = lum < 0.55 * float(np.median(border))
-    dark = ndimage.binary_opening(dark, iterations=1)
-    lab, n = ndimage.label(dark)
-    if not n:
+    dark = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    n, _lab, stats, _centres = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    if n <= 1:
         return {"cav": 0.0, "blobs": 0}
-    areas = ndimage.sum(dark, lab, range(1, n + 1))
-    sl = ndimage.find_objects(lab)
     bh, bw = dark.shape
-    def inner(i):  # jaw lines, hair and nose strokes enter from the crop edge; a mouth cavity does not
-        ys, xs = sl[i]
-        cx = (xs.start + xs.stop) / 2
-        return ys.start > 0 and ys.stop < bh and xs.start > 0 and xs.stop < bw and 0.15 * bw < cx < 0.85 * bw
-    keep = [i for i in range(n) if inner(i)]
+    def inner(i: int) -> bool:  # jaw lines, hair and nose strokes enter from the crop edge; a mouth cavity does not
+        x, y, w, h, _area = stats[i]
+        cx = x + w / 2
+        return y > 0 and y + h < bh and x > 0 and x + w < bw and 0.15 * bw < cx < 0.85 * bw
+    keep = [i for i in range(1, n) if inner(i)]
     if not keep:
         return {"cav": 0.0, "blobs": 0}
-    amax = max(areas[i] for i in keep)
-    big = [i + 1 for i in keep if areas[i] >= max(6, 0.12 * amax)]
+    amax = max(stats[i, cv2.CC_STAT_AREA] for i in keep)
+    big = [i for i in keep if stats[i, cv2.CC_STAT_AREA] >= max(6, 0.12 * amax)]
     rows = np.zeros(dark.shape[0], bool)
     spans = []
     for i in big:
-        ys, xs = sl[i - 1]
-        rows[ys] = True
-        spans.append((ys.start, ys.stop, xs.start, xs.stop))
+        x, y, w, h, _area = stats[i]
+        rows[y:y + h] = True
+        spans.append((y, y + h, x, x + w))
     # stacked = two blobs overlapping horizontally but separated vertically by a gap
     stacked = 0
     for a in range(len(spans)):
