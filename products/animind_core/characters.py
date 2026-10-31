@@ -43,6 +43,37 @@ def load(character_id: str) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
+REUSE_MIN_SCORE = 80
+
+
+def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
+    """A saved, QA-approved Gemini rig of the same persona and art style, or None.
+
+    Asking for "Sócrates" again must not pay for a new image: the best-scored ready rig with the same
+    name (accent/case-insensitive) and style is returned, file URLs rebased on this server. Ties go to
+    the newest. ``reuse: false`` in the request (or a ``rawPrompt``) always generates.
+    """
+    best: tuple[int, str, dict[str, Any]] | None = None
+    root = puppets_dir()
+    for path in root.glob("*/character.json") if root.is_dir() else []:
+        try:
+            c = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        score = int((c.get("qa") or {}).get("score") or 0)
+        if (c.get("status") != "ready" or c.get("generator") != "gemini" or score < REUSE_MIN_SCORE
+                or c.get("artStyle") != art_style or _slug(str(c.get("name") or "")) != _slug(name)
+                or c.get("id") != path.parent.name or not (path.parent / "rig.json").is_file()):
+            continue
+        key = (score, str(c.get("createdAt") or ""), c)
+        if best is None or key[:2] > best[:2]:
+            best = key
+    if best is None:
+        return None
+    text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(best[2]))
+    return json.loads(text) | {"reused": True}
+
+
 def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     source = req.get("source") or {}
     kind = source.get("kind")
@@ -69,6 +100,11 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         return f"{files_base}/{path.relative_to(assets).as_posix()}"
 
     art_style = styles.pick(req.get("artStyle"))
+    if req.get("reuse", True) is not False and not req.get("rawPrompt"):
+        found = reusable(name, art_style, base_url)
+        if found:
+            _LOG.info("character %s reused for %r (no image generated)", found["id"], name)
+            return found
     mode = "gemini" if settings.gemini_available() else "mock"
     with _BUILD_LOCK:
         if mode == "gemini":
