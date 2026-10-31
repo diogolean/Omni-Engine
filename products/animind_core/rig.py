@@ -4,15 +4,15 @@ One request makes one character:
 
 1. ``create_puppet.generate_character_image`` (Aiwake factory, guarded Gemini
    Flash image) draws a 3/4 bust facing left on magenta, mouth closed.
-2. The same call, with that image as reference, redraws only the mouth twice:
-   wide open ("AH") and rounded ("OO"). Budget errors skip these shots and
-   the visemes are warped from the closed mouth instead.
+2. Referenced Gemini edits make a mouthless head and a parts sheet with all
+   nine Rhubarb mouths plus half/closed lids. Failed cells fall back to
+   deterministic warps and drawn lids.
 3. BiRefNet (rembg ``birefnet-general``, the Rigly rigger's matte) cuts
    every shot, then the magenta spill is removed. A Gemini text call returns
    the face, eye and mouth boxes.
-4. Layers: ``body`` and ``head`` (split under the chin with an overlap),
-   ``eyes`` and ``eyes_closed``, and one mouth sprite per Rhubarb viseme
-   ``X A B C D E F G H``. The ``right`` view is the mirror of ``left``.
+4. Layers: ``torso``, ``neck`` and mouthless ``head`` (split under the chin
+   with an overlap), movable eyes, lids, eyebrows, and one mouth sprite per
+   Rhubarb viseme ``X A B C D E F G H``. The ``right`` view mirrors ``left``.
 5. ``front``: one more Gemini call redraws the same character facing the
    camera, with the side shot as reference. It is cut, detected and rigged
    (eyes, lids, warped mouths) like the side. If the budget or detection
@@ -26,8 +26,8 @@ touches git. ``build_mock_rig`` draws the same layer set with PIL, no network.
 from __future__ import annotations
 
 import json
-import math
 import logging
+import math
 import os
 import re
 from pathlib import Path
@@ -95,7 +95,10 @@ def detect_features(image_path: Path) -> dict[str, Box]:
     """Face, eye and mouth boxes from a guarded Gemini text call."""
     from google.genai import types  # noqa: PLC0415
 
-    from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client  # noqa: PLC0415
+    from production.cost.google_guardrail import (  # noqa: PLC0415
+        guarded_generate_content,
+        make_guarded_gemini_client,
+    )
 
     with Image.open(image_path) as im:
         w, h = im.size
@@ -140,8 +143,9 @@ def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict
                  tries: int = 2, tag: str = "sheet") -> Path | None:
     """Draw the 4x3 parts sheet (9 mouths + 3 eye states) and gate it: 12 cells must slice out and
     the closed-mouth and open-eye cells must register on the master (NCC). Re-drawn while the cap allows."""
-    from . import partsheet, qa  # noqa: PLC0415
     from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    from . import partsheet, qa  # noqa: PLC0415
 
     with Image.open(closed) as im:
         base = im.convert("RGBA")
@@ -186,8 +190,9 @@ def _mouthless_shot(src: Path, work: Path, boxes: dict[str, Box], tag: str, atte
                     notes: dict[str, str], tries: int = 2) -> Path | None:
     """Gemini edit of ``src`` with the mouth removed (the head is drawn mouthless instead of inpainted).
     Gated: no lip/cavity ink may remain around the mouth; re-drawn once while the cap allows."""
-    from . import qa  # noqa: PLC0415
     from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    from . import qa  # noqa: PLC0415
 
     size = Image.open(src).size
     best: tuple[float, Path] | None = None
@@ -232,8 +237,9 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
     """Generate-then-verify: master (closed mouth) -> parts sheet (all mouths + lids, gated) -> front view
     (gated for symmetry). Order is priority under the cap; a gate failure re-draws only while budget remains,
     otherwise that asset falls back to the deterministic path (warped mouths, drawn lids, side art)."""
-    from . import styles  # noqa: PLC0415
     from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    from . import styles  # noqa: PLC0415
 
     attempts = attempts if attempts is not None else {}
     work.mkdir(parents=True, exist_ok=True)
@@ -590,6 +596,62 @@ def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int],
     return layer
 
 
+def _eyebrows(base: Image.Image, eyes: list[Box]) -> tuple[Image.Image, Image.Image]:
+    """Lift the two brow strokes out of the face and return ``(layer, face_without_brows)``.
+
+    Brows are selected as the widest dark component in the narrow skin band
+    above each eye.  The mask is feathered by one pixel; the same mask is
+    inpainted on the head so moving a brow cannot expose a second, fixed brow.
+    """
+    import cv2  # noqa: PLC0415
+
+    rgba = np.asarray(base.convert("RGBA")).copy()
+    mask = np.zeros(rgba.shape[:2], np.uint8)
+    for x0, y0, x1, y1 in eyes:
+        w, h = max(1, x1 - x0), max(1, y1 - y0)
+        rx0, rx1 = max(0, x0 - w // 5), min(base.width, x1 + w // 5)
+        ry0, ry1 = max(0, y0 - int(h * 0.9)), min(base.height, y0 + max(1, int(h * 0.05)))
+        crop = rgba[ry0:ry1, rx0:rx1]
+        if crop.size == 0:
+            continue
+        opaque = crop[..., 3] > 128
+        rgb = crop[..., :3].astype(np.float32)
+        lum = rgb.mean(axis=2)
+        if opaque.any():
+            pixels = rgb[opaque]
+            skin = np.median(pixels[pixels.mean(axis=1) >= np.median(pixels.mean(axis=1))], axis=0)
+        else:
+            skin = np.array([220, 180, 160], np.float32)
+        dark = (lum < float(skin.mean()) - 38) & (np.abs(rgb - skin).max(axis=2) > 35) & opaque
+        dark = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        n, lab, stats, cents = cv2.connectedComponentsWithStats(dark, connectivity=8)
+        candidates = [
+            i for i in range(1, n)
+            if stats[i, cv2.CC_STAT_WIDTH] >= max(5, int(w * 0.18))
+            and stats[i, cv2.CC_STAT_WIDTH] >= 1.35 * stats[i, cv2.CC_STAT_HEIGHT]
+            and ry0 + cents[i][1] < y0 - h * 0.04
+            and stats[i, cv2.CC_STAT_AREA] >= 4
+        ]
+        if not candidates:
+            continue
+        best = max(candidates, key=lambda i: stats[i, cv2.CC_STAT_AREA] * stats[i, cv2.CC_STAT_WIDTH])
+        chosen = (lab == best).astype(np.uint8)
+        chosen = cv2.dilate(chosen, np.ones((3, 3), np.uint8))
+        mask[ry0:ry1, rx0:rx1] = np.maximum(mask[ry0:ry1, rx0:rx1], chosen * 255)
+
+    soft = cv2.GaussianBlur(mask, (0, 0), 0.8)
+    layer_arr = rgba.copy()
+    layer_arr[..., 3] = np.minimum(layer_arr[..., 3], soft)
+    layer = Image.fromarray(layer_arr)
+    clean_arr = rgba.copy()
+    hole = ((mask > 0) & (rgba[..., 3] > 128)).astype(np.uint8) * 255
+    if hole.any():
+        clean_arr[..., :3] = cv2.inpaint(
+            np.ascontiguousarray(clean_arr[..., :3]), hole, 3, cv2.INPAINT_TELEA
+        )
+    return layer, Image.fromarray(clean_arr)
+
+
 def _sheet_lids(base: Image.Image, closed: Image.Image, eyes: list[Box]) -> Image.Image | None:
     """Closed lids cut from the parts sheet (registered ``closed``): the drawn lids inside each eye
     opening, crisp 1 px edge, shifted to the master's skin colours (median over the eye box rim)."""
@@ -806,7 +868,7 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
     # z: eyes (rest pose, for older clients) and eye_white share a slot; renderers that know
     # eye_white draw white -> iris (shifted by gaze, clipped to eye_socket) -> lids instead.
     order = (("body", 0), ("torso", 0), ("neck", 1), ("head", 2), ("eyes", 3), ("eye_white", 3), ("iris", 4), ("eye_socket", 4),
-             ("eyes_half", 5), ("eyes_closed", 6))
+             ("eyes_half", 5), ("eyes_closed", 6), ("brows", 7))
     for name, z in order:
         if name in parts:
             img, xy = place(*parts[name])
@@ -912,6 +974,7 @@ def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, s
     connected to the detected mouth, holes filled), never a rectangle with the chin. Returns the sprite and
     the share of mouth ink in ``src`` that lies outside that mask (a second / ghost mouth in the cell)."""
     import cv2  # noqa: PLC0415
+
     from . import qa  # noqa: PLC0415
 
     x0, y0, x1, y1 = box
@@ -1072,7 +1135,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
                     ghost[f"{v}_rejected"] = g
     sprites = _cap_open(sprites, clean.crop(mbox), face[3] - face[1])
     skin_rgb, ink = _skin_and_ink(base, face)
-    eyes_boxes = [_grow(boxes[k], size, 0.18, 0.25, 0.25) for k in ("left_eye", "right_eye")]
+    raw_eye_boxes = [boxes[k] for k in ("left_eye", "right_eye")]
+    eyes_boxes = [_grow(b, size, 0.18, 0.12, 0.25) for b in raw_eye_boxes]
     eyes_open = Image.new("RGBA", size, (0, 0, 0, 0))
     for b in eyes_boxes:
         patch = base.crop(b)
@@ -1084,6 +1148,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
     if parts_from_sheet and "eyes_half" in good:  # Gemini's drawn half lids, registered, over the drawn fallback
         eye["eyes_half"] = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_half"], eyes_boxes) or eye["eyes_half"]
+    brows, clean = _eyebrows(clean, raw_eye_boxes)
     chin = max(face[3], mouth[3]) + int((face[3] - face[1]) * 0.04)
     torso, neck, head = _slice_bust(clean, face, chin)
     parts = {
@@ -1097,6 +1162,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "iris": _crop_layer(eye["iris"]),
         "eye_socket": _crop_layer(eye["eye_socket"]),
         "eyes_half": _crop_layer(eye["eyes_half"]),
+        "brows": _crop_layer(brows),
         "eyeRig": eye["meta"],
         "visemes": {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()},
         "mouthQA": {"head": head_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth)},
@@ -1217,6 +1283,7 @@ def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[st
         d.ellipse((x - 26, 298, x + 26, 346), fill=(250, 250, 248, 255), outline=(25, 25, 35, 255), width=3)
         d.ellipse((x - 16, 306, x + 8, 338), fill=(60, 40, 30, 255))
         d.ellipse((x - 10, 314, x + 2, 330), fill=(10, 10, 12, 255))
+        d.line((x - 26, 290, x, 284, x + 26, 290), fill=(65, 42, 35, 255), width=4, joint="curve")
     d.line((285, 440, 355, 440), fill=(120, 40, 50, 255), width=8)
     shot = base.copy()
     ImageDraw.Draw(shot).ellipse((280, 420, 360, 480), fill=(120, 30, 40, 255))

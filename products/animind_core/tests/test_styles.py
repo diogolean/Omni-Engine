@@ -47,6 +47,7 @@ def test_frontality_separates_front_from_three_quarter():
 
 def test_realista_and_aquarela_have_their_own_look():
     from PIL import Image
+
     from products.animind_core import styles
     plate = Image.new("RGBA", (64, 64), (90, 80, 70, 255))
     for st in ("realista", "aquarela"):
@@ -56,6 +57,7 @@ def test_realista_and_aquarela_have_their_own_look():
 
 def test_squashed_open_mouth_keeps_mustache_rows_intact():
     from PIL import Image, ImageDraw
+
     from products.animind_core.rig import _mouth_sprite
     base = Image.new("RGBA", (120, 120), (230, 190, 160, 255))
     ImageDraw.Draw(base).rectangle((20, 40, 100, 55), fill=(30, 30, 30, 255))  # mustache
@@ -74,7 +76,7 @@ def test_rig_has_torso_neck_mouthless_head_and_mouth_layer(tmp_path):
     views = build_mock_rig("Test", tmp_path, lambda p: str(p))["views"]
     for name in ("front", "left", "right"):
         layers = {l["name"]: l for l in views[name]["layers"]}
-        assert {"torso", "neck", "head"} <= set(layers)
+        assert {"torso", "neck", "head", "brows"} <= set(layers)
         assert layers["torso"]["z"] < layers["neck"]["z"] < layers["head"]["z"] < views[name]["visemes"]["X"]["z"]
     left = tmp_path / "views" / "left"
     head = Image.open(left / "head.png").convert("RGBA")
@@ -82,10 +84,13 @@ def test_rig_has_torso_neck_mouthless_head_and_mouth_layer(tmp_path):
     # the mock's lip line (dark red at y=440, x 285..355) is gone from the face layer
     px = np.asarray(head)[440 - hy, 320 - hx]
     assert not (px[0] < 160 and px[1] < 80), px
+    brow = Image.open(left / "brows.png").convert("RGBA")
+    assert np.asarray(brow)[..., 3].max() == 255
 
 
 def test_mouth_sprite_soft_alpha_matches_base_and_hides_seam():
     from PIL import Image, ImageDraw
+
     from products.animind_core.rig import _mouth_sprite, _mouthless
     base = Image.new("RGBA", (160, 160), (230, 190, 160, 255))
     ImageDraw.Draw(base).rectangle((50, 70, 110, 80), fill=(40, 30, 30, 255))  # mustache
@@ -103,7 +108,8 @@ def test_mouth_sprite_soft_alpha_matches_base_and_hides_seam():
     assert np.abs(rgb[ring] - ref[ring]).max() <= 2  # soft rim = base colours, no lighter patch
     head = np.asarray(_mouthless(base, box, mouth))
     # where the sprite is not fully opaque the head is untouched, so no second mustache shows
-    full = np.zeros(head.shape[:2], bool); full[50:130, 20:140] = a > 250
+    full = np.zeros(head.shape[:2], bool)
+    full[50:130, 20:140] = a > 250
     assert (head[~full] == np.asarray(base)[~full]).all()
 
 
@@ -125,6 +131,7 @@ def test_short_open_cues_are_softened():
 
 def test_closed_lids_are_sharp():
     from PIL import Image
+
     from products.animind_core.rig import _eyes_closed
     base = Image.new("RGBA", (200, 120), (230, 190, 160, 255))
     lids = np.asarray(_eyes_closed(base, [(40, 30, 100, 70)], (230, 190, 160), (30, 20, 20)).getchannel("A")).astype(int)
@@ -135,6 +142,7 @@ def test_closed_lids_are_sharp():
 
 def test_frameqa_sees_two_stacked_mouths():
     from PIL import Image, ImageDraw
+
     from products.animind_core.frameqa import measure
     one = Image.new("RGB", (120, 80), (235, 190, 170))
     ImageDraw.Draw(one).ellipse((30, 30, 90, 50), fill=(90, 20, 30))

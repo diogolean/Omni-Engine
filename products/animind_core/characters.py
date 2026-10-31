@@ -3,7 +3,7 @@
 Real path (Gemini key set), see :mod:`products.animind_core.rig`:
   Gemini image (Aiwake ``create_puppet.generate_character_image``) -> BiRefNet
   matte (rembg ``birefnet-general``, as in the Rigly rigger) -> Gemini feature
-  boxes -> body / head / eyes / eyes_closed layers + 9 Rhubarb mouth sprites,
+  boxes -> torso / neck / mouthless head / eyes / lids / brows layers + 9 Rhubarb mouth sprites,
   in ``left`` and ``right`` (mirror) views. ``front`` reuses the left art.
 Mock path (no key, or ``ANIMIND_FORCE_MOCK=1``): a flat PIL drawing cut into
 the same layers, for wiring tests. ``generator`` says which one ran.
