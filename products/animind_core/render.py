@@ -164,9 +164,43 @@ def line_visemes(clip: Path, text: str, offset_s: float) -> tuple[list[dict[str,
     cues = rhubarb.analyze_visemes(clip, dialog_text=text, allow_download=False)
     source = "rhubarb"
     if not cues:
-        cues = rhubarb.visemes_from_envelope(envelope(_read_pcm(clip)).tolist(), ENV_FPS)
+        cues = envelope_visemes(_read_pcm(clip))
         source = "envelope"
     return smooth_visemes([{"t": round(offset_s + float(t), 3), "v": str(v)} for t, v in cues]), source
+
+
+# Envelope fallback (no Rhubarb binary): one mouth per syllable-sized window, not per 10 ms envelope
+# step.  The shared ``rhubarb.visemes_from_envelope`` changes shape every envelope sample, so every
+# cue is shorter than a video frame and ``smooth_visemes`` used to absorb them all into the first
+# "X": a frozen mouth for the whole line.  Here a window's peak picks the openness band and voiced
+# windows rotate through that band, so consecutive syllables never repeat the same mouth.
+SYLLABLE_S = 0.09
+SILENCE = 0.08
+ENVELOPE_BANDS: tuple[tuple[float, tuple[str, ...]], ...] = (
+    (0.28, ("B", "F", "B", "G")),
+    (0.55, ("C", "B", "E", "G")),
+    (1.01, ("D", "C", "E", "B")),
+)
+
+
+def envelope_visemes(pcm: np.ndarray, fps: int = ENV_FPS) -> list[tuple[float, str]]:
+    env = envelope(pcm, fps) if len(pcm) else np.zeros(1)
+    hop = max(1, round(SYLLABLE_S * fps))
+    cues: list[tuple[float, str]] = []
+    voiced = 0
+    for w in range(int(np.ceil(len(env) / hop))):
+        level = float(env[w * hop:(w + 1) * hop].max())
+        if level < SILENCE:
+            v = "X"
+        else:
+            shapes = next(sh for ceiling, sh in ENVELOPE_BANDS if level < ceiling)
+            v = shapes[voiced % len(shapes)]
+            if cues and cues[-1][1] == v:
+                v = shapes[(voiced + 1) % len(shapes)]
+            voiced += 1
+        if not cues or cues[-1][1] != v:
+            cues.append((round(w * hop / fps, 3), v))
+    return cues or [(0.0, "X")]
 
 
 # Short syllables do not get the full jaw: an "ah" (D) shorter than 80 ms is drawn as C, a 40 ms blip
@@ -265,7 +299,9 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             )
         # Fail closed: decode the encoded MP4 and verify every measurable mouth, not only the
         # pre-encode stage.  The report stays beside the render for diagnosis.
-        trace = {"fps": scene.FPS, "size": [sc.OW, sc.OH], "frames": sc.trace}
+        # Speech spans let the QA fail a mouth that stays shut (or frozen) while its line is heard.
+        trace = {"fps": scene.FPS, "size": [sc.OW, sc.OH], "frames": sc.trace,
+                 "speech": [{"start": s["startMs"] / 1000, "end": s["endMs"] / 1000, "speaker": s["speaker"]} for s in script]}
         (work / "frames.json").write_text(json.dumps(trace))
         frame_qa = frameqa.check(video, trace)
         (work / "frame_qa.json").write_text(json.dumps(frame_qa, indent=2))
