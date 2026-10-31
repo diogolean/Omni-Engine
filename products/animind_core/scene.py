@@ -63,6 +63,10 @@ def _font(weight: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFon
 
 
 BREATH_SHARE = {"body": 0.4, "torso": 0.4, "neck": 0.7}  # head, eyes, mouth: 1.0
+BODY_LAYERS = ("body", "torso", "neck")  # everything else is the head group (micro-movements)
+# per-line emotion -> brow lift in stage px (negative = up), eased in over EMO_EASE_S
+EMO_BROW = {"neutro": 0.0, "alegre": -1.5, "irritado": 2.5, "surpreso": -4.0, "triste": -2.0, "desdenhoso": 1.2, "pensativo": -0.8}
+EMO_EASE_S = 0.3
 
 
 def _qa_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -385,6 +389,10 @@ class Scene:
                 )
             return
         lids = eyes.blink(t, 7 + idx * 13)
+        # head micro-movements: slow sway + a small nod with the speech envelope (whole head group, mouth included)
+        hx = round((math.sin(t * 0.63 + seed * 2.1) * 0.9 + math.sin(t * 1.37 + seed) * 0.4) * SS)
+        hy = round(amp * 1.5 * SS)
+        brow = self._brow(idx, t) * SS
         gx, gy = self.gaze(idx, t, view)
         gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))  # eye_shift is the socket-safe maximum
         cur_v, prev_v, wv = vis
@@ -400,7 +408,7 @@ class Scene:
             m0 = mouths[-1]
             bx = m0[1].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *m0[1].size)
             # Mouth follows the head's breathing offset; trace the actual painted position.
-            ox, oy = x0 + m0[2][0], y0 + m0[2][1] + round(breathe)
+            ox, oy = x0 + m0[2][0] + hx, y0 + m0[2][1] + round(breathe) + hy
             self._mouth_log.append({"char": idx, "v": cur_v, "layers": len(mouths), "view": view,
                                     "box": _qa_box((ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3]))})
         names = {p[0] for p in parts}
@@ -413,10 +421,11 @@ class Scene:
                     or (name == "eyes_half" and lids != "half"):
                 continue
             # The face no longer rides the jaw: only the mouth layer changes with speech.
-            dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 2 * SS if name == "brows" else 0)
+            dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 2 * SS if name == "brows" else 0) + (brow if name == "brows" else 0)
+            hdx, hdy = (0, 0) if name in BODY_LAYERS else (hx, hy)
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
-            stage.alpha_composite(img, (x0 + lx, y0 + ly + round(dy)))
+            stage.alpha_composite(img, (x0 + lx + hdx, y0 + ly + round(dy) + hdy))
         if mouths:  # reference: the one mouth as drawn, measured the way the video QA measures frames
             key = (idx, view, cur_v)
             if key not in self._mouth_ref:
@@ -424,6 +433,19 @@ class Scene:
                 crop = np.asarray(stage.crop(box).convert("RGB"))
                 self._mouth_ref[key] = frameqa.measure(crop, (0, 0, crop.shape[1], crop.shape[0]))
             self._mouth_log[-1]["ref"] = self._mouth_ref[key]
+
+    def _brow(self, idx: int, t: float) -> float:
+        """Brow offset for character ``idx``: the emotion of its own current line, eased in and out;
+        listeners keep a neutral brow."""
+        ms = t * 1000
+        for l in self.script:
+            if l["speaker"] != idx:
+                continue
+            a, b = l["startMs"] - EMO_EASE_S * 1000, l["endMs"] + EMO_EASE_S * 1000
+            if a <= ms <= b:
+                k = min(1.0, (ms - a) / (EMO_EASE_S * 1000), (b - ms) / (EMO_EASE_S * 1000))
+                return EMO_BROW.get(str(l.get("emotion") or "neutro"), 0.0) * k
+        return 0.0
 
     def gaze(self, idx: int, t: float, view: str) -> tuple[float, float]:
         """Where character ``idx`` looks: at the other speaker by default, sometimes at the lens
