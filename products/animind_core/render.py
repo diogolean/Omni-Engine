@@ -42,11 +42,11 @@ _RENDER_LOCK = threading.Lock()
 FAST_PCT = 15  # re-voice a line that overruns its beat budget (on top of the cast pace)
 
 
-CAMERA_BEATS = ("gancho", "fechamento", "resumo", "síntese")
+CAMERA_BEATS = ("gancho", "virada", "fechamento", "resumo", "síntese")
 
 
 def line_view(template: str, speaker: int, index: int, beat: str = "") -> str:
-    """Hook and closing lines address the camera (front view); otherwise debate speakers face
+    """Hook, the debate's turn and closing lines address the camera (front view); otherwise debate speakers face
     each other and solo/lesson turn on every other line."""
     if beat in CAMERA_BEATS:
         return "front"
@@ -322,6 +322,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "voices": [{k: v[k] for k in ("voice", "pitchHz", "ratePct", "auto", "traits")} for v in voices],
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
             "personaMode": mode,
+            **({"scriptQA": written["scriptQA"]} if "scriptQA" in written else {}),
             "style": art,
             "tone": tone,
             "frameQa": frame_qa,

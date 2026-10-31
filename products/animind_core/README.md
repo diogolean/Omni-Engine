@@ -31,10 +31,16 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   source line says "atribuída/disputada", are dropped. Up to 24 quotes, primary first, short (6–20 words)
   first, one per work per round so every book gets a chance.
 
-- **debate** (dramatic arc): gancho (hook, to camera) -> tese (quote) -> réplica (quote) -> réplica (picks up the
-  opponent's key word) -> réplica (quote only if it answers the line before or is really about the topic, else
-  written) -> tréplica (the turn: when the opponent just quoted, his own certainty is turned against him) ->
-  fechamento -> fechamento (the strongest remaining quote that answers the last line, else written).
+- **debate** (four acts, strict A/B alternation): *abertura* gancho (hook, to camera; if none of B's quotes is
+  on the topic it sets one up: "aposto que você vai fugir pro assunto X") -> tese (B quote) -> *confronto*
+  réplica -> réplica (short jabs) -> *virada* (A quote, to camera, the turn in the middle) -> réplica -> tréplica ->
+  *fechamento* fechamento (B) -> fechamento (A's strongest remaining quote that answers the last line, else
+  written). Every line must answer the one before (`link`: a shared content stem or concept group, never just a
+  name or a mold word; each line carries `act` and `replyTo {line, idea}`); a mold is preferred when the next
+  speaker's quote can answer it (set-up/payoff). LLM lines that ignore the previous line, or a hook off the
+  topic, are rewritten from molds. `check_debate` (exposed as `scriptQA` in the job result) flags
+  monologues, unlinked lines, a missing hook/turn/close, a speaker without a real quote, written lines over 16
+  words (quotes over 30), no jab of <= 9 words and monotonous lengths.
 - **lesson** (progression): gancho -> pergunta -> citação (quote) -> exemplo -> citação (quote) -> síntese (to camera).
   **solo**: gancho -> tese (quote) -> argumento -> fechamento.
 - Rhythm: each beat has a word budget (`maxS` = words / (2.6 × pace) + 0.8 s), a pause after it (0–0.6 s: longer
