@@ -11,6 +11,10 @@ Rhubarb visemes).
 | `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame and fails the job if more than one mouth layer, a stacked second mouth, or an excessive opening is found. Successful results include `frameQa` and `frameQaUrl`. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
+**Rig reuse:** a prompt character whose name (accent/case-insensitive) and art style match a saved,
+QA-approved (score >= 80) Gemini rig returns that rig (`"reused": true`, URLs rebased) instead of
+generating a new image. Send `"reuse": false` (or a `rawPrompt`) to force a new one.
+
 Without a Gemini key (or with `ANIMIND_FORCE_MOCK=1`) characters are a flat PIL
 drawing cut into the same layers; the response says `"generator": "mock"`.
 
@@ -68,7 +72,9 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
 - `CORE_API_KEY` (required; `Authorization: Bearer ...`).
 - `GEMINI_API_KEY` (absent -> mock art). `ANIMIND_DATA_DIR` (default `~/.animind-core`, outside git). `CORE_PUBLIC_URL`.
 - `ANIMIND_PERSONAS_OFFLINE=1`: never fetch Wikiquote (tests); only cached sheets are used.
-- `RHUBARB_PATH`: Rhubarb Lip Sync binary (Linux has no auto-download; absent -> envelope visemes).
+- `RHUBARB_PATH`: Rhubarb Lip Sync binary (Linux has no auto-download; absent -> envelope visemes:
+  `render.envelope_visemes` picks one mouth per ~90 ms syllable window by loudness and rotates shapes, so
+  the mouth still talks; `visemeSource` in the result says `envelope`).
 - Cost: one character is one budget unit (both caps are reset per request). A character is 3 images
   (~$0.04 each) + one text call. The engine defaults (`REEL_REEL_BUDGET_USD` $0.05 and the
   Google guardrail `MAX_GOOGLE_COST_PER_RUN_USD`, clamped to $0.05) only fit the base image: the
@@ -152,7 +158,10 @@ never squashed into a second copy (the old "tear" in close-ups).
    alpha edges and resolution -> score 0–100. `qa.json` + `qa_sheet.png` are stored with the character; a failed
    skin/edge gate on sheet mouths rebuilds with deterministic mouths (free).
 6. **Render QA** (`frameqa.py`): the encoded MP4 is decoded frame by frame; the render fails closed
-   unless every frame has exactly one mouth and stays within the natural opening cap.
+   unless every frame has exactly one mouth and stays within the natural opening cap. The trace also carries
+   one `speech` span per voiced line: a speaker whose drawn mouth never changes shape during a line
+   (>= 0.4 s), whose measured opening never reaches `OPEN_MIN`, or a video with speech and `maxOpen` 0
+   fails too (a frozen mouth is not a pass).
 
 **Cost:** $0.039/image. No retries = 3 images = ~$0.12. Test-phase cap 0.30 allows up to ~7 images;
 production should use a lower cap (see `.env.example`).
