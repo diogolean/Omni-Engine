@@ -65,6 +65,14 @@ def _font(weight: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFon
 BREATH_SHARE = {"body": 0.4, "torso": 0.4, "neck": 0.7}  # head, eyes, mouth: 1.0
 
 
+def _qa_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Mouth box padded with a skin margin: a drawn mouth's outline fills its own bbox, so the frame QA
+    needs surrounding skin to tell the cavity from the crop edge (reference and frames use the same box)."""
+    x0, y0, x1, y1 = box
+    px, py = max(3, round((x1 - x0) * 0.2)), max(3, round((y1 - y0) * 0.35))
+    return (x0 - px, y0 - py, x1 + px, y1 + py)
+
+
 @dataclass
 class RigView:
     """One view, layers pre-scaled (and pre-lit) to the stage scale."""
@@ -364,10 +372,10 @@ class Scene:
                 bb = mouth[0].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (
                     0, 0, *mouth[0].size
                 )
-                box = (
+                box = _qa_box((
                     x0 + mouth[1][0] + bb[0], sy + mouth[1][1] + bb[1],
                     x0 + mouth[1][0] + bb[2], sy + mouth[1][1] + bb[3],
-                )
+                ))
                 key = (idx, view, "X", "soft")
                 if key not in self._mouth_ref:
                     crop = np.asarray(stage.crop(box).convert("RGB"))
@@ -394,7 +402,7 @@ class Scene:
             # Mouth follows the head's breathing offset; trace the actual painted position.
             ox, oy = x0 + m0[2][0], y0 + m0[2][1] + round(breathe)
             self._mouth_log.append({"char": idx, "v": cur_v, "layers": len(mouths), "view": view,
-                                    "box": (ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3])})
+                                    "box": _qa_box((ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3]))})
         names = {p[0] for p in parts}
         movable = {"eye_white", "iris", "eye_socket"} <= names
         socket = next((p for p in parts if p[0] == "eye_socket"), None)

@@ -104,8 +104,11 @@ def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:
                 continue
             measured += 1
             worst = max(worst, r["cav"])
-            if r["cav"] > CAV_ABS:
-                bad.append((i, f"{who}: open {r['cav']:.2f} > {CAV_ABS}"))
+            # a round drawn O (E) is taller than CAV_ABS by design; its own drawn sprite (already capped per
+            # face share by the rig QA) is then the ceiling
+            cap = max(CAV_ABS, ref["cav"] + CAV_SLACK)
+            if r["cav"] > cap:
+                bad.append((i, f"{who}: open {r['cav']:.2f} > {cap:.2f}"))
             elif r["cav"] > CAV_GROW * ref["cav"] + CAV_SLACK:
                 bad.append((i, f"{who}: open {r['cav']:.2f} vs drawn {ref['cav']:.2f}"))
             if r["blobs"] >= 2 and r["blobs"] > ref["blobs"]:
