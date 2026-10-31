@@ -50,7 +50,10 @@ BUST_H, BUST_BOTTOM = 0.55, 0.8
 LECTERN_TOP, LECTERN_BASE, LECTERN_W = 0.645, 0.835, 0.27
 FACE_Y = 0.42  # where the faces sit, for close framings
 BOARD = (0.45, 0.08, 0.94, 0.62)  # lesson board on the stage (x0, y0, x1, y1)
-DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.5, 0.6
+DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.25, 0.6
+# The opening frame is the thumbnail and the first thing a viewer sees: it starts at this brightness
+# (scenario and characters already visible), never on black.
+FADE_IN_FLOOR = 0.85
 CAP_H = 180  # caption strip height (speaker label + two rows)
 V_FACE_AT = 0.34  # 9:16: faces sit this high in the output so the chin clears the captions (cap_y 0.70)
 V_CU_FACE_AT = 0.29  # close-ups: bigger head, so it sits higher still
@@ -738,7 +741,8 @@ class Scene:
             rgb = rgb.convert("RGBA")
             rgb.alpha_composite(self.texture)
             rgb = rgb.convert("RGB")
-        fade = look.ease(t / FADE_IN_S) * look.ease((self.duration_s - t) / FADE_OUT_S)
+        fade_in = FADE_IN_FLOOR + (1.0 - FADE_IN_FLOOR) * look.ease(t / FADE_IN_S)
+        fade = fade_in * look.ease((self.duration_s - t) / FADE_OUT_S)
         if fade < 0.999:
             rgb = Image.blend(Image.new("RGB", (self.OW, self.OH)), rgb, fade)
         frame = rgb.convert("RGBA")
