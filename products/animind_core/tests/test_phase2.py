@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from animation.parametric import rhubarb
-from products.animind_core import languages, script
+from products.animind_core import casting, languages, script
 
 from .test_api import H, client  # noqa: F401
 
@@ -12,12 +12,18 @@ def test_language_is_bcp47_open_and_defaults_to_english():
     assert languages.normalize(None) == "en-US"
     assert languages.normalize("pt") == "pt-BR"
     assert languages.profile("es-MX").tag == "es-MX"
-    assert languages.profile("es-MX").script == "en-US"
+    assert languages.profile("es-MX").script == "es-MX"
     assert languages.recognizer("en") == "pocketSphinx"
+    assert languages.recognizer("en-GB") == "pocketSphinx"
     assert languages.recognizer("pt-BR") == "phonetic"
+    assert languages.recognizer("es-MX") == "phonetic"
     written = script.write("solo", "", ["Ada"], lang="en-US", sheets=[{"quotes": []}], use_llm=False)
     assert written["topic"] == "artificial intelligence"
     assert written["lines"][0]["text"].startswith(("Today", "Artificial", "No joke", "Pay attention"))
+    spanish = script.write("solo", "energía solar", ["Ada"], lang="es-MX", use_llm=False)
+    assert spanish["writer"] == "template-universal"
+    assert spanish["language"] == "es-MX"
+    assert all(line["text"].lower().startswith("energía solar") for line in spanish["lines"])
 
 
 def test_stick_presets_are_reusable_and_include_complete_face_sheet(client):  # noqa: F811
@@ -79,6 +85,24 @@ def test_voice_endpoint_lists_gendered_language_specific_ids(client):  # noqa: F
     assert {voice["voiceId"] for voice in en["voices"]}.isdisjoint(
         {voice["voiceId"] for voice in pt["voices"]}
     )
+
+
+def test_unfiltered_voice_endpoint_lists_edge_locales_with_native_names(client, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(casting, "_edge_voices", lambda: [
+        {"ShortName": "es-MX-JorgeNeural", "Gender": "Male", "Locale": "es-MX",
+         "LocaleName": "Spanish (Mexico)"},
+        {"ShortName": "es-MX-DaliaNeural", "Gender": "Female", "Locale": "es-MX",
+         "LocaleName": "Spanish (Mexico)"},
+        {"ShortName": "ja-JP-KeitaNeural", "Gender": "Male", "Locale": "ja-JP",
+         "LocaleName": "Japanese (Japan)"},
+    ])
+    data = client.get("/v1/voices").json()
+    names = {row["language"]: row["name"] for row in data["languages"]}
+    assert names["es-MX"] == "español (México)"
+    assert names["ja-JP"] == "日本語 (日本)"
+    spanish = [v for v in data["voices"] if v["language"] == "es-MX"]
+    assert {v["gender"] for v in spanish} == {"male", "female"}
+    assert {v["voiceId"] for v in spanish} == {"es-MX-JorgeNeural", "es-MX-DaliaNeural"}
 
 
 def test_rhubarb_rejects_unknown_recognizer():

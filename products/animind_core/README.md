@@ -33,15 +33,19 @@ returning them as metadata. `GET /v1/tones` and `GET /v1/objectives` expose the 
 `language` is the canonical BCP-47 render field (`lang` remains an alias). It defaults to `en-US`;
 `pt`/`pt-BR` select Brazilian Portuguese. The locale controls the offline script bank, Edge voice
 pool, titles/caption labels and disclaimer. Other BCP-47 locales remain valid: Edge's catalogue is
-resolved at runtime (or explicit `voices[]` may be supplied), while copy falls back to the English
-bank until a profile is registered in `languages.py`. `GET /v1/languages` exposes built-ins.
+resolved at runtime (or explicit `voices[]` may be supplied). They never fall back to English:
+until a rich locale bank is registered, the offline writer uses a language-neutral shape containing
+only the caller's localized topic, and untranslated UI chips are omitted. Thus speech and captions
+stay in the selected language without Gemini or a translation API. `GET /v1/languages` exposes the
+two rich built-in banks; the accepted locale set comes from Edge.
 
 Voice casting uses the character's inferred `gender` (`male` or `female`), from an explicit field,
 persona wording, Wikidata or the first name, and returns it in both the character and render
 contracts. Automatic picks always come from that gender's pool and speakers receive distinct voices
 when the language pool has capacity. A character-level `voiceId` overrides the automatic pick
 (`voices[]` remains compatible); render results expose both canonical `voiceId` and legacy `voice`.
-`GET /v1/voices?lang=en` lists the available ids with label, gender and normalized language.
+`GET /v1/voices?lang=en` filters one locale. Unfiltered `GET /v1/voices` returns the complete Edge
+catalogue with `voiceId`, gender, BCP-47 locale and the locale name in its own language.
 
 Rhubarb selection is language-aware. PocketSphinx is used only for English; all other locales use
 `phonetic`. The phase-2 comparison used identical edge-tts clips and dialog text with Rhubarb

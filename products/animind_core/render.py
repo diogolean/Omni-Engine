@@ -57,7 +57,10 @@ def role_line(char: dict[str, Any], template: str, topic: str, lang: str) -> str
     attr = (char.get("photo") or {}).get("attribution") or {}
     profile = languages.profile(lang)
     if attr.get("author"):
-        return f"{profile.photo}: {attr['author']} · {attr.get('license', '')}".strip(" ·")
+        prefix = f"{profile.photo}: " if profile.photo else ""
+        return f"{prefix}{attr['author']} · {attr.get('license', '')}".strip(" ·")
+    if lang not in languages.PROFILES:
+        return topic[:60]
     kind = "Debate" if template == "debate" else profile.lesson if template == "lesson" else profile.talk
     return f"{kind} · {topic}"[:60]
 
@@ -260,7 +263,12 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         scenario = req.get("scenario") if req.get("scenario") in scene.SCENARIOS else "studio"
         lang = languages.requested(req)
         language = languages.profile(lang)
-        topic = (req.get("topic") or ("inteligência artificial" if language.script == "pt-BR" else "artificial intelligence")).strip()[:200]
+        default_topic = (
+            "inteligência artificial" if language.script == "pt-BR"
+            else "artificial intelligence" if language.script == "en-US"
+            else "AI"
+        )
+        topic = (req.get("topic") or default_topic).strip()[:200]
         work = settings.data_dir() / "jobs" / job_id
         work.mkdir(parents=True, exist_ok=True)
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
@@ -304,7 +312,11 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         _write_pcm(audio, track)
         duration = len(track) / SAMPLE_RATE
         rigs = [_rig_views(c, scene_template, i, scenario) for i, c in enumerate(cast)]
-        disclaimer = PARODY_DISCLAIMER if language.script == "pt-BR" else PARODY_DISCLAIMER_EN
+        disclaimer = (
+            PARODY_DISCLAIMER if language.script == "pt-BR"
+            else PARODY_DISCLAIMER_EN if language.script == "en-US"
+            else ""
+        )
         sc = scene.Scene(template=scene_template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
                          env_fps=ENV_FPS, duration_s=duration, disclaimer=disclaimer,
                          names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art,

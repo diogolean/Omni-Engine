@@ -77,6 +77,23 @@ def test_voice_catalog_is_gendered_and_language_specific():
     assert {v["voiceId"] for v in pt if v["gender"] == "female"} == set(casting.POOL["pt-BR"]["f"])
 
 
+def test_any_edge_locale_casts_by_gender(monkeypatch):
+    monkeypatch.setattr(casting, "_edge_voices", lambda: [
+        {"ShortName": "es-MX-JorgeNeural", "Gender": "Male", "Locale": "es-MX"},
+        {"ShortName": "es-MX-DaliaNeural", "Gender": "Female", "Locale": "es-MX"},
+    ])
+    casting.voice_pool.cache_clear()
+    try:
+        male, female = casting.cast(
+            [{"name": "Jorge", "gender": "male"}, {"name": "Sofia", "gender": "female"}],
+            "es-MX",
+        )
+    finally:
+        casting.voice_pool.cache_clear()
+    assert male["voiceId"] == "es-MX-JorgeNeural" and male["gender"] == "male"
+    assert female["voiceId"] == "es-MX-DaliaNeural" and female["gender"] == "female"
+
+
 def test_more_speakers_than_voices_falls_back_to_pitch_split():
     many = [{"name": f"Homem {i}", "gender": "m"} for i in range(len(casting.POOL["pt-BR"]["m"]) + 1)]
     picks = casting.cast(many, "pt-BR")

@@ -30,6 +30,9 @@ import urllib.request
 from functools import lru_cache
 from typing import Any
 
+from babel import Locale
+from babel.core import UnknownLocaleError
+
 from . import languages
 
 # voice -> (label, median F0 in Hz measured on a pt-BR line with pyin). Native voices first.
@@ -168,17 +171,7 @@ def voice_pool(lang: str) -> dict[str, list[str]]:
     tag = languages.normalize(lang)
     if tag in POOL:
         return POOL[tag]
-
-    async def discover() -> list[dict[str, Any]]:
-        import edge_tts  # noqa: PLC0415
-        return await edge_tts.list_voices()
-
-    try:
-        voices = asyncio.run(discover())
-    except Exception as exc:  # noqa: BLE001 — surfaced as a useful render error
-        raise ValueError(
-            f"no built-in voice profile for {tag}; provide voices[] overrides or make the Edge voice catalogue available"
-        ) from exc
+    voices = _edge_voices()
     exact = [v for v in voices if str(v.get("Locale") or "").casefold() == tag.casefold()]
     if not exact:
         exact = [v for v in voices if str(v.get("Locale") or "").split("-")[0].casefold() == tag.split("-")[0].casefold()]
@@ -186,28 +179,75 @@ def voice_pool(lang: str) -> dict[str, list[str]]:
         "m": [str(v["ShortName"]) for v in exact if str(v.get("Gender") or "").casefold() == "male"],
         "f": [str(v["ShortName"]) for v in exact if str(v.get("Gender") or "").casefold() == "female"],
     }
-    if not pool["m"] or not pool["f"]:
-        raise ValueError(f"Edge has no complete male/female voice pool for language {tag}; provide voices[] overrides")
+    if not pool["m"] and not pool["f"]:
+        raise ValueError(f"Edge has no voices for language {tag}")
     return pool
 
 
-def voice_catalog(lang: str) -> list[dict[str, str]]:
-    """Available voice overrides for one requested output language."""
-    tag = languages.normalize(lang)
-    pool = voice_pool(tag)
-    return [
-        {
-            "voiceId": voice,
-            "label": VOICE_INFO.get(
-                voice,
-                (re.sub(r"^[a-z]{2}-[A-Z]{2}-|(Multilingual)?Neural$", "", voice), 0.0),
-            )[0],
-            "gender": PUBLIC_GENDER[gender],
-            "language": tag,
-        }
-        for gender in ("m", "f")
-        for voice in pool[gender]
+@lru_cache(maxsize=1)
+def _edge_voices() -> list[dict[str, Any]]:
+    async def discover() -> list[dict[str, Any]]:
+        import edge_tts  # noqa: PLC0415
+        return await edge_tts.list_voices()
+
+    try:
+        return asyncio.run(discover())
+    except Exception as exc:  # noqa: BLE001 — API reports catalogue failure
+        raise ValueError("Edge voice catalogue is unavailable") from exc
+
+
+def _native_locale_name(tag: str, fallback: str = "") -> str:
+    try:
+        locale = Locale.parse(tag, sep="-")
+        return str(locale.get_display_name(locale))
+    except (UnknownLocaleError, ValueError):
+        return fallback or tag
+
+
+def _voice_record(voice: str, gender: str, tag: str, metadata: dict[str, Any] | None = None) -> dict[str, str]:
+    metadata = metadata or {}
+    return {
+        "voiceId": voice,
+        "label": VOICE_INFO.get(
+            voice,
+            (re.sub(r"^[a-z]{2,3}-[A-Z][a-zA-Z]+-|(Multilingual)?Neural$", "", voice), 0.0),
+        )[0],
+        "gender": PUBLIC_GENDER[gender],
+        "language": tag,
+        "languageName": _native_locale_name(tag, str(metadata.get("LocaleName") or "")),
+    }
+
+
+def voice_catalog(lang: str | None = None) -> list[dict[str, str]]:
+    """Edge voice overrides for one locale, or every locale when unfiltered."""
+    if lang is not None:
+        tag = languages.normalize(lang)
+        by_id = {str(v.get("ShortName")): v for v in _edge_voices()} if tag not in POOL else {}
+        pool = voice_pool(tag)
+        return [
+            _voice_record(voice, gender, tag, by_id.get(voice))
+            for gender in ("m", "f")
+            for voice in pool[gender]
+        ]
+
+    edge = _edge_voices()
+    records = [
+        _voice_record(
+            str(voice["ShortName"]),
+            "m" if str(voice.get("Gender") or "").casefold() == "male" else "f",
+            languages.normalize(voice.get("Locale")),
+            voice,
+        )
+        for voice in edge
+        if voice.get("ShortName") and str(voice.get("Gender") or "").casefold() in {"male", "female"}
     ]
+    pairs = {(r["language"], r["voiceId"]) for r in records}
+    for tag, pool in POOL.items():
+        for gender in ("m", "f"):
+            for voice in pool[gender]:
+                if (tag, voice) not in pairs:
+                    records.append(_voice_record(voice, gender, tag))
+    return sorted(records, key=lambda row: (row["language"], row["gender"], row["label"], row["voiceId"]))
 
 
 def cast(chars: list[dict[str, Any]], lang: str, overrides: list[Any] | None = None) -> list[dict[str, Any]]:
@@ -233,6 +273,11 @@ def cast(chars: list[dict[str, Any]], lang: str, overrides: list[Any] | None = N
     voices: list[str] = [""] * len(chars)
     for g in ("m", "f"):
         idx = [i for i, tr in enumerate(trs) if tr["gender"] == g and not ovs[i]]
+        if idx and not pool[g]:
+            raise ValueError(
+                f"Edge has no {PUBLIC_GENDER[g]} voice for language {languages.normalize(lang)}; "
+                "provide voiceId for each affected character"
+            )
         free = [v for v in pool[g] if v not in taken]
         if len(idx) > len(free):  # more speakers than voices: cycle the pool (pitch split below)
             for k, i in enumerate(sorted(idx, key=lambda i: (names[i], i))):

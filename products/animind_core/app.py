@@ -127,14 +127,24 @@ def get_languages() -> dict:
 
 
 @app.get("/v1/voices")
-def get_voices(lang: str = "en") -> dict:
-    """Gendered Edge voice overrides available for one BCP-47 language."""
-    language = languages.normalize(lang)
+def get_voices(lang: str | None = None) -> dict:
+    """All Edge locales when unfiltered, or gendered voices for one locale."""
+    language = languages.normalize(lang) if lang else None
     try:
         voices = casting.voice_catalog(language)
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return {"language": language, "voices": voices}
+        raise HTTPException(503 if lang is None else 400, str(exc)) from exc
+    locale_names = {}
+    for voice in voices:
+        locale_names.setdefault(voice["language"], voice["languageName"])
+    return {
+        "language": language,
+        "languages": [
+            {"language": tag, "name": name}
+            for tag, name in sorted(locale_names.items())
+        ],
+        "voices": voices,
+    }
 
 
 @app.get("/v1/stick-presets")

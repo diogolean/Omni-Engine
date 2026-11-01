@@ -21,7 +21,7 @@ from typing import Any, Iterator
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from . import eyes, frameqa, look, styles, titles
+from . import eyes, frameqa, languages, look, styles, titles
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
@@ -266,9 +266,12 @@ class Scene:
     def _title_card(self, end: bool = False) -> Image.Image:
         key = ("title", end)
         if key not in self._cache:
-            lang = "pt-BR" if self.lang == "pt-BR" else "en-US"
+            lang = self.lang if self.lang in languages.PROFILES else None
             names = "  ×  ".join(pretty_name(n).upper() for n in self.names[: 2 if self.template == "debate" else 1] if n)
-            kicker = ("FIM" if lang == "pt-BR" else "THE END") if end else titles.KIND[lang].get(self.template, "").upper()
+            kicker = (
+                (languages.profile(lang).end if end else titles.KIND[lang].get(self.template, "").upper())
+                if lang else ""
+            )
             band = 0.785 if self.vertical else 0.757  # lower band: under the faces, inside the matte
             self._cache[key] = titles.title_card((self.OW, self.OH), self.k * (0.86 if not self.vertical else 1.0), kicker,
                                                  names, self.topic, self.accent, band)
@@ -313,7 +316,7 @@ class Scene:
                 continue
             key = ("chapter", act, numeral)
             if key not in self._cache:
-                label = titles.ACT_LABEL["pt-BR" if self.lang == "pt-BR" else "en-US"].get(act, act)
+                label = titles.ACT_LABEL[self.lang].get(act, act) if self.lang in languages.PROFILES else ""
                 self._cache[key] = titles.chapter_card(self.k, numeral, label, self.accent)
             card = self._cache[key]
             frame.alpha_composite(_fade(card, al), (24 - round(10 * (1 - al)), round(190 if self.vertical else 66)))
@@ -854,6 +857,8 @@ class Scene:
 
     def _tag(self, line: dict[str, Any]) -> Image.Image | None:
         """Top-center chip: CITAÇÃO + source for a real quote, PARÁFRASE for written lines."""
+        if self.lang not in languages.PROFILES:
+            return None
         kind = line.get("kind")
         if kind not in ("quote", "paraphrase"):
             return None

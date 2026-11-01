@@ -1,9 +1,9 @@
 """Language profiles shared by writing, TTS, lip sync, and on-screen copy.
 
-``language`` accepts BCP-47 tags. English is the product default and Brazilian
-Portuguese is the second built-in profile. Unknown tags remain valid: Edge's
-voice catalogue is queried by :mod:`casting`, while the offline writer and UI
-fall back to English until a locale-specific text bank is registered here.
+``language`` accepts every BCP-47 locale exposed by Edge TTS. English and
+Brazilian Portuguese have rich offline template banks. Other locales use a
+language-neutral script shape made only from the caller's localized topic, so
+the spoken script and captions never silently fall back to another language.
 
 Rhubarb's PocketSphinx recognizer is English-only. Non-English speech uses the
 language-independent phonetic recognizer; the phase-2 measurement artifact
@@ -50,9 +50,10 @@ def profile(value: object | None) -> Profile:
     tag = normalize(value)
     if tag in PROFILES:
         return PROFILES[tag]
-    # Extensible generic profile: keep the requested locale for Edge while
-    # using English copy/templates and Rhubarb's language-independent engine.
-    return Profile(tag, "en-US", "phonetic", "Photo", "Talk", "Lesson", "THE END")
+    # No English UI fallback: generic locales keep the selected language and
+    # omit labels for which this package has no vetted translation.
+    recognizer = "pocketSphinx" if tag.split("-")[0] == "en" else "phonetic"
+    return Profile(tag, tag, recognizer, "", "", "", "")
 
 
 def requested(body: dict) -> str:

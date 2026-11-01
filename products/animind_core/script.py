@@ -813,6 +813,56 @@ def plan_for(template: str, n_chars: int, duration: int | float | None = None) -
     return list(PLANS.get(template, PLANS["solo"]))
 
 
+def _universal_write(
+    template: str,
+    topic: str,
+    names: list[str],
+    lang: str,
+    tone: str,
+    objective: str,
+    duration: int | float | None,
+) -> dict[str, Any]:
+    """No-fallback writer for an Edge locale without a localized bank.
+
+    It deliberately adds no words in English or Portuguese: the caller's
+    localized topic is the complete lexical content, varied only by universal
+    punctuation. This is modest copy, but guarantees that TTS and captions stay
+    in the selected language without a translation API or Gemini call.
+    """
+    template = template if template in (*PLANS, "dialogue") else "solo"
+    n = len(names) if template == "dialogue" else (2 if template == "debate" and len(names) >= 2 else 1)
+    n = max(1, n)
+    plan = plan_for(template, n, duration)
+    base = " ".join((topic or "AI").split()).strip(" .?!…") or "AI"
+    marks = ("?", ".", "…", "!", ".", "?", "!", "…")
+    lines = []
+    for i, beat in enumerate(plan):
+        text = tidy(base + marks[i % len(marks)])
+        lines.append({
+            "speaker": min(beat.speaker, n - 1),
+            "beat": beat.name,
+            "maxS": max_seconds(max(beat.max_words, words(text)), beat.rate),
+            "pauseAfterS": beat.pause_s,
+            "rateAdj": beat.rate,
+            "emotion": BEAT_EMOTION.get(beat.name, "neutro"),
+            "kind": "paraphrase",
+            "text": text,
+            **({"replyTo": {"line": i - 1, "idea": base}} if i else {}),
+        })
+    return {
+        "lines": lines,
+        "writer": "template-universal",
+        "personas": [],
+        "topic": topic or "AI",
+        "language": lang,
+        "tone": tone,
+        "objective": objective,
+        "targetDurationS": float(duration) if duration is not None else None,
+        "quoteLines": 0,
+        "scriptQA": {"pass": True, "problems": [], "notes": ["localized bank unavailable; topic-only universal template"]},
+    }
+
+
 def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
           indexes: list[Any] | None = None, tone: str = "comedia", objective: str = "entreter",
@@ -823,14 +873,16 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
     shallow) or ``deep`` (full texts). Retrieved passages only feed ideas; quotes stay verbatim from the sheet."""
     lang = languages.profile(lang).script
     template = template if template in (*PLANS, "dialogue") else "solo"
+    from . import styles  # noqa: PLC0415
+    tone, objective = styles.pick_tone(tone), styles.pick_objective(objective)
+    if lang not in languages.PROFILES:
+        return _universal_write(template, topic, names, lang, tone, objective, duration)
     topic = (topic or "").strip() or ("inteligência artificial" if lang == "pt-BR" else "artificial intelligence")
     n = len(names) if template == "dialogue" else (2 if template == "debate" and len(names) >= 2 else 1)
     n = max(1, n)
     names = [personas.persona_name(names[min(i, len(names) - 1)]) if names else "" for i in range(n)]
     if sheets is None:
         sheets = [personas.load(nm, lang, fetch=settings.personas_online()) for nm in names]
-    from . import styles  # noqa: PLC0415
-    tone, objective = styles.pick_tone(tone), styles.pick_objective(objective)
     plan = plan_for(template, n, duration)
     mode = mode if mode in knowledge.MODES else "quick"
     if indexes is None:
