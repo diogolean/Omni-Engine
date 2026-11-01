@@ -30,7 +30,7 @@ from typing import Any
 from . import knowledge, languages, personas, settings
 
 _LOG = logging.getLogger("animind_core")
-WRITER_MODEL = "gemini-2.5-flash"
+WRITER_MODEL = "gemini-2.5-flash-lite"
 WORDS_PER_S = 2.6  # edge-tts pt-BR/en-US neural voices at the default rate
 QUOTE_MARKS = "\"“”«»„‟"
 
@@ -406,26 +406,24 @@ def _bank(lang: str) -> dict[str, list[str]]:
             "tese": ["My thesis is simple: {the} is not accepted. It is examined."],
             "tese1": ["Easy, {a}: {the} belongs to whoever has the courage to decide.",
                       "Simple, {a}: {the} is whatever survives your doubt."],
-            "réplica0": ["{Kw}, {b}? Then tell me: who decides what {noun} is?",
-                         "Easy, {b}. If everything is {kw}, so is your sentence.",
-                         "You swap {noun} for {kw}, {b}. Is that an answer… or an escape?",
-                         "{Kw}? Lovely word, {b}. Now define it."],
-            "réplica1": ["{Kw}, {a}? Here you go again. A question is not proof.",
-                         "You call {kw} what is only habit, {a}.",
-                         "{Kw}, {a}? That is fear of admitting nobody knows.",
-                         "Talking about {kw} is easy, {a}. Living is hard.",
-                         "{Kw}? Old words, {a}. I want action.",
-                         "{Kw}? Prove it, {a}.",
-                         "{Kw}, {a}? Cowardice with a pretty name."],
+            "réplica0": ["{Kw} needs a test, {b}. What evidence would prove your claim wrong?",
+                         "If {kw} explains everything, {b}, it predicts nothing.",
+                         "You replace {noun} with {kw}, {b}. What problem does that solve?",
+                         "{Kw} is the premise, {b}. Now show the conclusion."],
+            "réplica1": ["{Kw} is evidence, {a}, but it is not the whole argument.",
+                         "Your test for {kw} ignores the cost of being wrong, {a}.",
+                         "{Kw} explains the doubt, {a}. It does not settle the question.",
+                         "A definition of {kw} still needs a concrete case, {a}.",
+                         "{Kw} matters, {a}. Consequences matter too.",
+                         "{Kw}? State the evidence, {a}."],
             "virada0": ["{Kw}? Wait, {b}. You said {kq} yourself. So you believe in something.",
                         "Stop, {b}. {Kw} was your word. Now stand by it."],
             "tréplica0": ["{Kw}? But you were the one who said {kq}, {b}. Your own words give you away.",
                           "{Kw}, {b}? A minute ago it was {kq}. Which one do you defend?",
                           "You swap {kq} for {kw}, {b}. That is not an answer. It is an escape."],
-            "fechamento1": ["{Kw}? Keep asking, {a}. I would rather live.",
-                            "Keep your {kw}, {a}. Life does not wait for answers.",
-                            "{Kw} is your word, {a}. I bow to no one.",
-                            "{Kw}? I would rather live, {a}."],
+            "fechamento1": ["Test {kw}, {a}. Life demands a choice.",
+                            "Measure {kw}, {a}. Life reveals consequences.",
+                            "{Kw} settles nothing, {a}. Life is the test."],
             "fechamento0": ["{Kw}, {b}? Then let the audience decide. I only asked questions.",
                             "{Kw}? The question stays, {b}. And it is stronger than both of us."],
             "fechamento": ["Think about it before you trust the next certainty about {the}."],
@@ -457,26 +455,24 @@ def _bank(lang: str) -> dict[str, list[str]]:
         "tese": ["Minha tese é simples: {the} não se aceita. Se examina."],
         "tese1": ["Resposta fácil, {a}: {the} é de quem tem coragem de decidir.",
                   "Simples, {a}: {the} é o que resiste à sua dúvida."],
-        "réplica0": ["{Kw}, {b}? Então me diga: quem decide o que é {noun}?",
-                     "Calma, {b}. Se tudo é {kw}, sua frase também é.",
-                     "Você troca {noun} por {kw}, {b}. Isso é resposta… ou fuga?",
-                     "{Kw}? Bonita palavra, {b}. Agora defina."],
-        "réplica1": ["{Kw}, {a}? Lá vem você. Pergunta não é prova.",
-                     "Você chama de {kw} o que é só costume, {a}.",
-                     "{Kw}, {a}? Isso é medo de admitir que ninguém sabe.",
-                     "Falar de {kw} é fácil, {a}. Difícil é viver.",
-                     "{Kw}? Palavra velha, {a}. Eu quero ação.",
-                     "{Kw}? Prove, {a}.",
-                     "{Kw}, {a}? Covardia com nome bonito."],
+        "réplica0": ["{Kw} precisa de um teste, {b}. Que evidência provaria sua tese errada?",
+                     "Se {kw} explica tudo, {b}, não prevê nada.",
+                     "Você troca {noun} por {kw}, {b}. Que problema isso resolve?",
+                     "{Kw} é a premissa, {b}. Agora mostre a conclusão."],
+        "réplica1": ["{Kw} é evidência, {a}, mas não é o argumento inteiro.",
+                     "Seu teste de {kw} ignora o custo de errar, {a}.",
+                     "{Kw} explica a dúvida, {a}. Não encerra a questão.",
+                     "Uma definição de {kw} ainda precisa de um caso concreto, {a}.",
+                     "{Kw} importa, {a}. As consequências também.",
+                     "{Kw}? Mostre a evidência, {a}."],
         "virada0": ["{Kw}? Espera, {b}. Você mesmo falou em {kq}. Então acredita em algo.",
                     "Pare, {b}. {Kw} foi palavra sua. Agora sustente."],
         "tréplica0": ["{Kw}? Mas foi você que falou em {kq}, {b}. Sua frase te entrega.",
                       "{Kw}, {b}? Agora há pouco era {kq}. Qual dos dois você defende?",
                       "Você troca {kq} por {kw}, {b}. Isso não é resposta. É fuga."],
-        "fechamento1": ["{Kw}? Continue perguntando, {a}. Eu prefiro viver.",
-                        "Pode ficar com {kw}, {a}. A vida não espera resposta.",
-                        "{Kw} é palavra sua, {a}. Eu não me curvo a ninguém.",
-                        "{Kw}? Eu prefiro viver, {a}."],
+        "fechamento1": ["Teste {kw}, {a}. A vida exige escolha.",
+                        "Meça {kw}, {a}. A vida revela consequências.",
+                        "{Kw} não encerra nada, {a}. A vida testa."],
         "fechamento0": ["{Kw}, {b}? Então que o público decida. Eu só fiz perguntas.",
                         "{Kw}? A pergunta fica, {b}. E ela é mais forte que nós dois."],
         "fechamento": ["Pense nisso antes de acreditar na próxima certeza sobre {the}."],
@@ -695,7 +691,7 @@ def emotion_of(draft: dict[str, Any], beat_name: str) -> str:
 
 def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], topic: str, lang: str, template: str,
             passages: list[list[dict[str, Any]]] | None = None, tone: str = "comedia",
-            objective: str = "entreter") -> str:
+            objective: str = "entreter", duration: int | float | None = None) -> str:
     who = []
     for k, (name, sheet) in enumerate(zip(names, sheets)):
         bg = "\n".join(f'    [{p["source"]}] {p["text"][:600]}' for p in (passages[k] if passages else []))
@@ -721,9 +717,11 @@ def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], to
     }[template]
     from . import styles  # noqa: PLC0415
     tone_line = styles.TONES[styles.pick_tone(tone)]["prompt"]
+    target = max(10, min(180, round(float(duration or 60))))
     return f"""You write {shape}, in {language}, about: {topic}
 Tone: {tone_line}.
 Objective: {objective}. Make that objective visible in the hook and close.
+Target duration: about {target} seconds. Use the full beat plan, but keep every line inside its word limit.
 
 {chr(10).join(who)}
 
@@ -852,6 +850,10 @@ def _universal_write(
     return {
         "lines": lines,
         "writer": "template-universal",
+        "scriptCost": {
+            "provider": None, "model": None, "costUsd": 0.0,
+            "inputTokens": 0, "outputTokens": 0, "cached": False, "status": "offline",
+        },
         "personas": [],
         "topic": topic or "AI",
         "language": lang,
@@ -863,7 +865,7 @@ def _universal_write(
     }
 
 
-def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
+def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
           indexes: list[Any] | None = None, tone: str = "comedia", objective: str = "entreter",
           duration: int | float | None = None) -> dict[str, Any]:
@@ -893,14 +895,40 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
 
     drafted: dict[int, dict[str, Any]] = {}
     writer = "template"
+    script_cost: dict[str, Any] = {
+        "provider": None,
+        "model": None,
+        "costUsd": 0.0,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cached": False,
+        "status": "offline",
+    }
     if use_llm:
+        prompt = _prompt(plan, sheets, names, topic, lang, template, passages, tone, objective, duration)
+        cached = _cache_path(prompt).is_file()
+        from production.cost.google_guardrail import get_google_cost_tracker  # noqa: PLC0415
+
+        before = get_google_cost_tracker().snapshot()
         try:
-            for entry in _gemini(_prompt(plan, sheets, names, topic, lang, template, passages, tone, objective)):
+            for entry in _gemini(prompt):
                 if isinstance(entry, dict) and isinstance(entry.get("i"), int):
                     drafted[entry["i"]] = entry
             writer = "gemini"
         except Exception as exc:  # noqa: BLE001 — the template writer always works
             _LOG.warning("script writer fell back to templates: %s", exc)
+        finally:
+            after = get_google_cost_tracker().snapshot()
+            new_entries = after["entries"][len(before["entries"]):]
+            script_cost = {
+                "provider": "google",
+                "model": WRITER_MODEL,
+                "costUsd": round(sum(float(e.get("cost_usd", 0.0)) for e in new_entries), 8),
+                "inputTokens": sum(int(e.get("input_tokens", 0)) for e in new_entries),
+                "outputTokens": sum(int(e.get("output_tokens", 0)) for e in new_entries),
+                "cached": cached and writer == "gemini",
+                "status": "ok" if writer == "gemini" else "fallback",
+            }
 
     used: set[tuple[int, str]] = set()
     lines: list[dict[str, Any]] = []
@@ -982,7 +1010,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
          "passages": [{"source": p["source"], "url": p["url"], "score": p["score"]} for p in ps]}
         for nm, s, ix, ps in zip(names, sheets, indexes, passages)
     ]
-    out = {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic, "tone": tone,
+    out = {"lines": lines, "writer": writer, "scriptCost": script_cost, "personas": personas_out, "topic": topic, "tone": tone,
            "objective": objective, "targetDurationS": float(duration) if duration is not None else None,
            "quoteLines": sum(1 for ln in lines if ln["kind"] == "quote")}
     problems = check(lines, sheets)  # quote fidelity holds for every template
