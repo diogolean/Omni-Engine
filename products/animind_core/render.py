@@ -339,7 +339,16 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "visemeSource": sorted(sources), "rigged": [r is not None for r in rigs],
             # Additive: who wrote the script and the persona sheets behind the quotes.
             "format": fmt, "width": sc.OW, "height": sc.OH,
-            "voices": [{k: v[k] for k in ("voice", "label", "pitchHz", "ratePct", "auto", "traits")} for v in voices],
+            "voices": [
+                {
+                    k: v[k]
+                    for k in (
+                        "voice", "voiceId", "label", "gender", "language",
+                        "pitchHz", "ratePct", "auto", "traits",
+                    )
+                }
+                for v in voices
+            ],
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
             "personaMode": mode,
             **({"scriptQA": written["scriptQA"]} if "scriptQA" in written else {}),

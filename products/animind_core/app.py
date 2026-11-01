@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from . import (
     API_VERSION,
+    casting,
     characters,
     knowledge,
     languages,
@@ -123,6 +124,17 @@ def get_languages() -> dict:
         "default": "en-US",
         "openBcp47": True,
     }
+
+
+@app.get("/v1/voices")
+def get_voices(lang: str = "en") -> dict:
+    """Gendered Edge voice overrides available for one BCP-47 language."""
+    language = languages.normalize(lang)
+    try:
+        voices = casting.voice_catalog(language)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"language": language, "voices": voices}
 
 
 @app.get("/v1/stick-presets")

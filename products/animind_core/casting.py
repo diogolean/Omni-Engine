@@ -3,7 +3,7 @@
 Auto mode reads the persona (gender, birth year, a few temperament words) from what
 the character carries (``gender``, ``born``, ``persona``/``bio`` text) and, when online,
 Wikidata (sex P21, birth P569). A user override (``voice`` on the character or
-``voices[i]`` on the render request) always wins.
+``voiceId`` on the character / ``voices[i]`` on the render request) always wins.
 
 Every speaker gets a *different speaker*, not the same voice at another pitch: pt-BR has
 one native male voice, so the pool adds the edge-tts Multilingual voices that read
@@ -53,13 +53,27 @@ POOL: dict[str, dict[str, list[str]]] = {
 CLOSE = {frozenset(("fr-FR-RemyMultilingualNeural", "en-AU-WilliamMultilingualNeural"))}
 TARGET_F0 = {"m": {"elder": 100, "adult": 125, "young": 150}, "f": {"elder": 185, "adult": 205, "young": 225}}
 TEMPER_F0 = {"fiery": 15, "calm": -10, "neutral": 0}
-FEMALE_WORDS = re.compile(r"\b(she|her|woman|queen|filósofa|escritora|cientista|rainha|ela|atriz|poeta(?:isa)?|pensadora|física|química)\b", re.I)
-MALE_WORDS = re.compile(r"\b(he|his|man|king|filósofo|escritor|rei|ele|ator|pensador|físico|químico)\b", re.I)
+FEMALE_WORDS = re.compile(
+    r"\b(she|her|woman|queen|filósofa|escritora|cientista|rainha|ela|atriz|poeta(?:isa)?|pensadora|"
+    r"física|química|professora|debatedora|aluna|sábia)\b",
+    re.I,
+)
+MALE_WORDS = re.compile(
+    r"\b(he|his|man|king|filósofo|escritor|rei|ele|ator|pensador|físico|químico|"
+    r"professor|debatedor|aluno|sábio)\b",
+    re.I,
+)
 FIERY = re.compile(r"\b(polêmic|provocat|furios|apaixonad|fiery|provocative|radical|revolucion|irreveren|sarcást|martelo|hammer)", re.I)
 CALM = re.compile(r"\b(seren|calm|sereno|estoic|stoic|gentil|gentle|sábi|wise|ironi|paciente|patient)", re.I)
 FEMALE_NAMES = {"ada", "marie", "simone", "hannah", "hipátia", "hypatia", "frida", "clarice", "cleópatra", "cleopatra",
                 "rosa", "virginia", "jane", "mary", "joana", "joan", "elizabeth", "maria", "ana", "anne", "safo", "sappho",
-                "lélia", "carolina", "cecília", "rachel", "florence", "emmy", "grace", "amelia", "chiquinha"}
+                "lélia", "carolina", "cecília", "rachel", "florence", "emmy", "grace", "amelia", "chiquinha",
+                "alice", "beatriz", "bia", "lia", "nina", "rita", "sofia", "sophia", "helena", "laura"}
+GENDER_ALIASES = {
+    "m": "m", "male": "m", "masculino": "m", "man": "m",
+    "f": "f", "female": "f", "feminino": "f", "woman": "f",
+}
+PUBLIC_GENDER = {"m": "male", "f": "female"}
 
 
 @lru_cache(maxsize=256)
@@ -100,7 +114,7 @@ def traits(char: dict[str, Any]) -> dict[str, Any]:
     name = str(char.get("name") or "")
     text = " ".join(str(char.get(k) or "") for k in ("persona", "bio", "description", "role", "prompt"))
     wd = wikidata(name)
-    gender = char.get("gender") or wd.get("gender")
+    gender = GENDER_ALIASES.get(str(char.get("gender") or "").strip().casefold()) or wd.get("gender")
     if gender not in ("m", "f"):
         first = name.split()[0].lower() if name.split() else ""
         f, m = len(FEMALE_WORDS.findall(text)), len(MALE_WORDS.findall(text))
@@ -109,6 +123,11 @@ def traits(char: dict[str, Any]) -> dict[str, Any]:
     temper = "fiery" if FIERY.search(text) else "calm" if CALM.search(text) else "neutral"
     age = char.get("age") or ("elder" if isinstance(born, int) and born < 1900 else "adult")
     return {"gender": gender, "born": born, "age": age, "temper": temper}
+
+
+def public_gender(char: dict[str, Any]) -> str:
+    """Public API value inferred by the same rules used for casting."""
+    return PUBLIC_GENDER[traits(char)["gender"]]
 
 
 def _key(ch: dict[str, Any]) -> str:
@@ -172,14 +191,43 @@ def voice_pool(lang: str) -> dict[str, list[str]]:
     return pool
 
 
+def voice_catalog(lang: str) -> list[dict[str, str]]:
+    """Available voice overrides for one requested output language."""
+    tag = languages.normalize(lang)
+    pool = voice_pool(tag)
+    return [
+        {
+            "voiceId": voice,
+            "label": VOICE_INFO.get(
+                voice,
+                (re.sub(r"^[a-z]{2}-[A-Z]{2}-|(Multilingual)?Neural$", "", voice), 0.0),
+            )[0],
+            "gender": PUBLIC_GENDER[gender],
+            "language": tag,
+        }
+        for gender in ("m", "f")
+        for voice in pool[gender]
+    ]
+
+
 def cast(chars: list[dict[str, Any]], lang: str, overrides: list[Any] | None = None) -> list[dict[str, Any]]:
-    """One voice per speaker: {'voice', 'label', 'pitchHz', 'ratePct', 'auto', 'traits'}."""
+    """One gender-matched voice per speaker; explicit ``voiceId`` wins."""
     trs = [traits(ch) for ch in chars]
     names = [_key(ch) or f"#{i}" for i, ch in enumerate(chars)]
     ovs: list[dict[str, Any] | None] = []
     for i, ch in enumerate(chars):
-        ov = (overrides[i] if overrides and i < len(overrides) else None) or ch.get("voice")
-        ovs.append({"voice": ov} if isinstance(ov, str) else ov if isinstance(ov, dict) and ov.get("voice") else None)
+        ov = (
+            (overrides[i] if overrides and i < len(overrides) else None)
+            or ch.get("voiceId")
+            or ch.get("voice")
+        )
+        if isinstance(ov, str):
+            ovs.append({"voice": ov})
+        elif isinstance(ov, dict):
+            voice_id = ov.get("voiceId") or ov.get("voice")
+            ovs.append(({**ov, "voice": voice_id} if voice_id else None))
+        else:
+            ovs.append(None)
     pool = voice_pool(lang) if any(o is None for o in ovs) else {"m": [], "f": []}
     taken = {o["voice"] for o in ovs if o}
     voices: list[str] = [""] * len(chars)
@@ -210,6 +258,9 @@ def cast(chars: list[dict[str, Any]], lang: str, overrides: list[Any] | None = N
                 out[i]["pitchHz"] += 9 * k if k % 2 else -9 * k
     for p in out:
         p["label"] = VOICE_INFO.get(p["voice"], (re.sub(r"^[a-z]{2}-[A-Z]{2}-|(Multilingual)?Neural$", "", p["voice"]),))[0]
+        p["voiceId"] = p["voice"]
+        p["gender"] = PUBLIC_GENDER[p["traits"]["gender"]]
+        p["language"] = languages.normalize(lang)
     return out
 
 

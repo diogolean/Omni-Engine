@@ -36,6 +36,13 @@ pool, titles/caption labels and disclaimer. Other BCP-47 locales remain valid: E
 resolved at runtime (or explicit `voices[]` may be supplied), while copy falls back to the English
 bank until a profile is registered in `languages.py`. `GET /v1/languages` exposes built-ins.
 
+Voice casting uses the character's inferred `gender` (`male` or `female`), from an explicit field,
+persona wording, Wikidata or the first name, and returns it in both the character and render
+contracts. Automatic picks always come from that gender's pool and speakers receive distinct voices
+when the language pool has capacity. A character-level `voiceId` overrides the automatic pick
+(`voices[]` remains compatible); render results expose both canonical `voiceId` and legacy `voice`.
+`GET /v1/voices?lang=en` lists the available ids with label, gender and normalized language.
+
 Rhubarb selection is language-aware. PocketSphinx is used only for English; all other locales use
 `phonetic`. The phase-2 comparison used identical edge-tts clips and dialog text with Rhubarb
 1.13.0: English measured 30 cues / 6 non-rest shapes with PocketSphinx versus 26 / 6 with phonetic;

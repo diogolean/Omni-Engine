@@ -26,12 +26,21 @@ def test_stick_presets_are_reusable_and_include_complete_face_sheet(client):  # 
     body = {
         "type": "stick", "name": "Nina", "preset": "rebel",
         "palette": {"skin": [210, 160, 120], "outfit": [20, 90, 160]},
-        "accessory": "bandana", "source": {"kind": "prompt", "prompt": "debatedora"},
+        "accessory": "bandana", "voiceId": "pt-BR-FranciscaNeural",
+        "source": {"kind": "prompt", "prompt": "debatedora"},
     }
     first = client.post("/v1/characters", headers=H, json=body).json()
     second = client.post("/v1/characters", headers=H, json=body).json()
+    changed_voice = client.post(
+        "/v1/characters", headers=H,
+        json={**body, "voiceId": "pt-BR-ThalitaMultilingualNeural"},
+    ).json()
     assert first["id"] == second["id"] and second["reused"] is True
+    assert changed_voice["id"] == first["id"] and changed_voice["reused"] is True
+    assert changed_voice["voiceId"] == "pt-BR-ThalitaMultilingualNeural"
     assert first["preset"] == "rebel"
+    assert first["gender"] == "female"
+    assert first["voiceId"] == "pt-BR-FranciscaNeural"
     assert first["customization"]["accessory"] == "bandana"
     for view in first["views"].values():
         assert set(view["expressions"]) == {
@@ -59,6 +68,17 @@ def test_language_catalog_documents_recognizers(client):  # noqa: F811
     by_tag = {item["language"]: item for item in data["languages"]}
     assert by_tag["en-US"]["rhubarbRecognizer"] == "pocketSphinx"
     assert by_tag["pt-BR"]["rhubarbRecognizer"] == "phonetic"
+
+
+def test_voice_endpoint_lists_gendered_language_specific_ids(client):  # noqa: F811
+    en = client.get("/v1/voices?lang=en").json()
+    pt = client.get("/v1/voices?lang=pt-BR").json()
+    assert en["language"] == "en-US" and pt["language"] == "pt-BR"
+    assert {voice["gender"] for voice in en["voices"]} == {"male", "female"}
+    assert {voice["gender"] for voice in pt["voices"]} == {"male", "female"}
+    assert {voice["voiceId"] for voice in en["voices"]}.isdisjoint(
+        {voice["voiceId"] for voice in pt["voices"]}
+    )
 
 
 def test_rhubarb_rejects_unknown_recognizer():

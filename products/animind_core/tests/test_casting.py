@@ -20,12 +20,16 @@ def test_two_men_in_pt_br_get_two_different_voices():
     assert {a["voice"], b["voice"]} <= set(casting.POOL["pt-BR"]["m"])
     assert a["label"] and b["label"] and a["label"] != b["label"]
     assert a["auto"] and b["auto"]
+    assert a["gender"] == b["gender"] == "male"
+    assert a["language"] == b["language"] == "pt-BR"
+    assert a["voiceId"] == a["voice"] and b["voiceId"] == b["voice"]
 
 
 def test_two_women_in_pt_br_get_two_different_voices():
     a, b = casting.cast([{"name": "Hannah Arendt", "gender": "f", "born": 1906},
                          {"name": "Simone de Beauvoir", "gender": "f", "born": 1908}], "pt-BR")
     assert a["voice"] != b["voice"] and {a["voice"], b["voice"]} <= set(casting.POOL["pt-BR"]["f"])
+    assert a["gender"] == b["gender"] == "female"
 
 
 def test_cast_is_deterministic_and_independent_of_speaker_order():
@@ -54,6 +58,23 @@ def test_override_wins_and_the_other_speaker_avoids_it():
     pin = casting.cast([NIETZSCHE], "pt-BR")[0]["voice"]
     a, b = casting.cast([SOCRATES, NIETZSCHE], "pt-BR", [None, {"voice": pin}])
     assert b["voice"] == pin and b["auto"] is False and a["voice"] != pin
+
+
+def test_character_voice_id_override_wins():
+    pin = casting.POOL["en-US"]["f"][2]
+    (pick,) = casting.cast([{"name": "Ada", "gender": "female", "voiceId": pin}], "en")
+    assert pick["voiceId"] == pin and pick["auto"] is False and pick["gender"] == "female"
+
+
+def test_voice_catalog_is_gendered_and_language_specific():
+    en = casting.voice_catalog("en")
+    pt = casting.voice_catalog("pt-BR")
+    assert {v["gender"] for v in en} == {"male", "female"}
+    assert {v["language"] for v in en} == {"en-US"}
+    assert {v["language"] for v in pt} == {"pt-BR"}
+    assert {v["voiceId"] for v in en}.isdisjoint({v["voiceId"] for v in pt})
+    assert {v["voiceId"] for v in en if v["gender"] == "male"} == set(casting.POOL["en-US"]["m"])
+    assert {v["voiceId"] for v in pt if v["gender"] == "female"} == set(casting.POOL["pt-BR"]["f"])
 
 
 def test_more_speakers_than_voices_falls_back_to_pitch_split():

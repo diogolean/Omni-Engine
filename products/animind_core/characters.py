@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import rig, settings, sheet, stick, styles
+from . import casting, rig, settings, sheet, stick, styles
 
 _LOG = logging.getLogger("animind_core")
 _BUILD_LOCK = threading.Lock()  # one character at a time: BiRefNet needs ~8 GB on CPU
@@ -73,7 +73,9 @@ def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
     if best is None:
         return None
     text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(best[2]))
-    return json.loads(text) | {"reused": True}
+    reused = json.loads(text)
+    reused.setdefault("gender", casting.public_gender(reused))
+    return reused | {"reused": True}
 
 
 def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
@@ -135,11 +137,17 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     art_style = styles.pick(req.get("artStyle"))
     if character_type == "stick" and (skin / "character.json").is_file():
         saved = json.loads((skin / "character.json").read_text(encoding="utf-8"))
+        saved["gender"] = casting.public_gender({**saved, **req, "name": name, "prompt": subject})
+        if req.get("voiceId"):
+            saved["voiceId"] = str(req["voiceId"])
         text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(saved))
         return json.loads(text) | {"reused": True}
     if character_type == "rig" and req.get("reuse", True) is not False and not req.get("rawPrompt"):
         found = reusable(name, art_style, base_url)
         if found:
+            found["gender"] = casting.public_gender({**found, **req, "name": name, "prompt": subject})
+            if req.get("voiceId"):
+                found["voiceId"] = str(req["voiceId"])
             _LOG.info("character %s reused for %r (no image generated)", found["id"], name)
             return found
     mode = "procedural" if character_type == "stick" else ("gemini" if settings.gemini_available() else "mock")
@@ -165,6 +173,8 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     character = {
         "id": character_id,
         "name": name,
+        "gender": casting.public_gender({**req, "name": name, "prompt": subject}),
+        **({"voiceId": str(req["voiceId"])} if req.get("voiceId") else {}),
         "type": character_type,
         "status": "ready",
         "style": "rig",
