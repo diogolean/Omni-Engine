@@ -46,7 +46,7 @@ def line_view(template: str, speaker: int, index: int, beat: str = "") -> str:
     each other and solo/lesson turn on every other line."""
     if beat in CAMERA_BEATS:
         return "front"
-    if template == "debate":
+    if template in {"debate", "dialogue"}:
         return "right" if speaker == 0 else "left"
     return "front" if index % 2 == 0 else "right"
 
@@ -247,7 +247,12 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         chars = req.get("characters") or []
         if not chars:
             raise ValueError("characters is required")
-        template = req.get("template") if req.get("template") in scene.PLACES else "solo"
+        requested_template = str(req.get("template") or "solo").lower()
+        requested_template = {"dialogo": "dialogue", "diálogo": "dialogue", "dialog": "dialogue",
+                              "monologue": "solo", "monólogo": "solo", "monologo": "solo"}.get(
+                                  requested_template, requested_template)
+        template = requested_template if requested_template in (*scene.PLACES, "dialogue") else "solo"
+        scene_template = "debate" if template == "dialogue" else template
         scenario = req.get("scenario") if req.get("scenario") in scene.SCENARIOS else "studio"
         lang = req.get("lang") if req.get("lang") in casting.POOL else "pt-BR"
         topic = (req.get("topic") or "inteligência artificial").strip()[:200]
@@ -256,10 +261,16 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
         art = styles.pick(req.get("style") or (chars[0].get("artStyle") if chars else None))
         tone = styles.pick_tone(req.get("tone"))
-        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang, mode=mode, tone=tone)
+        objective = styles.pick_objective(req.get("objective"))
+        try:
+            target_duration = max(10.0, min(180.0, float(req.get("duration") or 45)))
+        except (TypeError, ValueError):
+            target_duration = 45.0
+        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang, mode=mode,
+                                tone=tone, objective=objective, duration=target_duration)
         lines = written["lines"]
         fmt = "9:16" if req.get("format") == "9:16" else "16:9"
-        n = 2 if template == "debate" else 1
+        n = len(chars) if template == "dialogue" else (2 if template == "debate" else 1)
         cast = [chars[min(i, len(chars) - 1)] for i in range(n)]
         voices = casting.cast(cast, lang, req.get("voices"))
         # Silence for the film titles: a cold open before the first line, a beat before each new act
@@ -287,8 +298,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         audio = work / "voice.wav"
         _write_pcm(audio, track)
         duration = len(track) / SAMPLE_RATE
-        rigs = [_rig_views(c, template, i, scenario) for i, c in enumerate(cast)]
-        sc = scene.Scene(template=template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
+        rigs = [_rig_views(c, scene_template, i, scenario) for i, c in enumerate(cast)]
+        sc = scene.Scene(template=scene_template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
                          env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER,
                          names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art,
                          topic=written["topic"])
@@ -328,6 +339,9 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             **({"scriptQA": written["scriptQA"]} if "scriptQA" in written else {}),
             "style": art,
             "tone": tone,
+            "objective": objective,
+            "targetDurationMs": int(target_duration * 1000),
+            "type": req.get("type") or ("stick" if all(c.get("type") == "stick" for c in cast) else "rig"),
             "frameQa": frame_qa,
             "frameQaUrl": f"{files}/frame_qa.json",
         })

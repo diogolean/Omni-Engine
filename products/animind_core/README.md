@@ -7,7 +7,7 @@ Rhubarb visemes).
 
 | Endpoint | What runs |
 | --- | --- |
-| `POST /v1/characters` | `rig.py`: Gemini master via Aiwake `create_puppet.generate_character_image` -> generated mouthless head + 4x3 parts sheet (nine Rhubarb mouths and three lid states) -> BiRefNet matte -> registered layers `torso`, `neck`, mouthless `head`, eyes/lids, `brows` and transparent mouth sprites `X A B C D E F G H`. A separate referenced Gemini shot supplies the frontal view; `right` mirrors the 3/4 `left` view. |
+| `POST /v1/characters` | `type: "rig"` uses `rig.py`: Gemini master via Aiwake `create_puppet.generate_character_image` -> generated mouthless head + 4x3 parts sheet (nine Rhubarb mouths and three lid states) -> BiRefNet matte -> registered layers. `type: "stick"` uses `stick.py` only: an anti-aliased procedural head/body, separate gesture arms, movable pupils, soft lids, delicate brows and clean `X A B C D E F G H` sprites, with no Gemini call. |
 | `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame and fails the job if more than one mouth layer, a stacked second mouth, or an excessive opening is found. Successful results include `frameQa` and `frameQaUrl`. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
@@ -21,6 +21,14 @@ The same happens when Gemini answers 402 / depleted credit / bad key: the reques
 with mock art and `generatorNote` ("Gemini indisponível: ..."), and from then on this process stops
 calling Gemini (`/v1/health` reports `generator: mock` plus the same `generatorNote`). Other build
 errors still fail.
+
+Stick characters are always `"generator": "procedural"` and cost zero, regardless of Gemini
+configuration. The render endpoint accepts `solo`/`monologue`, the existing `debate`, and
+`dialogue`/`dialogo` with every character in the supplied array participating. App controls
+`tone` (`humor`, `terror`, `educacional`, `sabio`, `serio`, plus the legacy ids), `objective`
+(`ensinar`, `debater`, `entreter`, `convencer`) and `duration` (10–180 seconds target) are passed to
+both writers. The offline template makes tone and objective visible in its hook rather than merely
+returning them as metadata. `GET /v1/tones` and `GET /v1/objectives` expose the catalogs.
 
 `/v1/health` also lists `scenarios` and `templates` this process can render (an unknown `scenario`
 renders as `studio`), so a core started from an older checkout is visible before a render falls back.
@@ -197,6 +205,10 @@ never squashed into a second copy (the old "tear" in close-ups).
    one `speech` span per voiced line: a speaker whose drawn mouth never changes shape during a line
    (>= 0.4 s), whose measured opening never reaches `OPEN_MIN`, or a video with speech and `maxOpen` 0
    fails too (a frozen mouth is not a pass).
+   The same trace records the actual lid and brow pose per character: clips of at least six seconds
+   must blink at 8–36 starts/minute, an emotional line must leave the neutral brow pose, and multiple
+   emotions must produce multiple brow poses. The result reports `blinkRatesPerMin`,
+   `browEmotions`, and `browPoseCounts`.
 
 **Cost:** $0.039/image. No retries = 3 images = ~$0.12. Test-phase cap 0.30 allows up to ~7 images;
 production should use a lower cap (see `.env.example`).

@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import hmac
 import os
-from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import API_VERSION, characters, knowledge, personas, scene, styles, render, settings
+from . import API_VERSION, characters, knowledge, personas, render, scene, settings, styles
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
@@ -94,6 +93,12 @@ def get_styles() -> dict:
 def get_tones() -> dict:
     """Script tones accepted as ``tone`` (render)."""
     return {"tones": styles.tone_catalog(), "default": styles.DEFAULT_TONE}
+
+
+@app.get("/v1/objectives")
+def get_objectives() -> dict:
+    """Script objectives accepted as ``objective`` (render)."""
+    return {"objectives": styles.objective_catalog(), "default": styles.DEFAULT_OBJECTIVE}
 
 
 @app.get("/v1/personas/sheet", dependencies=[Depends(require_key)])

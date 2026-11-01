@@ -45,11 +45,25 @@ DEFAULT = "ghibli"
 # Narrative tone of the script (writer prompt + default emotion per beat); independent of the drawing style.
 TONES: dict[str, dict[str, Any]] = {
     "comedia": {"label": "Comédia", "prompt": "comedic: witty, light, timing on the punchline, never cruel"},
+    "humor": {"label": "Humor", "prompt": "humorous: light, clear, with one gentle punchline"},
     "ficcao": {"label": "Ficção", "prompt": "fictional drama: vivid stakes, characters fully in role"},
     "horror": {"label": "Horror", "prompt": "horror: eerie, slow dread, unsettling images, no gore"},
+    "terror": {"label": "Terror", "prompt": "terror: tense and uncanny, suggestive rather than graphic"},
+    "educacional": {"label": "Educacional", "prompt": "educational: concrete, structured, and easy to retain"},
+    "sabio": {"label": "Sábio", "prompt": "wise: reflective, concise, and grounded in a useful insight"},
+    "sábio": {"label": "Sábio", "prompt": "wise: reflective, concise, and grounded in a useful insight"},
     "serio": {"label": "Sério", "prompt": "serious and respectful: rigorous arguments, calm intensity"},
+    "sério": {"label": "Sério", "prompt": "serious and respectful: rigorous arguments, calm intensity"},
 }
 DEFAULT_TONE = "comedia"
+
+OBJECTIVES: dict[str, str] = {
+    "ensinar": "Ensinar",
+    "debater": "Debater",
+    "entreter": "Entreter",
+    "convencer": "Convencer",
+}
+DEFAULT_OBJECTIVE = "entreter"
 
 
 def pick_tone(tone: Any) -> str:
@@ -58,6 +72,14 @@ def pick_tone(tone: Any) -> str:
 
 def tone_catalog() -> list[dict[str, str]]:
     return [{"id": k, "label": v["label"]} for k, v in TONES.items()]
+
+
+def pick_objective(objective: Any) -> str:
+    return objective if isinstance(objective, str) and objective in OBJECTIVES else DEFAULT_OBJECTIVE
+
+
+def objective_catalog() -> list[dict[str, str]]:
+    return [{"id": key, "label": label} for key, label in OBJECTIVES.items()]
 
 
 def pick(style: Any) -> str:

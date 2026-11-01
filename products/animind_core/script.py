@@ -540,7 +540,8 @@ def _seed(topic: str, names: list[str], lang: str) -> int:
 
 def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: list[dict[str, Any]], n: int,
                    taken: set[str], molds: set[str] | None = None, seed: int = 0, index: int = 0,
-                   upcoming: list[str] | None = None) -> str:
+                   upcoming: list[str] | None = None, objective: str = "entreter",
+                   tone: str = "comedia") -> str:
     """A written line for ``beat`` that answers ``before`` (the lines so far), never one already in ``taken``
     and never a mold already in ``molds`` (updated in place). In a debate the line picks up an idea of the
     line right before it (and prefers a mold whose text really shares a word with that line). ``upcoming``:
@@ -549,6 +550,24 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
     molds = set() if molds is None else molds
     head, noun, is_q = topic_parts(topic)
     the = noun_phrase(topic, noun)
+    if beat.name == "gancho" and (tone != "comedia" or objective != "entreter"):
+        lead = {
+            "humor": "Sem piada", "comedia": "Sem piada", "terror": "No escuro",
+            "horror": "No escuro", "educacional": "Passo a passo", "sabio": "Pense bem",
+            "sábio": "Pense bem", "serio": "Sem atalhos", "sério": "Sem atalhos",
+        }.get(tone, "Preste atenção")
+        action = {
+            "ensinar": "vamos entender", "debater": "vamos confrontar ideias",
+            "entreter": "isso vai surpreender", "convencer": "vou provar meu ponto",
+        }.get(objective, "isso vai surpreender")
+        if lang == "en-US":
+            lead = {"No escuro": "In the dark", "Passo a passo": "Step by step",
+                    "Pense bem": "Think carefully", "Sem atalhos": "No shortcuts",
+                    "Sem piada": "No joke"}.get(lead, "Pay attention")
+            action = {"ensinar": "let us understand it", "debater": "let us test both sides",
+                      "entreter": "this will surprise you", "convencer": "I will make the case"}.get(
+                          objective, "this will surprise you")
+        return tidy(f"{lead}: {the}. {action}.")
     a = names[0] if names else ""
     b = names[1] if len(names) > 1 else a
     sp = min(beat.speaker, n - 1)
@@ -662,7 +681,7 @@ def _contract(text: str, lang: str) -> str:
 # ---------------------------------------------------------------- Gemini writer
 
 
-EMOTIONS = ("neutro", "alegre", "irritado", "surpreso", "triste", "desdenhoso", "pensativo")
+EMOTIONS = ("neutro", "alegre", "irritado", "bravo", "surpreso", "triste", "desdenhoso", "ironico", "pensativo")
 BEAT_EMOTION = {"gancho": "surpreso", "tese": "pensativo", "réplica": "irritado", "tréplica": "irritado",
                 "fechamento": "desdenhoso", "argumento": "pensativo", "exemplo": "alegre", "resumo": "neutro",
                 "pergunta": "pensativo", "citação": "pensativo", "síntese": "alegre"}
@@ -675,7 +694,8 @@ def emotion_of(draft: dict[str, Any], beat_name: str) -> str:
 
 
 def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], topic: str, lang: str, template: str,
-            passages: list[list[dict[str, Any]]] | None = None, tone: str = "comedia") -> str:
+            passages: list[list[dict[str, Any]]] | None = None, tone: str = "comedia",
+            objective: str = "entreter") -> str:
     who = []
     for k, (name, sheet) in enumerate(zip(names, sheets)):
         bg = "\n".join(f'    [{p["source"]}] {p["text"][:600]}' for p in (passages[k] if passages else []))
@@ -697,11 +717,13 @@ def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], to
         "debate": "a tight, cinematic debate for a 60-second vertical video in four acts: opening hook, clash of short alternating replies that answer each other, a turn in the middle (a real quote that changes the fight), and a strong close",
         "lesson": "a short lesson that progresses: a hook question, the right question, a real quote, one concrete everyday example, a second quote, a one-line synthesis",
         "solo": "a short monologue: hook, thesis, one argument, close",
+        "dialogue": "a concise round-table dialogue where every participant responds to the shared topic",
     }[template]
     from . import styles  # noqa: PLC0415
     tone_line = styles.TONES[styles.pick_tone(tone)]["prompt"]
     return f"""You write {shape}, in {language}, about: {topic}
 Tone: {tone_line}.
+Objective: {objective}. Make that objective visible in the hook and close.
 
 {chr(10).join(who)}
 
@@ -753,11 +775,14 @@ def _gemini(prompt: str) -> list[dict[str, Any]]:
 
 
 def _gemini_call(prompt: str) -> list[dict[str, Any]]:
+    import os  # noqa: PLC0415
+
     from google.genai import types  # noqa: PLC0415
 
-    from production.cost.google_guardrail import guarded_generate_content, make_guarded_gemini_client  # noqa: PLC0415
-
-    import os  # noqa: PLC0415
+    from production.cost.google_guardrail import (  # noqa: PLC0415
+        guarded_generate_content,
+        make_guarded_gemini_client,
+    )
 
     client = make_guarded_gemini_client((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
     response = guarded_generate_content(
@@ -773,26 +798,39 @@ def _gemini_call(prompt: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------- assembly
 
 
-def plan_for(template: str, n_chars: int) -> list[Beat]:
+def plan_for(template: str, n_chars: int, duration: int | float | None = None) -> list[Beat]:
     if template == "debate" and n_chars < 2:
         template = "solo"
+    if template == "dialogue":
+        n_chars = max(1, n_chars)
+        count = max(n_chars, min(12, round(float(duration or 45) / 6)))
+        return [
+            Beat("gancho" if i == 0 else ("fechamento" if i == count - 1 else "réplica"),
+                 i % n_chars, "paraphrase", 14 if i in (0, count - 1) else 12,
+                 0.35 if i < count - 1 else 0.0)
+            for i in range(count)
+        ]
     return list(PLANS.get(template, PLANS["solo"]))
 
 
 def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
-          indexes: list[Any] | None = None, tone: str = "comedia") -> dict[str, Any]:
+          indexes: list[Any] | None = None, tone: str = "comedia", objective: str = "entreter",
+          duration: int | float | None = None) -> dict[str, Any]:
     """Script lines (before TTS) plus the sheets used. ``use_llm`` None -> Gemini when a key is set.
 
     ``mode`` picks the knowledge index behind written lines (:mod:`knowledge`): ``quick`` (key terms,
     shallow) or ``deep`` (full texts). Retrieved passages only feed ideas; quotes stay verbatim from the sheet."""
-    template = template if template in PLANS else "solo"
+    template = template if template in (*PLANS, "dialogue") else "solo"
     topic = (topic or "").strip() or ("inteligência artificial" if lang == "pt-BR" else "artificial intelligence")
-    n = 2 if template == "debate" and len(names) >= 2 else 1
+    n = len(names) if template == "dialogue" else (2 if template == "debate" and len(names) >= 2 else 1)
+    n = max(1, n)
     names = [personas.persona_name(names[min(i, len(names) - 1)]) if names else "" for i in range(n)]
     if sheets is None:
         sheets = [personas.load(nm, lang, fetch=settings.personas_online()) for nm in names]
-    plan = plan_for(template, n)
+    from . import styles  # noqa: PLC0415
+    tone, objective = styles.pick_tone(tone), styles.pick_objective(objective)
+    plan = plan_for(template, n, duration)
     mode = mode if mode in knowledge.MODES else "quick"
     if indexes is None:
         indexes = [knowledge.ensure(nm, lang, mode, sheet=sh) for nm, sh in zip(names, sheets)]
@@ -804,7 +842,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
     writer = "template"
     if use_llm:
         try:
-            for entry in _gemini(_prompt(plan, sheets, names, topic, lang, template, passages, tone)):
+            for entry in _gemini(_prompt(plan, sheets, names, topic, lang, template, passages, tone, objective)):
                 if isinstance(entry, dict) and isinstance(entry.get("i"), int):
                     drafted[entry["i"]] = entry
             writer = "gemini"
@@ -871,7 +909,8 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
                 upcoming = ([q["text"] for q in _rank([q for q in _eligible(sheets[nsp], nxt.max_words)
                                                        if (nsp, q["id"]) not in used], topic, "")]
                             if debate and nxt and nxt.kind == "quote" else None)
-                text = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming)
+                text = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
+                                      objective, tone)
             line.update(kind="paraphrase", text=text)
             if beat.name == "citação":  # a written line is never labelled as a quote
                 line["beat"] = "ideia"
@@ -891,6 +930,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
         for nm, s, ix, ps in zip(names, sheets, indexes, passages)
     ]
     out = {"lines": lines, "writer": writer, "personas": personas_out, "topic": topic, "tone": tone,
+           "objective": objective, "targetDurationS": float(duration) if duration is not None else None,
            "quoteLines": sum(1 for ln in lines if ln["kind"] == "quote")}
     problems = check(lines, sheets)  # quote fidelity holds for every template
     if debate:
