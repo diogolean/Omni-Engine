@@ -30,6 +30,32 @@ configuration. The render endpoint accepts `solo`/`monologue`, the existing `deb
 both writers. The offline template makes tone and objective visible in its hook rather than merely
 returning them as metadata. `GET /v1/tones` and `GET /v1/objectives` expose the catalogs.
 
+`language` is the canonical BCP-47 render field (`lang` remains an alias). It defaults to `en-US`;
+`pt`/`pt-BR` select Brazilian Portuguese. The locale controls the offline script bank, Edge voice
+pool, titles/caption labels and disclaimer. Other BCP-47 locales remain valid: Edge's catalogue is
+resolved at runtime (or explicit `voices[]` may be supplied), while copy falls back to the English
+bank until a profile is registered in `languages.py`. `GET /v1/languages` exposes built-ins.
+
+Rhubarb selection is language-aware. PocketSphinx is used only for English; all other locales use
+`phonetic`. The phase-2 comparison used identical edge-tts clips and dialog text with Rhubarb
+1.13.0: English measured 30 cues / 6 non-rest shapes with PocketSphinx versus 26 / 6 with phonetic;
+pt-BR measured 41 cues / 8 shapes with phonetic versus 32 / 5 with PocketSphinx. Thus phonetic
+preserved substantially more Portuguese articulation, while PocketSphinx gave denser English cues.
+The proof bundle includes `recognizer/measurement.json`.
+
+Stick characters have four deterministic presets (`teacher`, `sage`, `rebel`, `explorer`) exposed
+by `GET /v1/stick-presets`. `palette.skin`, `palette.outfit` (or `clothing.color`) and `accessory`
+are overridable. An identical name+preset+customization resolves to the same cached character and
+returns `reused: true`, without image generation or Gemini.
+
+The mouth family comes directly from Aiwake's
+`products/aiwake/animator/asset_generator.py::_draw_ghibli_mouth_patch`: organic X/A-H visemes,
+`smug_smile` (the asymmetric triangular grin) and `stressed_grimace`. It is shared by stick rigs
+and complex rigs. Seven emotional rest variants are stored separately from visemes, and the
+renderer substitutes one only during X/rest frames, preserving exactly one mouth layer per frame.
+The generated `review_sheet.png` now includes all mouths, eye states/directions, emotional brows
+and expressions for all three views; it stays under `ANIMIND_DATA_DIR`, outside git.
+
 `/v1/health` also lists `scenarios` and `templates` this process can render (an unknown `scenario`
 renders as `studio`), so a core started from an older checkout is visible before a render falls back.
 

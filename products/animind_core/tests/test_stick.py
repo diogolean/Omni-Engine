@@ -75,7 +75,7 @@ def test_offline_writer_uses_tone_objective_duration_and_n_speakers():
     names = ["Ana", "Beto", "Caio"]
     sheets = [{"quotes": []} for _ in names]
     out = script.write(
-        "dialogue", "energia solar", names, sheets=sheets, use_llm=False,
+        "dialogue", "energia solar", names, lang="pt-BR", sheets=sheets, use_llm=False,
         tone="educacional", objective="ensinar", duration=30,
     )
     assert out["writer"] == "template"
