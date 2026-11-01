@@ -10,6 +10,7 @@ the same layers, for wiring tests. ``generator`` says which one ran.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -97,8 +98,34 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         raise ValueError("source.kind must be prompt, catalog, or upload")
 
     name = (str(req.get("name") or "").strip() or subject)[:40]
-    character_id = f"{_slug(name)}_{uuid.uuid4().hex[:8]}"
     assets = settings.data_dir() / "assets"
+    stick_options: dict[str, Any] = {}
+    if character_type == "stick":
+        palette = req.get("palette") if isinstance(req.get("palette"), dict) else {}
+        clothing = req.get("clothing") if isinstance(req.get("clothing"), dict) else {}
+        preset = str(req.get("preset") or "teacher").strip().lower()
+        preset = preset if preset in stick.PRESETS else "teacher"
+
+        def rgb(value: Any, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+            try:
+                got = tuple(max(0, min(255, int(v))) for v in value[:3])
+                return got if len(got) == 3 else fallback
+            except (TypeError, ValueError):
+                return fallback
+
+        spec = stick.PRESETS[preset]
+        stick_options = {
+            "preset": preset,
+            "colour": rgb(palette.get("skin"), spec["skin"]),
+            "outfit": rgb(palette.get("outfit") or clothing.get("color"), spec["outfit"]),
+            "accessory": str(req.get("accessory", spec["accessory"])).strip().lower(),
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps({"name": name, **stick_options}, sort_keys=True, default=list).encode()
+        ).hexdigest()[:12]
+        character_id = f"stick_{preset}_{fingerprint}"
+    else:
+        character_id = f"{_slug(name)}_{uuid.uuid4().hex[:8]}"
     skin = assets / "puppets" / character_id
     files_base = f"{base_url}/v1/files"
 
@@ -106,6 +133,10 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         return f"{files_base}/{path.relative_to(assets).as_posix()}"
 
     art_style = styles.pick(req.get("artStyle"))
+    if character_type == "stick" and (skin / "character.json").is_file():
+        saved = json.loads((skin / "character.json").read_text(encoding="utf-8"))
+        text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(saved))
+        return json.loads(text) | {"reused": True}
     if character_type == "rig" and req.get("reuse", True) is not False and not req.get("rawPrompt"):
         found = reusable(name, art_style, base_url)
         if found:
@@ -116,15 +147,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     with _BUILD_LOCK:
         built = None
         if mode == "procedural":
-            palette = req.get("palette") if isinstance(req.get("palette"), dict) else {}
-            raw_colour = palette.get("skin", [244, 218, 190])
-            try:
-                colour = tuple(max(0, min(255, int(v))) for v in raw_colour[:3])
-                if len(colour) != 3:
-                    raise ValueError
-            except (TypeError, ValueError):
-                colour = (244, 218, 190)
-            built = stick.build(skin, url, colour)  # type: ignore[arg-type]
+            built = stick.build(skin, url, **stick_options)
             note = "vetorial/procedural; nenhum modelo de imagem usado"
         elif mode == "gemini":
             try:
@@ -155,6 +178,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "mouthShots": built["mouthShots"],
         "artStyle": art_style,
         "frontShot": built.get("frontShot", "mock"),
+        **({"preset": built["preset"], "customization": built["customization"]} if character_type == "stick" else {}),
         # generate-then-verify QA: score 0-100, Gemini cost, attempts, failed gates; sheet stored with the character
         "qa": built.get("qa"),
         "qaSheetUrl": url(skin / "qa_sheet.png") if (skin / "qa_sheet.png").exists() else None,

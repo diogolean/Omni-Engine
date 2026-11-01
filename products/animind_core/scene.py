@@ -92,6 +92,11 @@ EMO_BROW_POSE = {
 EMO_ARM_ROT = {"alegre": (-5.0, 5.0), "irritado": (7.0, -7.0), "bravo": (7.0, -7.0),
                 "triste": (4.0, -4.0), "surpreso": (-10.0, 10.0), "pensativo": (-3.0, -8.0),
                 "desdenhoso": (-8.0, 2.0), "ironico": (-8.0, 2.0), "irônico": (-8.0, 2.0)}
+EMO_MOUTH = {
+    "neutro": "neutral", "alegre": "happy", "irritado": "angry", "bravo": "angry",
+    "triste": "sad", "surpreso": "surprised", "pensativo": "thoughtful",
+    "desdenhoso": "ironic", "ironico": "ironic", "irônico": "ironic",
+}
 
 
 def _qa_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -109,6 +114,7 @@ class RigView:
     size: tuple[int, int]
     layers: list[tuple[str, Image.Image, tuple[int, int], int]] = field(default_factory=list)
     visemes: dict[str, tuple[Image.Image, tuple[int, int], int]] = field(default_factory=dict)
+    expressions: dict[str, tuple[Image.Image, tuple[int, int], int]] = field(default_factory=dict)
     side: int = 1
     eye_shift: tuple[float, float] = (0.0, 0.0)  # iris travel (stage px) for a gaze of +-1
 
@@ -136,6 +142,9 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
     for v, layer in view["visemes"].items():
         img, xy = sized(layer, rim=False)
         rv.visemes[v] = (img, xy, layer.get("z", 99))
+    for emotion, layer in view.get("expressions", {}).items():
+        img, xy = sized(layer, rim=False)
+        rv.expressions[emotion] = (img, xy, layer.get("z", 99))
     return rv
 
 
@@ -526,7 +535,13 @@ class Scene:
         gx, gy = self.gaze(idx, t, view)
         gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))  # eye_shift is the socket-safe maximum
         cur_v, prev_v, wv = vis
-        mouth = rv.visemes.get(cur_v) or rv.visemes.get("X")
+        expression = EMO_MOUTH.get(emotion, "neutral")
+        mouth = (
+            rv.expressions.get(expression)
+            if cur_v == "X"
+            else None
+        ) or rv.visemes.get(cur_v) or rv.visemes.get("X")
+        mouth_tag = f"X_{expression}" if cur_v == "X" and expression in rv.expressions else cur_v
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
         before = rv.visemes.get(prev_v) or rv.visemes.get("X")
         if XFADE_S > 0 and mouth and before and wv < 1.0 and before[0] is not mouth[0]:
@@ -539,7 +554,7 @@ class Scene:
             bx = m0[1].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *m0[1].size)
             # Mouth follows the head's breathing offset; trace the actual painted position.
             ox, oy = x0 + m0[2][0] + hx, y0 + m0[2][1] + round(breathe) + hy
-            self._mouth_log.append({"char": idx, "v": cur_v, "layers": len(mouths), "view": view,
+            self._mouth_log.append({"char": idx, "v": mouth_tag, "layers": len(mouths), "view": view,
                                     "box": _qa_box((ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3]))})
         names = {p[0] for p in parts}
         movable = {"eye_white", "iris", "eye_socket"} <= names
@@ -572,7 +587,7 @@ class Scene:
                 ly -= (img.height - original.height) // 2
             stage.alpha_composite(img, (x0 + lx + hdx, y0 + ly + round(dy) + hdy))
         if mouths:  # reference: the one mouth as drawn, measured the way the video QA measures frames
-            key = (idx, view, cur_v)
+            key = (idx, view, mouth_tag)
             if key not in self._mouth_ref:
                 box = self._mouth_log[-1]["box"]
                 crop = np.asarray(stage.crop(box).convert("RGB"))

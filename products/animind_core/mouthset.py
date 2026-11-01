@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 VISEMES = "XABCDEFGH"
+EMOTIONS = ("neutral", "happy", "angry", "sad", "surprised", "thoughtful", "ironic")
 _REF_PLATE = (400, 300)  # library units: patch 264 x 150, widest shape ~0.73 x patch width
 
 
@@ -40,13 +41,21 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
 
     colours = dict(colours)
     lip = colours.pop("lip", None)
-    raw = {v: _draw_ghibli_mouth_patch(v, plate_width=_REF_PLATE[0], plate_height=_REF_PLATE[1], organic=True, **colours)
-           for v in VISEMES}
+    raw = {
+        v: _draw_ghibli_mouth_patch(
+            v, plate_width=_REF_PLATE[0], plate_height=_REF_PLATE[1], organic=True, **colours
+        ).rotate(-1.5 if v in "XABCGH" else 1.0, Image.Resampling.BICUBIC, expand=False)
+        for v in VISEMES
+    }
     # Aiwake's F pucker is a ringed bullseye that reads as two stacked mouths at video size: use a small round O
-    e = raw["E"]; bb = e.getchannel("A").getbbox()
+    e = raw["E"]
+    bb = e.getchannel("A").getbbox()
     if bb:
-        o = e.crop(bb); o = o.resize((max(1, round(o.width * 0.55)), max(1, round(o.height * 0.75))), Image.LANCZOS)
-        f = Image.new("RGBA", e.size, (0, 0, 0, 0)); f.paste(o, ((e.width - o.width) // 2, (e.height - o.height) // 2)); raw["F"] = f
+        o = e.crop(bb)
+        o = o.resize((max(1, round(o.width * 0.55)), max(1, round(o.height * 0.75))), Image.LANCZOS)
+        f = Image.new("RGBA", e.size, (0, 0, 0, 0))
+        f.paste(o, ((e.width - o.width) // 2, (e.height - o.height) // 2))
+        raw["F"] = f
     pw = raw["X"].width
     k = lip_width / (0.73 * pw)
     out: dict[str, Image.Image] = {}
@@ -63,10 +72,67 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
             canvas.paste(part.resize((part.width, nh), Image.LANCZOS), (bb[0], (bb[1] + bb[3] - nh) // 2))
             im = canvas
         out[v] = _lips(im, lip) if lip and v not in "XA" else im
-    W = max(i.width for i in out.values()); H = max(i.height for i in out.values())
+    W = max(i.width for i in out.values())
+    H = max(i.height for i in out.values())
     for v, im in out.items():  # one shared canvas size again, centred: same anchor, comparable sprites
-        c = Image.new("RGBA", (W, H), (0, 0, 0, 0)); c.paste(im, ((W - im.width) // 2, (H - im.height) // 2)); out[v] = c
+        c = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        c.paste(im, ((W - im.width) // 2, (H - im.height) // 2))
+        out[v] = c
     return out
+
+
+def draw_expressions(
+    lip_width: float,
+    colours: dict[str, tuple[int, int, int, int]],
+    *,
+    squeeze: float = 1.0,
+) -> dict[str, Image.Image]:
+    """Aiwake rest mouths adapted to the seven Animind emotions.
+
+    Happy and ironic deliberately retain Aiwake's asymmetric triangular
+    ``smug_smile``; angry uses its ``stressed_grimace``. The remaining
+    variants are restrained transforms of the same organic X/E/D artwork.
+    """
+    from products.aiwake.animator.asset_generator import _draw_ghibli_mouth_patch  # noqa: PLC0415
+
+    colours = {k: v for k, v in colours.items() if k != "lip"}
+    source = {
+        "neutral": ("X", "neutral", 0.0, 1.0, 1.0),
+        "happy": ("X", "smug_smile", -2.5, 1.0, 0.72),
+        "angry": ("X", "stressed_grimace", 1.5, 0.9, 0.7),
+        "sad": ("X", "neutral", 7.0, 0.8, 1.0),
+        "surprised": ("E", "neutral", -1.0, 0.62, 0.78),
+        "thoughtful": ("X", "neutral", -4.0, 0.72, 1.0),
+        "ironic": ("X", "smug_smile", -5.0, 0.86, 0.62),
+    }
+    raw: dict[str, Image.Image] = {}
+    for emotion, (viseme, rest, angle, sx, sy) in source.items():
+        im = _draw_ghibli_mouth_patch(
+            viseme, plate_width=_REF_PLATE[0], plate_height=_REF_PLATE[1],
+            organic=True, rest_state=rest, **colours,
+        )
+        bb = im.getchannel("A").getbbox()
+        if bb:
+            part = im.crop(bb)
+            part = part.resize((max(1, round(part.width * sx)), max(1, round(part.height * sy))), Image.LANCZOS)
+            canvas = Image.new("RGBA", im.size, (0, 0, 0, 0))
+            canvas.paste(part, ((im.width - part.width) // 2, (im.height - part.height) // 2))
+            im = canvas.rotate(angle, Image.Resampling.BICUBIC, expand=False)
+        raw[emotion] = im
+    k = lip_width / (0.73 * raw["neutral"].width)
+    scaled = {
+        emotion: im.resize(
+            (max(1, round(im.width * k * squeeze)), max(1, round(im.height * k))),
+            Image.LANCZOS,
+        )
+        for emotion, im in raw.items()
+    }
+    width, height = max(i.width for i in scaled.values()), max(i.height for i in scaled.values())
+    for emotion, im in scaled.items():
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
+        scaled[emotion] = canvas
+    return scaled
 
 
 def _lips(im: Image.Image, lip: tuple[int, int, int, int]) -> Image.Image:
@@ -100,4 +166,9 @@ def place(lips: tuple[int, int, int, int], sprites: dict[str, Image.Image]) -> d
 
 
 def describe() -> dict[str, Any]:
-    return {"source": "products.aiwake.animator.asset_generator._draw_ghibli_mouth_patch", "visemes": VISEMES}
+    return {
+        "source": "products.aiwake.animator.asset_generator._draw_ghibli_mouth_patch",
+        "visemes": VISEMES,
+        "expressions": EMOTIONS,
+        "aiwakeRestStates": ["smug_smile", "stressed_grimace"],
+    }

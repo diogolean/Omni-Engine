@@ -971,7 +971,13 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
     for v in VISEMES:
         img, xy = place(*parts["visemes"][v])
         visemes[v] = _layer(f"mouth_{v}", img, xy, 10, out / "mouths" / f"{v}.png", url)
-    view = {"canvas": {"w": W, "h": H}, "layers": layers, "visemes": visemes}
+    expressions = {}
+    for emotion, pair in parts.get("expressions", {}).items():
+        img, xy = place(*pair)
+        expressions[emotion] = _layer(
+            f"expression_{emotion}", img, xy, 10, out / "expressions" / f"{emotion}.png", url
+        )
+    view = {"canvas": {"w": W, "h": H}, "layers": layers, "visemes": visemes, "expressions": expressions}
     if "mouthQA" in parts:
         mq = dict(parts["mouthQA"])
         if mirror:
@@ -989,6 +995,8 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
         layer["url"] = f"{layer['name']}.png"
     for v, layer in local["visemes"].items():
         layer["url"] = f"mouths/{v}.png"
+    for emotion, layer in local["expressions"].items():
+        layer["url"] = f"expressions/{emotion}.png"
     (out / "view.json").write_text(json.dumps(local, indent=2), encoding="utf-8")
     return view
 
@@ -999,7 +1007,7 @@ def load_view(skin: Path, view: str) -> dict[str, Any]:
     if not (base / "view.json").exists():
         base = skin / "views" / ("left" if view == "front" else view)
     data = json.loads((base / "view.json").read_text(encoding="utf-8"))
-    for layer in [*data["layers"], *data["visemes"].values()]:
+    for layer in [*data["layers"], *data["visemes"].values(), *data.get("expressions", {}).values()]:
         layer["url"] = str(base / layer["url"])
     return data
 
@@ -1254,11 +1262,11 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     sprites = _cap_open(sprites, clean.crop(mbox), face[3] - face[1])
     skin_rgb, ink = _skin_and_ink(base, face)
     placed = {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()}
+    expressions: dict[str, tuple[Image.Image, tuple[int, int]]] = {}
     mouth_src = "cut"
     mustache = None
     if drawn_mouths:  # Aiwake Rhubarb set over the mouthless head
-        from . import mouthset  # noqa: PLC0415
-        from . import qa  # noqa: PLC0415
+        from . import mouthset, qa  # noqa: PLC0415
         xb = x_sprite.getchannel("A").point(lambda q: 255 if q > 128 else 0).getbbox()
         rest = (mbox[0] + xb[0], mbox[1] + xb[1], mbox[0] + xb[2], mbox[1] + xb[3]) if xb else mouth
         fw = face[2] - face[0]
@@ -1266,6 +1274,9 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         cols = mouthset.tones(np.asarray(x_sprite), skin_rgb)
         drawn = mouthset.draw_set(lw, cols, squeeze=1.0 if front else 0.85, open_cap={k: 0.95 * c * (face[3] - face[1]) for k, c in qa.OPEN_DRAWN.items()})
         placed = mouthset.place(rest, drawn)
+        expressions = mouthset.place(
+            rest, mouthset.draw_expressions(lw, cols, squeeze=1.0 if front else 0.85)
+        )
         mouth_src = "aiwake drawn set"
         hair = _facial_hair(np.asarray(clean), mbox)
         import cv2  # noqa: PLC0415
@@ -1310,6 +1321,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "brows": _crop_layer(brows),
         "eyeRig": eye["meta"],
         "visemes": placed,
+        "expressions": expressions,
         **({"mustache": _crop_layer(mustache)} if mustache is not None else {}),
         "mouthQA": {"head": head_src, "mouths": mouth_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth)},
     }

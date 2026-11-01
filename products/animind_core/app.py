@@ -7,7 +7,18 @@ import os
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import API_VERSION, characters, knowledge, personas, render, scene, settings, styles
+from . import (
+    API_VERSION,
+    characters,
+    knowledge,
+    languages,
+    personas,
+    render,
+    scene,
+    settings,
+    stick,
+    styles,
+)
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
@@ -99,6 +110,31 @@ def get_tones() -> dict:
 def get_objectives() -> dict:
     """Script objectives accepted as ``objective`` (render)."""
     return {"objectives": styles.objective_catalog(), "default": styles.DEFAULT_OBJECTIVE}
+
+
+@app.get("/v1/languages")
+def get_languages() -> dict:
+    """Built-in locale profiles; any BCP-47 tag is accepted by render."""
+    return {
+        "languages": [
+            {"language": p.tag, "script": p.script, "rhubarbRecognizer": p.rhubarb}
+            for p in languages.PROFILES.values()
+        ],
+        "default": "en-US",
+        "openBcp47": True,
+    }
+
+
+@app.get("/v1/stick-presets")
+def get_stick_presets() -> dict:
+    """Reusable procedural presets; palette and accessory remain overridable."""
+    return {
+        "presets": [
+            {"id": key, **value} for key, value in stick.PRESETS.items()
+        ],
+        "default": "teacher",
+        "customizable": ["palette.skin", "palette.outfit", "clothing.color", "accessory"],
+    }
 
 
 @app.get("/v1/personas/sheet", dependencies=[Depends(require_key)])
