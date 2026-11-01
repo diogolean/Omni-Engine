@@ -664,7 +664,24 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
     if candidates:
         molds.add(candidates[0][0])
         return candidates[0][1]
-    return tidy(_contract(bank[key][0].format(**fields), lang))
+    # A longer duration can consume every suitable mold. Never fall back to a
+    # format string that requires an unavailable quote word (the old result
+    # was "you were the one who said,"). Keep the exchange connected instead.
+    other_name = b if sp == 0 else a
+    safe = (
+        [
+            f"{kw} still needs evidence, {other_name}",
+            f"{kw} has consequences, {other_name}; name one",
+            f"{kw} is the claim, {other_name}; what is the test",
+        ]
+        if lang == "en-US"
+        else [
+            f"{kw} ainda precisa de evidência, {other_name}",
+            f"{kw} tem consequências, {other_name}; diga uma",
+            f"{kw} é a tese, {other_name}; qual é o teste",
+        ]
+    )
+    return tidy(safe[index % len(safe)])
 
 
 def _contract(text: str, lang: str) -> str:
@@ -808,7 +825,19 @@ def plan_for(template: str, n_chars: int, duration: int | float | None = None) -
                  0.35 if i < count - 1 else 0.0)
             for i in range(count)
         ]
-    return list(PLANS.get(template, PLANS["solo"]))
+    plan = list(PLANS.get(template, PLANS["solo"]))
+    if template == "debate" and duration is not None:
+        # A 60-second debate needs more than the compact nine-beat default.
+        # Insert complete A/B exchanges so strict alternation and the central
+        # quote turn remain intact. Short requests keep the original plan.
+        pairs = min(2, max(0, round((float(duration) - 45.0) / 7.5)))
+        exchange = [
+            Beat("réplica", speaker, "paraphrase", 14, 0.25, 3, act="confronto")
+            for _ in range(pairs)
+            for speaker in (0, 1)
+        ]
+        plan[4:4] = exchange
+    return plan
 
 
 def _universal_write(
