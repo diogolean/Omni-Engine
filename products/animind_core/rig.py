@@ -848,9 +848,32 @@ def _slice_bust(base: Image.Image, face: Box, chin: int) -> tuple[Image.Image, I
     return torso, neck, sl.head
 
 
-def _mouthless(head: Image.Image, mbox: Box, mouth: Box) -> Image.Image:
+def _facial_hair(rgba: np.ndarray, box: Box) -> np.ndarray:
+    """Mustache/beard inside ``box``: dark, desaturated, opaque masses (thin lip lines are opened away),
+    then grown back to the hair's own outline (strands and anti-aliased rim). Bool mask the size of ``rgba``."""
+    import cv2  # noqa: PLC0415
+
+    x0, y0, x1, y1 = box
+    rgb = rgba[y0:y1, x0:x1, :3].astype(np.int16)
+    opaque = rgba[y0:y1, x0:x1, 3] > 128
+    lum, chroma = rgb.mean(axis=2), rgb.max(axis=2) - rgb.min(axis=2)
+    dark = (lum < 90) & (chroma < 35) & opaque
+    k = max(3, (x1 - x0) // 25)
+    mass = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    near = cv2.dilate(mass, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))) > 0
+    rim = (lum < 130) & (chroma < 45) & opaque  # strands and the soft edge, only next to a real mass
+    out = np.zeros(rgba.shape[:2], bool)
+    out[y0:y1, x0:x1] = (mass > 0) | (near & rim)
+    return out
+
+
+def _mouthless(head: Image.Image, mbox: Box, mouth: Box, *, keep_hair: bool = False) -> Image.Image:
     """``head`` inpainted where the mouth sprite is fully opaque (:func:`_lips_mask` > 250), so
-    the mouth layer alone carries lips and mustache and its soft rim lies over unchanged art."""
+    the mouth layer alone carries lips and mustache and its soft rim lies over unchanged art.
+
+    ``keep_hair`` (drawn mouth sets, which carry no mustache): facial hair stays in the head and only
+    the skin/lips around it are filled, from skin alone (hair is masked out of the inpaint source too,
+    so it cannot smear into a grey patch)."""
     import cv2  # noqa: PLC0415
 
     arr = np.asarray(head).copy()
@@ -858,7 +881,43 @@ def _mouthless(head: Image.Image, mbox: Box, mouth: Box) -> Image.Image:
     x0, y0, x1, y1 = mbox
     hole[y0:y1, x0:x1] = (np.asarray(_lips_mask(mbox, mouth)) > 250).astype(np.uint8) * 255
     hole &= (arr[..., 3] > 128).astype(np.uint8) * 255
-    rgb = cv2.inpaint(np.ascontiguousarray(arr[..., :3]), hole, max(3, (x1 - x0) // 12), cv2.INPAINT_TELEA)
+    radius = max(3, (x1 - x0) // 12)
+    if keep_hair:
+        hair = _facial_hair(arr, mbox)
+        if (hair & (hole > 0)).any():
+            # Skin only: a normalized blur of the opaque, non-hair, skin-toned pixels around the box (no Telea
+            # streaks from hair, collar or backdrop), feathered in so there is no hard patch edge.
+            H, W = hole.shape
+            g = 3 * radius
+            gy0, gy1, gx0, gx1 = max(0, y0 - g), min(H, y1 + g), max(0, x0 - g), min(W, x1 + g)
+            sub = arr[gy0:gy1, gx0:gx1].astype(np.float32)
+            lum = sub[..., :3].mean(axis=2)
+            chroma = sub[..., :3].max(axis=2) - sub[..., :3].min(axis=2)
+            known = ((sub[..., 3] > 128) & ~hair[gy0:gy1, gx0:gx1] & (hole[gy0:gy1, gx0:gx1] == 0)
+                     & (lum > 95) & (lum < 235) & (chroma > 18)).astype(np.float32)
+            sig = float(radius)
+            num = cv2.GaussianBlur(sub[..., :3] * known[..., None], (0, 0), sig)
+            den = cv2.GaussianBlur(known, (0, 0), sig)[..., None]
+            wide = cv2.GaussianBlur(sub[..., :3] * known[..., None], (0, 0), 3 * sig) / np.maximum(
+                cv2.GaussianBlur(known, (0, 0), 3 * sig)[..., None], 1e-4)
+            fill = np.where(den > 0.05, num / np.maximum(den, 1e-4), wide)
+            soft = np.zeros(hole.shape, np.float32)
+            soft[y0:y1, x0:x1] = np.asarray(_lips_mask(mbox, mouth), np.float32) / 255
+            # the lips sit right under the hair: only a band below each column's lowest hair is repainted,
+            # so the chin line, collar and jaw below keep the master's art
+            band = max(6, int((mouth[2] - mouth[0]) * 0.12))
+            rows = np.arange(H)[:, None]
+            inside = hair & (rows >= mouth[1] - band) & (rows <= mouth[3] + band)
+            low = np.where(inside.any(axis=0), H - 1 - np.argmax(inside[::-1], axis=0), -1)
+            keep = (low >= 0)[None, :] & (rows >= low[None, :] - 2) & (rows <= low[None, :] + band)
+            keep = cv2.GaussianBlur(keep.astype(np.float32), (0, 0), max(2.0, band / 6))
+            white = (lum > 200) & (chroma < 25)  # collar / teeth-white cloth is never skin
+            soft = soft[gy0:gy1, gx0:gx1] * keep[gy0:gy1, gx0:gx1] * (sub[..., 3] > 128) * ~hair[gy0:gy1, gx0:gx1] * ~white
+            k = soft[..., None]
+            sub[..., :3] = sub[..., :3] * (1 - k) + fill * k
+            arr[gy0:gy1, gx0:gx1, :3] = np.clip(sub[..., :3], 0, 255).astype(np.uint8)
+            return Image.fromarray(arr)
+    rgb = cv2.inpaint(np.ascontiguousarray(arr[..., :3]), hole, radius, cv2.INPAINT_TELEA)
     arr[..., :3] = rgb
     return Image.fromarray(arr)
 
@@ -903,7 +962,7 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
     # z: eyes (rest pose, for older clients) and eye_white share a slot; renderers that know
     # eye_white draw white -> iris (shifted by gaze, clipped to eye_socket) -> lids instead.
     order = (("body", 0), ("torso", 0), ("neck", 1), ("head", 2), ("eyes", 3), ("eye_white", 3), ("iris", 4), ("eye_socket", 4),
-             ("eyes_half", 5), ("eyes_closed", 6), ("brows", 7))
+             ("eyes_half", 5), ("eyes_closed", 6), ("brows", 7), ("mustache", 11))  # mustache over the mouth (z 10)
     for name, z in order:
         if name in parts:
             img, xy = place(*parts[name])
@@ -975,7 +1034,8 @@ def _refine_mouth(base: Image.Image, mouth: Box) -> Box:
     return tuple(int(v) for v in out)  # type: ignore[return-value]
 
 
-def _clean_base(base: Image.Image, shots: dict[str, Path], key: str, mbox: Box, mouth: Box) -> tuple[Image.Image, str]:
+def _clean_base(base: Image.Image, shots: dict[str, Path], key: str, mbox: Box, mouth: Box, *,
+                keep_hair: bool = False) -> tuple[Image.Image, str]:
     """``base`` with no mouth: the mouth area comes from the Gemini mouthless edit (``shots[key]``, aligned
     and colour-matched, blended in a soft ellipse so eyes/hair stay the master's), else an inpaint fallback."""
     if key in shots and shots[key].exists():
@@ -1000,7 +1060,7 @@ def _clean_base(base: Image.Image, shots: dict[str, Path], key: str, mbox: Box, 
         src = np.clip(b[..., :3] + shift, 0, 255)
         fixed[..., :3] = (fixed[..., :3] * (1 - k) + src * k).astype(np.uint8)
         return Image.fromarray(fixed), "gemini mouthless"
-    return _mouthless(base, mbox, mouth), "inpaint (no mouthless shot)"
+    return _mouthless(base, mbox, mouth, keep_hair=keep_hair), "inpaint (no mouthless shot)"
 
 
 def _iso_sprite(src: Image.Image, clean: Image.Image, box: Box, mouth: Box, *, sx: float = 1.0,
@@ -1143,7 +1203,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     mbox = _grow(mouth, size, 0.6, 0.7, 1.3)  # open jaws drop down
     mbox = (mbox[0], mbox[1], mbox[2], min(mbox[3], max(face[3] + 6, mouth[3] + 4)))
     mbox = _union(mbox, _grow(mouth, size, 0.3, 0.3, 0.6))
-    clean, head_src = _clean_base(base, shots, "mouthless", mbox, mouth)
+    drawn_mouths = os.environ.get("ANIMIND_MOUTHS", "drawn") == "drawn"
+    clean, head_src = _clean_base(base, shots, "mouthless", mbox, mouth, keep_hair=drawn_mouths)
     x_sprite, _ = _iso_sprite(base, clean, mbox, mouth)
     if x_sprite is None:  # nothing to cut (mouthless edit kept the mouth): soft-ellipse sprite of the master
         x_sprite = _mouth_sprite(base, None, mbox, mouth)
@@ -1194,7 +1255,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     skin_rgb, ink = _skin_and_ink(base, face)
     placed = {v: (img, (mbox[0], mbox[1])) for v, img in sprites.items()}
     mouth_src = "cut"
-    if os.environ.get("ANIMIND_MOUTHS", "drawn") == "drawn":  # Aiwake Rhubarb set over the mouthless head
+    mustache = None
+    if drawn_mouths:  # Aiwake Rhubarb set over the mouthless head
         from . import mouthset  # noqa: PLC0415
         from . import qa  # noqa: PLC0415
         xb = x_sprite.getchannel("A").point(lambda q: 255 if q > 128 else 0).getbbox()
@@ -1205,6 +1267,16 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         drawn = mouthset.draw_set(lw, cols, squeeze=1.0 if front else 0.85, open_cap={k: 0.95 * c * (face[3] - face[1]) for k, c in qa.OPEN_DRAWN.items()})
         placed = mouthset.place(rest, drawn)
         mouth_src = "aiwake drawn set"
+        hair = _facial_hair(np.asarray(clean), mbox)
+        import cv2  # noqa: PLC0415
+        n_, lab_, _st, _c = cv2.connectedComponentsWithStats(hair.astype(np.uint8), connectivity=8)
+        on_mouth = set(np.unique(lab_[mouth[1]:mouth[3], mouth[0]:mouth[2]])) - {0}
+        hair = np.isin(lab_, list(on_mouth))  # the mustache itself, not a dark coat or hair at the box edge
+        if hair.sum() > 0.03 * (mbox[2] - mbox[0]) * (mbox[3] - mbox[1]):  # the head keeps it; this copy covers open jaws
+            m = np.zeros(hair.shape, np.uint8)
+            m[hair] = 255
+            mustache = clean.copy()
+            mustache.putalpha(Image.fromarray(np.minimum(m, np.asarray(clean.getchannel("A")))).filter(ImageFilter.GaussianBlur(1)))
     raw_eye_boxes = [boxes[k] for k in ("left_eye", "right_eye")]
     eyes_boxes = [_grow(b, size, 0.18, 0.12, 0.25) for b in raw_eye_boxes]
     eyes_open = Image.new("RGBA", size, (0, 0, 0, 0))
@@ -1238,6 +1310,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "brows": _crop_layer(brows),
         "eyeRig": eye["meta"],
         "visemes": placed,
+        **({"mustache": _crop_layer(mustache)} if mustache is not None else {}),
         "mouthQA": {"head": head_src, "mouths": mouth_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth)},
     }
     (skin / ("sheet_front.json" if front else "sheet.json")).write_text(json.dumps(
