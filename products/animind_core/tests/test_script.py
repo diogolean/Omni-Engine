@@ -78,7 +78,7 @@ def test_debate_shape_and_pacing():
             assert script.words(line["text"]) <= 16 + 1
 
 
-LESSON_BEATS = ["gancho", "pergunta", "citação", "exemplo", "citação", "síntese"]
+LESSON_BEATS = ["gancho", "pergunta", "citação", "exemplo", "virada", "síntese"]
 
 
 def test_lesson_progresses_question_quote_example_synthesis():
@@ -346,11 +346,15 @@ def test_offline_debate_quotes_reply_and_never_repeats():
             assert names[1 - line["speaker"]] in line["text"]
 
 
-def test_offline_lesson_has_two_real_quotes():
+def test_offline_lesson_quotes_stay_on_the_thread():
     out = script.write("lesson", "a verdade existe?", ["Sócrates"], sheets=[socrates()], use_llm=False)
     lines = out["lines"]
     assert [line["beat"] for line in lines] == LESSON_BEATS
-    assert out["quoteLines"] >= 2 and all(line["kind"] == "quote" for line in lines if line["beat"] == "citação")
+    assert out["quoteLines"] >= 1 and all(line["kind"] == "quote" for line in lines if line["beat"] == "citação")
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+    # the fixture sheet has a single quote about truth: the turn is written, never an off-topic quote
+    turn = lines[LESSON_BEATS.index("virada")]
+    assert turn["kind"] == "paraphrase" and turn["act"] == "virada"
     assert lines[1]["text"].endswith("?")  # the lesson opens on a question, not on "Segundo:" without a "Primeiro"
     assert not any(t in line["text"] for line in lines for t in ("Segundo", "sobre verdade"))
 
@@ -411,7 +415,7 @@ def test_debate_is_a_real_exchange_with_an_arc(topic, pair):
     sheets = make()
     out = script.write("debate", topic, names, sheets=sheets, use_llm=False)
     lines = out["lines"]
-    assert out["scriptQA"] == {"pass": True, "problems": []}, out["scriptQA"]
+    assert out["scriptQA"]["pass"] and out["scriptQA"]["problems"] == [], out["scriptQA"]
     # every spoken quote is literally in the speaker's own sheet, with its source
     for line in lines:
         if line["kind"] == "quote":
@@ -477,3 +481,147 @@ def test_prompt_describes_the_arc():
     prompt = script._prompt(script.plan_for("debate", 2), [socrates(), nietzsche()], names, "a verdade", "pt-BR", "debate")
     assert "act: virada" in prompt and "act: abertura" in prompt
     assert "repeat one content word" in prompt and "at least one of his real quotes" in prompt
+
+
+# --- quote fidelity and lesson/debate quality (scriptQA) ---------------------------------------------------------
+
+LESSON_TOPICS = ["A verdade existe?", "Deus está morto?", "o conhecimento", "A morte é o fim?", "a vida e o saber"]
+
+
+@pytest.mark.parametrize("who", ["Sócrates", "Nietzsche"])
+@pytest.mark.parametrize("topic", LESSON_TOPICS)
+def test_lesson_is_a_real_lesson_with_real_quotes(topic, who):
+    sheets = [socrates() if who == "Sócrates" else nietzsche()]
+    out = script.write("lesson", topic, [who], sheets=sheets, use_llm=False)
+    lines = out["lines"]
+    assert out["scriptQA"]["pass"] and out["scriptQA"]["problems"] == [], out["scriptQA"]
+    assert [line["beat"] for line in lines] == LESSON_BEATS
+    assert [line["act"] for line in lines] == ["abertura", "abertura", "desenvolvimento", "desenvolvimento", "virada", "fechamento"]
+    assert out["quoteLines"] >= 1
+    own = {q["id"]: q for q in sheets[0]["quotes"]}
+    for i, line in enumerate(lines):
+        if line["kind"] == "quote":  # literal, with the sheet's own source and link
+            q = own[line["quote"]["id"]]
+            assert line["text"] == q["text"] and line["quote"]["source"] == q["source"] and line["quote"]["url"] == q["url"]
+            assert script.on_thread(line["text"], lines[i - 1]["text"], topic) or script.link(line["text"], lines[i + 1]["text"])
+        else:
+            assert not any(c in line["text"] for c in script.QUOTE_MARKS) and not script.copies_quote(line["text"], sheets[0])
+    assert script.strong_hook(lines[0]["text"]) and lines[1]["text"].endswith("?")
+    assert script.words(lines[-1]["text"]) <= script.CLOSE_MAX_WORDS
+    counts = [script.words(line["text"]) for line in lines]
+    assert len(set(counts)) >= len(counts) // 2
+
+
+def test_lesson_takes_a_second_quote_only_when_it_stays_on_the_thread():
+    n = nietzsche()
+    out = script.write("lesson", "Deus está morto?", ["Nietzsche"], sheets=[n], use_llm=False)
+    lines = out["lines"]
+    for i, line in enumerate(lines):
+        if line["kind"] == "quote":
+            assert script.on_thread(line["text"], lines[i - 1]["text"], "Deus está morto?") or script.link(line["text"], lines[i + 1]["text"])
+
+
+@pytest.mark.parametrize("template,names", [("debate", ["Sócrates", "Nietzsche"]), ("lesson", ["Sócrates"]), ("solo", ["Nietzsche"])])
+def test_script_qa_is_reported_for_every_template(template, names):
+    sheets = [socrates() if nm == "Sócrates" else nietzsche() for nm in names]
+    qa = script.write(template, "A verdade existe?", names, sheets=sheets, use_llm=False)["scriptQA"]
+    assert qa["pass"] and qa["problems"] == [] and isinstance(qa["notes"], list), qa
+
+
+def _lesson(topic="A verdade existe?"):
+    s = nietzsche()
+    return s, script.write("lesson", topic, ["Nietzsche"], sheets=[s], use_llm=False)["lines"]
+
+
+def test_check_rejects_invented_and_paraphrased_quotes():
+    s, lines = _lesson()
+    i = next(k for k, line in enumerate(lines) if line["kind"] == "quote")
+    real = lines[i]["quote"]
+    # a paraphrase of a real quote presented as literal (same id, reworded text)
+    words = real["text"].rstrip(".").split()
+    reworded = " ".join(words[:-2] + ["no", "fundo"]) + "."
+    para = {**lines[i], "text": reworded, "quote": {**real, "text": reworded}}
+    problems = script.check(lines[:i] + [para] + lines[i + 1:], [s])
+    assert f"line {i}: quote is not literally in the sheet" in problems
+    assert any(p.startswith(f"line {i}: paraphrased quote shown as literal") for p in problems), problems
+    # an invented quote with a real-looking id and source
+    fake = "A internet é o martelo com que se filosofa hoje."
+    inv = {**lines[i], "text": fake, "quote": {**real, "text": fake}}
+    problems = script.check(lines[:i] + [inv] + lines[i + 1:], [s])
+    assert f"line {i}: invented quote (nothing like it in the sheet)" in problems
+    # a real quote with a source or link that is not the sheet's
+    for tamper, msg in (({"source": "Assim falou Zaratustra, cap. 99"}, "quote source differs from the sheet"),
+                        ({"source": ""}, "quote has no source"),
+                        ({"url": "https://example.com/frases"}, "quote has no source link")):
+        bad = {**lines[i], "quote": {**real, **tamper}}
+        assert f"line {i}: {msg}" in script.check(lines[:i] + [bad] + lines[i + 1:], [s])
+    assert script.check(lines, [s]) == []
+
+
+@pytest.mark.parametrize("text,msg", [
+    ("Como eu escrevi: a verdade é só vontade de poder.", "paraphrase posed as a literal quote"),
+    ("Nas palavras de Nietzsche, a verdade é um exército de metáforas.", "paraphrase posed as a literal quote"),
+    ("Palavra por palavra: Deus está morto e fomos nós.", "paraphrase posed as a literal quote"),
+    ("Ele disse “a verdade é feia” e saiu.", "paraphrase uses quotation marks"),
+])
+def test_check_rejects_paraphrase_presented_as_literal(text, msg):
+    s, lines = _lesson()
+    i = next(k for k, line in enumerate(lines) if line["kind"] == "paraphrase" and k > 0)
+    bad = lines[:i] + [{**lines[i], "text": text}] + lines[i + 1:]
+    assert any(p.startswith(f"line {i}: {msg}") for p in script.check(bad, [s])), script.check(bad, [s])
+
+
+def test_check_rejects_a_real_quote_smuggled_into_a_written_line_or_a_written_line_labelled_as_quote():
+    s, lines = _lesson()
+    i = next(k for k, line in enumerate(lines) if line["kind"] == "paraphrase" and k > 0)
+    real = s["quotes"][0]["text"]
+    smuggled = lines[:i] + [{**lines[i], "text": real}] + lines[i + 1:]
+    assert f"line {i}: paraphrase repeats a real quote without marking it" in script.check(smuggled, [s])
+    labelled = lines[:i] + [{**lines[i], "beat": "citação"}] + lines[i + 1:]
+    assert f"line {i}: written line labelled as a quote" in script.check(labelled, [s])
+
+
+def test_check_lesson_flags_weak_hook_missing_question_off_thread_quote_and_long_close():
+    s, lines = _lesson()
+    bad = [dict(line) for line in lines]
+    bad[0]["text"] = "Hoje vamos conversar com calma e bastante tempo sobre um assunto muito importante para todos nós aqui."
+    bad[1]["text"] = "Comece pela pergunta certa sobre a verdade."
+    q = next(k for k, line in enumerate(bad) if line["kind"] == "quote")
+    off = next(x for x in s["quotes"] if not script.on_thread(x["text"], bad[q - 1]["text"], "A verdade existe?")
+               and not script.link(x["text"], bad[q + 1]["text"]))
+    bad[q] = {**bad[q], "text": off["text"], "quote": {**bad[q]["quote"], "id": off["id"], "text": off["text"]}}
+    bad[-1]["text"] = "Então, para resumir tudo o que vimos hoje, a verdade é algo que precisamos examinar com muito cuidado sempre."
+    problems = script.check_lesson(bad, [s], "A verdade existe?")
+    assert "lesson: weak hook (more than 14 words, no question, no short punch)" in problems
+    assert "lesson: the question beat is not a question" in problems
+    assert f"line {q}: quote is off the lesson's thread" in problems
+    assert any(p.startswith("lesson: the close is too long") for p in problems)
+
+
+def test_check_debate_wants_a_strong_hook_and_a_memorable_close():
+    s, n = socrates(), nietzsche()
+    good = script.write("debate", "A verdade existe?", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=False)["lines"]
+    assert script.check_debate(good, [s, n], ["Sócrates", "Nietzsche"], "A verdade existe?") == []
+    bad = [dict(line) for line in good]
+    bad[0]["text"] = "Nietzsche, hoje eu gostaria de conversar com você longamente sobre a verdade e outras coisas."
+    bad[-1] = {**bad[-1], "kind": "paraphrase", "text": "Bom, acho que cada um de nós tem um pouco de razão e a conversa poderia continuar amanhã.",
+               "quote": None}
+    problems = script.check_debate(bad, [s, n], ["Sócrates", "Nietzsche"], "A verdade existe?")
+    assert "debate: weak hook (more than 14 words, no question, no short punch)" in problems
+    assert any(p.startswith("debate: the close is not memorable") for p in problems), problems
+
+
+def test_llm_line_that_claims_to_be_literal_is_rewritten(monkeypatch):
+    s = nietzsche()
+    monkeypatch.setattr(script, "_gemini", lambda prompt: [
+        {"i": 3, "text": "Como eu escrevi: a verdade é só uma metáfora gasta."},
+        {"i": 5, "text": "Nas minhas palavras, Deus morreu e a verdade também."}])
+    out = script.write("lesson", "A verdade existe?", ["Nietzsche"], sheets=[s], use_llm=True)
+    assert not any("escrevi" in line["text"] or "Nas minhas palavras" in line["text"] for line in out["lines"])
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+
+
+def test_english_lesson_passes_qa():
+    out = script.write("lesson", "What is truth?", ["Nietzsche"], "en", sheets=[nietzsche()], use_llm=False)
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+    assert out["lines"][-1]["beat"] == "síntese" and out["lines"][4]["beat"] == "virada"
