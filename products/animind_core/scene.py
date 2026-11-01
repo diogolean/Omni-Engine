@@ -357,6 +357,10 @@ class Scene:
                 return Shot(W / 2, H * 0.47, 1.24, "two")
             if quote:
                 return Shot(W * (px + 0.035 * toward), H * CU_Y, 2.1, "cu")
+            if i % 4 == 2:
+                return Shot(W * (px + 0.07 * toward), H * 0.46, 1.82, "single")
+            if i > 0 and i % 4 == 3:
+                return Shot(W / 2, H * 0.47, 1.24, "two")
             return Shot(W * (px + 0.115 * toward), H * 0.47, 1.6, "ots")
         if self.template == "lesson":
             if quote:
@@ -376,15 +380,22 @@ class Scene:
         if self.vertical:
             return self._plan_vertical()
         shots: list[tuple[float, Shot, str]] = [(0.0, look.clamp_shot(self.shot_for(-1, 0)), "cut")]
+
+        def add(start: float, shot: Shot, transition: str) -> None:
+            shot = look.clamp_shot(shot)
+            if shot != shots[-1][1]:
+                shots.append((max(start, shots[-1][0] + 0.5), shot, transition))
+
         for i, line in enumerate(self.script):
             start = line["startMs"] / 1000
+            end = line["endMs"] / 1000
             if i == 0:  # after a cold-open title the wide has already established the set
                 start = min(start + (0.8 if self.title_end else 1.6), max(start, line["endMs"] / 1000 - 1.0))
             shot = look.clamp_shot(self.shot_for(line["speaker"], i))
             prev = shots[-1][1]
             act_cut = self._act_cut(i)
             if act_cut is not None and shot != prev:  # a new act: hard cut at the bottom of the dip
-                shots.append((max(act_cut, shots[-1][0] + 0.5), shot, "cut"))
+                add(act_cut, shot, "cut")
             elif shot != prev:
                 if shot.kind in ("wide", "two", "board") or prev.kind in ("wide", "board"):
                     kind = "dissolve"
@@ -392,8 +403,38 @@ class Scene:
                     kind = "whip"
                 else:
                     kind = "cut"
-                shots.append((max(start - 0.12, shots[-1][0] + 0.5), shot, kind))
+                add(start - 0.12, shot, kind)
+            # Deterministic speech-paced inserts. Long lines briefly reveal the
+            # listener's reaction or restore spatial context, then return to
+            # the speaker. This provides reaction, countershot and two-shot
+            # coverage without an LLM or random camera decisions.
+            span = end - line["startMs"] / 1000
+            if self.template == "debate" and len(self.rigs) > 1 and span >= 3.6:
+                insert_at = line["startMs"] / 1000 + span * (0.52 if i % 2 else 0.6)
+                if i % 3 == 1:
+                    other = (line["speaker"] + 1) % len(self.rigs)
+                    px = self.places[other][0]
+                    toward = 1 if px < 0.5 else -1
+                    insert = Shot(W * (px + 0.07 * toward), H * 0.46, 1.76, "react")
+                else:
+                    insert = Shot(W / 2, H * 0.47, 1.22, "two")
+                add(insert_at, insert, "cut")
+                if insert_at + 1.15 < end - 0.25:
+                    add(insert_at + 1.05, shot, "cut")
         return shots
+
+    def camera_plan(self) -> list[dict[str, Any]]:
+        """Serializable deterministic edit decision list for UI and review sheets."""
+        return [
+            {
+                "startMs": round(start * 1000),
+                "kind": shot.kind,
+                "transition": transition,
+                "center": [round(shot.cx, 2), round(shot.cy, 2)],
+                "zoom": round(shot.zoom, 3),
+            }
+            for start, shot, transition in self.shots
+        ]
 
     def _act_cut(self, i: int) -> float | None:
         """Cut time for line ``i`` when it opens a new act (the middle of the dip), else None."""
@@ -431,6 +472,7 @@ class Scene:
             end = self.shots[j + 1][0] if j + 1 < len(self.shots) else self.duration_s
             span = max(2.0, end - s_start)
             amount = PUSH_CU if s.kind in ("cu", "board") else PUSH
+            amount *= min(1.0, span / 4.0)  # brief reaction inserts should not rush a full-shot push
             return Shot(s.cx, s.cy, s.zoom * (1 + amount * look.ease(since / span)), s.kind)
 
         local = t - start
@@ -715,7 +757,7 @@ class Scene:
             img, xy = self._set_piece("shadow", idx, False)
             stage.alpha_composite(img, xy)
         order = sorted(range(n), key=lambda i: 1 if (line and line["speaker"] == i) else 0)  # speaker in front
-        single = shot is not None and shot.kind in ("ots", "cu") and n > 1
+        single = shot is not None and shot.kind in ("ots", "cu", "single") and n > 1
         for idx in order:
             speaking = line is not None and line["speaker"] == idx
             soft = single and line is not None and not speaking

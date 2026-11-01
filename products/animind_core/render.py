@@ -361,7 +361,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                 }
                 for v in voices
             ],
-            "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
+            "writer": written["writer"], "scriptCost": written["scriptCost"],
+            "topic": written["topic"], "personas": written["personas"],
             "personaMode": mode,
             **({"scriptQA": written["scriptQA"]} if "scriptQA" in written else {}),
             "style": art,
@@ -369,6 +370,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "objective": objective,
             "targetDurationMs": int(target_duration * 1000),
             "type": req.get("type") or ("stick" if all(c.get("type") == "stick" for c in cast) else "rig"),
+            "cameraPlan": sc.camera_plan(),
             "frameQa": frame_qa,
             "frameQaUrl": f"{files}/frame_qa.json",
             "language": lang,
