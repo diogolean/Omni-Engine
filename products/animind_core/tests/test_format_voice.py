@@ -11,10 +11,10 @@ from .test_api import H, _make, client  # noqa: F401
 def test_casting_by_persona_and_override():
     a, b = casting.cast([{"name": "Simone de Beauvoir", "persona": "filósofa existencialista"},
                          {"name": "Nietzsche", "persona": "filósofo provocativo", "born": 1844}], "pt-BR")
-    assert a["voice"] == "pt-BR-FranciscaNeural" and b["voice"] == "pt-BR-AntonioNeural"
+    assert a["voice"] in casting.POOL["pt-BR"]["f"] and b["voice"] in casting.POOL["pt-BR"]["m"]
     assert b["traits"]["temper"] == "fiery" and b["traits"]["age"] == "elder"
     x, y = casting.cast([{"name": "Sócrates"}, {"name": "Platão"}], "pt-BR")
-    assert x["voice"] == y["voice"] and x["pitchHz"] != y["pitchHz"]  # one male pt-BR voice: split by pitch
+    assert x["voice"] != y["voice"]  # two men: two different speakers, not one voice split by pitch
     (o,) = casting.cast([{"name": "Sócrates"}], "pt-BR", [{"voice": "pt-BR-ThalitaMultilingualNeural"}])
     assert o["voice"] == "pt-BR-ThalitaMultilingualNeural" and o["auto"] is False
 
