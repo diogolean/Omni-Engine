@@ -581,6 +581,16 @@ def vignette_at(field: Image.Image, centre: tuple[float, float]) -> Image.Image:
     return field.crop((x0, y0, x0 + W, y0 + H))
 
 
+def key_glow_field(colour: tuple[int, int, int], strength: float = 0.08, size: tuple[int, int] = (W, H)) -> Image.Image:
+    """A soft warm pool of light twice the frame size (screen-blended, cropped with :func:`vignette_at`):
+    lifts the subject a touch so the light reads as falling on whoever has the floor."""
+    W, H = size  # noqa: N806
+    x, y = _grid(2 * W, 2 * H)
+    r2 = ((x - W) / (0.42 * W)) ** 2 + ((y - H) / (0.55 * H)) ** 2
+    g = strength * np.exp(-r2)[..., None] * np.asarray(colour, np.float32)[None, None, :]
+    return Image.fromarray(np.clip(g, 0, 255).astype(np.uint8))
+
+
 def vignette(strength: float = 0.5, size: tuple[int, int] = (W, H)) -> Image.Image:
     W, H = size  # noqa: N806
     x, y = _grid(W, H)
