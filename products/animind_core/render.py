@@ -27,10 +27,6 @@ from . import script as scripts
 
 _LOG = logging.getLogger("animind_core")
 PARODY_DISCLAIMER = "Paródia • Gerado por IA"
-VOICES = {
-    "pt-BR": ("pt-BR-AntonioNeural", "pt-BR-FranciscaNeural"),
-    "en-US": ("en-US-GuyNeural", "en-US-JennyNeural"),
-}
 SAMPLE_RATE = 24000
 GAP_S = 0.3
 ENV_FPS = 100
@@ -253,7 +249,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             raise ValueError("characters is required")
         template = req.get("template") if req.get("template") in scene.PLACES else "solo"
         scenario = req.get("scenario") if req.get("scenario") in scene.SCENARIOS else "studio"
-        lang = req.get("lang") if req.get("lang") in VOICES else "pt-BR"
+        lang = req.get("lang") if req.get("lang") in casting.POOL else "pt-BR"
         topic = (req.get("topic") or "inteligência artificial").strip()[:200]
         work = settings.data_dir() / "jobs" / job_id
         work.mkdir(parents=True, exist_ok=True)
@@ -326,7 +322,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "visemeSource": sorted(sources), "rigged": [r is not None for r in rigs],
             # Additive: who wrote the script and the persona sheets behind the quotes.
             "format": fmt, "width": sc.OW, "height": sc.OH,
-            "voices": [{k: v[k] for k in ("voice", "pitchHz", "ratePct", "auto", "traits")} for v in voices],
+            "voices": [{k: v[k] for k in ("voice", "label", "pitchHz", "ratePct", "auto", "traits")} for v in voices],
             "writer": written["writer"], "topic": written["topic"], "personas": written["personas"],
             "personaMode": mode,
             **({"scriptQA": written["scriptQA"]} if "scriptQA" in written else {}),

@@ -3,11 +3,24 @@
 Auto mode reads the persona (gender, birth year, a few temperament words) from what
 the character carries (``gender``, ``born``, ``persona``/``bio`` text) and, when online,
 Wikidata (sex P21, birth P569). A user override (``voice`` on the character or
-``voices[i]`` on the render request) always wins. Two speakers of the same voice are
-split by pitch so a debate never sounds like one person.
+``voices[i]`` on the render request) always wins.
+
+Every speaker gets a *different speaker*, not the same voice at another pitch: pt-BR has
+one native male voice, so the pool adds the edge-tts Multilingual voices that read
+Portuguese with a Brazilian accent (measured 2026-11-01: Whisper WER 0 on a pt-BR line,
+IPA within 0.10-0.13 of Antonio and 0.52+ from pt-PT Duarte) and that a speaker-embedding
+model (ECAPA) tells apart (cross-voice cosine <= 0.45 inside each pool; the same voice
+on another sentence scores 0.77-0.90; Antonio at +9 Hz still scores 0.89, so a pitch split
+is not a new voice). Each voice carries its measured median F0; a character's target F0
+comes from age and temper, and the cast is the assignment of distinct voices with the lowest
+total cost, plus a stable per-name tie-break. The result does not depend on speaker order,
+and the same character in the same cast always gets the same voice. Pitch splitting is
+only the last resort when a debate has more speakers than the pool has voices.
 """
 from __future__ import annotations
 
+import hashlib
+import itertools
 import json
 import os
 import re
@@ -16,11 +29,27 @@ import urllib.request
 from functools import lru_cache
 from typing import Any
 
+# voice -> (label, median F0 in Hz measured on a pt-BR line with pyin). Native voices first.
+VOICE_INFO: dict[str, tuple[str, float]] = {
+    "pt-BR-AntonioNeural": ("Antonio", 160), "en-US-AndrewMultilingualNeural": ("Andrew", 109),
+    "fr-FR-RemyMultilingualNeural": ("Rémy", 92), "en-US-BrianMultilingualNeural": ("Brian", 128),
+    "en-AU-WilliamMultilingualNeural": ("William", 107),
+    "pt-BR-FranciscaNeural": ("Francisca", 234), "pt-BR-ThalitaMultilingualNeural": ("Thalita", 196),
+    "en-US-AvaMultilingualNeural": ("Ava", 214), "en-US-EmmaMultilingualNeural": ("Emma", 214),
+    "de-DE-SeraphinaMultilingualNeural": ("Seraphina", 165),
+}
 POOL: dict[str, dict[str, list[str]]] = {
-    "pt-BR": {"m": ["pt-BR-AntonioNeural"], "f": ["pt-BR-FranciscaNeural", "pt-BR-ThalitaMultilingualNeural"]},
+    "pt-BR": {"m": ["pt-BR-AntonioNeural", "en-US-AndrewMultilingualNeural", "fr-FR-RemyMultilingualNeural",
+                    "en-US-BrianMultilingualNeural", "en-AU-WilliamMultilingualNeural"],
+              "f": ["pt-BR-FranciscaNeural", "pt-BR-ThalitaMultilingualNeural", "en-US-AvaMultilingualNeural",
+                    "en-US-EmmaMultilingualNeural", "de-DE-SeraphinaMultilingualNeural"]},
     "en-US": {"m": ["en-US-GuyNeural", "en-US-AndrewNeural", "en-US-BrianNeural", "en-US-ChristopherNeural"],
               "f": ["en-US-JennyNeural", "en-US-AriaNeural", "en-US-EmmaNeural", "en-US-MichelleNeural"]},
 }
+# Pairs the speaker-embedding check found closest (cross-voice cosine >= 0.5): never cast together.
+CLOSE = {frozenset(("fr-FR-RemyMultilingualNeural", "en-AU-WilliamMultilingualNeural"))}
+TARGET_F0 = {"m": {"elder": 100, "adult": 125, "young": 150}, "f": {"elder": 185, "adult": 205, "young": 225}}
+TEMPER_F0 = {"fiery": 15, "calm": -10, "neutral": 0}
 FEMALE_WORDS = re.compile(r"\b(she|her|woman|queen|filósofa|escritora|cientista|rainha|ela|atriz|poeta(?:isa)?|pensadora|física|química)\b", re.I)
 MALE_WORDS = re.compile(r"\b(he|his|man|king|filósofo|escritor|rei|ele|ator|pensador|físico|químico)\b", re.I)
 FIERY = re.compile(r"\b(polêmic|provocat|furios|apaixonad|fiery|provocative|radical|revolucion|irreveren|sarcást|martelo|hammer)", re.I)
@@ -79,26 +108,76 @@ def traits(char: dict[str, Any]) -> dict[str, Any]:
     return {"gender": gender, "born": born, "age": age, "temper": temper}
 
 
+def _key(ch: dict[str, Any]) -> str:
+    return re.sub(r"\s+", " ", str(ch.get("name") or "")).strip().casefold()
+
+
+def _jitter(name: str, voice: str) -> float:
+    """Stable 0..0.5 tie-break so two characters with the same traits still get a fixed, name-bound voice."""
+    return int(hashlib.sha1(f"{name}|{voice}".encode()).hexdigest()[:8], 16) / 0xFFFFFFFF / 2
+
+
+def _cost(name: str, tr: dict[str, Any], voice: str) -> float:
+    f0 = VOICE_INFO.get(voice, ("", 0.0))[1]
+    if not f0:  # unmeasured pool (en-US): keep the listed order, broken by name
+        return 0.0 + _jitter(name, voice)
+    target = TARGET_F0[tr["gender"]].get(tr["age"], TARGET_F0[tr["gender"]]["adult"]) + TEMPER_F0[tr["temper"]]
+    return abs(f0 - target) / 20 + _jitter(name, voice)
+
+
+def _assign(names: list[str], trs: list[dict[str, Any]], options: list[str]) -> list[str]:
+    """Distinct voices with the lowest total cost; CLOSE pairs are avoided. Order of ``names`` does not matter."""
+    order = sorted(range(len(names)), key=lambda i: (names[i], i))
+    best: tuple[float, tuple[str, ...]] | None = None
+    for combo in itertools.permutations(options, len(order)):
+        cost = sum(_cost(names[i], trs[i], v) for i, v in zip(order, combo))
+        cost += 100 * sum(frozenset(p) in CLOSE for p in itertools.combinations(combo, 2))
+        if best is None or cost < best[0] - 1e-9:
+            best = (cost, combo)
+    out = [""] * len(names)
+    for i, v in zip(order, best[1] if best else ()):
+        out[i] = v
+    return out
+
+
 def cast(chars: list[dict[str, Any]], lang: str, overrides: list[Any] | None = None) -> list[dict[str, Any]]:
-    """One voice per speaker: {'voice', 'rate', 'pitch', 'auto', 'traits'}."""
+    """One voice per speaker: {'voice', 'label', 'pitchHz', 'ratePct', 'auto', 'traits'}."""
     pool = POOL.get(lang, POOL["pt-BR"])
-    out: list[dict[str, Any]] = []
+    trs = [traits(ch) for ch in chars]
+    names = [_key(ch) or f"#{i}" for i, ch in enumerate(chars)]
+    ovs: list[dict[str, Any] | None] = []
     for i, ch in enumerate(chars):
         ov = (overrides[i] if overrides and i < len(overrides) else None) or ch.get("voice")
-        if isinstance(ov, str):
-            ov = {"voice": ov}
-        tr = traits(ch)
-        used = [o["voice"] for o in out]
-        options = pool[tr["gender"]]
-        voice = next((v for v in options if v not in used), options[0])
+        ovs.append({"voice": ov} if isinstance(ov, str) else ov if isinstance(ov, dict) and ov.get("voice") else None)
+    taken = {o["voice"] for o in ovs if o}
+    voices: list[str] = [""] * len(chars)
+    for g in ("m", "f"):
+        idx = [i for i, tr in enumerate(trs) if tr["gender"] == g and not ovs[i]]
+        free = [v for v in pool[g] if v not in taken]
+        if len(idx) > len(free):  # more speakers than voices: cycle the pool (pitch split below)
+            for k, i in enumerate(sorted(idx, key=lambda i: (names[i], i))):
+                voices[i] = (free or pool[g])[k % len(free or pool[g])]
+        elif idx:
+            for i, v in zip(idx, _assign([names[i] for i in idx], [trs[i] for i in idx], free)):
+                voices[i] = v
+    out: list[dict[str, Any]] = []
+    for i, tr in enumerate(trs):
         pitch = {"elder": -6, "adult": 0, "young": 5}.get(tr["age"], 0)
         rate = {"fiery": 6, "calm": -5, "neutral": 0}[tr["temper"]] + (-4 if tr["age"] == "elder" else 0)
-        if voice in used:  # same voice twice: split by pitch
-            pitch += 9 if pitch <= out[used.index(voice)]["pitchHz"] else -9
-        pick = {"voice": voice, "pitchHz": pitch, "ratePct": rate, "auto": True, "traits": tr}
-        if isinstance(ov, dict) and ov.get("voice"):
+        pick = {"voice": voices[i], "pitchHz": pitch, "ratePct": rate, "auto": True, "traits": tr}
+        if ovs[i]:
+            ov = ovs[i]
             pick.update(voice=str(ov["voice"]), pitchHz=int(ov.get("pitchHz", 0)), ratePct=int(ov.get("ratePct", 0)), auto=False)
         out.append(pick)
+    seen: dict[str, list[int]] = {}
+    for i, p in enumerate(out):
+        seen.setdefault(p["voice"], []).append(i)
+    for same in seen.values():  # last resort only: same voice twice, split by pitch in a stable order
+        for k, i in enumerate(sorted(same, key=lambda i: (names[i], i))[1:], 1):
+            if out[i]["auto"]:
+                out[i]["pitchHz"] += 9 * k if k % 2 else -9 * k
+    for p in out:
+        p["label"] = VOICE_INFO.get(p["voice"], (re.sub(r"^[a-z]{2}-[A-Z]{2}-|(Multilingual)?Neural$", "", p["voice"]),))[0]
     return out
 
 
