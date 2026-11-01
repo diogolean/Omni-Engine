@@ -410,7 +410,8 @@ def review_sheet(skin: Path, gates: dict[str, Any], total: int, cost: float, des
                                        v["visemes"]["X"]["y"] + Image.open(d / v["visemes"]["X"]["url"]).height + 10)) for k in "XABCDEFGH"]
         row = Image.new("RGB", (260 * 3 + 120 * 9, 300), (30, 30, 34))
         for i, t in enumerate(tiles):
-            t = t.convert("RGB"); t.thumbnail((250, 290) if i < 3 else (116, 116))
+            t = t.convert("RGB")
+            t.thumbnail((250, 290) if i < 3 else (116, 116))
             row.paste(t, (i * 260, 5) if i < 3 else (780 + (i - 3) * 120, 90))
         ImageDraw.Draw(row).text((4, 284), f"{vname}: closed / open D / eyes closed | mouths X A B C D E F G H", fill="white")
         rows.append(row)
@@ -423,7 +424,8 @@ def review_sheet(skin: Path, gates: dict[str, Any], total: int, cost: float, des
     sheet = Image.new("RGB", (1860, sum(r.height for r in rows) + table.height), (0, 0, 0))
     y = 0
     for r in rows + [table]:
-        sheet.paste(r, (0, y)); y += r.height
+        sheet.paste(r, (0, y))
+        y += r.height
     sheet.save(dest)
     return dest
 
