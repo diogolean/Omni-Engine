@@ -22,6 +22,9 @@ with mock art and `generatorNote` ("Gemini indisponível: ..."), and from then o
 calling Gemini (`/v1/health` reports `generator: mock` plus the same `generatorNote`). Other build
 errors still fail.
 
+`/v1/health` also lists `scenarios` and `templates` this process can render (an unknown `scenario`
+renders as `studio`), so a core started from an older checkout is visible before a render falls back.
+
 ## Scripts: real quotes, marked paraphrases
 
 `script.py` writes every render from a beat plan, and `personas.py` keeps a sheet of real quotes per

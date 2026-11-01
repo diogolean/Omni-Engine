@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import API_VERSION, characters, knowledge, styles, render, settings
+from . import API_VERSION, characters, knowledge, scene, styles, render, settings
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
@@ -29,7 +29,9 @@ def _base(request: Request) -> str:
 @app.get("/v1/health")
 def health() -> dict:
     gen = "gemini" if settings.gemini_available() else "mock"
-    out = {"ok": True, "version": API_VERSION, "generator": gen}
+    out = {"ok": True, "version": API_VERSION, "generator": gen,
+           # what this process can render: a stale server (older checkout) is visible before a render falls back
+           "scenarios": list(scene.SCENARIOS), "templates": list(scene.PLACES)}
     if settings.gemini_dead_reason():  # a 402 / depleted credit seen in this process: art falls back to mock
         out["generatorNote"] = f"Gemini indisponível: {settings.gemini_dead_reason()[:200]}"
     return out
