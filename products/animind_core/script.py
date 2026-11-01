@@ -371,6 +371,17 @@ def topic_parts(topic: str) -> tuple[str, str, bool]:
     is_q = t.endswith("?")
     head = tidy(t)
     noun = t.rstrip("?").lower() if not is_q and len(t.split()) <= 4 else (keyword(t, t) or t.rstrip("?").lower())
+    if re.match(r"(?i)^(?:should|can|could|do|does|is|are|will|would)\b", t):
+        # Modal English questions end on the proposition's object.  Keeping
+        # that noun ("claims"), rather than a longer verb ("verify"), makes
+        # the offline exchange discuss the actual issue.
+        tail = re.findall(r"[A-Za-z]+(?:-[A-Za-z]+)?", t.rstrip("?"))
+        if tail:
+            raw_tail = tail[-1].lower()
+            noun = singular(raw_tail) or (
+                raw_tail[:-1] if len(raw_tail) > 4 and raw_tail.endswith("s")
+                and not raw_tail.endswith(("ss", "us", "is")) else raw_tail
+            )
     return head, noun, is_q
 
 
@@ -404,9 +415,9 @@ def _bank(lang: str) -> dict[str, list[str]]:
             "gancho1q": ["{Q} Sounds easy. It is not.", "{Q} Take three seconds before you answer."],
             "gancho1": ["Today: {the}. Everything you think you know gets tested.", "{The}. Sounds simple. It is not."],
             "tese": ["My thesis is simple: {the} is not accepted. It is examined."],
-            "tese1": ["Easy, {a}: {the} belongs to whoever has the courage to decide.",
-                      "Simple, {a}: {the} is whatever survives your doubt."],
-            "réplica0": ["{Kw} needs a test, {b}. What evidence would prove your claim wrong?",
+            "tese1": ["No, {a}. {Kw} earns trust only when evidence can prove it wrong.",
+                      "Yes, {a}, when the {kw} is tested against real consequences."],
+            "réplica0": ["{Kw} needs a test, {b}. What evidence would prove your position wrong?",
                          "If {kw} explains everything, {b}, it predicts nothing.",
                          "You replace {noun} with {kw}, {b}. What problem does that solve?",
                          "{Kw} is the premise, {b}. Now show the conclusion."],
@@ -453,8 +464,8 @@ def _bank(lang: str) -> dict[str, list[str]]:
         "gancho1q": ["{Q} Parece fácil. Não é.", "{Q} Pense três segundos antes de responder."],
         "gancho1": ["Hoje: {the}. Tudo o que você acha que sabe vai ser testado.", "{The}. Parece simples. Não é."],
         "tese": ["Minha tese é simples: {the} não se aceita. Se examina."],
-        "tese1": ["Resposta fácil, {a}: {the} é de quem tem coragem de decidir.",
-                  "Simples, {a}: {the} é o que resiste à sua dúvida."],
+        "tese1": ["Não, {a}. {Kw} só merece confiança quando a evidência pode refutá-la.",
+                  "Sim, {a}, quando {kw} é testada contra consequências reais."],
         "réplica0": ["{Kw} precisa de um teste, {b}. Que evidência provaria sua tese errada?",
                      "Se {kw} explica tudo, {b}, não prevê nada.",
                      "Você troca {noun} por {kw}, {b}. Que problema isso resolve?",
@@ -563,6 +574,10 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
             action = {"ensinar": "let us understand it", "debater": "let us test both sides",
                       "entreter": "this will surprise you", "convencer": "I will make the case"}.get(
                           objective, "this will surprise you")
+        if is_q:
+            # Preserve the complete question: reducing it to one keyword made
+            # sensible topics read as "Step by step: verify."
+            return tidy(f"{head} {action}.")
         return tidy(f"{lead}: {the}. {action}.")
     a = names[0] if names else ""
     b = names[1] if len(names) > 1 else a
@@ -595,6 +610,8 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
         recall.sort(key=(lambda kt: (fresh(kt), not _nounish(*kt))) if beat.name == "virada"
                     else (lambda kt: (not _nounish(*kt), fresh(kt))))
         kw = recall[0][0] if recall else ""
+    if n > 1 and len(before) == 1 and is_q:
+        kw = noun  # the thesis answers the proposition, not an incidental verb
     if not kw and prev and (n == 1 or before[-1]["speaker"] != sp):
         # nothing new in the line before -> pick up its clash word again ("Vontade, Sócrates?")
         kw = keyword(prev, topic, avoid=said, nouny=nouny) or (
@@ -624,6 +641,12 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
     bare = re.sub(r"^(?:a|o|as|os|the)\s+", "", noun)
     fields = {"Q": head, "q": head[:1].lower() + head[1:], "noun": noun, "bare": bare, "the": the, "The": the[:1].upper() + the[1:],
               "a": a, "b": b, "kw": kw, "Kw": kw[:1].upper() + kw[1:], "kq": kq, "Kq": kq[:1].upper() + kq[1:], "kt": kt, "kn": kn}
+    if beat.name == "fechamento" and sp == 1 and upcoming == []:
+        return tidy(
+            f"{kw} reaches one final verdict, {a}: test it in practice"
+            if lang == "en-US"
+            else f"{kw} chega a um veredito final, {a}: teste na prática"
+        )
     fallback = "réplica0" if sp == 0 else "réplica1"
     keys = [key, *[k for k in bank if k.startswith(beat.name.split(" ")[0]) and k != key], fallback]
     if n > 1:  # a debate line in the other speaker's mold would talk to the wrong person

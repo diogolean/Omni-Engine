@@ -57,7 +57,9 @@ def test_fallback_debate_has_coherent_argument_language():
     text = " ".join(line["text"] for line in written["lines"])
     assert written["scriptQA"]["pass"], written["scriptQA"]
     assert len(written["lines"]) == 13  # a 60 s target expands the compact nine-beat plan
+    assert "Should schools teach AI literacy?" in written["lines"][0]["text"]
     assert "Cowardice" not in text and "pretty name" not in text
+    assert "who said," not in text
     assert any(word in text.lower() for word in ("evidence", "premise", "test", "consequences"))
 
 
