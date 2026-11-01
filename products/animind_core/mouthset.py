@@ -14,6 +14,7 @@ from PIL import Image
 VISEMES = "XABCDEFGH"
 EMOTIONS = ("neutral", "happy", "angry", "sad", "surprised", "thoughtful", "ironic")
 _REF_PLATE = (400, 300)  # library units: patch 264 x 150, widest shape ~0.73 x patch width
+OPEN_ASPECT_CAP = 0.48  # drawn height / width; speech never becomes a scream
 
 
 def tones(lips_rgba: np.ndarray, skin: tuple[int, int, int]) -> dict[str, tuple[int, int, int, int]]:
@@ -71,7 +72,8 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
             canvas = Image.new("RGBA", im.size, (0, 0, 0, 0))
             canvas.paste(part.resize((part.width, nh), Image.LANCZOS), (bb[0], (bb[1] + bb[3] - nh) // 2))
             im = canvas
-        out[v] = _lips(im, lip) if lip and v not in "XA" else im
+        im = _lips(im, lip) if lip and v not in "XA" else im
+        out[v] = _limit_opening(im, max_aspect=OPEN_ASPECT_CAP)
     W = max(i.width for i in out.values())
     H = max(i.height for i in out.values())
     for v, im in out.items():  # one shared canvas size again, centred: same anchor, comparable sprites
@@ -86,6 +88,7 @@ def draw_expressions(
     colours: dict[str, tuple[int, int, int, int]],
     *,
     squeeze: float = 1.0,
+    open_cap: float | None = None,
 ) -> dict[str, Image.Image]:
     """Aiwake rest mouths adapted to the seven Animind emotions.
 
@@ -121,10 +124,10 @@ def draw_expressions(
         raw[emotion] = im
     k = lip_width / (0.73 * raw["neutral"].width)
     scaled = {
-        emotion: im.resize(
+        emotion: _limit_opening(im.resize(
             (max(1, round(im.width * k * squeeze)), max(1, round(im.height * k))),
             Image.LANCZOS,
-        )
+        ), max_height=open_cap, max_aspect=OPEN_ASPECT_CAP)
         for emotion, im in raw.items()
     }
     width, height = max(i.width for i in scaled.values()), max(i.height for i in scaled.values())
@@ -133,6 +136,36 @@ def draw_expressions(
         canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
         scaled[emotion] = canvas
     return scaled
+
+
+def _limit_opening(
+    image: Image.Image,
+    *,
+    max_height: float | None = None,
+    max_aspect: float = OPEN_ASPECT_CAP,
+) -> Image.Image:
+    """Flatten a mouth around its fixed centre when its final painted shape is too tall.
+
+    The South-Park-style O and pucker sprites are naturally narrow.  A face-height
+    cap alone therefore allowed a cavity taller than its width in close-up.  This
+    limit is applied after lips/rims are drawn, so every viseme and emotional rest
+    mouth obeys the same visible opening contract.
+    """
+    box = image.getchannel("A").getbbox()
+    if not box:
+        return image
+    width, height = box[2] - box[0], box[3] - box[1]
+    limit = min(
+        height,
+        max(1, int(width * max_aspect)),
+        max(1, int(max_height)) if max_height is not None else height,
+    )
+    if height <= limit:
+        return image
+    part = image.crop(box).resize((width, limit), Image.LANCZOS)
+    out = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    out.paste(part, (box[0], round((box[1] + box[3] - limit) / 2)))
+    return out
 
 
 def _lips(im: Image.Image, lip: tuple[int, int, int, int]) -> Image.Image:

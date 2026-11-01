@@ -277,6 +277,7 @@ OPEN_REL = {"X": 1.0, "A": 1.15, "B": 1.3, "G": 1.35, "H": 1.4, "C": 1.45, "F": 
 OPEN_ABS = 0.2
 # drawn Aiwake set (no rest-lip reference to scale from): per-viseme cap as a share of the face height
 OPEN_DRAWN = {"X": 0.03, "A": 0.03, "B": 0.055, "G": 0.065, "H": 0.075, "C": 0.085, "F": 0.07, "E": 0.095, "D": 0.115}
+EXPRESSION_OPEN_ABS = 0.115
 # a mouth hidden under a beard or mustache rests tiny; below this share of the face any viseme is fine
 OPEN_FLOOR = 0.07
 OPEN_SLACK = 0.01
@@ -323,8 +324,20 @@ def mouth_open(view: Path, face: list[int]) -> dict[str, Any]:
     face_share = {k: round(h / fh, 3) for k, h in hs.items()}
     if (v.get("mouthQA") or {}).get("mouths") == "aiwake drawn set":
         bad = {k: face_share[k] for k in hs if face_share[k] > OPEN_DRAWN.get(k, 0.115) + OPEN_SLACK}
-        return {"pass": not bad, "value": max(face_share.values(), default=0), "limit": OPEN_DRAWN, "ratios": ratios,
-                "faceShare": face_share, "bad": bad, "mode": "drawn"}
+        expression_share: dict[str, float] = {}
+        for name, mouth in (v.get("expressions") or {}).items():
+            sprite = np.asarray(Image.open(view / mouth["url"]).convert("RGBA"))
+            h, w = sprite.shape[:2]
+            under = np.asarray(canvas.crop((mouth["x"], mouth["y"], mouth["x"] + w, mouth["y"] + h)))
+            expression_share[name] = round(open_height(sprite, under) / fh, 3)
+        bad.update({
+            f"expression:{name}": share
+            for name, share in expression_share.items()
+            if share > EXPRESSION_OPEN_ABS + OPEN_SLACK
+        })
+        return {"pass": not bad, "value": max([*face_share.values(), *expression_share.values()], default=0),
+                "limit": OPEN_DRAWN, "ratios": ratios, "faceShare": face_share,
+                "expressionFaceShare": expression_share, "bad": bad, "mode": "drawn"}
     bad = {k: ratios[k] for k in hs if (ratios[k] > OPEN_REL.get(k, 1.7) + 0.05 and face_share[k] > OPEN_FLOOR) or face_share[k] > OPEN_ABS + OPEN_SLACK}
     return {"pass": not bad, "value": max(ratios.values(), default=0), "limit": OPEN_REL, "ratios": ratios,
             "faceShare": face_share, "bad": bad}

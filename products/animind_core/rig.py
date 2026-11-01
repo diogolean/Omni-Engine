@@ -1275,7 +1275,11 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         drawn = mouthset.draw_set(lw, cols, squeeze=1.0 if front else 0.85, open_cap={k: 0.95 * c * (face[3] - face[1]) for k, c in qa.OPEN_DRAWN.items()})
         placed = mouthset.place(rest, drawn)
         expressions = mouthset.place(
-            rest, mouthset.draw_expressions(lw, cols, squeeze=1.0 if front else 0.85)
+            rest,
+            mouthset.draw_expressions(
+                lw, cols, squeeze=1.0 if front else 0.85,
+                open_cap=0.95 * qa.EXPRESSION_OPEN_ABS * (face[3] - face[1]),
+            ),
         )
         mouth_src = "aiwake drawn set"
         hair = _facial_hair(np.asarray(clean), mbox)

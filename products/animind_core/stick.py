@@ -150,7 +150,10 @@ def _parts(
         "tongue": (190, 86, 92, 255), "lip": (142, 72, 78, 255),
     }
     mouths = mouthset.place((270, 365, 370, 430), mouthset.draw_set(90, colours, open_cap=42))
-    expressions = mouthset.place((270, 365, 370, 430), mouthset.draw_expressions(90, colours))
+    expressions = mouthset.place(
+        (270, 365, 370, 430),
+        mouthset.draw_expressions(90, colours, open_cap=42),
+    )
 
     return {
         "body": _crop(body), "arm_left": _crop(arm_left), "arm_right": _crop(arm_right), "head": _crop(head),

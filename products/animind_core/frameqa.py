@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-CAV_ABS = 0.62  # cavity height / mouth width, any viseme
+CAV_ABS = 0.50  # cavity height / mouth width, any viseme or emotional mouth
 CAV_GROW = 1.3  # x the drawn sprite's own cavity, plus CAV_SLACK, before a frame counts as over-open
 CAV_SLACK = 0.08
 NORM_W = 64  # mouth crops are measured at this width
@@ -187,11 +187,11 @@ def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:
             measured += 1
             worst = max(worst, r["cav"])
             opens.setdefault(i, {})[m["char"]] = max(r["cav"], opens.get(i, {}).get(m["char"], 0.0))
-            # a round drawn O (E) is taller than CAV_ABS by design; its own drawn sprite (already capped per
-            # face share by the rig QA) is then the ceiling
-            cap = max(CAV_ABS, ref["cav"] + CAV_SLACK)
-            if r["cav"] > cap:
-                bad.append((i, f"{who}: open {r['cav']:.2f} > {cap:.2f}"))
+            # The absolute ceiling wins even when an intrinsically tall sprite
+            # was supplied.  Otherwise the reference itself could raise the
+            # limit and let the old 1.07-height O mouth pass.
+            if r["cav"] > CAV_ABS:
+                bad.append((i, f"{who}: open {r['cav']:.2f} > {CAV_ABS:.2f}"))
             elif r["cav"] > CAV_GROW * ref["cav"] + CAV_SLACK:
                 bad.append((i, f"{who}: open {r['cav']:.2f} vs drawn {ref['cav']:.2f}"))
             if r["blobs"] >= 2 and r["blobs"] > ref["blobs"]:
