@@ -30,6 +30,8 @@ NORM_W = 64  # mouth crops are measured at this width
 SPEECH_MIN_S = 0.4  # shorter voiced lines are not judged for a frozen mouth
 OPEN_MIN = 0.05  # measured cavity / mouth width that counts as a visibly open mouth
 MIN_MEASURED = 6  # measured frames of the speaker a line needs before its openness is judged
+BLINK_RATE_MIN = 8.0
+BLINK_RATE_MAX = 36.0
 
 
 def measure(img: np.ndarray, box: Any) -> dict[str, Any] | None:
@@ -114,6 +116,55 @@ def speech_check(trace: dict[str, Any], opens: dict[int, dict[int, float]]) -> l
     return bad
 
 
+def facial_check(trace: dict[str, Any]) -> tuple[list[tuple[int, str]], dict[str, Any]]:
+    """Validate actual rendered face states recorded by :class:`scene.Scene`.
+
+    Blink starts are counted from open -> half transitions.  Brow poses must
+    leave neutral during an emotional line and must differ when the script
+    carries more than one emotion.
+    """
+    frames = trace.get("frames") or []
+    duration = (float(frames[-1]["t"]) - float(frames[0]["t"])) if len(frames) > 1 else 0.0
+    chars = sorted({int(face["char"]) for frame in frames for face in frame.get("faces", [])})
+    bad: list[tuple[int, str]] = []
+    blink_rates: dict[int, float] = {}
+    brow_states: dict[int, set[tuple[float, ...]]] = {char: set() for char in chars}
+    brow_emotions: dict[int, set[str]] = {char: set() for char in chars}
+    for char in chars:
+        states: list[tuple[int, dict[str, Any]]] = [
+            (index, face)
+            for index, frame in enumerate(frames)
+            for face in frame.get("faces", [])
+            if int(face["char"]) == char
+        ]
+        starts = sum(
+            1 for (_ia, before), (_ib, after) in zip(states, states[1:])
+            if before.get("blink") == "open" and after.get("blink") == "half"
+        )
+        if duration >= 6.0:
+            rate = starts * 60.0 / duration
+            blink_rates[char] = round(rate, 2)
+            if not BLINK_RATE_MIN <= rate <= BLINK_RATE_MAX:
+                bad.append((states[0][0], f"char {char}: blink rate {rate:.1f}/min outside "
+                                          f"{BLINK_RATE_MIN:.0f}-{BLINK_RATE_MAX:.0f}"))
+        for _index, face in states:
+            emotion = str(face.get("emotion") or "neutro")
+            pose = tuple(float(v) for v in face.get("brows") or ())
+            if emotion != "neutro":
+                brow_emotions[char].add(emotion)
+                brow_states[char].add(pose)
+        if brow_emotions[char] and not any(any(abs(v) >= 0.3 for v in pose) for pose in brow_states[char]):
+            bad.append((states[0][0], f"char {char}: brows frozen at neutral during emotional speech"))
+        if len(brow_emotions[char]) > 1 and len(brow_states[char]) < 2:
+            bad.append((states[0][0], f"char {char}: brows do not vary across emotions"))
+    report = {
+        "blinkRatesPerMin": blink_rates,
+        "browEmotions": {char: sorted(values) for char, values in brow_emotions.items()},
+        "browPoseCounts": {char: len(values) for char, values in brow_states.items()},
+    }
+    return bad, report
+
+
 def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:
     w, h = trace["size"]
     bad: list[tuple[int, str]] = []
@@ -149,8 +200,10 @@ def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:
     if speaking and measured and worst <= 0.0:
         bad.append((0, f"maxOpen 0 over {measured} measured mouths although {len(speaking)} lines are voiced"))
     bad += speech_check(trace, opens)
+    face_bad, face_report = facial_check(trace)
+    bad += face_bad
     return {"frames": len(trace["frames"]), "mouthsMeasured": measured, "badFrames": len({b[0] for b in bad}),
-            "pass": not bad, "maxOpen": round(worst, 3), "examples": bad[:12]}
+            "pass": not bad, "maxOpen": round(worst, 3), "examples": bad[:12], **face_report}
 
 
 if __name__ == "__main__":  # python -m products.animind_core.frameqa OUT.mp4 [frames.json]

@@ -10,14 +10,16 @@ iris at the right edge of its socket, ``gy = +1`` at the bottom. Behaviour:
 - sometimes at the camera, more often in the front view and on close-ups;
   in a 3/4 view "at camera" turns the iris toward the viewer side;
 - short wanders (up, down, aside) with small saccadic jitter.
-Blinks: every 2.2-5.6 s, half -> closed -> half (about 0.2 s).
+Blinks: every 2-6 s, closing over about 3 frames and opening over about 4,
+with an occasional deterministic double blink.
 """
 from __future__ import annotations
 
 import math
 
 SEG_MIN, SEG_MAX = 0.8, 2.4  # seconds per gaze segment
-BLINK_MIN, BLINK_MAX = 2.2, 5.6
+BLINK_MIN, BLINK_MAX = 2.0, 6.0
+BLINK_CLOSE_S, BLINK_SHUT_S, BLINK_OPEN_S = 3 / 24, 2 / 24, 4 / 24
 SACCADE_S = 0.07
 
 
@@ -31,13 +33,29 @@ def rand(seed: int, n: int) -> float:
 
 def blink(t: float, seed: int) -> str:
     """``open``, ``half`` or ``closed`` at time ``t``."""
-    start, n = 0.6 + rand(seed, 9999) * 1.5, 0
-    while start <= t:
-        u = t - start
-        if u < 0.05 or 0.16 <= u < 0.22:
+    start, n = 0.8 + rand(seed, 9999) * 1.2, 0
+    total = BLINK_CLOSE_S + BLINK_SHUT_S + BLINK_OPEN_S
+
+    def state(since: float) -> str:
+        if since < 0:
+            return "open"
+        if 0 <= since < BLINK_CLOSE_S:
             return "half"
-        if u < 0.16:
+        if since < BLINK_CLOSE_S + BLINK_SHUT_S:
             return "closed"
+        if since < total:
+            return "half"
+        return "open"
+
+    while start <= t:
+        current = state(t - start)
+        if current != "open":
+            return current
+        # Roughly one blink in eight is followed by a quick second blink.
+        if rand(seed + 911, n) < 0.125:
+            current = state(t - (start + total + 0.12))
+            if current != "open":
+                return current
         n += 1
         start += BLINK_MIN + rand(seed, n) * (BLINK_MAX - BLINK_MIN)
     return "open"

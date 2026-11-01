@@ -71,11 +71,27 @@ def _font(weight: str, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFon
     return ImageFont.truetype(str(path), size) if path.is_file() else ImageFont.load_default()
 
 
-BREATH_SHARE = {"body": 0.4, "torso": 0.4, "neck": 0.7}  # head, eyes, mouth: 1.0
-BODY_LAYERS = ("body", "torso", "neck")  # everything else is the head group (micro-movements)
+BREATH_SHARE = {"body": 0.4, "torso": 0.4, "neck": 0.7, "arm_left": 0.45, "arm_right": 0.45}
+BODY_LAYERS = ("body", "torso", "neck", "arm_left", "arm_right")
 # per-line emotion -> brow lift in stage px (negative = up), eased in over EMO_EASE_S
 EMO_BROW = {"neutro": 0.0, "alegre": -1.5, "irritado": 2.5, "surpreso": -4.0, "triste": -2.0, "desdenhoso": 1.2, "pensativo": -0.8}
 EMO_EASE_S = 0.3
+# (left y, right y, left rotation, right rotation), gently blended at line edges.
+EMO_BROW_POSE = {
+    "neutro": (0.0, 0.0, 0.0, 0.0),
+    "alegre": (-1.5, -1.5, -4.0, 4.0),
+    "irritado": (2.5, 2.5, 12.0, -12.0),
+    "bravo": (2.5, 2.5, 12.0, -12.0),
+    "triste": (-1.0, -1.0, -10.0, 10.0),
+    "surpreso": (-4.0, -4.0, 1.0, -1.0),
+    "pensativo": (-1.8, 0.6, -5.0, 4.0),
+    "desdenhoso": (-2.0, 1.0, -8.0, 5.0),
+    "ironico": (-2.0, 1.0, -8.0, 5.0),
+    "irônico": (-2.0, 1.0, -8.0, 5.0),
+}
+EMO_ARM_ROT = {"alegre": (-5.0, 5.0), "irritado": (7.0, -7.0), "bravo": (7.0, -7.0),
+                "triste": (4.0, -4.0), "surpreso": (-10.0, 10.0), "pensativo": (-3.0, -8.0),
+                "desdenhoso": (-8.0, 2.0), "ironico": (-8.0, 2.0), "irônico": (-8.0, 2.0)}
 
 
 def _qa_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -178,7 +194,12 @@ class Scene:
         self.rigs, self.script, self.env, self.env_fps = rigs, script, envelope, env_fps
         self.duration_s, self.disclaimer, self.fps = duration_s, disclaimer, fps
         self.lang = lang
-        self.places = PLACES[self.template]
+        if self.template == "debate" and len(rigs) > 2:
+            count = len(rigs)
+            scale = max(0.68, 1.0 - 0.09 * (count - 2))
+            self.places = [(0.16 + 0.68 * i / (count - 1), scale) for i in range(count)]
+        else:
+            self.places = PLACES[self.template]
         self.style = styles.pick(style)
         self.far, self.mid = look.plates(self.scenario, self.template, [p[0] for p in self.places])
         self.far, self.mid = styles.tint_plate(self.far, self.style), styles.tint_plate(self.mid, self.style)
@@ -209,8 +230,9 @@ class Scene:
         self._cache: dict[Any, Image.Image] = {}
         self.trace: list[dict[str, Any]] = []
         self._mouth_log: list[dict[str, Any]] = []
+        self._face_log: list[dict[str, Any]] = []
         self._mouth_ref: dict[Any, Any] = {}
-        n = 2 if self.template == "debate" else 1
+        n = len(self.rigs)
         self.lights = [look.light_for(self.scenario, self.template, i, self.places[min(i, len(self.places) - 1)][0]) for i in range(n)]
 
     # ------------------------------------------------------------ titles
@@ -379,7 +401,7 @@ class Scene:
                 act_cut = self._act_cut(i)
                 shots.append((max(start - 0.1 if act_cut is None else act_cut, shots[-1][0] + 0.5), shot, "cut"))
             if self.template == "debate" and end - start > 5.5:
-                other = 1 - line["speaker"]
+                other = (line["speaker"] + 1) % max(1, len(self.rigs))
                 mid = start + (end - start) * 0.55
                 shots.append((mid, clamp(replace(self.shot_for(other, i), kind="react")), "cut"))
                 shots.append((mid + 1.3, shot, "cut"))
@@ -495,7 +517,12 @@ class Scene:
         # head micro-movements: slow sway + a small nod with the speech envelope (whole head group, mouth included)
         hx = round((math.sin(t * 0.63 + seed * 2.1) * 0.9 + math.sin(t * 1.37 + seed) * 0.4) * SS)
         hy = round(amp * 1.5 * SS)
-        brow = self._brow(idx, t) * SS
+        emotion, blend = self._emotion(idx, t)
+        brow_pose = tuple(v * blend for v in EMO_BROW_POSE.get(emotion, EMO_BROW_POSE["neutro"]))
+        arm_pose = tuple(v * blend for v in EMO_ARM_ROT.get(emotion, (0.0, 0.0)))
+        brow = self._brow(idx, t) * SS  # legacy rigs keep their single combined brow layer
+        self._face_log.append({"char": idx, "blink": lids, "emotion": emotion,
+                               "brows": [round(v, 2) for v in brow_pose]})
         gx, gy = self.gaze(idx, t, view)
         gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))  # eye_shift is the socket-safe maximum
         cur_v, prev_v, wv = vis
@@ -528,6 +555,21 @@ class Scene:
             hdx, hdy = (0, 0) if name in BODY_LAYERS else (hx, hy)
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
+            if name in {"brow_left", "brow_right"}:
+                side = 0 if name == "brow_left" else 1
+                angle = brow_pose[2 + side]
+                original = img
+                img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
+                lx -= (img.width - original.width) // 2
+                ly -= (img.height - original.height) // 2
+                dy += brow_pose[side] * SS
+            elif name in {"arm_left", "arm_right"}:
+                side = 0 if name == "arm_left" else 1
+                angle = arm_pose[side]
+                original = img
+                img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
+                lx -= (img.width - original.width) // 2
+                ly -= (img.height - original.height) // 2
             stage.alpha_composite(img, (x0 + lx + hdx, y0 + ly + round(dy) + hdy))
         if mouths:  # reference: the one mouth as drawn, measured the way the video QA measures frames
             key = (idx, view, cur_v)
@@ -549,6 +591,18 @@ class Scene:
                 k = min(1.0, (ms - a) / (EMO_EASE_S * 1000), (b - ms) / (EMO_EASE_S * 1000))
                 return EMO_BROW.get(str(l.get("emotion") or "neutro"), 0.0) * k
         return 0.0
+
+    def _emotion(self, idx: int, t: float) -> tuple[str, float]:
+        """Current emotion and smooth 0..1 transition weight for one speaker."""
+        ms = t * 1000
+        for line in self.script:
+            if line["speaker"] != idx:
+                continue
+            a, b = line["startMs"] - EMO_EASE_S * 1000, line["endMs"] + EMO_EASE_S * 1000
+            if a <= ms <= b:
+                weight = min(1.0, (ms - a) / (EMO_EASE_S * 1000), (b - ms) / (EMO_EASE_S * 1000))
+                return str(line.get("emotion") or "neutro").lower(), max(0.0, weight)
+        return "neutro", 0.0
 
     def gaze(self, idx: int, t: float, view: str) -> tuple[float, float]:
         """Where character ``idx`` looks: at the other speaker by default, sometimes at the lens
@@ -638,7 +692,7 @@ class Scene:
         stage = Image.new("RGBA", (round(W * SS), round(H * SS)), (0, 0, 0, 0))
         if self.template == "lesson":
             self._board(stage, t, soft=shot is not None and shot.kind == "mcu")
-        n = 2 if self.template == "debate" else 1
+        n = len(self.rigs)
         for idx in range(n):
             img, xy = self._set_piece("shadow", idx, False)
             stage.alpha_composite(img, xy)
@@ -876,10 +930,12 @@ class Scene:
         cam = self.camera(t)
         shot = cam[-1][1]
         self._mouth_log: list[dict[str, Any]] = []
+        self._face_log = []
         stage = self._stage(t, line, amp, shot)
         drift = look.handheld(t)
         self.trace.append({"t": round(t, 3), "takes": len(cam), "blur": round(max(c[2] for c in cam), 2),
-                           "mouths": [m | {"box": self._to_output(m["box"], shot, drift)} for m in self._mouth_log]})
+                           "mouths": [m | {"box": self._to_output(m["box"], shot, drift)} for m in self._mouth_log],
+                           "faces": self._face_log})
         out = None
         for weight, shot, blur in cam:
             img = self._shoot(stage, shot, drift, blur)
