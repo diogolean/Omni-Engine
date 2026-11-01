@@ -64,11 +64,14 @@ The mouth family comes directly from Aiwake's
 `smug_smile` (the asymmetric triangular grin) and `stressed_grimace`. It is shared by stick rigs
 and complex rigs. Seven emotional rest variants are stored separately from visemes, and the
 renderer substitutes one only during X/rest frames, preserving exactly one mouth layer per frame.
+Every viseme and emotional mouth is flattened to a maximum painted height/width of 0.48, and
+frame QA enforces an independent 0.50 cavity ceiling; a tall reference sprite cannot raise it.
 The generated `review_sheet.png` now includes all mouths, eye states/directions, emotional brows
 and expressions for all three views; it stays under `ANIMIND_DATA_DIR`, outside git.
 
-`/v1/health` also lists `scenarios` and `templates` this process can render (an unknown `scenario`
-renders as `studio`), so a core started from an older checkout is visible before a render falls back.
+`/v1/health` also lists `scenarios`, `templates`, and the contract-only future
+`illustrated-scene` mode this process understands. That contract accepts a plate image plus
+normalized face anchors/scales for eye and mouth overlays, but performs no image generation.
 
 ## Scripts: real quotes, marked paraphrases
 
@@ -119,7 +122,8 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   the topic and cast; no mold, and no picked-up word, repeats inside one script.
 - `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
   `quote {id, text, source, label, url, site, wikisource?}` (`label` is the short on-screen source: no
-  page numbers, translators or publishers, <= 48 chars; `source` stays complete). Gemini (`gemini-2.5-flash`, one text call) only picks
+  page numbers, translators or publishers, <= 48 chars; `source` stays complete). Gemini
+  (`gemini-2.5-flash-lite`, one text call with thinking disabled) only picks
   quote ids and writes the other lines. Only `primary` quotes can be a "Citação real". Quote beats prefer
   quotes sharing words with the topic (stemmed): an unknown/reused id, or an off-topic id while an on-topic
   quote fits, becomes the best topic match (then the shortest), never model text.
@@ -137,6 +141,9 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   to 32% (never black), hard-cuts at the bottom of the dip and shows a chapter mark (“II — O CONFRONTO”) top
   left; an end card and the matte return after the last line. 9:16 keeps the cards but no matte. In wide
   and two shots the vignette and a warm key glow lean toward whoever has the floor.
+- Debate camera edits are deterministic and speech-paced: an establishing wide leads into alternating
+  over-shoulders/speaker singles, quote close-ups, listener reaction inserts, context two-shots and a
+  closing two-shot. `cameraPlan` exposes the complete edit decision list in the render result.
 - Each quote beat ranks the speaker's quotes by topic fit (shared stems plus related concepts) and by
   overlap with the line before it, so a quote answers the previous argument. Every line goes through
   `tidy()` (no space before punctuation, no "?." or "..", capital first letter, final mark).
@@ -144,7 +151,8 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   writes short replies that pick up a noun from the previous line and name the other speaker
   (hook -> exchange -> climax -> close); no line repeats. Gemini answers are cached on disk by
   model + prompt (`ANIMIND_DATA_DIR/cache/script/`), so re-rendering the same script costs nothing.
-- Result adds `writer` (`gemini`|`template`), `quoteLines`, `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
+- Result adds `writer` (`gemini`|`template`), `scriptCost` (model, tokens, cache hit and USD for this
+  script), `quoteLines`, `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
   The character name is cut before a comma or parenthesis to find the person ("Sócrates, de toga" -> "Sócrates").
 
 ## Env

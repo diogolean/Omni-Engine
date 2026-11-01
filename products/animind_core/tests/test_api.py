@@ -178,7 +178,7 @@ def test_shot_grammar_quotes_get_a_close_up_and_the_close_is_a_two_shot():
     sc = scene.Scene(template="debate", scenario="studio", rigs=[None, None], script=script, envelope=np.ones(1300) * 0.5,
                      env_fps=100, duration_s=12.5, disclaimer="x", names=["A", "B"], roles=["x", "y"])
     kinds = [shot.kind for _, shot, _ in sc.shots]
-    assert kinds == ["wide", "ots", "cu", "ots", "two"]
+    assert kinds == ["wide", "ots", "cu", "single", "two"]
     cu = sc.shots[2][1]
     assert cu.zoom > sc.shots[1][1].zoom and cu.cx > 640  # speaker 1's quote, tight on the right
     frame = sc.frame(6.5)  # the listener is out of focus in a single; still a full frame

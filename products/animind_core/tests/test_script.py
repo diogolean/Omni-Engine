@@ -360,7 +360,8 @@ def test_offline_lesson_quotes_stay_on_the_thread():
 
 
 def test_offline_debate_has_a_turn_and_closes_on_the_strongest_quote():
-    out = script.write("debate", "A verdade existe?", ["Sócrates", "Nietzsche"], sheets=[socrates(), nietzsche()], use_llm=False)
+    out = script.write("debate", "A verdade existe?", ["Sócrates", "Nietzsche"], lang="pt-BR",
+                       sheets=[socrates(), nietzsche()], use_llm=False)
     lines = out["lines"]
     texts = " ".join(line["text"] for line in lines)
     assert "Sem música" not in texts  # v17 used an off-topic quote as a reply
@@ -383,7 +384,7 @@ def test_lines_carry_rhythm_quotes_slower_jabs_faster():
 def test_offline_molds_never_repeat_inside_a_script(topic):
     for template, names, sheets in (("debate", ["Sócrates", "Nietzsche"], [socrates(), nietzsche()]),
                                     ("lesson", ["Sócrates"], [socrates()])):
-        lines = script.write(template, topic, names, sheets=sheets, use_llm=False)["lines"]
+        lines = script.write(template, topic, names, lang="pt-BR", sheets=sheets, use_llm=False)["lines"]
         heads = [" ".join(line["text"].split()[:2]) for line in lines if line["kind"] == "paraphrase"]
         assert len(set(heads)) == len(heads), heads
 
@@ -413,7 +414,7 @@ TOPICS = ["A verdade existe?", "O que é a felicidade?", "inteligência artifici
 def test_debate_is_a_real_exchange_with_an_arc(topic, pair):
     names, make = PAIRS[pair]
     sheets = make()
-    out = script.write("debate", topic, names, sheets=sheets, use_llm=False)
+    out = script.write("debate", topic, names, lang="pt-BR", sheets=sheets, use_llm=False)
     lines = out["lines"]
     assert out["scriptQA"]["pass"] and out["scriptQA"]["problems"] == [], out["scriptQA"]
     # every spoken quote is literally in the speaker's own sheet, with its source
