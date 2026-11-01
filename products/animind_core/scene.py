@@ -358,7 +358,9 @@ class Scene:
             if quote:
                 return Shot(W * (px + 0.035 * toward), H * CU_Y, 2.1, "cu")
             if i % 4 == 2:
-                return Shot(W * (px + 0.07 * toward), H * 0.46, 1.82, "single")
+                return Shot(W * (px + 0.06 * toward), H * 0.455, 1.86, "cu")
+            if i > 0 and i % 4 == 0:
+                return Shot(W * (px + 0.08 * toward), H * 0.46, 1.72, "single")
             if i > 0 and i % 4 == 3:
                 return Shot(W / 2, H * 0.47, 1.24, "two")
             return Shot(W * (px + 0.115 * toward), H * 0.47, 1.6, "ots")
