@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import rig, settings, sheet, styles
+from . import rig, settings, sheet, stick, styles
 
 _LOG = logging.getLogger("animind_core")
 _BUILD_LOCK = threading.Lock()  # one character at a time: BiRefNet needs ~8 GB on CPU
@@ -78,7 +78,12 @@ def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
 def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     source = req.get("source") or {}
     kind = source.get("kind")
-    if kind == "prompt":
+    character_type = str(req.get("type") or "rig").strip().lower()
+    if character_type not in {"rig", "stick"}:
+        raise ValueError("type must be rig or stick")
+    if character_type == "stick":
+        subject = str(source.get("prompt") or req.get("name") or "personagem stick").strip()[:400]
+    elif kind == "prompt":
         subject = str(source.get("prompt") or "").strip()[:400]
         if not subject:
             raise ValueError("source.prompt is required")
@@ -101,16 +106,27 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         return f"{files_base}/{path.relative_to(assets).as_posix()}"
 
     art_style = styles.pick(req.get("artStyle"))
-    if req.get("reuse", True) is not False and not req.get("rawPrompt"):
+    if character_type == "rig" and req.get("reuse", True) is not False and not req.get("rawPrompt"):
         found = reusable(name, art_style, base_url)
         if found:
             _LOG.info("character %s reused for %r (no image generated)", found["id"], name)
             return found
-    mode = "gemini" if settings.gemini_available() else "mock"
+    mode = "procedural" if character_type == "stick" else ("gemini" if settings.gemini_available() else "mock")
     note = None if mode == "gemini" else _mock_note()
     with _BUILD_LOCK:
         built = None
-        if mode == "gemini":
+        if mode == "procedural":
+            palette = req.get("palette") if isinstance(req.get("palette"), dict) else {}
+            raw_colour = palette.get("skin", [244, 218, 190])
+            try:
+                colour = tuple(max(0, min(255, int(v))) for v in raw_colour[:3])
+                if len(colour) != 3:
+                    raise ValueError
+            except (TypeError, ValueError):
+                colour = (244, 218, 190)
+            built = stick.build(skin, url, colour)  # type: ignore[arg-type]
+            note = "vetorial/procedural; nenhum modelo de imagem usado"
+        elif mode == "gemini":
             try:
                 built = rig.build_rig(subject, skin, url, raw_prompt=req.get("rawPrompt"), style=art_style)
             except Exception as exc:  # noqa: BLE001
@@ -126,6 +142,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     character = {
         "id": character_id,
         "name": name,
+        "type": character_type,
         "status": "ready",
         "style": "rig",
         "views": built["views"],
