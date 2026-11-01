@@ -29,6 +29,8 @@ def test_vertical_debate_has_shot_countershot(client, monkeypatch):  # noqa: F81
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=0.6", str(out)], check=True)
 
     monkeypatch.setattr(render, "_tts", fake_tts)
+    for k in ("TITLE_S", "ACT_GAP_S", "END_S"):  # camera test: skip the film titles to keep the 1080x1920 render short
+        monkeypatch.setattr(render.titles, k, 0.0)
     a, b = _make(client, "owl"), _make(client, "cat")
     job = client.post("/v1/render", headers=H, json={"characters": [a, b], "template": "debate", "format": "9:16",
                                                     "topic": "IA"}).json()

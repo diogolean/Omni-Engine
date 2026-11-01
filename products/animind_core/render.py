@@ -22,7 +22,7 @@ from typing import Any
 
 import numpy as np
 
-from . import casting, characters, frameqa, rig, scene, settings, styles
+from . import casting, characters, frameqa, rig, scene, settings, styles, titles
 from . import script as scripts
 
 _LOG = logging.getLogger("animind_core")
@@ -266,9 +266,15 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         n = 2 if template == "debate" else 1
         cast = [chars[min(i, len(chars) - 1)] for i in range(n)]
         voices = casting.cast(cast, lang, req.get("voices"))
-        pcm_parts, script, sources, t = [], [], set(), 0.0
+        # Silence for the film titles: a cold open before the first line, a beat before each new act
+        # (the dip and its chapter card) and the end card after the last line (see titles.py).
+        silence = lambda s: np.zeros(int(s * SAMPLE_RATE), dtype=np.int16)  # noqa: E731
+        pcm_parts, script, sources, t = [silence(titles.TITLE_S)], [], set(), titles.TITLE_S
         for i, planned in enumerate(lines):
             speaker, text = planned["speaker"], planned["text"]
+            if i and planned.get("act") and planned.get("act") != lines[i - 1].get("act"):
+                pcm_parts.append(silence(titles.ACT_GAP_S))
+                t += titles.ACT_GAP_S
             mp3, clip = work / f"line_{i}.mp3", work / f"line_{i}.wav"
             pcm, rate = _voice_line(text, voices[min(speaker, len(voices) - 1)], mp3, clip, planned["maxS"],
                                     int(planned.get("rateAdj", 0)))
@@ -281,14 +287,15 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             pcm_parts += [pcm, np.zeros(int(gap_s * SAMPLE_RATE), dtype=np.int16)]
             t += dur + gap_s
             _set(job_id, progress=0.1 + 0.4 * (i + 1) / len(lines))
-        track = np.concatenate(pcm_parts)
+        track = np.concatenate(pcm_parts + [silence(titles.END_S)])
         audio = work / "voice.wav"
         _write_pcm(audio, track)
         duration = len(track) / SAMPLE_RATE
         rigs = [_rig_views(c, template, i, scenario) for i, c in enumerate(cast)]
         sc = scene.Scene(template=template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
                          env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER,
-                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art)
+                         names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art,
+                         topic=written["topic"])
         video = work / "preview.mp4"
         _set(job_id, progress=0.55)
         with _RENDER_LOCK:

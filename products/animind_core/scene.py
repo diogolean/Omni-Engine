@@ -21,7 +21,7 @@ from typing import Any, Iterator
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from . import eyes, frameqa, look, styles
+from . import eyes, frameqa, look, styles, titles
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
@@ -51,6 +51,8 @@ BUST_H, BUST_BOTTOM = 0.55, 0.8
 LECTERN_TOP, LECTERN_BASE, LECTERN_W = 0.645, 0.835, 0.27
 FACE_Y = 0.42  # where the faces sit, for close framings
 BOARD = (0.45, 0.08, 0.94, 0.62)  # lesson board on the stage (x0, y0, x1, y1)
+SPEAKER_PULL, FLOOR_EASE_S = 0.55, 1.0  # wide/two shots: how far the light leans to the speaker, how fast
+KEY_GLOW = (255, 206, 150)  # warm key pool screened over the subject
 DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.25, 0.6
 PUSH, PUSH_CU = 0.04, 0.075  # push-in over a shot (fraction of its zoom); quote close-ups lean in further
 CU_Y = 0.45  # debate quote close-ups: the face sits higher, so mouth and beard clear the captions
@@ -162,7 +164,7 @@ class Scene:
     def __init__(self, *, template: str, scenario: str, rigs: list[dict[str, RigView] | None], script: list[dict[str, Any]],
                  envelope: np.ndarray, env_fps: int, duration_s: float, disclaimer: str, fps: int = FPS,
                  names: list[str] | None = None, roles: list[str] | None = None, lang: str = "pt-BR",
-                 fmt: str = "16:9", style: str = "cartoon") -> None:
+                 fmt: str = "16:9", style: str = "cartoon", topic: str = "") -> None:
         # 9:16 shoots a vertical window (VWIN frame px wide) of the same 16:9 set at 1080x1920.
         self.vertical = fmt == "9:16"
         self.OW, self.OH = (1080, 1920) if self.vertical else (W, H)
@@ -186,6 +188,7 @@ class Scene:
         self.texture = styles.texture(self.style, (self.OW, self.OH))
         self.vig = look.vignette(0.55, (self.OW, self.OH))
         self.vig_field = look.vignette_field(0.6, (self.OW, self.OH))
+        self.glow_field = look.key_glow_field(KEY_GLOW, 0.09, (self.OW, self.OH))
         self.bloom = look.BLOOM.get(self.scenario, 0.2)
         self.scrim = look.scrim((self.OW, self.OH), 0.62 if self.vertical else 0.68)
         self.accent = look.ACCENT[self.scenario]
@@ -200,6 +203,8 @@ class Scene:
         self.role_font = _font("SemiBold", 15)
         self.speaker_font = _font("Bold", round(16 * k))
         self.names, self.roles = names or [], roles or []
+        self.topic = topic
+        self._plan_titles()
         self.shots = self._plan_shots()
         self._cache: dict[Any, Image.Image] = {}
         self.trace: list[dict[str, Any]] = []
@@ -207,6 +212,80 @@ class Scene:
         self._mouth_ref: dict[Any, Any] = {}
         n = 2 if self.template == "debate" else 1
         self.lights = [look.light_for(self.scenario, self.template, i, self.places[min(i, len(self.places) - 1)][0]) for i in range(n)]
+
+    # ------------------------------------------------------------ titles
+    def _plan_titles(self) -> None:
+        """Cold-open title while the voices have not started (``render`` leaves ``titles.TITLE_S``), act
+        breaks in the silent gaps that open a new act, an end card after the last line."""
+        s = self.script
+        first = s[0]["startMs"] / 1000 if s else 0.0
+        self.title_end = first if first >= 1.0 else 0.0
+        last = s[-1]["endMs"] / 1000 if s else 0.0
+        self.end_start = last + 0.3 if s and self.duration_s - last >= 1.5 else None
+        self.matte = titles.matte_h(self.OW, self.OH)
+        self.breaks: list[tuple[int, str, float, float, str]] = []  # (line, act, gap start, gap end, numeral)
+        seen = [s[0].get("act")] if s and s[0].get("act") else []
+        for i, act in titles.acts(s):
+            a, b = s[i - 1]["endMs"] / 1000, s[i]["startMs"] / 1000
+            seen.append(act)
+            if b - a >= 0.6:
+                self.breaks.append((i, act, a, b, titles.ROMAN[min(len(seen), len(titles.ROMAN)) - 1]))
+        self.dips = [(a, b) for _i, _act, a, b, _n in self.breaks]
+
+    def _title_card(self, end: bool = False) -> Image.Image:
+        key = ("title", end)
+        if key not in self._cache:
+            lang = "pt-BR" if self.lang == "pt-BR" else "en-US"
+            names = "  ×  ".join(pretty_name(n).upper() for n in self.names[: 2 if self.template == "debate" else 1] if n)
+            kicker = ("FIM" if lang == "pt-BR" else "THE END") if end else titles.KIND[lang].get(self.template, "").upper()
+            band = 0.785 if self.vertical else 0.757  # lower band: under the faces, inside the matte
+            self._cache[key] = titles.title_card((self.OW, self.OH), self.k * (0.86 if not self.vertical else 1.0), kicker,
+                                                 names, self.topic, self.accent, band)
+        return self._cache[key]
+
+    def matte_at(self, t: float) -> float:
+        """Letterbox amount 0..1: on for the cold open and the end card, eased off/on."""
+        m = 0.0
+        if self.title_end:
+            m = 1.0 - look.ease((t - self.title_end) / titles.MATTE_EASE_S)
+        if self.end_start is not None:
+            m = max(m, look.ease((t - self.end_start) / titles.MATTE_EASE_S))
+        return m
+
+    def _titles(self, rgb: Image.Image, t: float) -> Image.Image:
+        """Matte bars, cold-open title and end card, under the fade (they fade in and out with the picture)."""
+        m = self.matte_at(t)
+        bar = round(self.matte * m)
+        a_title = 1.0 - look.ease((t - (self.title_end - 0.3)) / 0.4) if self.title_end else 0.0
+        a_end = look.ease((t - self.end_start - 0.25) / 0.5) if self.end_start is not None else 0.0
+        if bar <= 0 and a_title <= 0.01 and a_end <= 0.01:
+            return rgb
+        frame = rgb.convert("RGBA")
+        if bar > 0:
+            d = ImageDraw.Draw(frame)
+            d.rectangle((0, 0, self.OW, bar - 1), fill=(0, 0, 0, 255))
+            d.rectangle((0, self.OH - bar, self.OW, self.OH), fill=(0, 0, 0, 255))
+        if a_title > 0.01:
+            frame.alpha_composite(_fade(self._title_card(), a_title))
+        if a_end > 0.01:
+            frame.alpha_composite(_fade(self._title_card(end=True), a_end))
+        return frame.convert("RGB")
+
+    def _chapter(self, frame: Image.Image, t: float) -> None:
+        """Chapter mark for the act that just started, top left, from the dip's lowest point."""
+        for _i, act, a, b, numeral in self.breaks:
+            t0 = (a + b) / 2
+            if not t0 <= t <= t0 + titles.CHAPTER_HOLD_S + 0.5:
+                continue
+            al = look.ease((t - t0) / 0.4) * (1 - look.ease((t - t0 - titles.CHAPTER_HOLD_S) / 0.5))
+            if al <= 0.01:
+                continue
+            key = ("chapter", act, numeral)
+            if key not in self._cache:
+                label = titles.ACT_LABEL["pt-BR" if self.lang == "pt-BR" else "en-US"].get(act, act)
+                self._cache[key] = titles.chapter_card(self.k, numeral, label, self.accent)
+            card = self._cache[key]
+            frame.alpha_composite(_fade(card, al), (24 - round(10 * (1 - al)), round(190 if self.vertical else 66)))
 
     # ------------------------------------------------------------ timeline
     def _line_at(self, t: float, grace: float = 0.0) -> dict[str, Any] | None:
@@ -265,11 +344,14 @@ class Scene:
         shots: list[tuple[float, Shot, str]] = [(0.0, look.clamp_shot(self.shot_for(-1, 0)), "cut")]
         for i, line in enumerate(self.script):
             start = line["startMs"] / 1000
-            if i == 0:
-                start = min(start + 1.6, max(start, line["endMs"] / 1000 - 1.0))
+            if i == 0:  # after a cold-open title the wide has already established the set
+                start = min(start + (0.8 if self.title_end else 1.6), max(start, line["endMs"] / 1000 - 1.0))
             shot = look.clamp_shot(self.shot_for(line["speaker"], i))
             prev = shots[-1][1]
-            if shot != prev:
+            act_cut = self._act_cut(i)
+            if act_cut is not None and shot != prev:  # a new act: hard cut at the bottom of the dip
+                shots.append((max(act_cut, shots[-1][0] + 0.5), shot, "cut"))
+            elif shot != prev:
                 if shot.kind in ("wide", "two", "board") or prev.kind in ("wide", "board"):
                     kind = "dissolve"
                 elif shot.kind == "cu" and abs(shot.cx - prev.cx) > W * 0.25:
@@ -278,6 +360,10 @@ class Scene:
                     kind = "cut"
                 shots.append((max(start - 0.12, shots[-1][0] + 0.5), shot, kind))
         return shots
+
+    def _act_cut(self, i: int) -> float | None:
+        """Cut time for line ``i`` when it opens a new act (the middle of the dip), else None."""
+        return next(((a + b) / 2 for j, _act, a, b, _n in self.breaks if j == i), None)
 
     def _plan_vertical(self) -> list[tuple[float, Shot, str]]:
         """Shot/countershot for 9:16: open on the first speaker (no establishing wide), hard cut on
@@ -290,7 +376,8 @@ class Scene:
             start, end = line["startMs"] / 1000, line["endMs"] / 1000
             shot = clamp(self.shot_for(line["speaker"], i))
             if shot != shots[-1][1]:
-                shots.append((max(start - 0.1, shots[-1][0] + 0.5), shot, "cut"))
+                act_cut = self._act_cut(i)
+                shots.append((max(start - 0.1 if act_cut is None else act_cut, shots[-1][0] + 0.5), shot, "cut"))
             if self.template == "debate" and end - start > 5.5:
                 other = 1 - line["speaker"]
                 mid = start + (end - start) * 0.55
@@ -582,15 +669,36 @@ class Scene:
         xs, ys = [q[0] for q in pts], [q[1] for q in pts]
         return [round(min(xs)), round(min(ys)), round(max(xs)), round(max(ys))]
 
-    def _focus(self, shot: Shot, drift: tuple[float, float, float]) -> tuple[float, float]:
-        """Output px the vignette centres on: the face nearest the camera in singles and close-ups,
-        the middle of the frame in wide, two and board shots."""
+    def _focus(self, shot: Shot, drift: tuple[float, float, float], t: float | None = None) -> tuple[float, float]:
+        """Output px the vignette and key glow centre on: the face nearest the camera in singles and
+        close-ups; in wide and two shots of a debate the light leans toward whoever has the floor
+        (``SPEAKER_PULL`` of the way from the middle, eased between lines); the middle otherwise."""
         if shot.kind in ("wide", "two", "board", ""):
-            return self.OW / 2, self.OH * 0.46
+            cx, cy = self.OW / 2, self.OH * 0.46
+            pull = self._floor(t) if t is not None and shot.kind != "board" and len(self.places) > 1 else 0.0
+            if pull:
+                faces = [self._to_output((W * p[0] * SS, 0, W * p[0] * SS, 0), shot, drift)[0] for p in self.places[:2]]
+                side = faces[1] if pull > 0 else faces[0]
+                cx += SPEAKER_PULL * abs(pull) * (float(side) - cx)
+            return cx, cy
         px = min((p[0] for p in self.places), key=lambda p: abs(W * p - shot.cx))
         x, y = W * px * SS, H * FACE_Y * SS
         box = self._to_output((x, y, x, y), shot, drift)
         return float(box[0]), float(box[1])
+
+    def _floor(self, t: float) -> float:
+        """Who has the floor, -1 (left speaker) .. +1 (right), eased over ``FLOOR_EASE_S`` from each
+        line's start; 0 under the titles."""
+        if t < self.title_end or (self.end_start is not None and t >= self.end_start):
+            return 0.0
+        level = 0.0
+        for line in self.script:
+            start = line["startMs"] / 1000 - 0.15
+            if start > t:
+                break
+            target = -1.0 if line["speaker"] == 0 else 1.0
+            level += (target - level) * look.ease((t - start) / FLOOR_EASE_S)
+        return level
 
     def _shoot(self, stage: Image.Image, shot: Shot, drift: tuple[float, float, float], blur: float) -> Image.Image:
         size = (self.OW, self.OH)
@@ -732,6 +840,7 @@ class Scene:
 
     def _overlays(self, frame: Image.Image, t: float, line: dict[str, Any] | None, shot: Shot | None = None) -> None:
         frame.alpha_composite(self.scrim)
+        self._chapter(frame, t)
         on_board = self.template == "lesson" and (shot is None or shot.kind in ("board", "wide"))
         if line and not on_board:  # the lesson reads the board; captions only when it is out of frame
             since = t - line["startMs"] / 1000
@@ -779,13 +888,16 @@ class Scene:
         if abs(self.sat - 1.0) > 1e-3:
             rgb = ImageEnhance.Color(rgb).enhance(self.sat)
         rgb = look.bloom(rgb, self.bloom)
-        rgb = ImageChops.multiply(rgb, look.vignette_at(self.vig_field, self._focus(cam[-1][1], drift)))
+        focus = self._focus(cam[-1][1], drift, t)
+        rgb = ImageChops.screen(rgb, look.vignette_at(self.glow_field, focus))
+        rgb = ImageChops.multiply(rgb, look.vignette_at(self.vig_field, focus))
         if self.texture is not None:
             rgb = rgb.convert("RGBA")
             rgb.alpha_composite(self.texture)
             rgb = rgb.convert("RGB")
+        rgb = self._titles(rgb, t)
         fade_in = FADE_IN_FLOOR + (1.0 - FADE_IN_FLOOR) * look.ease(t / FADE_IN_S)
-        fade = fade_in * look.ease((self.duration_s - t) / FADE_OUT_S)
+        fade = fade_in * look.ease((self.duration_s - t) / FADE_OUT_S) * titles.dip(t, self.dips)
         if fade < 0.999:
             rgb = Image.blend(Image.new("RGB", (self.OW, self.OH)), rgb, fade)
         frame = rgb.convert("RGBA")

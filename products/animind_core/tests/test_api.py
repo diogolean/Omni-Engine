@@ -88,6 +88,9 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
     assert client.get("/v1/files/" + res["frameQaUrl"].split("/v1/files/")[1]).status_code == 200
     assert {line["kind"] for line in res["script"]} == {"paraphrase"}  # no sheet offline: nothing passes as a quote
     assert [line["beat"] for line in res["script"]][0] == "gancho"
+    from products.animind_core import titles
+    assert res["script"][0]["startMs"] >= titles.TITLE_S * 1000 - 1  # silent cold open for the title card
+    assert res["durationMs"] >= res["script"][-1]["endMs"] + titles.END_S * 1000 - 1  # and room for the end card
     assert client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1]).status_code == 200
 
 

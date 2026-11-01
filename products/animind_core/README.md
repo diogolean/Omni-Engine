@@ -86,6 +86,12 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   (fictional characters, offline) every line is a paraphrase.
 - On screen: a chip "CITAÇÃO REAL · source · Wikiquote" or "PARÁFRASE"; quote captions in italics
   within “ ”; captions paged two rows at a time. The lesson board shows the beat, the line set as large as the board allows, and the quote source; captions carry a tracked speaker label.
+- Film titles (`titles.py`): render leaves 1.8 s of silence before the first line, 0.7 s before each new act
+  and 2.4 s after the last line. A cold-open title card (kind, names, topic in EB Garamond Italic) sits in
+  the lower band under a 2.39:1 matte that eases off as the voices start; each act break dips the picture
+  to 32% (never black), hard-cuts at the bottom of the dip and shows a chapter mark (“II — O CONFRONTO”) top
+  left; an end card and the matte return after the last line. 9:16 keeps the cards but no matte. In wide
+  and two shots the vignette and a warm key glow lean toward whoever has the floor.
 - Each quote beat ranks the speaker's quotes by topic fit (shared stems plus related concepts) and by
   overlap with the line before it, so a quote answers the previous argument. Every line goes through
   `tidy()` (no space before punctuation, no "?." or "..", capital first letter, final mark).
