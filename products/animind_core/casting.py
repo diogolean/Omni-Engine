@@ -19,6 +19,7 @@ only the last resort when a debate has more speakers than the pool has voices.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import itertools
 import json
@@ -28,6 +29,8 @@ import urllib.parse
 import urllib.request
 from functools import lru_cache
 from typing import Any
+
+from . import languages
 
 # voice -> (label, median F0 in Hz measured on a pt-BR line with pyin). Native voices first.
 VOICE_INFO: dict[str, tuple[str, float]] = {
@@ -140,15 +143,44 @@ def _assign(names: list[str], trs: list[dict[str, Any]], options: list[str]) -> 
     return out
 
 
+@lru_cache(maxsize=32)
+def voice_pool(lang: str) -> dict[str, list[str]]:
+    """Native Edge voices for a BCP-47 locale, with curated built-ins first."""
+    tag = languages.normalize(lang)
+    if tag in POOL:
+        return POOL[tag]
+
+    async def discover() -> list[dict[str, Any]]:
+        import edge_tts  # noqa: PLC0415
+        return await edge_tts.list_voices()
+
+    try:
+        voices = asyncio.run(discover())
+    except Exception as exc:  # noqa: BLE001 — surfaced as a useful render error
+        raise ValueError(
+            f"no built-in voice profile for {tag}; provide voices[] overrides or make the Edge voice catalogue available"
+        ) from exc
+    exact = [v for v in voices if str(v.get("Locale") or "").casefold() == tag.casefold()]
+    if not exact:
+        exact = [v for v in voices if str(v.get("Locale") or "").split("-")[0].casefold() == tag.split("-")[0].casefold()]
+    pool = {
+        "m": [str(v["ShortName"]) for v in exact if str(v.get("Gender") or "").casefold() == "male"],
+        "f": [str(v["ShortName"]) for v in exact if str(v.get("Gender") or "").casefold() == "female"],
+    }
+    if not pool["m"] or not pool["f"]:
+        raise ValueError(f"Edge has no complete male/female voice pool for language {tag}; provide voices[] overrides")
+    return pool
+
+
 def cast(chars: list[dict[str, Any]], lang: str, overrides: list[Any] | None = None) -> list[dict[str, Any]]:
     """One voice per speaker: {'voice', 'label', 'pitchHz', 'ratePct', 'auto', 'traits'}."""
-    pool = POOL.get(lang, POOL["pt-BR"])
     trs = [traits(ch) for ch in chars]
     names = [_key(ch) or f"#{i}" for i, ch in enumerate(chars)]
     ovs: list[dict[str, Any] | None] = []
     for i, ch in enumerate(chars):
         ov = (overrides[i] if overrides and i < len(overrides) else None) or ch.get("voice")
         ovs.append({"voice": ov} if isinstance(ov, str) else ov if isinstance(ov, dict) and ov.get("voice") else None)
+    pool = voice_pool(lang) if any(o is None for o in ovs) else {"m": [], "f": []}
     taken = {o["voice"] for o in ovs if o}
     voices: list[str] = [""] * len(chars)
     for g in ("m", "f"):

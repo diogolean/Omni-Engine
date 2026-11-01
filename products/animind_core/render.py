@@ -22,11 +22,12 @@ from typing import Any
 
 import numpy as np
 
-from . import casting, characters, frameqa, rig, scene, settings, styles, titles
+from . import casting, characters, frameqa, languages, rig, scene, settings, styles, titles
 from . import script as scripts
 
 _LOG = logging.getLogger("animind_core")
 PARODY_DISCLAIMER = "Paródia • Gerado por IA"
+PARODY_DISCLAIMER_EN = "Parody • AI generated"
 SAMPLE_RATE = 24000
 GAP_S = 0.3
 ENV_FPS = 100
@@ -54,10 +55,11 @@ def line_view(template: str, speaker: int, index: int, beat: str = "") -> str:
 def role_line(char: dict[str, Any], template: str, topic: str, lang: str) -> str:
     """Lower-third second line: the photo's source when there is one, else the scene and topic."""
     attr = (char.get("photo") or {}).get("attribution") or {}
+    profile = languages.profile(lang)
     if attr.get("author"):
-        return f"{'Foto' if lang == 'pt-BR' else 'Photo'}: {attr['author']} · {attr.get('license', '')}".strip(" ·")
-    kind = {"debate": ("Debate", "Debate"), "lesson": ("Aula", "Lesson")}.get(template, ("Fala", "Talk"))
-    return f"{kind[0] if lang == 'pt-BR' else kind[1]} · {topic}"[:60]
+        return f"{profile.photo}: {attr['author']} · {attr.get('license', '')}".strip(" ·")
+    kind = "Debate" if template == "debate" else profile.lesson if template == "lesson" else profile.talk
+    return f"{kind} · {topic}"[:60]
 
 
 async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str = "+0Hz") -> None:
@@ -153,11 +155,13 @@ def envelope(pcm: np.ndarray, fps: int = ENV_FPS) -> np.ndarray:
     return env / max(float(env.max()), 1e-6)
 
 
-def line_visemes(clip: Path, text: str, offset_s: float) -> tuple[list[dict[str, Any]], str]:
+def line_visemes(clip: Path, text: str, offset_s: float, recognizer: str = "phonetic") -> tuple[list[dict[str, Any]], str]:
     """Rhubarb cues for one line, shifted to track time. Returns (cues, source)."""
     from animation.parametric import rhubarb  # noqa: PLC0415
 
-    cues = rhubarb.analyze_visemes(clip, dialog_text=text, allow_download=False)
+    cues = rhubarb.analyze_visemes(
+        clip, dialog_text=text, allow_download=False, recognizer=recognizer
+    )
     source = "rhubarb"
     if not cues:
         cues = envelope_visemes(_read_pcm(clip))
@@ -254,8 +258,9 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         template = requested_template if requested_template in (*scene.PLACES, "dialogue") else "solo"
         scene_template = "debate" if template == "dialogue" else template
         scenario = req.get("scenario") if req.get("scenario") in scene.SCENARIOS else "studio"
-        lang = req.get("lang") if req.get("lang") in casting.POOL else "pt-BR"
-        topic = (req.get("topic") or "inteligência artificial").strip()[:200]
+        lang = languages.requested(req)
+        language = languages.profile(lang)
+        topic = (req.get("topic") or ("inteligência artificial" if language.script == "pt-BR" else "artificial intelligence")).strip()[:200]
         work = settings.data_dir() / "jobs" / job_id
         work.mkdir(parents=True, exist_ok=True)
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
@@ -266,7 +271,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             target_duration = max(10.0, min(180.0, float(req.get("duration") or 45)))
         except (TypeError, ValueError):
             target_duration = 45.0
-        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], lang, mode=mode,
+        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], language.script, mode=mode,
                                 tone=tone, objective=objective, duration=target_duration)
         lines = written["lines"]
         fmt = "9:16" if req.get("format") == "9:16" else "16:9"
@@ -286,7 +291,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             pcm, rate = _voice_line(text, voices[min(speaker, len(voices) - 1)], mp3, clip, planned["maxS"],
                                     int(planned.get("rateAdj", 0)))
             dur = len(pcm) / SAMPLE_RATE
-            cues, src = line_visemes(clip, text, t)
+            cues, src = line_visemes(clip, text, t, language.rhubarb)
             sources.add(src)
             gap_s = planned.get("pauseAfterS", GAP_S)
             script.append({**planned, "startMs": int(t * 1000), "endMs": int((t + dur) * 1000),
@@ -299,8 +304,9 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         _write_pcm(audio, track)
         duration = len(track) / SAMPLE_RATE
         rigs = [_rig_views(c, scene_template, i, scenario) for i, c in enumerate(cast)]
+        disclaimer = PARODY_DISCLAIMER if language.script == "pt-BR" else PARODY_DISCLAIMER_EN
         sc = scene.Scene(template=scene_template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
-                         env_fps=ENV_FPS, duration_s=duration, disclaimer=PARODY_DISCLAIMER,
+                         env_fps=ENV_FPS, duration_s=duration, disclaimer=disclaimer,
                          names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art,
                          topic=written["topic"])
         video = work / "preview.mp4"
@@ -328,7 +334,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         _set(job_id, status="done", progress=1.0, result={
             "template": template, "scenario": scenario, "characters": chars,
             "script": script, "durationMs": int(duration * 1000), "audioUrl": f"{files}/voice.wav",
-            "videoUrl": f"{files}/preview.mp4", "disclaimer": PARODY_DISCLAIMER,
+            "videoUrl": f"{files}/preview.mp4", "disclaimer": disclaimer,
             # Additive: which viseme source ran, and which characters had a core rig.
             "visemeSource": sorted(sources), "rigged": [r is not None for r in rigs],
             # Additive: who wrote the script and the persona sheets behind the quotes.
@@ -344,6 +350,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "type": req.get("type") or ("stick" if all(c.get("type") == "stick" for c in cast) else "rig"),
             "frameQa": frame_qa,
             "frameQaUrl": f"{files}/frame_qa.json",
+            "language": lang,
+            "rhubarbRecognizer": language.rhubarb,
         })
     except Exception as exc:  # noqa: BLE001 — surfaced on the job
         _LOG.exception("render job %s failed", job_id)

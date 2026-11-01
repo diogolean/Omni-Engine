@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
-from . import knowledge, personas, settings
+from . import knowledge, languages, personas, settings
 
 _LOG = logging.getLogger("animind_core")
 WRITER_MODEL = "gemini-2.5-flash"
@@ -821,6 +821,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "pt-BR", *,
 
     ``mode`` picks the knowledge index behind written lines (:mod:`knowledge`): ``quick`` (key terms,
     shallow) or ``deep`` (full texts). Retrieved passages only feed ideas; quotes stay verbatim from the sheet."""
+    lang = languages.profile(lang).script
     template = template if template in (*PLANS, "dialogue") else "solo"
     topic = (topic or "").strip() or ("inteligência artificial" if lang == "pt-BR" else "artificial intelligence")
     n = len(names) if template == "dialogue" else (2 if template == "debate" and len(names) >= 2 else 1)
