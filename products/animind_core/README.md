@@ -45,11 +45,27 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   written). Every line must answer the one before (`link`: a shared content stem or concept group, never just a
   name or a mold word; each line carries `act` and `replyTo {line, idea}`); a mold is preferred when the next
   speaker's quote can answer it (set-up/payoff). LLM lines that ignore the previous line, or a hook off the
-  topic, are rewritten from molds. `check_debate` (exposed as `scriptQA` in the job result) flags
+  topic, are rewritten from molds. `check_debate` (part of `scriptQA`, below) flags
   monologues, unlinked lines, a missing hook/turn/close, a speaker without a real quote, written lines over 16
   words (quotes over 30), no jab of <= 9 words and monotonous lengths.
-- **lesson** (progression): gancho -> pergunta -> citação (quote) -> exemplo -> citação (quote) -> síntese (to camera).
+- **lesson** (acts *abertura* -> *desenvolvimento* -> *virada* -> *fechamento*): gancho (<= 14 words, names the
+  topic) -> pergunta (a real question) -> citação (quote on the topic) -> exemplo (an everyday case built on a word
+  of that quote) -> virada (a second, punchier quote, only if it stays on the thread: it shares an idea with the
+  line before or the topic; otherwise a written turn) -> síntese (<= 16 words, recalls the topic or a quote).
+  A beat named "citação" is always a real quote: a written fallback is relabelled "ideia".
   **solo**: gancho -> tese (quote) -> argumento -> fechamento.
+- **scriptQA** (`{pass, problems, notes}` in every job result, all templates): `check` (quote fidelity),
+  plus `check_debate` or `check_lesson` (shape and rhythm). Fidelity: a `quote` line must be a sheet quote
+  byte for byte (same id and text), keep the sheet's `source` (non-empty) and Wikiquote/Wikipedia/Wikisource
+  `url`, and be primary; anything else is reported as *paraphrased quote shown as literal* (it reuses half or
+  more of a sheet quote's words, `closest_quote`) or *invented quote*. A `paraphrase` line may not use quote
+  marks, claim literal wording ("como eu escrevi:", "nas palavras de X,", "palavra por palavra", "in his own
+  words,", "Em <obra>:"), repeat 7+ words of a real quote, or sit on a "citação" beat. LLM lines that claim
+  literal wording are rewritten from molds. Shape: a strong hook (<= 14 words, a question or a punch of <= 4
+  words) on the topic; a memorable close (a quote with punch or <= 14 words, or a written line <= 16 words);
+  `notes` lists softer issues (the same idea picked up three lines in a row).
+- `GET /v1/personas/sheet?name=&lang=` returns the cached sheet (id, text, source, work, sourceKind, url,
+  wikisource), so a client can verify that every on-screen quote is literal.
 - Rhythm: each beat has a word budget (`maxS` = words / (2.6 × pace) + 0.8 s), a pause after it (0–0.6 s: longer
   after a hook, a quote or the turn, short between quick jabs) and a pace nudge `rateAdj` (quotes −5…−8 %, jabs
   +2…+6 %) added to the cast voice's rate. A clip that overruns `maxS` is voiced again at `max(rateAdj, 0) + 15%`

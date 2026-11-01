@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from . import API_VERSION, characters, knowledge, scene, styles, render, settings
+from . import API_VERSION, characters, knowledge, personas, scene, styles, render, settings
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
@@ -94,6 +94,19 @@ def get_styles() -> dict:
 def get_tones() -> dict:
     """Script tones accepted as ``tone`` (render)."""
     return {"tones": styles.tone_catalog(), "default": styles.DEFAULT_TONE}
+
+
+@app.get("/v1/personas/sheet", dependencies=[Depends(require_key)])
+def get_sheet(name: str, lang: str = "pt-BR") -> dict:
+    """The persona's quote sheet (Wikiquote, cached): every "Citação real" in a script is one of these, verbatim."""
+    nm = personas.persona_name(name)
+    if not nm:
+        raise HTTPException(400, "name required")
+    sheet = personas.load(nm, lang, fetch=settings.personas_online())
+    keep = ("id", "text", "source", "work", "sourceKind", "url", "wikisource")
+    return {"name": nm, "lang": lang, "found": bool(sheet.get("found")), "wikiquote": sheet.get("wikiquote"),
+            "license": sheet.get("license"),
+            "quotes": [{k: q[k] for k in keep if k in q} for q in sheet.get("quotes") or []]}
 
 
 @app.post("/v1/personas/deep", dependencies=[Depends(require_key)])

@@ -180,3 +180,21 @@ def test_shot_grammar_quotes_get_a_close_up_and_the_close_is_a_two_shot():
     assert cu.zoom > sc.shots[1][1].zoom and cu.cx > 640  # speaker 1's quote, tight on the right
     frame = sc.frame(6.5)  # the listener is out of focus in a single; still a full frame
     assert frame.size == (1280, 720)
+
+
+def test_persona_sheet_lists_the_literal_quotes(client, tmp_path):
+    import yaml
+
+    from products.animind_core import personas
+
+    path = personas.cache_path("Sócrates", "pt-BR")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    q = {"id": "q1", "text": "Só sei que nada sei.", "source": "Platão, Apologia de Sócrates, 21d", "work": "Apologia de Sócrates",
+         "sourceKind": "primary", "url": "https://pt.wikiquote.org/wiki/S%C3%B3crates"}
+    path.write_text(yaml.safe_dump({"name": "Sócrates", "found": True, "version": personas.SHEET_VERSION,
+                                    "wikiquote": q["url"], "quotes": [q]}, allow_unicode=True), encoding="utf-8")
+    assert client.get("/v1/personas/sheet", params={"name": "Sócrates"}).status_code == 401
+    r = client.get("/v1/personas/sheet", params={"name": "Sócrates, de toga"}, headers=H)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["found"] and body["name"] == "Sócrates" and body["quotes"] == [q]
