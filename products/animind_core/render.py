@@ -39,6 +39,8 @@ _RENDER_LOCK = threading.Lock()
 
 
 FAST_PCT = 15  # re-voice a line that overruns its beat budget (on top of the cast pace)
+# The spoken timeline, measured after TTS, must land this close to the request.
+MEASURED_TOLERANCE_S = 2.0
 
 
 CAMERA_BEATS = ("gancho", "virada", "fechamento", "resumo", "síntese")
@@ -62,9 +64,9 @@ def role_line(char: dict[str, Any], template: str, topic: str, lang: str) -> str
         prefix = f"{profile.photo}: " if profile.photo else ""
         return f"{prefix}{attr['author']} · {attr.get('license', '')}".strip(" ·")
     if lang not in languages.PROFILES:
-        return topic[:60]
+        return topic
     kind = "Debate" if template == "debate" else profile.lesson if template == "lesson" else profile.talk
-    return f"{kind} · {topic}"[:60]
+    return f"{kind} · {topic}"
 
 
 _TTS_DELAYS_S = (0.4, 1.2, 2.5)
@@ -114,6 +116,77 @@ def _voice_line(text: str, pick: dict[str, Any], mp3: Path, clip: Path, max_s: f
         args = casting.edge_args(pick, max(rate_adj, 0) + FAST_PCT)
         pcm = _voice(text, pick["voice"], mp3, clip, args)
     return pcm, args["rate"]
+
+
+def timeline_seconds(speech: list[float], lines: list[dict[str, Any]]) -> float:
+    """Title card, measured speech, pauses, act gaps and the end card."""
+    pauses = sum(float(line.get("pauseAfterS") or 0) for line in lines)
+    gaps = 0.0
+    for index in range(1, len(lines)):
+        act = lines[index].get("act")
+        if act and act != lines[index - 1].get("act"):
+            gaps += titles.ACT_GAP_S
+    return titles.TITLE_S + sum(speech) + pauses + gaps + titles.END_S
+
+
+def fit_measured_duration(
+    lines: list[dict[str, Any]],
+    speech: list[float],
+    target: float,
+    respeak,
+    *,
+    tolerance: float = MEASURED_TOLERANCE_S,
+    rewrite=None,
+) -> tuple[list[dict[str, Any]], list[float]]:
+    """Move only the last line until the measured timeline is within ``tolerance`` of ``target``.
+
+    ``respeak(text) -> seconds`` synthesizes a replacement. ``rewrite(line, *, shorter, words)``
+    may return new last-line copy; otherwise the line is trimmed from the end and voiced again.
+    """
+    lines = [dict(line) for line in lines]
+    speech = [float(item) for item in speech]
+    if not lines:
+        return lines, speech
+    for _ in range(8):
+        delta = timeline_seconds(speech, lines) - float(target)
+        if abs(delta) <= tolerance:
+            break
+        last = lines[-1]
+        if delta > tolerance:
+            pause = float(last.get("pauseAfterS") or 0)
+            spare = delta - tolerance
+            if pause > 0.05 and spare > 0:
+                last["pauseAfterS"] = round(max(0.0, pause - min(pause, spare)), 3)
+                continue
+            tokens = str(last.get("text") or "").split()
+            if len(tokens) > 4 and speech[-1] > 1.05:
+                need = max(0.3, delta - tolerance * 0.5)
+                frac = min(0.6, need / max(speech[-1], 0.2))
+                keep = max(4, int(round(len(tokens) * (1.0 - frac))))
+                if keep < len(tokens):
+                    text = " ".join(tokens[:keep]).rstrip(",;:—-")
+                    if text[-1:] not in ".?!…":
+                        text += "."
+                    if rewrite is not None:
+                        fresh = rewrite(last, shorter=True, words=keep)
+                        if fresh:
+                            text = str(fresh).strip()
+                    last["text"] = text
+                    speech[-1] = float(respeak(text))
+                    continue
+            floor = max(0.8, speech[-1] - max(0.0, delta - tolerance * 0.5))
+            if floor < speech[-1] - 0.05:
+                speech[-1] = floor
+                continue
+            break
+        if rewrite is None:
+            break
+        fresh = rewrite(last, shorter=False, words=scripts.words(str(last.get("text") or "")) + 6)
+        if not fresh or str(fresh).strip() == last.get("text"):
+            break
+        last["text"] = str(fresh).strip()
+        speech[-1] = float(respeak(last["text"]))
+    return lines, speech
 
 
 def _voice(text: str, voice: str, mp3: Path, clip: Path, args: dict[str, str]) -> np.ndarray:
@@ -351,24 +424,51 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
         # Silence for the film titles: a cold open before the first line, a beat before each new act
         # (the dip and its chapter card) and the end card after the last line (see titles.py).
         silence = lambda s: np.zeros(int(s * SAMPLE_RATE), dtype=np.int16)  # noqa: E731
-        pcm_parts, script, sources, t = [silence(titles.TITLE_S)], [], set(), titles.TITLE_S
+        voiced: list[dict[str, Any]] = []
         for i, planned in enumerate(lines):
             speaker, text = planned["speaker"], planned["text"]
-            if i and planned.get("act") and planned.get("act") != lines[i - 1].get("act"):
-                pcm_parts.append(silence(titles.ACT_GAP_S))
-                t += titles.ACT_GAP_S
             mp3, clip = work / f"line_{i}.mp3", work / f"line_{i}.wav"
             pcm, rate = _voice_line(text, voices[min(speaker, len(voices) - 1)], mp3, clip, planned["maxS"],
                                     int(planned.get("rateAdj", 0)))
+            voiced.append({"pcm": pcm, "rate": rate})
+            _set(job_id, progress=0.1 + 0.2 * (i + 1) / max(1, len(lines)))
+
+        def _respeak(text: str) -> float:
+            last = len(lines) - 1
+            speaker = lines[last]["speaker"]
+            mp3, clip = work / f"line_{last}.mp3", work / f"line_{last}.wav"
+            pcm, rate = _voice_line(
+                text, voices[min(speaker, len(voices) - 1)], mp3, clip, lines[last]["maxS"],
+                int(lines[last].get("rateAdj", 0)),
+            )
+            voiced[last] = {"pcm": pcm, "rate": rate}
+            return len(pcm) / SAMPLE_RATE
+
+        lines, speech = fit_measured_duration(
+            lines, [len(item["pcm"]) / SAMPLE_RATE for item in voiced], target_duration, _respeak,
+        )
+        if speech and voiced:
+            keep = int(speech[-1] * SAMPLE_RATE)
+            if 0 < keep < len(voiced[-1]["pcm"]):
+                voiced[-1]["pcm"] = voiced[-1]["pcm"][:keep]
+                _write_pcm(work / f"line_{len(lines) - 1}.wav", voiced[-1]["pcm"])
+        pcm_parts, script, sources, t = [silence(titles.TITLE_S)], [], set(), titles.TITLE_S
+        for i, planned in enumerate(lines):
+            speaker = planned["speaker"]
+            if i and planned.get("act") and planned.get("act") != lines[i - 1].get("act"):
+                pcm_parts.append(silence(titles.ACT_GAP_S))
+                t += titles.ACT_GAP_S
+            pcm, rate = voiced[i]["pcm"], voiced[i]["rate"]
             dur = len(pcm) / SAMPLE_RATE
-            cues, src = line_visemes(clip, text, t, language.rhubarb)
+            clip = work / f"line_{i}.wav"
+            cues, src = line_visemes(clip, planned["text"], t, language.rhubarb)
             sources.add(src)
             gap_s = planned.get("pauseAfterS", GAP_S)
             script.append({**planned, "startMs": int(t * 1000), "endMs": int((t + dur) * 1000),
                            "visemes": cues, "view": line_view(template, speaker, i, planned.get("beat", "")), "ttsRate": rate})
             pcm_parts += [pcm, np.zeros(int(gap_s * SAMPLE_RATE), dtype=np.int16)]
             t += dur + gap_s
-            _set(job_id, progress=0.1 + 0.4 * (i + 1) / len(lines))
+            _set(job_id, progress=0.3 + 0.2 * (i + 1) / max(1, len(lines)))
         track = np.concatenate(pcm_parts + [silence(titles.END_S)])
         audio = work / "voice.wav"
         _write_pcm(audio, track)

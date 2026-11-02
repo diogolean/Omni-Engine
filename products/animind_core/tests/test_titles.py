@@ -74,6 +74,25 @@ def test_vertical_has_no_matte_and_untitled_scripts_are_unchanged():
     assert sc.title_end == 0.0 and sc.end_start is None and sc.matte_at(0.0) == 0.0
 
 
+def test_close_up_keeps_headroom_and_the_name_card_below_the_chin():
+    from products.animind_core import render
+
+    sc = _scene()
+    sc.script[2]["kind"] = "quote"
+    shot = sc.shot_for(sc.script[2]["speaker"], 2)
+    hair = scene.H * (scene.BUST_BOTTOM - scene.BUST_H)
+    window_top = shot.cy - scene.H / (2 * shot.zoom)
+    assert shot.kind == "cu"
+    assert window_top <= hair - 0.04 * scene.H
+    role = render.role_line({}, "debate", "Is knowledge imagination or only perspective", "en-US")
+    assert role.lower().endswith("perspective")
+    rows = sc._role_rows(role, 520)[1]
+    assert "PERSPECTIVE" in " ".join(rows)
+    assert not any(row.endswith("PERSPEC") for row in rows)
+    card = sc._lower_third(0)
+    assert sc.lower_third_y(shot, card.height) >= sc.OH - card.height - round(12 * sc.k)
+
+
 def test_key_light_leans_toward_the_speaker_in_wide_shots():
     sc = _scene()
     wide = scene.look.Shot(640, 360, 1.0, "wide")

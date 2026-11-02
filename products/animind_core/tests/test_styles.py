@@ -64,6 +64,20 @@ def test_realista_and_aquarela_have_their_own_look():
         assert styles.tint_plate(plate, st).size == (64, 64)
 
 
+def test_tight_front_cap_does_not_draw_a_black_rectangle():
+    from products.animind_core import frameqa, mouthset, qa
+
+    colours = {
+        "outline": (20, 12, 12, 255), "cavity": (6, 4, 4, 255),
+        "teeth": (246, 242, 236, 255), "tongue": (160, 60, 60, 255), "lip": (36, 18, 18, 255),
+    }
+    cap = {code: 14 if code in "CDFGH" else 0.95 * share * 480 for code, share in qa.OPEN_DRAWN.items()}
+    mouths = mouthset.draw_set(140, colours, squeeze=1.0, open_cap=cap)
+    for code in "CDF":
+        assert not mouthset._is_black_bar(mouths[code]), code
+        assert frameqa.happy_cavity(mouths[code]) + 1e-6 >= frameqa.VISEME_CAV_MIN[code], code
+
+
 def test_squashed_open_mouth_keeps_mustache_rows_intact():
     from PIL import Image, ImageDraw
 

@@ -85,21 +85,35 @@ def title_card(size: tuple[int, int], k: float, kicker: str, names: str, topic: 
     fk, fn, ft = font("SemiBold", round(15 * k)), font("Bold", round(30 * k)), font("serif", round(64 * k))
     tk, tn = 6.0 * k, 7.0 * k
     topic = topic[:1].upper() + topic[1:] if topic else ""
-    while topic and d.textlength(topic, font=ft) > w * 0.8:
+    topic_lines = [topic] if topic else []
+    while topic_lines and any(d.textlength(line, font=ft) > w * 0.8 for line in topic_lines):
+        if ft.size <= round(28 * k) and len(topic_lines) == 1 and len(topic.split()) > 1:
+            words = topic.split()
+            best: list[str] | None = None
+            for split in range(1, len(words)):
+                pair = [" ".join(words[:split]), " ".join(words[split:])]
+                if all(d.textlength(line, font=ft) <= w * 0.86 for line in pair):
+                    best = pair
+                    break
+            if best:
+                topic_lines = best
+                break
+        if ft.size <= 16:
+            break
         ft = font("serif", ft.size - 2)
     rows = []  # row heights
     if kicker:
         rows.append(round(22 * k))
     if names:
         rows.append(round(44 * k))
-    if topic:
+    for _line in topic_lines:
         rows.append(round(ft.size * 1.15))
     gap = round(12 * k)
     total = sum(rows) + gap * (len(rows) - 1)
     y = round(h * y_band - total / 2)
     plate = Image.new("L", size, 0)
     pd = ImageDraw.Draw(plate)
-    bw = max([d.textlength(topic, font=ft)] + [tracked_width(d, names, fn, tn)]) / 2 + 70 * k
+    bw = max([d.textlength(line, font=ft) for line in topic_lines] + [tracked_width(d, names, fn, tn)]) / 2 + 70 * k
     pd.rounded_rectangle((w / 2 - bw, y - 26 * k, w / 2 + bw, y + total + 26 * k), round(40 * k), fill=150)
     img = Image.new("RGBA", size, (4, 4, 8, 0))
     img.putalpha(plate.filter(ImageFilter.GaussianBlur(round(30 * k))))
@@ -116,9 +130,10 @@ def title_card(size: tuple[int, int], k: float, kicker: str, names: str, topic: 
         marks.append((names, w / 2 - nw / 2, y, fn, (255, 255, 255, 250), tn))
         y += rows.pop(0) + gap
         d.line((w / 2 - 28 * k, y - gap / 2, w / 2 + 28 * k, y - gap / 2), fill=(*accent, 220), width=max(1, round(2 * k)))
-    if topic:
-        tw = d.textlength(topic, font=ft)
-        marks.append((topic, w / 2 - tw / 2, y - round(ft.size * 0.12), ft, (255, 248, 236, 255), 0.0))
+    for line in topic_lines:
+        tw = d.textlength(line, font=ft)
+        marks.append((line, w / 2 - tw / 2, y - round(ft.size * 0.12), ft, (255, 248, 236, 255), 0.0))
+        y += round(ft.size * 1.15)
     for text, x, yy, f, _fill, tr in marks:
         tracked(sd, x, yy + 2 * k, text, f, (0, 0, 0, 200), tr)
     img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(round(4 * k))))

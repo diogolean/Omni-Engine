@@ -79,6 +79,10 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
         else:
             im = _lips(im, lip) if lip and v not in "XA" else im
             im = _limit_opening(im, max_aspect=OPEN_ASPECT_CAP)
+            # A squashed front-view cavity becomes a flat black rectangle. Redraw it open.
+            if v not in "XA" and _is_black_bar(im):
+                width = max(12, int((bb[2] - bb[0]) if bb else lip_width))
+                im = _lipped_open(width, {**colours, "lip": lip} if lip else colours)
         out[v] = im
     W = max(i.width for i in out.values())
     H = max(i.height for i in out.values())
@@ -150,6 +154,54 @@ def draw_expressions(
     seated.paste(smile, ((width - smile.width) // 2, (height - smile.height) // 2))
     scaled["happy"] = seated
     return scaled
+
+
+def _is_black_bar(image: Image.Image) -> bool:
+    """A wide, nearly black fill with square corners: the front-view mouth that reads as a sticker."""
+    arr = np.asarray(image)
+    if arr.ndim != 3 or arr.shape[2] < 4:
+        return False
+    alpha = arr[..., 3]
+    ys, xs = np.nonzero(alpha > 128)
+    if xs.size < 20:
+        return False
+    x0, x1, y0, y1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
+    width, height = x1 - x0 + 1, y1 - y0 + 1
+    if height < 3 or width / height < 2.8:
+        return False
+    crop = arr[y0:y1 + 1, x0:x1 + 1]
+    corners = (int(crop[0, 0, 3]), int(crop[0, -1, 3]), int(crop[-1, 0, 3]), int(crop[-1, -1, 3]))
+    rgb = crop[crop[..., 3] > 128][:, :3].astype(np.float32)
+    if rgb.size == 0:
+        return False
+    dark = float((rgb.mean(axis=1) < 42).mean())
+    # Square corners, or a wide dark slab (a squashed ellipse still has clear corners).
+    return dark > 0.6 and (min(corners) > 180 or width / height >= 3.2)
+
+
+def _lipped_open(width: int, colours: dict[str, tuple[int, int, int, int]]) -> Image.Image:
+    """Open mouth at a readable aspect: ellipse, lip rim, a teeth crescent. Not a flat black bar."""
+    from PIL import ImageDraw  # noqa: PLC0415
+
+    cavity = colours.get("cavity", (52, 24, 26, 255))
+    rgb = np.array(cavity[:3], np.float32)
+    if float(rgb.mean()) < 36:
+        cavity = (52, 24, 26, 255)
+    outline = colours.get("outline", (40, 24, 26, 255))
+    teeth = colours.get("teeth", (246, 242, 236, 255))
+    lip = colours.get("lip", outline)
+    height = max(8, int(round(width * OPEN_ASPECT_CAP)))
+    pad = 6
+    image = Image.new("RGBA", (width + 2 * pad, height + 2 * pad), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    box = (pad, pad, pad + width - 2, pad + height - 2)
+    draw.ellipse(box, fill=lip)
+    inset = max(2, width // 14)
+    inner = (box[0] + inset, box[1] + inset, box[2] - inset, box[3] - inset)
+    draw.ellipse(inner, fill=cavity)
+    teeth_box = (inner[0] + inset, inner[1], inner[2] - inset, inner[1] + max(4, (inner[3] - inner[1]) // 3))
+    draw.pieslice(teeth_box, 200, 340, fill=teeth)
+    return image
 
 
 def _round_open(width: int) -> Image.Image:

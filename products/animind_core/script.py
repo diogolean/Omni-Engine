@@ -801,7 +801,7 @@ def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], to
     return f"""You write {shape}, in {language}, about: {topic}
 Tone: {tone_line}.
 Objective: {objective}. Make that objective visible in the hook and close.
-Target duration: about {target} seconds. Use the full beat plan, but keep every line inside its word limit.
+Target duration: about {target} seconds, including the title and end cards (about 4 seconds together). Use the full beat plan, but keep every line inside its word limit so the spoken cut lands on that budget.
 
 {chr(10).join(who)}
 
@@ -819,6 +819,8 @@ Rules:
 - The hook grabs in 3 seconds: a provocative question or claim about the topic, aimed at the other speaker when there is one.
 - Each reply answers the line right before it: it must repeat one content word (or its idea) of the line right before
   it — the word you attack. No parallel monologues. A quote beat picks the quote that answers the line before.
+- Do not keep that same content keyword on three consecutive lines. Echo it once, then the next line moves to a different concrete word.
+- Speak only in {language}. When a quote is in another language, do not speak the original. Write the translation as text, set basisId to that quote, and leave quoteId null. The original source stays on the basis.
 - Each speaker says at least one of his real quotes (quote beats only; never invent or alter a quote).
 - The turn ('virada', in the middle) is a quote that flips the fight; the rebuttal turns the opponent's own words.
 - The turn (tréplica) uses the opponent's own words against him. Closing: the second-to-last line concedes nothing and
@@ -1034,6 +1036,134 @@ def _universal_write(
     }
 
 
+_GERMAN_WORD = re.compile(
+    r"\b(?:und|der|die|das|nicht|ist|ein|eine|einer|einem|einen|ich|mich|mit|von|vom|zu|zum|zur|"
+    r"den|dem|des|sich|auch|auf|für|wird|sind|aber|oder|wenn|keine|kein|dass|macht|haben|hat|"
+    r"sein|seine|wird)\b",
+    re.I,
+)
+_GERMAN_MARK = re.compile(r"[äöüÄÖÜß]")
+
+
+def foreign_quote(text: str, lang: str) -> bool:
+    """A sheet quote that must not be spoken as-is in ``lang`` (German source text)."""
+    if (lang or "").lower().startswith("de"):
+        return False
+    raw = text or ""
+    if _GERMAN_MARK.search(raw):
+        return True
+    return len(_GERMAN_WORD.findall(raw)) >= 2
+
+
+def counts_as_sheet_quote(line: dict[str, Any]) -> bool:
+    """A spoken sheet quote, or a translation whose original stays on ``basis``."""
+    if line.get("kind") == "quote":
+        return True
+    basis = line.get("basis") or {}
+    return bool(basis.get("translated") and basis.get("id"))
+
+
+def _basis_of(quote: dict[str, Any], *, translated: bool = False) -> dict[str, Any]:
+    out = {"id": quote["id"], "source": quote.get("source", ""),
+           "label": source_label(quote.get("source", "")), "url": quote.get("url", "")}
+    if translated:
+        out["text"] = quote.get("text", "")
+        out["translated"] = True
+    return out
+
+
+def _ask_writer(prompt: str, *, allow_unavailable_gemini: bool) -> list[dict[str, Any]]:
+    """One more writer call for a single line. Empty when no provider answers."""
+    result, _failures = llm_providers.generate(
+        prompt,
+        settings.data_dir() / "cache" / "script",
+        _gemini,
+        allow_unavailable_gemini=allow_unavailable_gemini,
+    )
+    return list(result.lines) if result is not None else []
+
+
+def _rewrite_line(index: int, problem: str, current: str, lang: str, topic: str, names: list[str], *,
+                  allow_unavailable_gemini: bool) -> str:
+    """Ask the writer for one replacement line. Never invents template copy here."""
+    language = "Brazilian Portuguese" if lang == "pt-BR" else "American English"
+    who = ", ".join(names) or "the speaker"
+    prompt = (
+        f"Rewrite only line {index} of a spoken script in {language} about {topic}. "
+        f"Speakers: {who}. Problem: {problem}\n"
+        f"Current line: {current}\n"
+        "Return JSON only: {\"lines\": [{\"i\": %d, \"text\": \"...\"}]}. "
+        "One spoken sentence, no quotation marks, no stage directions, not a template."
+        % index
+    )
+    for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini):
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("i") not in (index, None):
+            continue
+        text = tidy(_clean_paraphrase(entry.get("text") or "", 18))
+        if text and personas.fold(text) != personas.fold(current):
+            return text
+    return ""
+
+
+def _spoken_translation(quote: dict[str, Any], draft: dict[str, Any], lang: str, topic: str, names: list[str], *,
+                        allow_unavailable_gemini: bool, use_llm: bool) -> str:
+    """Target-language speech for a foreign quote. The original stays on ``basis``."""
+    stored = tidy(_clean_paraphrase(quote.get("translation") or "", 24))
+    if stored and not foreign_quote(stored, lang):
+        return stored
+    draft_text = tidy(_clean_paraphrase(draft.get("text") or "", 24))
+    if draft_text and not foreign_quote(draft_text, lang) and personas.fold(draft_text) != personas.fold(quote["text"]):
+        return draft_text
+    if not use_llm:
+        return ""
+    language = "Brazilian Portuguese" if lang == "pt-BR" else "American English"
+    prompt = (
+        f"Translate this quote into {language} for speech about {topic}. "
+        f"Speakers: {', '.join(names) or 'the speaker'}. "
+        "Keep the meaning, one sentence, no quotation marks.\n"
+        f"Quote: {quote.get('text')}\n"
+        "Return JSON only: {\"lines\": [{\"i\": 0, \"text\": \"...\"}]}."
+    )
+    for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini):
+        if not isinstance(entry, dict):
+            continue
+        text = tidy(_clean_paraphrase(entry.get("text") or "", 24))
+        if text and not foreign_quote(text, lang):
+            return text
+    return ""
+
+
+def _repair_reason(text: str, sheet: dict[str, Any], passages: list[dict[str, Any]], taken: set[str]) -> str:
+    """Why an LLM line cannot be spoken as written. A weak link is not a reason."""
+    if not text:
+        return ""
+    if personas.fold(text) in taken:
+        return "this line repeats an earlier line; write a different sentence"
+    if _literal_claim(text, sheet):
+        return "this line pretends to be a literal quote; say it as ordinary speech"
+    if copies_quote(text, sheet):
+        return "this line copies a real quote; paraphrase the idea in new words"
+    if knowledge.copies_passage(text, passages):
+        return "this line copies a research note; use your own words"
+    return ""
+
+
+def _keyword_streak(lines: list[dict[str, Any]]) -> tuple[int, str] | None:
+    """Index of a written line that repeats one content word from the previous two lines."""
+    stems = [_stems(str(line.get("text") or "")) for line in lines]
+    for index in range(2, len(lines)):
+        if lines[index].get("kind") == "quote":
+            continue
+        shared = set(stems[index]) & set(stems[index - 1]) & set(stems[index - 2])
+        if not shared:
+            continue
+        stem = next(iter(shared))
+        return index, stems[index][stem]
+    return None
+
+
 def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
           indexes: list[Any] | None = None, tone: str = "comedia", objective: str = "entreter",
@@ -1108,6 +1238,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
 
     used: set[tuple[int, str]] = set()
     lines: list[dict[str, Any]] = []
+    authored: set[int] = set()
     molds: set[str] = set()
     seed = _seed(topic, names, lang)
     debate = template == "debate" and n > 1
@@ -1122,20 +1253,35 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             line["act"] = beat.act
         previous = lines[-1]["text"] if lines else ""
         answers_prev = (lambda text, quote=False: link(previous, text, quote=quote, names=names)) if debate and lines else None
+        # A line the model actually wrote is final. Template molds fill only beats it left empty.
+        writer_line = writer in {"deepseek", "gemini"} and i in drafted
         quote = None
+        chosen_quote = None
         if beat.kind == "quote":
             pool = [q for q in _eligible(sheet, beat.max_words) if (sp, q["id"]) not in used]
             qid = draft.get("quoteId")
             ranked = _rank_strong(pool, topic, previous) if beat.strong else _rank(pool, topic, previous)
-            if answers_prev:  # a debate quote answers the line before: quotes that pick up its idea come first
+            if not writer_line and answers_prev:  # offline: a debate quote answers the line before
                 ranked = sorted(ranked, key=lambda q: not answers_prev(q["text"], True))
-            elif template == "lesson":  # a lesson quote stays on the thread: it picks up the line before or the topic
+            elif not writer_line and template == "lesson":
                 ranked = sorted(ranked, key=lambda q: not on_thread(q["text"], previous, topic))
-            quote = next((q for q in pool if q["id"] == qid), None)
-            if quote is None or (ranked and not (_tokens(topic) & _tokens(quote["text"])) and topic_score(quote, topic) < topic_score(ranked[0], topic)) \
-                    or (answers_prev and not answers_prev(quote["text"], True) and ranked and answers_prev(ranked[0]["text"], True)):
-                quote = next(iter(ranked), None)  # unknown/reused/off-topic id, or one that ignores the line before
-            if quote is not None and beat.optional:
+            chosen_quote = next((q for q in pool if q["id"] == qid), None)
+            if writer_line and chosen_quote is not None:
+                quote = chosen_quote  # the writer's quote is not re-picked later
+            else:
+                quote = chosen_quote
+                off_topic = bool(
+                    quote is not None and ranked
+                    and not (_tokens(topic) & _tokens(quote["text"]))
+                    and topic_score(quote, topic) < topic_score(ranked[0], topic)
+                )
+                ignores = bool(
+                    answers_prev and quote is not None and ranked
+                    and not answers_prev(quote["text"], True) and answers_prev(ranked[0]["text"], True)
+                )
+                if quote is None or (not writer_line and (off_topic or ignores)):
+                    quote = next(iter(ranked), None)  # unknown id, or an offline quote that ignores the line before
+            if quote is not None and beat.optional and not (writer_line and chosen_quote is not None):
                 if template == "lesson" and not on_thread(quote["text"], previous, topic):
                     quote = None  # an off-thread quote would be a non sequitur: the turn is written instead
                 elif answers_prev and not answers_prev(quote["text"], True):
@@ -1146,8 +1292,18 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             # a written line that *is* one of the speaker's real quotes is shown as that quote, with its source
             pool = [q for q in _quotable(sheet) if (sp, q["id"]) not in used]
             quote = matching_quote(draft.get("text") or "", pool, beat.max_words + 6)
+        translated_from: dict[str, Any] | None = None
+        spoken_translation = ""
+        if quote is not None and foreign_quote(quote["text"], lang):
+            # Speak the target language. The German (or other) source stays on basis.
+            translated_from = quote
+            spoken_translation = _spoken_translation(
+                quote, draft, lang, topic, names,
+                allow_unavailable_gemini=explicit_llm, use_llm=writer_line,
+            )
+            quote = None
         mismatched: dict[str, Any] | None = None
-        if quote is not None and lines and template in {"solo", "dialogue"}:
+        if quote is not None and lines and template in {"solo", "dialogue"} and not (writer_line and chosen_quote is quote):
             fits_line = bool(link(previous, quote["text"], quote=True, names=names))
             fits_topic = topic_score(quote, topic) > 0 or focus(quote, topic) >= 0.3
             # A real quote that answers neither the previous line nor the question
@@ -1163,31 +1319,52 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         else:
             if beat.kind == "quote":  # a quote beat without a fitting quote gets a short written line
                 beat = replace(beat, max_words=min(beat.max_words, 16))
-            text = tidy(_clean_paraphrase(draft.get("text") or "", beat.max_words))
             taken = {personas.fold(ln["text"]) for ln in lines}
-            hook_off_topic = debate and not lines and not link(topic, text, names=names)  # the rival must answer the topic
-            drafted_text = bool(text)
-            if (not text or personas.fold(text) in taken or copies_quote(text, sheet) or hook_off_topic
-                    or _literal_claim(text, sheet)  # "como escrevi: ..." would pass a written line off as a quote
-                    or knowledge.copies_passage(text, passages[sp]) or (answers_prev and not answers_prev(text))):
-                drafted_text = False
-                nxt = plan[i + 1] if i + 1 < len(plan) else None
-                nsp = min(nxt.speaker, n - 1) if nxt else 0
-                upcoming = ([q["text"] for q in _rank([q for q in _eligible(sheets[nsp], nxt.max_words)
-                                                       if (nsp, q["id"]) not in used], topic, "")]
-                            if debate and nxt and nxt.kind == "quote" else None)
-                text = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
-                                      objective, tone)
+            draft_text = tidy(_clean_paraphrase(draft.get("text") or "", beat.max_words))
+            locked = False
+            if spoken_translation:
+                text = tidy(_clean_paraphrase(spoken_translation, max(beat.max_words, words(spoken_translation))))
+                drafted_text = True
+                locked = True
+                authored.add(i)
+            elif writer_line and draft_text:
+                text = draft_text
+                reason = _repair_reason(text, sheet, passages[sp], taken)
+                if reason:
+                    rewritten = _rewrite_line(
+                        i, reason, text, lang, topic, names, allow_unavailable_gemini=explicit_llm,
+                    )
+                    if rewritten:
+                        text = rewritten
+                drafted_text = True
+                locked = True  # the model's line stays; a failed repair does not inject a mold
+                authored.add(i)
+            else:
+                text = draft_text
+                hook_off_topic = debate and not lines and not link(topic, text, names=names)
+                drafted_text = bool(text)
+                if (not text or personas.fold(text) in taken or copies_quote(text, sheet) or hook_off_topic
+                        or _literal_claim(text, sheet)
+                        or knowledge.copies_passage(text, passages[sp]) or (answers_prev and not answers_prev(text))):
+                    drafted_text = False
+                    nxt = plan[i + 1] if i + 1 < len(plan) else None
+                    nsp = min(nxt.speaker, n - 1) if nxt else 0
+                    upcoming = ([q["text"] for q in _rank([q for q in _eligible(sheets[nsp], nxt.max_words)
+                                                           if (nsp, q["id"]) not in used], topic, "")]
+                                if debate and nxt and nxt.kind == "quote" else None)
+                    text = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
+                                          objective, tone)
             line.update(kind="paraphrase", text=text)
             if beat.name == "citação":  # a written line is never labelled as a quote
                 line["beat"] = "ideia"
             basis = by_id.get(draft.get("basisId") or "") if drafted_text else None  # a replaced draft keeps no basis
-            if mismatched is not None:
+            if translated_from is not None:
+                basis = translated_from
+            elif mismatched is not None:
                 basis = mismatched
             if basis is not None:
-                line["basis"] = {"id": basis["id"], "source": basis.get("source", ""),
-                                 "label": source_label(basis.get("source", "")), "url": basis.get("url", "")}
-            if lines and not link(previous, line["text"], names=names):
+                line["basis"] = _basis_of(basis, translated=translated_from is not None)
+            if not locked and lines and not link(previous, line["text"], names=names):
                 taken = {personas.fold(ln["text"]) for ln in lines}
                 nxt = plan[i + 1] if i + 1 < len(plan) else None
                 nsp = min(nxt.speaker, n - 1) if nxt else 0
@@ -1202,6 +1379,27 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             idea = link(previous, line["text"], quote=line["kind"] == "quote", names=names)
             line["replyTo"] = {"line": len(lines) - 1, "idea": idea}
         lines.append(line)
+    if writer in {"deepseek", "gemini"} and authored:
+        stems = [_stems(str(line.get("text") or "")) for line in lines]
+        for index in range(2, len(lines)):
+            if index not in authored or lines[index].get("kind") == "quote":
+                continue
+            shared = set(stems[index]) & set(stems[index - 1]) & set(stems[index - 2])
+            if not shared:
+                continue
+            word = stems[index][next(iter(shared))]
+            rewritten = _rewrite_line(
+                index,
+                f"the word {word!r} is already on the two lines before this one; use a different concrete word",
+                lines[index]["text"], lang, topic, names, allow_unavailable_gemini=explicit_llm,
+            )
+            if rewritten and personas.fold(word) not in personas.fold(rewritten):
+                lines[index]["text"] = rewritten
+                lines[index]["replyTo"] = {
+                    "line": index - 1,
+                    "idea": link(lines[index - 1]["text"], rewritten, names=names),
+                }
+            break
     personas_out = [
         {"name": nm, "found": bool(s.get("found")), "wikiquote": s.get("wikiquote"), "wikipedia": s.get("wikipedia"),
          "quotes": len(s.get("quotes") or []), "primaryQuotes": len(_quotable(s)), "license": s.get("license"),
@@ -1409,7 +1607,7 @@ def check_lesson(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], topi
         errors.append("lesson: the question beat is not a question")
     quotes = [i for i, ln in enumerate(lines) if ln.get("kind") == "quote"]
     eligible = _eligible(sheets[0], 34) if sheets else []
-    if eligible and not quotes:
+    if eligible and not any(counts_as_sheet_quote(ln) for ln in lines):
         errors.append("lesson: no real quote of the speaker's sheet")
     for i in quotes:  # the line after a quote builds on it (the example), so it counts as the thread too
         after = lines[i + 1]["text"] if i + 1 < len(lines) else ""
@@ -1468,7 +1666,8 @@ def check_debate(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], name
     if not any(len(lines) / 4 <= i <= 3 * len(lines) / 4 for i in turns):
         errors.append("debate: no turn in the middle")
     for sp, sheet in enumerate(sheets[:2]):
-        if _eligible(sheet, QUOTE_MAX_WORDS - 2) and not any(ln["speaker"] == sp and ln.get("kind") == "quote" for ln in lines):
+        if _eligible(sheet, QUOTE_MAX_WORDS - 2) and not any(
+                ln["speaker"] == sp and counts_as_sheet_quote(ln) for ln in lines):
             errors.append(f"speaker {sp}: no real quote of his own sheet")
     counts = [words(ln["text"]) for ln in lines]
     for i, (ln, w) in enumerate(zip(lines, counts)):

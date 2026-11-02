@@ -293,10 +293,16 @@ def test_written_line_that_is_a_real_quote_is_marked_with_its_source(monkeypatch
     ids = {q["text"][:12]: q["id"] for q in n["quotes"]}
     # Nietzsche's quote beat takes another quote; then the writer puts his real line in a written beat
     # (fechamento, speaker 1) with other casing/punctuation, and a 7-word excerpt of Sócrates in another
-    monkeypatch.setattr(script, "_gemini", lambda prompt: [
-        {"i": 1, "quoteId": ids["As convicçõe"]},
-        {"i": 7, "text": "o que NÃO me mata, me fortalece!"},
-        {"i": 2, "text": "Prefiro morrer tendo falado a minha maneira"}])
+    def fake(prompt):
+        if "Rewrite only line 2" in prompt:
+            return [{"i": 2, "text": "Essa frase ainda pede uma prova."}]
+        return [
+            {"i": 1, "quoteId": ids["As convicçõe"]},
+            {"i": 7, "text": "o que NÃO me mata, me fortalece!"},
+            {"i": 2, "text": "Prefiro morrer tendo falado a minha maneira"},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
     lines = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)["lines"]
     assert script.check(lines, [s, n]) == []
     close = lines[7]
@@ -315,9 +321,9 @@ def test_quote_beats_prefer_the_topic_and_pacing_stays_tight(monkeypatch):
     monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 1, "quoteId": off_topic}])
     out = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
     lines = out["lines"]
-    # the index-page quote ("Sachregister") also matches the topic but is not primary
-    assert lines[1]["kind"] == "quote" and lines[1]["text"] == "As convicções são inimigas mais perigosas da verdade do que as mentiras."
-    assert "Humano, Demasiado Humano" in lines[1]["quote"]["source"]
+    # the writer picked this quote; a later pass must not swap it for a more topical one
+    assert lines[1]["kind"] == "quote" and lines[1]["text"].startswith("Sem música")
+    assert lines[1]["quote"]["id"] == off_topic
     assert all("Sachregister" not in line["quote"]["source"] for line in lines if line["kind"] == "quote")
     assert [line["beat"] for line in lines][0] == "gancho" and lines[-1]["beat"] == "fechamento"
     assert all(a["speaker"] != b["speaker"] for a, b in zip(lines, lines[1:]))  # strict alternation, hook included
@@ -482,14 +488,15 @@ def test_check_debate_flags_monologues_fake_quotes_and_long_lines():
     assert "line 5: 20 words is too long" in problems
 
 
-def test_llm_lines_that_ignore_the_previous_line_are_rewritten(monkeypatch):
+def test_llm_lines_are_not_replaced_with_template_filler(monkeypatch):
     s, n = socrates(), nietzsche()
     monkeypatch.setattr(script, "_gemini", lambda prompt: [
         {"i": i, "text": "Gatos dormem muito durante a tarde."} for i in (0, 2, 3, 5, 6, 7)])
     out = script.write("debate", "A verdade existe?", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
-    assert out["scriptQA"]["pass"], out["scriptQA"]
-    assert all(line["replyTo"]["idea"] for line in out["lines"][1:])
-    assert sum("Gatos" in line["text"] for line in out["lines"]) <= 1  # only the hook may ignore the (empty) past
+    written = [line["text"] for line in out["lines"] if line["beat"] != "citação"]
+    assert any("Gatos dormem muito durante a tarde." in text for text in written)
+    filler = ("Life reveals consequences", "only an opinion", "sem isso", "A vida revela")
+    assert not any(phrase in text for text in written for phrase in filler)
 
 
 def test_prompt_describes_the_arc():
@@ -629,9 +636,18 @@ def test_check_debate_wants_a_strong_hook_and_a_memorable_close():
 
 def test_llm_line_that_claims_to_be_literal_is_rewritten(monkeypatch):
     s = nietzsche()
-    monkeypatch.setattr(script, "_gemini", lambda prompt: [
-        {"i": 3, "text": "Como eu escrevi: a verdade é só uma metáfora gasta."},
-        {"i": 5, "text": "Nas minhas palavras, Deus morreu e a verdade também."}])
+
+    def fake(prompt):
+        if "Rewrite only line 3" in prompt:
+            return [{"i": 3, "text": "A verdade é uma metáfora gasta."}]
+        if "Rewrite only line 5" in prompt:
+            return [{"i": 5, "text": "Deus morreu e a verdade também."}]
+        return [
+            {"i": 3, "text": "Como eu escrevi: a verdade é só uma metáfora gasta."},
+            {"i": 5, "text": "Nas minhas palavras, Deus morreu e a verdade também."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
     out = script.write("lesson", "A verdade existe?", ["Nietzsche"], sheets=[s], use_llm=True)
     assert not any("escrevi" in line["text"] or "Nas minhas palavras" in line["text"] for line in out["lines"])
     assert out["scriptQA"]["pass"], out["scriptQA"]
@@ -641,3 +657,104 @@ def test_english_lesson_passes_qa():
     out = script.write("lesson", "What is truth?", ["Nietzsche"], "en", sheets=[nietzsche()], use_llm=False)
     assert out["scriptQA"]["pass"], out["scriptQA"]
     assert out["lines"][-1]["beat"] == "síntese" and out["lines"][4]["beat"] == "virada"
+
+
+def _caption(sc, line) -> str:
+    text = " ".join(row for page in sc._pages(line) for row in page)
+    if line.get("kind") == "quote" and text.startswith("“") and text.endswith("”"):
+        text = text[1:-1]
+    return text
+
+
+def test_rendered_subtitles_match_the_writer_lines(monkeypatch):
+    import numpy as np
+
+    from products.animind_core import scene
+
+    plan = script.plan_for("solo", 1, 30)
+    bank = (
+        "Curiosity opens the first question.",
+        "Evidence has to survive a rival.",
+        "Practice shows where a claim breaks.",
+        "Doubt keeps the easy answer honest.",
+        "Method matters more than the slogan.",
+        "Results should change the next step.",
+        "Choice arrives after the check.",
+        "Limits belong in the final line.",
+    )
+    texts = list(bank[:len(plan)])
+
+    def fake(prompt):
+        assert "Rewrite only line" not in prompt
+        return [{"i": i, "text": text} for i, text in enumerate(texts)]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write(
+        "solo", "What is strength?", ["Ada"], "en-US",
+        sheets=[{"quotes": []}], use_llm=True, duration=30,
+    )
+    assert [line["text"] for line in out["lines"]] == [script.tidy(text) for text in texts]
+    filler = ("only an opinion", "Life reveals consequences", "Look at ")
+    assert not any(phrase in line["text"] for line in out["lines"] for phrase in filler)
+    timed = []
+    cursor = 2000
+    for line in out["lines"]:
+        timed.append({**line, "startMs": cursor, "endMs": cursor + 2000})
+        cursor += 2300
+    sc = scene.Scene(
+        template="solo", scenario="studio", rigs=[None], script=timed, envelope=np.ones(800),
+        env_fps=100, duration_s=cursor / 1000 + 3, disclaimer="Parody", names=["Ada"], topic=out["topic"],
+    )
+    assert [_caption(sc, line) for line in sc.script] == [line["text"] for line in out["lines"]]
+
+
+def test_german_source_is_spoken_in_the_target_language(monkeypatch):
+    german = "Was mich nicht umbringt, macht mich stärker."
+    sheet = {"quotes": [{
+        "id": "q-de",
+        "text": german,
+        "source": "Götzen-Dämmerung, Sprüche und Pfeile",
+        "sourceKind": "primary",
+        "url": "https://en.wikiquote.org/wiki/Friedrich_Nietzsche",
+    }]}
+
+    def fake(prompt):
+        if "Translate this quote" in prompt:
+            return [{"i": 0, "text": "What does not kill me makes me stronger."}]
+        return [
+            {"i": 0, "text": "Strength is not the same thing as noise."},
+            {"i": 1, "quoteId": "q-de"},
+            {"i": 2, "text": "Strength shows up when the plan fails."},
+            {"i": 3, "text": "Keep the test and drop the slogan."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write("solo", "What is strength?", ["Nietzsche"], "en-US", sheets=[sheet], use_llm=True)
+    spoken = out["lines"][1]
+    assert "umbringt" not in spoken["text"].lower()
+    assert "stronger" in spoken["text"].lower()
+    assert spoken["kind"] == "paraphrase"
+    assert spoken["basis"]["text"] == german
+    assert spoken["basis"]["source"].startswith("Götzen-Dämmerung")
+    assert spoken["basis"]["translated"] is True
+
+
+def test_writer_varies_a_keyword_repeated_on_three_lines(monkeypatch):
+    calls = []
+
+    def fake(prompt):
+        calls.append(prompt)
+        if "Rewrite only line 2" in prompt:
+            return [{"i": 2, "text": "Practice is the part that changes."}]
+        return [
+            {"i": 0, "text": "Knowledge opens the first door."},
+            {"i": 1, "text": "Knowledge still needs a witness."},
+            {"i": 2, "text": "Knowledge without a test is decoration."},
+            {"i": 3, "text": "Leave the audience one check."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write("solo", "What is knowledge?", ["Ada"], "en-US", sheets=[{"quotes": []}], use_llm=True)
+    assert "Practice is the part that changes." in out["lines"][2]["text"]
+    assert any("Rewrite only line 2" in prompt for prompt in calls)
+    assert script._keyword_streak(out["lines"][:3]) is None or "knowledge" not in out["lines"][2]["text"].lower()

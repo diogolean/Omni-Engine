@@ -28,6 +28,30 @@ def test_keep_hair_keeps_mustache_and_erases_lips_only():
     assert (out[255:, :] == src[255:, :]).all()  # collar below keeps the master's art
 
 
+def test_open_mouth_sits_below_a_walrus_mustache():
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from products.animind_core import frameqa
+    from products.animind_core.scene import clear_mustache
+
+    stache = Image.new("RGBA", (90, 46), (0, 0, 0, 0))
+    ImageDraw.Draw(stache).ellipse((4, 4, 86, 40), fill=(32, 28, 28, 255))
+    mouth = Image.new("RGBA", (70, 36), (0, 0, 0, 0))
+    ImageDraw.Draw(mouth).ellipse((8, 6, 62, 30), fill=(48, 18, 20, 255))
+    mouth_xy, stache_xy = (12, 8), (4, 0)
+    drop, lift = clear_mustache((mouth, mouth_xy, 10), ("mustache", stache, stache_xy, 11))
+    assert drop > 0 or lift > 0
+    canvas = Image.new("RGB", (160, 140), (232, 196, 168))
+    canvas.paste(stache, (stache_xy[0], stache_xy[1] - lift), stache)
+    canvas.paste(mouth, (mouth_xy[0], mouth_xy[1] + drop), mouth)
+    box = (mouth_xy[0], mouth_xy[1] + drop, mouth_xy[0] + mouth.width, mouth_xy[1] + drop + mouth.height)
+    measured = frameqa.measure(np.asarray(canvas), box)
+    assert measured is not None
+    assert measured["blobs"] == 1
+    assert measured["cav"] >= frameqa.VISEME_CAV_MIN["F"] or measured["cav"] >= frameqa.VISEME_CAV_MIN["C"]
+
+
 def test_default_inpaint_unchanged_without_hair():
     from products.animind_core.rig import _mouthless
 

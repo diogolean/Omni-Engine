@@ -31,6 +31,39 @@ W, H, FPS = look.W, look.H, 24
 XFADE_S = 0.0
 
 
+def clear_mustache(mouth: tuple, mustache: tuple) -> tuple[int, int]:
+    """Pixels to drop an open mouth and lift a walrus mustache so the cavity is visible.
+
+    The mustache layer is painted over the mouth. On a left-view Nietzsche that stacks
+    a second dark mass on viseme C and hides viseme F. Returns ``(mouth_drop, mustache_lift)``.
+    """
+    m_img, m_xy = mouth[0], mouth[1]
+    s_img, s_xy = mustache[1], mustache[2]
+
+    def rows(img: Image.Image) -> np.ndarray:
+        alpha = np.asarray(img.getchannel("A"))
+        return np.flatnonzero((alpha > 128).any(axis=1))
+
+    m_rows, s_rows = rows(m_img), rows(s_img)
+    if m_rows.size == 0 or s_rows.size == 0:
+        return 0, 0
+    mouth_top = m_xy[1] + int(m_rows[0])
+    mouth_bot = m_xy[1] + int(m_rows[-1])
+    stache_top = s_xy[1] + int(s_rows[0])
+    stache_bot = s_xy[1] + int(s_rows[-1])
+    overlap = stache_bot - mouth_top
+    if overlap <= 1:
+        return 0, 0
+    drop = overlap + 2
+    mouth_h = max(1, mouth_bot - mouth_top)
+    lift = 0
+    if drop > mouth_h * 0.65:
+        # A thick mustache: lift it on the open viseme and seat the mouth in the gap.
+        lift = min(drop // 2, int((stache_bot - stache_top) * 0.45))
+        drop = max(0, drop - lift)
+    return drop, lift
+
+
 def viseme_mix(cues: list[dict[str, Any]], t: float, fade: float = XFADE_S) -> tuple[str, str, float]:
     """``(current, previous, weight of current)`` at ``t``: the newest cue fades in over ``fade`` s."""
     cur, prev, since = "X", "X", 1e9
@@ -55,14 +88,16 @@ SPEAKER_PULL, FLOOR_EASE_S = 0.55, 1.0  # wide/two shots: how far the light lean
 KEY_GLOW = (255, 206, 150)  # warm key pool screened over the subject
 DISSOLVE_S, WHIP_S, FADE_IN_S, FADE_OUT_S = 0.45, 0.3, 0.25, 0.6
 PUSH, PUSH_CU = 0.04, 0.075  # push-in over a shot (fraction of its zoom); quote close-ups lean in further
-CU_Y = 0.45  # debate quote close-ups: the face sits higher, so mouth and beard clear the captions
+CU_Y = 0.40  # close-ups look higher so the hair keeps headroom above the frame
+CU_ZOOM = 1.68  # 2.1 clipped the top of tall hair (Einstein) on a 16:9 close-up
 # The opening frame is the thumbnail and the first thing a viewer sees: it starts at this brightness
 # (scenario and characters already visible), never on black.
 FADE_IN_FLOOR = 0.85
 CAP_H = 180  # caption strip height (speaker label + two rows)
 CAPTION_PLATE_A = 120  # opacity of the soft plate behind caption rows
 V_FACE_AT = 0.34  # 9:16: faces sit this high in the output so the chin clears the captions (cap_y 0.70)
-V_CU_FACE_AT = 0.29  # close-ups: bigger head, so it sits higher still
+V_CU_FACE_AT = 0.40  # close-ups sit lower than 0.29, which pushed the hair off the top
+V_CU_ZOOM = 1.35
 VWIN = H * 9 / 16  # vertical camera window width in frame px at zoom 1
 
 
@@ -350,17 +385,17 @@ class Scene:
         toward = 1 if px < 0.5 else -1  # look room toward the other side of the frame
         if self.vertical:  # singles only: the window is too narrow for a two-shot
             if quote:
-                return Shot(W * (px + 0.01 * toward), vertical_cy(1.55, V_CU_FACE_AT), 1.55, "cu")
-            return Shot(W * (px + 0.02 * toward), vertical_cy(1.22), 1.22, "single")
+                return Shot(W * (px + 0.01 * toward), vertical_cy(V_CU_ZOOM, V_CU_FACE_AT), V_CU_ZOOM, "cu")
+            return Shot(W * (px + 0.02 * toward), vertical_cy(1.22, 0.40), 1.22, "single")
         if self.template == "debate":
             if last:
                 return Shot(W / 2, H * 0.47, 1.24, "two")
             if quote:
-                return Shot(W * (px + 0.035 * toward), H * CU_Y, 2.1, "cu")
+                return Shot(W * (px + 0.035 * toward), H * CU_Y, CU_ZOOM, "cu")
             if i % 4 == 2:
-                return Shot(W * (px + 0.06 * toward), H * 0.455, 1.86, "cu")
+                return Shot(W * (px + 0.06 * toward), H * CU_Y, 1.62, "cu")
             if i > 0 and i % 4 == 0:
-                return Shot(W * (px + 0.08 * toward), H * 0.46, 1.72, "single")
+                return Shot(W * (px + 0.08 * toward), H * 0.44, 1.55, "single")
             if i > 0 and i % 4 == 3:
                 return Shot(W / 2, H * 0.47, 1.24, "two")
             return Shot(W * (px + 0.115 * toward), H * 0.47, 1.6, "ots")
@@ -372,7 +407,7 @@ class Scene:
                 return Shot(W / 2, H * 0.5, 1.0, "wide")
             return Shot(W * (px + 0.13), H * 0.47, 1.55, "mcu")
         if quote:
-            return Shot(W / 2, H * FACE_Y, 2.0, "cu")
+            return Shot(W / 2, H * CU_Y, CU_ZOOM, "cu")
         return Shot(W / 2, H * 0.5, 1.0, "wide") if last else Shot(W / 2, H * 0.47, 1.5, "mcu")
 
     def _plan_shots(self) -> list[tuple[float, Shot, str]]:
@@ -596,11 +631,16 @@ class Scene:
             fading.putalpha(fading.getchannel("A").point(lambda a: int(a * wv)))
             parts = list(rv.layers) + [("mouth", before[0], before[1], before[2]), ("mouth", fading, mouth[1], mouth[2] + 0.001)]
         mouths = [p for p in parts if p[0] == "mouth"]
+        mustache = next((p for p in parts if p[0] == "mustache"), None)
+        mouth_drop, mustache_lift = (0, 0)
+        if mouths and mustache is not None and cur_v not in "XA":
+            # Seat the open cavity under the mustache so C is not two mouths and F is not hidden.
+            mouth_drop, mustache_lift = clear_mustache(mouths[-1], mustache)
         if mouths:  # frame trace for the video QA: how many mouth layers were drawn, and where
             m0 = mouths[-1]
             bx = m0[1].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *m0[1].size)
             # Mouth follows the head's breathing offset; trace the actual painted position.
-            ox, oy = x0 + m0[2][0] + hx, y0 + m0[2][1] + round(breathe) + hy
+            ox, oy = x0 + m0[2][0] + hx, y0 + m0[2][1] + round(breathe) + hy + mouth_drop
             self._mouth_log.append({"char": idx, "v": mouth_tag, "layers": len(mouths), "view": view,
                                     "box": _qa_box((ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3]))})
         names = {p[0] for p in parts}
@@ -615,6 +655,10 @@ class Scene:
             # The face no longer rides the jaw: only the mouth layer changes with speech.
             dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 2 * SS if name == "brows" else 0) + (brow if name == "brows" else 0)
             hdx, hdy = (0, 0) if name in BODY_LAYERS else (hx, hy)
+            if name == "mouth":
+                dy += mouth_drop
+            elif name == "mustache" and mustache_lift:
+                dy -= mustache_lift
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
             if name in {"brow_left", "brow_right"}:
@@ -937,24 +981,48 @@ class Scene:
         """Chips and lower-thirds are drawn at 16:9 size; 9:16 scales them up to its text size."""
         return img.resize((round(img.width * self.k), round(img.height * self.k)), Image.LANCZOS) if self.vertical else img
 
+    def _role_rows(self, role: str, max_w: float) -> tuple[Any, list[str]]:
+        """Wrap and shrink the topic line so a long title is not cut to 'PERSPEC'."""
+        probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+        text = " ".join((role or "").upper().split())
+        chosen_font, chosen = self.role_font, _wrap(probe, text, self.role_font, max_w) or [""]
+        for size in (15, 13, 12, 11, 10):
+            font = _font("SemiBold", size)
+            rows = _wrap(probe, text, font, max_w)
+            if rows and len(rows) <= 2 and all(probe.textlength(row, font=font) <= max_w + 1 for row in rows):
+                return font, rows
+            chosen_font, chosen = font, rows
+        return chosen_font, chosen[:3] or [""]
+
     def _lower_third(self, idx: int) -> Image.Image:
         key = ("lt", idx)
         if key not in self._cache:
             name = pretty_name(self.names[idx]) if idx < len(self.names) else ""
-            role = (self.roles[idx] if idx < len(self.roles) else "").upper()
-            img = Image.new("RGBA", (620, 96), (0, 0, 0, 0))
+            role = self.roles[idx] if idx < len(self.roles) else ""
+            max_w = 520
+            role_font, rows = self._role_rows(role, max_w)
+            img = Image.new("RGBA", (620, 78 + 22 * max(1, len(rows))), (0, 0, 0, 0))
             d = ImageDraw.Draw(img)
             nw = d.textlength(name, font=self.name_font)
-            rw = sum(d.textlength(c, font=self.role_font) + 2.2 for c in role)
+            rw = max((d.textlength(row, font=role_font) for row in rows), default=0)
             pw = int(min(620, max(nw, rw) + 52))
+            ph = img.height - 4
             panel = Image.new("RGBA", img.size, (0, 0, 0, 0))
-            ImageDraw.Draw(panel).rounded_rectangle((0, 0, pw, 92), 10, fill=(8, 8, 10, 170))
+            ImageDraw.Draw(panel).rounded_rectangle((0, 0, pw, ph), 10, fill=(8, 8, 10, 170))
             img.alpha_composite(panel)
-            d.rounded_rectangle((0, 0, 6, 92), 3, fill=(*self.accent, 255))
-            d.text((26, 14), name, font=self.name_font, fill=(255, 255, 255, 255))
-            _tracked(d, (27, 58), role, self.role_font, (*self.accent, 235), 2.2)
-            self._cache[key] = self._big(img.crop((0, 0, pw + 1, 96)))
+            d.rounded_rectangle((0, 0, 6, ph), 3, fill=(*self.accent, 255))
+            d.text((26, 12), name, font=self.name_font, fill=(255, 255, 255, 255))
+            for i, row in enumerate(rows):
+                d.text((27, 48 + i * (role_font.size + 3)), row, font=role_font, fill=(*self.accent, 235))
+            self._cache[key] = self._big(img.crop((0, 0, pw + 1, ph + 1)))
         return self._cache[key]
+
+    def lower_third_y(self, shot: Shot | None, card_h: int) -> int:
+        """Name card below the chin. Close-ups used to park it on the mouth."""
+        margin = round(10 * self.k)
+        if shot is not None and shot.kind in ("cu", "ots", "mcu", "single"):
+            return max(margin, self.OH - card_h - margin)
+        return min(self.cap_y, self.OH - card_h - margin)
 
     def _overlays(self, frame: Image.Image, t: float, line: dict[str, Any] | None, shot: Shot | None = None) -> None:
         frame.alpha_composite(self.scrim)
@@ -975,12 +1043,12 @@ class Scene:
                 a = look.ease((since - 0.25) / 0.35) * (1 - look.ease((since - hold) / 0.3))
                 if a > 0.01:
                     lt = self._lower_third(line["speaker"])
-                    # wide/two: under the speaker; close debate shots: on the open side, off the face
-                    close = shot is not None and shot.kind in ("ots", "cu")
+                    # wide/two: under the speaker; close shots: on the open side, below the chin
+                    close = shot is not None and shot.kind in ("ots", "cu", "mcu", "single")
                     right = self.template == "debate" and (line["speaker"] == 1) != close
                     slide = round(30 * (1 - a)) * (1 if right else -1)
                     x = (self.OW - 64 - lt.width if right else 64) + slide
-                    frame.alpha_composite(_fade(lt, a), (x, self.cap_y - round(82 * self.k)))
+                    frame.alpha_composite(_fade(lt, a), (x, self.lower_third_y(shot, lt.height)))
         d = ImageDraw.Draw(frame)
         lw = d.textlength(self.disclaimer, font=self.label_font) + 28
         d.rounded_rectangle((24, 24, 24 + lw, 58), 17, fill=(255, 255, 255, 235))

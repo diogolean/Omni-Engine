@@ -133,6 +133,33 @@ def test_an_unfitting_quote_is_paraphrased_and_still_sourced():
         assert out["lines"][index]["replyTo"]["idea"]
 
 
+def test_measured_tts_lands_within_two_seconds_of_the_target():
+    from products.animind_core import render
+
+    lines = [
+        {"text": "Curiosity opens the first question today.", "pauseAfterS": 0.4, "act": "abertura"},
+        {"text": "Evidence has to survive a serious rival.", "pauseAfterS": 0.4, "act": "abertura"},
+        {"text": "Practice shows where this claim breaks apart.", "pauseAfterS": 0.4, "act": "confronto"},
+        {"text": "Doubt keeps every easy answer honest enough.", "pauseAfterS": 0.4, "act": "confronto"},
+        {"text": "Method matters more than a loud slogan here.", "pauseAfterS": 0.35, "act": "fechamento"},
+    ]
+    # The last take is long, the way a 30s request came back at 33s.
+    speech = [4.4, 4.5, 4.4, 4.5, 7.2]
+    spoken = {}
+    per_word = speech[-1] / len(lines[-1]["text"].split())
+
+    def respeak(text: str) -> float:
+        spoken["text"] = text
+        return max(0.9, per_word * len(text.split()))
+
+    fitted, durations = render.fit_measured_duration(lines, speech, 30.0, respeak)
+    total = render.timeline_seconds(durations, fitted)
+    assert abs(total - 30.0) <= render.MEASURED_TOLERANCE_S, total
+    assert [line["text"] for line in fitted[:-1]] == [line["text"] for line in lines[:-1]]
+    assert fitted[-1]["text"] != lines[-1]["text"]
+    assert spoken["text"] == fitted[-1]["text"]
+
+
 def test_tts_retries_no_audio_received(monkeypatch, tmp_path):
     from products.animind_core import render
 
