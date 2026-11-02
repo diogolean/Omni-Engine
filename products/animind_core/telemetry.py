@@ -99,7 +99,7 @@ def summarize(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             "runs": 0, "inputTokens": 0, "outputTokens": 0, "images": 0,
             "costUsd": 0.0, "latencyMs": 0.0, "scriptPass": 0,
             "scriptChecks": 0, "framePass": 0, "frameChecks": 0,
-            "imageScores": [], "artifacts": 0,
+            "imageScores": [], "artifacts": 0, "statuses": {},
         }
     )
     for row in rows:
@@ -110,6 +110,8 @@ def summarize(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         group = groups[key]
         group["runs"] += 1
+        status = str(row.get("status") or "unknown")
+        group["statuses"][status] = group["statuses"].get(status, 0) + 1
         for field in ("inputTokens", "outputTokens", "images"):
             group[field] += int(row.get(field) or 0)
         group["costUsd"] += float(row.get("costUsd") or 0.0)
@@ -135,6 +137,10 @@ def summarize(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             "provider": provider,
             "model": model,
             "runs": runs,
+            "status": ", ".join(
+                f"{status}×{count}" if count > 1 else status
+                for status, count in sorted(group["statuses"].items())
+            ),
             "inputTokens": group["inputTokens"],
             "outputTokens": group["outputTokens"],
             "images": group["images"],
@@ -154,13 +160,13 @@ def summarize(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 def markdown(rows: Iterable[dict[str, Any]]) -> str:
     summary = summarize(rows)
     headers = (
-        "operation", "provider", "model", "runs", "tokens in/out", "images",
+        "operation", "provider", "model", "status", "runs", "tokens in/out", "images",
         "cost USD", "avg ms", "scriptQA", "frameQA", "image QA", "artifacts",
     )
     lines = ["| " + " | ".join(headers) + " |", "|" + "|".join("---" for _ in headers) + "|"]
     for row in summary:
         lines.append("| " + " | ".join(map(str, (
-            row["operation"], row["provider"], row["model"], row["runs"],
+            row["operation"], row["provider"], row["model"], row["status"], row["runs"],
             f"{row['inputTokens']}/{row['outputTokens']}", row["images"],
             f"{row['costUsd']:.8f}", row["avgLatencyMs"], row["scriptQA"],
             row["frameQA"], row["imageQAScore"], row["artifacts"],

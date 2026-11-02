@@ -23,6 +23,7 @@ def test_jsonl_record_and_comparative_summary_stay_outside_git(tmp_path, monkeyp
     assert summary["runs"] == 2
     assert summary["costUsd"] == 0.00018
     assert summary["avgLatencyMs"] == 100
+    assert summary["status"] == "ok×2"
     assert summary["scriptQA"] == "1/2" and summary["frameQA"] == "2/2"
     assert "deepseek-flash" in telemetry.markdown(rows)
     assert "api_key" not in source.read_text().lower()
