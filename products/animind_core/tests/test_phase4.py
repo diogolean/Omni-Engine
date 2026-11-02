@@ -95,8 +95,8 @@ def test_three_hero_stick_presets_have_aiwake_bust_and_distinct_brows():
     assert len(set(brows)) == 3
 
 
-def test_thirty_second_debate_keeps_arc_in_seven_beats():
+def test_thirty_second_debate_keeps_arc_in_five_beats():
     plan = script.plan_for("debate", 2, duration=30)
-    assert len(plan) == 7
-    assert [beat.speaker for beat in plan] == [0, 1, 0, 1, 0, 1, 0]
+    assert len(plan) == 5
+    assert [beat.speaker for beat in plan] == [0, 1, 0, 1, 0]
     assert {beat.act for beat in plan} >= {"abertura", "confronto", "virada", "fechamento"}

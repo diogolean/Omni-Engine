@@ -428,7 +428,7 @@ def _bank(lang: str) -> dict[str, list[str]]:
                          "{Kw} matters, {a}. Consequences matter too.",
                          "{Kw}? State the evidence, {a}."],
             "virada0": ["{Kw}? Wait, {b}. You said {kq} yourself. So you believe in something.",
-                        "Stop, {b}. {Kw} was your word. Now stand by it."],
+                        "Stop, {b}. {Kw} was your word. Stand by it."],
             "tréplica0": ["{Kw}? But you were the one who said {kq}, {b}. Your own words give you away.",
                           "{Kw}, {b}? A minute ago it was {kq}. Which one do you defend?",
                           "You swap {kq} for {kw}, {b}. That is not an answer. It is an escape."],
@@ -477,7 +477,7 @@ def _bank(lang: str) -> dict[str, list[str]]:
                      "{Kw} importa, {a}. As consequências também.",
                      "{Kw}? Mostre a evidência, {a}."],
         "virada0": ["{Kw}? Espera, {b}. Você mesmo falou em {kq}. Então acredita em algo.",
-                    "Pare, {b}. {Kw} foi palavra sua. Agora sustente."],
+                    "Pare, {b}. {Kw} foi palavra sua. Sustente."],
         "tréplica0": ["{Kw}? Mas foi você que falou em {kq}, {b}. Sua frase te entrega.",
                       "{Kw}, {b}? Agora há pouco era {kq}. Qual dos dois você defende?",
                       "Você troca {kq} por {kw}, {b}. Isso não é resposta. É fuga."],
@@ -851,10 +851,11 @@ def plan_for(template: str, n_chars: int, duration: int | float | None = None) -
     plan = list(PLANS.get(template, PLANS["solo"]))
     if template == "debate" and duration is not None:
         if float(duration) <= 35.0:
-            # Keep the complete four-act arc but drop one confrontation
-            # exchange. Film cards add about six seconds, so seven voiced
+            # Keep the complete four-act arc but drop two confrontation
+            # exchanges. Film cards add about six seconds, so five voiced
             # beats land a requested 30-second debate near its target.
             del plan[2:4]
+            del plan[3:5]
         # A 60-second debate needs more than the compact nine-beat default.
         # Insert complete A/B exchanges so strict alternation and the central
         # quote turn remain intact. Short requests keep the original plan.
