@@ -78,6 +78,36 @@ def test_a_chin_dot_grows_to_the_face_and_tucks_under_the_mustache():
     assert tuple(tucked[6, 30][:3]) == (32, 28, 28)
 
 
+def test_front_g_under_a_heavy_mustache_draws_a_measurable_opening():
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from products.animind_core import frameqa
+    from products.animind_core.scene import clear_mustache, open_cavity_below_mustache
+
+    shut = Image.new("RGBA", (80, 20), (0, 0, 0, 0))
+    ImageDraw.Draw(shut).line((10, 10, 70, 10), fill=(48, 28, 30, 255), width=2)
+    bare = Image.new("RGB", shut.size, (232, 196, 168))
+    bare.paste(shut, (0, 0), shut)
+    closed = frameqa.measure(np.asarray(bare), (0, 0, shut.width, shut.height))
+    assert closed is not None and closed["cav"] + 1e-6 < frameqa.VISEME_CAV_MIN["G"]
+    opened = open_cavity_below_mustache(shut, "G")
+    stache = Image.new("RGBA", (100, 34), (0, 0, 0, 0))
+    ImageDraw.Draw(stache).ellipse((4, 2, 96, 30), fill=(26, 22, 22, 255))
+    drop, _lift = clear_mustache(("mouth", opened, (40, 90), 10), ("mustache", stache, (28, 78), 11))
+    stage = Image.new("RGBA", (180, 200), (232, 196, 168, 255))
+    stage.alpha_composite(stache, (28, 78))
+    stage.alpha_composite(opened, (40, 90 + drop))
+    box = opened.getchannel("A").getbbox()
+    assert box is not None
+    x0, y0 = 40 + box[0], 90 + drop + box[1]
+    x1, y1 = 40 + box[2], 90 + drop + box[3]
+    measured = frameqa.measure(np.asarray(stage.convert("RGB")), (max(0, x0 - 6), max(0, y0 - 6), x1 + 6, y1 + 6))
+    assert measured is not None
+    assert measured["cav"] + 1e-6 >= frameqa.VISEME_CAV_MIN["G"]
+    assert 90 + drop + box[3] > 78 + 30
+
+
 def test_stale_line_takes_are_replaced(tmp_path):
     import numpy as np
 

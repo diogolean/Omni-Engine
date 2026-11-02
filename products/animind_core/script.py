@@ -1517,10 +1517,29 @@ def judge_debate(lines: list[dict[str, Any]], names: list[str], topic: str, lang
         f"Topic: {topic}. Language: {lang}.\n"
         f"{body}\n"
         "For each line after the first, set answers_previous true only when it responds to the line before it. "
-        "Set coherent true only when the script holds together as one argument.\n"
+        "A line may refer only to content already said. Naming a quote, a pipe, or any concrete thing that "
+        "is spoken only on a later line is not an answer, and coherent must be false.\n"
+        "Set coherent true only when the script holds together as one argument and no reply precedes its referent.\n"
         'Return JSON only: {"lines": [{"i": 1, "answers_previous": true, "reason": "...", "coherent": true}]}.'
     )
-    entries = [entry for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini) if isinstance(entry, dict)]
+    result, _failures = llm_providers.generate(
+        prompt,
+        settings.data_dir() / "cache" / "script",
+        _gemini,
+        allow_unavailable_gemini=allow_unavailable_gemini,
+    )
+    if result is not None:
+        telemetry.record(
+            "script-judge",
+            provider=result.provider,
+            model=result.model,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cost_usd=result.cost_usd,
+            status="ok",
+            metadata={"lines": len(lines), "topic": topic},
+        )
+    entries = [entry for entry in (result.lines if result is not None else []) if isinstance(entry, dict)]
     if not entries:
         return None
     if not any("coherent" in entry or "answers_previous" in entry for entry in entries):
@@ -1569,6 +1588,8 @@ def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: s
             max_words=16, previous=previous, following=nxt,
         )
         if not rewritten or not link(previous, rewritten, names=names):
+            continue
+        if _names_a_later_quote(rewritten, lines, index, topic):
             continue
         lines[index]["text"] = rewritten
         lines[index]["replyTo"] = {"line": index - 1, "idea": link(previous, rewritten, names=names)}
@@ -2307,6 +2328,18 @@ def check_lesson(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], topi
     if len(set(counts)) < len(counts) // 2:
         errors.append("lesson: line lengths do not vary")
     return errors
+
+
+def _names_a_later_quote(text: str, lines: list[dict[str, Any]], index: int, topic: str = "") -> bool:
+    """True when ``text`` uses a word that belongs to a quote which has not been spoken yet."""
+    stems = set(_stems(text)) - set(_stems(topic))
+    earlier = set(_stems(" ".join(str(line.get("text") or "") for line in lines[:index])))
+    for later in lines[index + 1:]:
+        if later.get("kind") != "quote":
+            continue
+        if (stems & set(_stems(str(later.get("text") or "")))) - earlier:
+            return True
+    return False
 
 
 def answer_notes(lines: list[dict[str, Any]], names: list[str] | tuple[str, ...] = ()) -> list[str]:

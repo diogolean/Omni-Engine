@@ -220,6 +220,41 @@ def tuck_mustache_over_mouth(mouth: Image.Image, head: Image.Image, mouth_xy: tu
     return Image.fromarray(arr)
 
 
+def open_cavity_below_mustache(sprite: Image.Image, viseme: str) -> Image.Image:
+    """Keep a dark hole in the lower half of an open viseme that a walrus mustache would cover.
+
+    Front G on a heavy moustache is often a shut lip. The sprite then measures 0
+    while the encoded frame, full of dark hair, measures about 0.25.
+    """
+    code = (viseme or "X")[:1].upper()
+    if code in "XA":
+        return sprite
+    from . import mouthset  # noqa: PLC0415
+
+    floor = frameqa.VISEME_CAV_MIN.get(code, 0.10)
+    plate = Image.new("RGB", sprite.size, (232, 196, 168))
+    plate.paste(sprite, (0, 0), sprite)
+    measured = frameqa.measure(np.asarray(plate), (0, 0, sprite.width, sprite.height))
+    if measured and measured["cav"] + 1e-6 >= floor and measured["blobs"] <= 1:
+        return sprite
+    box = sprite.getchannel("A").getbbox()
+    if not box:
+        return sprite
+    width = max(16, box[2] - box[0])
+    drawn = mouthset._lipped_open(width, _open_colours())
+    # The hole hangs entirely below the lip line. A walrus mustache covers that line.
+    x = box[0] + max(0, (box[2] - box[0] - drawn.width) // 2)
+    y = box[3] + 1
+    canvas = Image.new(
+        "RGBA",
+        (max(sprite.width, x + drawn.width + 2), max(sprite.height, y + drawn.height + 2)),
+        (0, 0, 0, 0),
+    )
+    canvas.paste(sprite, (0, 0), sprite)
+    canvas.paste(drawn, (max(0, x), y), drawn)
+    return canvas
+
+
 def structured_mouth(img: Image.Image | str, face_w: int = 0, *, open_shape: bool = True) -> Image.Image:
     """Load a path mouth, scale a chin-dot up to the face, and replace a flat dark oval.
 
@@ -747,6 +782,10 @@ class Scene:
             parts = list(rv.layers) + [("mouth", before[0], before[1], before[2]), ("mouth", fading, mouth[1], mouth[2] + 0.001)]
         mouths = [p for p in parts if p[0] == "mouth"]
         mustache = next((p for p in parts if p[0] == "mustache"), None)
+        if mouths and mustache is not None and cur_v not in "XA":
+            opened = open_cavity_below_mustache(layer_image(mouths[-1][1]), cur_v)
+            mouths[-1] = ("mouth", opened, mouths[-1][2], mouths[-1][3])
+            parts = [mouths[-1] if p[0] == "mouth" else p for p in parts]
         mouth_drop, mustache_lift = (0, 0)
         if mouths and mustache is not None and cur_v not in "XA":
             # Seat the open cavity under the mustache so C is not two mouths and F is not hidden.

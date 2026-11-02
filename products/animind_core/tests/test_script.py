@@ -1112,6 +1112,72 @@ def test_the_coherent_pipe_draft_is_kept(monkeypatch):
     assert sum("Judge this debate" in prompt for prompt in calls) == 1
 
 
+def test_a_reply_cannot_name_a_quote_that_is_spoken_later(monkeypatch):
+    pipe = "Pipe smoking contributes to a calm and objective judgment in human affairs."
+    einstein = {"quotes": [_quote("q10", pipe, "Albert_Einstein")]}
+    nietzsche = {"quotes": [_quote("q4", "Convictions are more dangerous enemies of truth than lies.", "Friedrich_Nietzsche")]}
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    order: list[str] = []
+
+    def fake(prompt):
+        if "Judge this debate" in prompt:
+            assert "already said" in prompt
+            if "Pipe smoke proves judgment" in prompt and prompt.index("Pipe smoke proves judgment") < prompt.index(pipe):
+                return [{
+                    "i": 3, "answers_previous": False,
+                    "reason": "pipe is spoken only on a later line", "coherent": False,
+                }]
+            return [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}]
+        if "does not answer the previous line" in prompt or "spoken only later" in prompt:
+            order.append("rewrite-early")
+            assert "line 3" in prompt
+            return [{"i": 3, "text": "Judgment needs a witness."}]
+        if "Write every beat again" in prompt or "Score each candidate quote" in prompt:
+            raise AssertionError("reordered the quote ahead of the reply")
+        return [
+            {"i": 0, "text": "Nietzsche, is judgment only a habit?"},
+            {"i": 1, "quoteId": "q4"},
+            {"i": 2, "text": "Convictions still need a witness."},
+            {"i": 3, "text": "Pipe smoke proves judgment?"},
+            {"i": 4, "quoteId": "q10"},
+            {"i": 5, "text": "A witness can still fail."},
+            {"i": 6, "text": "Failure stays small here."},
+            {"i": 7, "text": "Keep one small witness."},
+            {"i": 8, "text": "The witness stays."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write("debate", "judgment", names, "en-US", sheets=[einstein, nietzsche], use_llm=True)
+    texts = [line["text"] for line in out["lines"]]
+    assert texts[4] == pipe
+    assert "pipe" not in texts[3].lower()
+    assert texts.index(pipe) > 3
+    assert order == ["rewrite-early"]
+    assert not any("refers to a quote spoken later" in problem for problem in out["scriptQA"]["problems"]), out["scriptQA"]
+
+
+def test_judge_tokens_are_logged(tmp_path, monkeypatch):
+    from products.animind_core import llm_providers, telemetry
+
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+
+    def generate(prompt, cache, gemini, *, allow_unavailable_gemini=False):
+        return llm_providers.LLMResult(
+            [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}],
+            "deepseek", "deepseek-flash", 320, 40, 0.000144,
+        ), []
+
+    monkeypatch.setattr(llm_providers, "generate", generate)
+    judged = script.judge_debate(
+        [{"speaker": 0, "text": "Nietzsche, is judgment a habit?"}, {"speaker": 1, "text": "Judgment needs a test."}],
+        ["Albert Einstein", "Friedrich Nietzsche"], "judgment", "en-US", allow_unavailable_gemini=True,
+    )
+    assert judged and judged["coherent"] is True
+    rows = [row for row in telemetry.read() if row["operation"] == "script-judge"]
+    assert rows and rows[-1]["inputTokens"] == 320 and rows[-1]["outputTokens"] == 40
+    assert rows[-1]["costUsd"] == 0.000144
+
+
 def test_debate_plan_fits_the_measured_word_budget():
     rate = 2.6
     plan = script.plan_for("debate", 2, 30, words_per_s=rate)
