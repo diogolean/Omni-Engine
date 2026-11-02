@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from products.animind_core import eyes, frameqa, human_eyes, scene
+import numpy as np
+
+from products.animind_core import eyes, frameqa, human_eyes, qa, scene
 
 
 def _portrait() -> tuple[Image.Image, dict, list]:
@@ -31,6 +33,18 @@ def test_closed_lid_follows_the_drawn_line_and_uses_the_cheek_colour():
     drawn = human_eyes.lid_line_y(eye["upper"], eye["lower"], 1.0, 80)
     edge = human_eyes._alpha_edge_y(built["eyes_closed"], 80, drawn)
     assert human_eyes.lids_near_line(edge, drawn, tol=4)
+    closed = np.asarray(built["eyes_closed"])
+    column = np.nonzero(closed[:, 80, 3] > 200)[0]
+    assert int(column.min()) <= 50  # the drawn upper lid line is covered
+    top = closed[int(column.min()), 80, :3].astype(int)
+    crease = closed[int(column.max()) - 4, 80, :3].astype(int)
+    lash = closed[int(column.max()), 80, :3].astype(int)
+    assert int(top.mean()) > int(crease.mean())
+    assert int(lash.mean()) < int(crease.mean()) - 15
+    half_edge = human_eyes._alpha_edge_y(built["eyes_half"], 80, 0)
+    half_line = human_eyes.lid_line_y(eye["upper"], eye["lower"], 0.5, 80)
+    assert human_eyes.lids_near_line(half_edge, half_line, tol=4)
+    assert half_edge < edge - 4
     # A grey box over the same span is not the lid line.
     box = Image.new("RGBA", plate.size, (0, 0, 0, 0))
     ImageDraw.Draw(box).rectangle((48, 50, 112, 80), fill=(128, 128, 128, 255))
@@ -48,6 +62,7 @@ def test_iris_stays_in_the_sclera_and_the_brow_stays_above_the_eye():
     # The hole where the brow was cut is no longer the brow ink.
     bare = built["head"].getpixel((80, 32))
     assert bare[0] > 80  # inpainted toward skin, not the dark brow
+    assert qa.brow_still_in_head(built["head"], built["brow_left"], (0, 0), (0, 0))
 
 
 def test_emotions_move_the_same_mouth_as_the_brows_and_the_sheet_is_free(tmp_path: Path):
@@ -68,6 +83,64 @@ def test_emotions_move_the_same_mouth_as_the_brows_and_the_sheet_is_free(tmp_pat
     assert set(saved["emotions"]) == set(human_eyes.EMOTIONS)
     assert saved["emotions"]["surprised"]["lid"] == 0.0
     assert saved["emotions"]["angry"]["lid"] > saved["emotions"]["neutral"]["lid"]
+
+
+def test_brow_pose_stays_on_the_forehead_without_stretching():
+    plate = Image.new("RGBA", (200, 160), (0, 0, 0, 0))
+    ImageDraw.Draw(plate).polygon([(20, 34), (50, 28), (80, 34), (78, 40), (50, 38), (22, 40)], fill=(40, 28, 22, 255))
+    part = plate.crop(plate.getchannel("A").getbbox())
+    turned, origin = human_eyes.pose_brow(plate, (0, 0), dy=-80, angle=70, brow_height=12, forehead=(10, 8, 100, 48))
+    clamped = part.rotate(20, resample=Image.Resampling.BILINEAR, expand=True)
+    assert turned.size == clamped.size
+    assert 10 <= origin[0] and origin[1] >= 8
+    assert origin[0] + turned.width <= 100
+    assert origin[1] + turned.height <= 48
+    neutral, _xy = human_eyes.pose_brow(plate, (0, 0), dy=0, angle=0, brow_height=12, forehead=(0, 0, 200, 80))
+    assert neutral.size == part.size
+
+
+def test_human_mouths_share_one_box_and_a_robot_bar_fails_qa():
+    from animation.parametric.factory.rigger import _mouth_layer
+    from products.animind_core import puppet_v3
+
+    mouths = puppet_v3.human_mouths((80, 120), 36)
+    view = {"mouthQA": {"mouths": "human"}, "visemes": {}, "layers": []}
+    for code, (sprite, xy) in mouths.items():
+        assert not qa.robot_mouth_sprite(sprite), code
+        view["visemes"][code] = {"x": xy[0], "y": xy[1], "w": sprite.width, "h": sprite.height, "url": ""}
+    from animation.parametric.puppet import seat_sprite
+
+    seated = seat_sprite(mouths["C"][0], (400, 600), (200, 300))
+    ink = mouths["C"][0].getchannel("A").getbbox()
+    seated_ink = seated.getchannel("A").getbbox()
+    assert seated.size == (400, 600)
+    assert abs((seated_ink[2] - seated_ink[0]) - (ink[2] - ink[0])) <= 2
+    assert seated_ink[2] - seated_ink[0] < 100
+    assert qa.visemes_share_one_scale(view)
+    assert qa.human_avatar_faults(view) == []
+    bar = _mouth_layer((120, 80), (60, 40), 48, "C", {"ink_outline": "#222222", "cavity_interior": "#4a4a4a"})
+    assert qa.robot_mouth_sprite(bar)
+    view["visemes"]["C"] = {"x": 1, "y": 2, "w": 9, "h": 9, "url": ""}
+    assert any("scale" in fault for fault in qa.human_avatar_faults(view))
+
+
+def test_frame_qa_rejects_a_robot_mouth_a_scale_jump_and_a_brow_off_the_forehead():
+    face = {"char": 0, "blink": "open", "emotion": "neutro", "brows": [0, 0], "puppet": {"x": 10, "y": 20, "w": 100, "h": 200}}
+    good = {"frames": [{"t": 0.0, "faces": [face]}, {"t": 0.1, "faces": [{**face, "puppet": {"x": 10, "y": 24, "w": 100, "h": 200}}]}]}
+    bad, _report = frameqa.facial_check(good)
+    assert not any("scale" in message for _i, message in bad)
+    jumped = {"frames": [{"t": 0.0, "faces": [face]}, {"t": 0.1, "faces": [{**face, "puppet": {"x": 10, "y": 20, "w": 70, "h": 140}}]}]}
+    bad, _report = frameqa.facial_check(jumped)
+    assert any("scale" in message for _i, message in bad)
+    robot = {"frames": [{"t": 0.0, "faces": [{**face, "robotMouth": True}]}]}
+    bad, _report = frameqa.facial_check(robot)
+    assert any("robot mouth" in message for _i, message in bad)
+    high = {"frames": [{"t": 0.0, "faces": [{**face, "forehead": [0, 20, 80, 50], "browBox": [4, 2, 40, 16]}]}]}
+    bad, _report = frameqa.facial_check(high)
+    assert any("forehead" in message for _i, message in bad)
+    dup = {"frames": [{"t": 0.0, "faces": [{**face, "duplicateBrow": True}]}]}
+    bad, _report = frameqa.facial_check(dup)
+    assert any("original brow" in message for _i, message in bad)
 
 
 def test_blink_interval_is_three_to_six_seconds_and_closes_in_about_120ms():

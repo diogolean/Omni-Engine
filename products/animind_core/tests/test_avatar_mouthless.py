@@ -192,6 +192,72 @@ def test_pink_lips_under_the_moustache_count_even_when_the_jacket_is_clean():
     assert qa.mouth_under_moustache_has_ink(_head(mouth=False), (48, 28, 208, 210)) is False
 
 
+def test_white_islands_on_the_border_are_cleared_and_an_interior_tooth_stays():
+    from products.animind_core import puppet_v3
+
+    image = Image.new("RGBA", (80, 60), (0, 0, 0, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 20, 8, 36), fill=(250, 250, 250, 255))
+    draw.rectangle((40, 24, 48, 32), fill=(248, 248, 246, 255))
+    fixed = puppet_v3.clean_border_white(image)
+    assert fixed.getpixel((2, 28))[3] == 0
+    assert fixed.getpixel((44, 28))[3] == 255
+
+
+def test_rerig_blanks_lips_once_and_no_edit_skips_the_call(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
+    calls = {"n": 0}
+
+    def generate(prompt, destination, **options):
+        calls["n"] += 1
+        assert "Remove the mouth" in prompt
+        assert options.get("reference_path")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _head(mouth=False).save(destination)
+        return "models/gemini-2.5-flash-image"
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
+    skin = tmp_path / "albert_einstein"
+    skin.mkdir()
+    _head(mouth=True).save(skin / "_gemini.png")
+    built = avatar.rerig_from_plate(
+        skin, description="Albert Einstein, bushy white moustache",
+        url=lambda path: path.name, character_id="albert_einstein", name="Albert Einstein",
+        edit=True, budget=image_models.RunBudget(0.20),
+    )
+    assert calls["n"] == 1
+    assert built["qa"]["costUsd"] > 0
+    view = built["views"]["left"]
+    assert qa.visemes_share_one_scale(view)
+    assert (view.get("mouthQA") or {}).get("mouths") == "human"
+    skipped = tmp_path / "plain" / "albert_einstein"
+    skipped.mkdir(parents=True)
+    _head(mouth=True).save(skipped / "_gemini.png")
+    calls["n"] = 0
+    avatar.rerig_from_plate(
+        skipped, description="Albert Einstein", url=lambda path: path.name,
+        character_id="albert_einstein", name="Albert Einstein", edit=False,
+    )
+    assert calls["n"] == 0
+    price = image_models.selected("nano-banana").usdPerImage
+    refused = tmp_path / "capped" / "albert_einstein"
+    refused.mkdir(parents=True)
+    _head(mouth=True).save(refused / "_gemini.png")
+    calls["n"] = 0
+    with pytest.raises(image_models.BudgetExceeded):
+        avatar.rerig_from_plate(
+            refused, description="Albert Einstein", url=lambda path: path.name,
+            character_id="albert_einstein", name="Albert Einstein",
+            edit=True, budget=image_models.RunBudget(price * 0.2),
+        )
+    assert calls["n"] == 0
+
+
 def test_a_white_footer_is_replaced_so_the_torso_reaches_the_bottom():
     image = Image.new("RGBA", (80, 100), (255, 255, 255, 255))
     ImageDraw.Draw(image).rectangle((8, 4, 72, 78), fill=(30, 40, 90, 255))

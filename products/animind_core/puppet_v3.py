@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -220,6 +221,13 @@ def _seat_human(qa: dict, scale: float, offset: tuple[int, int], socket: Image.I
         "sclera": list(box),
         "browBottom": ty(qa["browBottom"]),
         "eyeTop": ty(qa["eyeTop"]),
+        "browHeight": max(4, int(round(float(qa.get("browHeight") or 8) * scale))),
+        "forehead": [
+            int(round(qa["forehead"][0] * scale + offset[0])),
+            int(round(qa["forehead"][1] * scale + offset[1])),
+            int(round(qa["forehead"][2] * scale + offset[0])),
+            int(round(qa["forehead"][3] * scale + offset[1])),
+        ] if qa.get("forehead") else None,
         "shift": [max(1.0, float(qa["shift"][0]) * scale), max(1.0, float(qa["shift"][1]) * scale)],
     }
 
@@ -237,6 +245,67 @@ def _disc(canvas: tuple[int, int], center: tuple[int, int], radius: int, fill: t
     draw = ImageDraw.Draw(image)
     draw.ellipse(_around(center, radius, radius), fill=fill)
     return image
+
+
+def clean_border_white(image: Image.Image) -> Image.Image:
+    """Drop white islands that touch the frame. They survive a black-key cutout."""
+    arr = np.asarray(image.convert("RGBA")).copy()
+    rgb = arr[:, :, :3].astype(np.int16)
+    lum = rgb.mean(axis=2)
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    white = ((lum >= 225) & (chroma <= 22) & (arr[:, :, 3] > 8)).astype(np.uint8)
+    count, labels = cv2.connectedComponents(white, connectivity=8)
+    if count <= 1:
+        return image
+    edge = np.zeros(labels.shape, bool)
+    edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
+    touch = set(np.unique(labels[edge])) - {0}
+    if not touch:
+        return image
+    kill = np.isin(labels, list(touch))
+    arr[kill, 3] = 0
+    return Image.fromarray(arr, "RGBA")
+
+
+def human_mouths(mouth_at: tuple[int, int], width: int) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
+    """One human mouth set, every viseme on the same canvas and the same anchor.
+
+    The Aiwake rigger draws robot bars. Those stay on mecha puppets. A person
+    uses the organic set, and no viseme is allowed to change the puppet's scale.
+    """
+    from . import mouthset  # noqa: PLC0415
+
+    colours = {
+        "outline": (48, 32, 30, 255),
+        "cavity": (36, 16, 18, 255),
+        "teeth": (246, 242, 236, 255),
+        "tongue": (186, 86, 90, 255),
+        "lip": (154, 78, 76, 255),
+    }
+    drawn = mouthset.draw_set(max(18, int(width)), colours, squeeze=0.92)
+    sample = next(iter(drawn.values()))
+    anchor = (int(round(mouth_at[0] - sample.width / 2)), int(round(mouth_at[1] - sample.height / 2)))
+    return {code: (sprite, anchor) for code, sprite in drawn.items()}
+
+
+def human_expressions(anchor: tuple[int, int], size: tuple[int, int], width: int) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
+    """Emotion rests on the same canvas and anchor as the visemes."""
+    from . import mouthset  # noqa: PLC0415
+
+    colours = {
+        "outline": (48, 32, 30, 255),
+        "cavity": (36, 16, 18, 255),
+        "teeth": (246, 242, 236, 255),
+        "tongue": (186, 86, 90, 255),
+        "lip": (154, 78, 76, 255),
+    }
+    drawn = mouthset.draw_expressions(max(18, int(width)), colours, squeeze=0.92)
+    seated: dict[str, tuple[Image.Image, tuple[int, int]]] = {}
+    for name, sprite in drawn.items():
+        canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+        canvas.paste(sprite, ((size[0] - sprite.width) // 2, (size[1] - sprite.height) // 2), sprite)
+        seated[name] = (canvas, anchor)
+    return seated
 
 
 def _mouth_part(skin: Path, code: str, scale: float, offset: tuple[int, int], canvas: tuple[int, int]) -> tuple[Image.Image, tuple[int, int]]:
@@ -318,11 +387,10 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         max(face[2], eye_boxes[0][2], eye_boxes[1][2]) + pad,
         face[3] + pad,
     )
-    visemes = {code: _mouth_part(skin, code, scale, offset, canvas) for code in rig.VISEMES}
-    happy = _mouth_part(skin, "A", scale, offset, canvas)
-    smug = skin / "mouths" / "mouth_smug_smile.png"
-    if smug.is_file():
-        happy = _place(_bake(_open(smug), scale, offset, canvas))
+    mouth_width = max(18, int(radius * 3))
+    visemes = human_mouths(mouth_at, mouth_width)
+    sample = next(iter(visemes.values()))
+    expressions = human_expressions(sample[1], sample[0].size, mouth_width)
     parts = {
         "size": canvas,
         "torso": _place(torso),
@@ -337,14 +405,14 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         "brows": _place(brows),
         **({"brow_left": _place(brow_left), "brow_right": _place(brow_right)} if brow_left is not None else {}),
         "visemes": visemes,
-        "expressions": {"happy": happy},
+        "expressions": expressions,
         "eyeRig": {
             "maxShift": [max(1.0, radius * 0.3), max(1.0, radius * 0.2)],
             "irises": [[left_eye[0], left_eye[1], radius / 3], [right_eye[0], right_eye[1], radius / 3]],
         },
         "mouthQA": {
             "head": "aiwake v3",
-            "mouths": "aiwake v3",
+            "mouths": "human",
             "mouthBox": list(mouth),
             "mouth": list(mouth),
             "eyes": [list(eye_boxes[0]), list(eye_boxes[1])],

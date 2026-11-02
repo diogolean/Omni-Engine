@@ -175,6 +175,29 @@ def facial_check(trace: dict[str, Any]) -> tuple[list[tuple[int, str]], dict[str
             bad.append((states[0][0], f"char {char}: brows frozen at neutral during emotional speech"))
         if len(brow_emotions[char]) > 1 and len(brow_states[char]) < 2:
             bad.append((states[0][0], f"char {char}: brows do not vary across emotions"))
+        puppet_boxes = [face.get("puppet") for _index, face in states if face.get("puppet")]
+        if len(puppet_boxes) >= 2:
+            first = puppet_boxes[0]
+            if any(
+                box["w"] != first["w"] or box["h"] != first["h"] or abs(int(box["x"]) - int(first["x"])) > 2
+                for box in puppet_boxes
+            ):
+                bad.append((states[0][0], f"char {char}: character scale or position changes between visemes"))
+        for index, face in states:
+            if face.get("robotMouth"):
+                bad.append((index, f"char {char}: robot mouth on a human"))
+                break
+            forehead = face.get("forehead")
+            brow_box = face.get("browBox")
+            if forehead and brow_box and (
+                brow_box[1] < forehead[1] - 2 or brow_box[3] > forehead[3] + 2
+                or brow_box[0] < forehead[0] - 4 or brow_box[2] > forehead[2] + 4
+            ):
+                bad.append((index, f"char {char}: brow leaves the forehead"))
+                break
+            if face.get("duplicateBrow"):
+                bad.append((index, f"char {char}: original brow is still painted in the head"))
+                break
         for index, face in states:
             human = face.get("humanEyes")
             if human:

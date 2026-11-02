@@ -30,6 +30,14 @@ def fake_human_landmarks(image: Image.Image, *, require_human_face: bool = False
     right = (head[0] + int(span_x * 0.65), head[1] + int(span_y * 0.38))
     mouth = (head[0] + span_x // 2, head[1] + int(span_y * 0.72))
     chin = (mouth[0], head[3] - 1)
+    rx, ry = max(8, int(span_x * 0.12)), max(8, int(span_y * 0.08))
+
+    def ring() -> tuple[tuple[int, int], ...]:
+        points = []
+        for step in range(12):
+            ang = np.pi * 2 * step / 12
+            points.append((int(round(mouth[0] + np.cos(ang) * rx)), int(round(mouth[1] + np.sin(ang) * ry))))
+        return tuple(points)
     return FacialLandmarks(
         left_eye=EyeLandmark(uv(*left), 0.04),
         right_eye=EyeLandmark(uv(*right), 0.04),
@@ -41,6 +49,7 @@ def fake_human_landmarks(image: Image.Image, *, require_human_face: bool = False
         head_bbox=head,
         confidence=0.95,
         backend="mediapipe_tasks",
+        lip_ring=ring(),
     )
 
 

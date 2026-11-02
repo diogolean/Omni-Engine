@@ -123,6 +123,7 @@ def create_avatar(
     reuse: bool = True,
     budget: image_models.RunBudget | None = None,
     allow_mock: bool = False,
+    edit_mouth: bool = True,
 ) -> dict[str, Any]:
     """Generate once, then reuse the cached bust for every later scene."""
     description = " ".join((description or "a person").split())[:400]
@@ -164,6 +165,7 @@ def create_avatar(
         try:
             left, front, spec_provider, spec_model, cost, mock, front_status, mouthless = _acquire(
                 description, style_id, stick_figure, skin, model_id, budget, allow_mock, ledger,
+                edit_mouth=edit_mouth,
             )
         except SideViewMissing:
             if passing is None:
@@ -207,6 +209,7 @@ def create_avatar(
         placed = _placed_features(skin)
         if not placed["pass"]:
             raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
+        _reject_avatar_faults(skin, views)
     else:
         views = _rig_views(left, front, skin, url, mouthless=mouthless)
     rig_path = skin / "rig.json"
@@ -298,6 +301,7 @@ def _acquire(
     budget: image_models.RunBudget,
     allow_mock: bool,
     ledger: dict[str, Any],
+    edit_mouth: bool = True,
 ) -> tuple[Image.Image, Image.Image, str, str, float, bool, str, bool]:
     del style_id, model_id
     if not _gemini_ready():
@@ -311,7 +315,7 @@ def _acquire(
     spent = float(ledger.get("spentUsd") or 0.0)
     plate_path = skin / "_gemini.png"
     _image, cost = _plate(prompt, plate_path, budget, spent)
-    _image = puppet_v3.drop_white_footer(_image)
+    _image = _prepare_plate(_image)
     _image.save(plate_path)
     from animation.parametric.factory.landmark_detector import (  # noqa: PLC0415
         RoboticLandmarkRefused,
@@ -322,17 +326,11 @@ def _acquire(
         marks = detect_landmarks(_image, require_human_face=True)
     except RoboticLandmarkRefused:
         raise
-    if qa.mouth_under_moustache_has_ink(_image, marks.head_bbox):
-        reference = skin / "_gemini_ref.png"
-        _image.save(reference)
-        _image, extra = _plate(
-            puppet_v3.MOUTH_EDIT_PROMPT, plate_path, budget, spent + cost, reference=reference,
-        )
+    if edit_mouth and _plate_has_lips(_image, marks):
+        _image, extra = _edit_painted_lips(_image, plate_path, budget, spent + cost, skin)
         cost += extra
-        _image = puppet_v3.drop_white_footer(_image)
-        _image.save(plate_path)
         marks = detect_landmarks(_image, require_human_face=True)
-        if qa.mouth_under_moustache_has_ink(_image, marks.head_bbox):
+        if _plate_has_lips(_image, marks):
             raise RuntimeError("mouth still drawn under the moustache after one edit")
     character_id = "".join(ch if ch.isalnum() else "_" for ch in skin.name.lower())[:48] or "avatar"
     try:
@@ -351,6 +349,7 @@ def _acquire(
         raise SideViewMissing(
             f"side view missing: the Aiwake rigger did not return a puppet ({type(exc).__name__})"
         ) from exc
+    _clean_cutouts(skin)
     _install_human_eyes(skin)
     character = Image.open(skin / "character.png").convert("RGBA")
     spec = image_models.selected(_FLASH_MODEL_ID)
@@ -786,16 +785,78 @@ def cached_plate(skin: Path) -> Path | None:
     return None
 
 
-def rerig_from_plate(skin: Path, *, description: str, url: Callable[[Path], str], character_id: str, name: str) -> dict[str, Any]:
-    """Cut the saved plate again. No Gemini call."""
+def _plate_has_lips(image: Image.Image, marks: Any) -> bool:
+    """Lip colour inside the landmark lip ring. The face box is the fallback."""
+    ring = tuple(getattr(marks, "lip_ring", ()) or ())
+    if len(ring) >= 3:
+        return qa.lips_in_polygon(image, ring)
+    box = getattr(marks, "head_bbox", None)
+    return bool(box) and qa.mouth_under_moustache_has_ink(image, box)
+
+
+def _prepare_plate(image: Image.Image) -> Image.Image:
+    return puppet_v3.clean_border_white(puppet_v3.drop_white_footer(image))
+
+
+def _edit_painted_lips(
+    image: Image.Image,
+    dest: Path,
+    budget: image_models.RunBudget,
+    spent: float,
+    skin: Path,
+) -> tuple[Image.Image, float]:
+    """One budget-checked Gemini edit. The plate is the reference."""
+    reference = skin / "_gemini_ref.png"
+    image.save(reference)
+    edited, cost = _plate(puppet_v3.MOUTH_EDIT_PROMPT, dest, budget, spent, reference=reference)
+    edited = _prepare_plate(edited)
+    edited.save(dest)
+    return edited, cost
+
+
+def _clean_cutouts(skin: Path) -> None:
+    for name in ("character.png", "head.png", "body.png", "collar.png"):
+        path = skin / name
+        if path.is_file():
+            puppet_v3.clean_border_white(Image.open(path).convert("RGBA")).save(path)
+
+
+def _reject_avatar_faults(skin: Path, views: dict[str, Any]) -> None:
+    """A rig with a robot mouth, a jumping scale, or a double brow does not pass."""
+    view = views.get("left") or next(iter(views.values()))
+    faults = qa.human_avatar_faults(view, root=skin / "views" / "left")
+    if faults:
+        raise RuntimeError("human avatar failed QA: " + "; ".join(faults))
+
+
+def rerig_from_plate(
+    skin: Path,
+    *,
+    description: str,
+    url: Callable[[Path], str],
+    character_id: str,
+    name: str,
+    edit: bool = True,
+    budget: image_models.RunBudget | None = None,
+) -> dict[str, Any]:
+    """Cut the saved plate again. Gemini runs only to blank a painted mouth."""
+    from animation.parametric.factory.landmark_detector import detect_landmarks  # noqa: PLC0415
     from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
 
     plate = cached_plate(skin)
     if plate is None:
         raise FileNotFoundError(f"no cached plate in {skin}; nothing to re-rig without an image call")
-    fixed = puppet_v3.drop_white_footer(Image.open(plate).convert("RGBA"))
+    fixed = _prepare_plate(Image.open(plate).convert("RGBA"))
     fixed_path = skin / "_plate.png"
     fixed.save(fixed_path)
+    marks = detect_landmarks(fixed, require_human_face=True)
+    cost = 0.0
+    if edit and _plate_has_lips(fixed, marks):
+        budget = budget or image_models.run_budget()
+        fixed, cost = _edit_painted_lips(fixed, fixed_path, budget, 0.0, skin)
+        marks = detect_landmarks(fixed, require_human_face=True)
+        if _plate_has_lips(fixed, marks):
+            raise RuntimeError("mouth still drawn under the moustache after one edit")
     prompt = puppet_v3.avatar_prompt(description, stick=False, facing="left")
     create_puppet(
         character_id=character_id,
@@ -806,17 +867,19 @@ def rerig_from_plate(skin: Path, *, description: str, url: Callable[[Path], str]
         rerig=(skin / "puppet.json").is_file(),
         require_human_face=True,
     )
+    _clean_cutouts(skin)
     _install_human_eyes(skin)
     views = puppet_v3.adapt(skin, url)
     placed = _placed_features(skin)
     if not placed["pass"]:
         raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
+    _reject_avatar_faults(skin, views)
     built = {
         "views": views,
         "viewStatus": {"left": "image-model", "right": "mirror of left", "front": "aiwake v3 mouthless"},
         "mouthShots": {"visemes": list(VISEMES)},
         "frontShot": "aiwake v3 mouthless",
-        "qa": {"score": 100, "costUsd": 0.0, "failed": []},
+        "qa": {"score": 100, "costUsd": round(cost, 4), "failed": []},
         "generator": "gemini",
         "model": "cached-plate",
         "cached": True,
@@ -836,7 +899,8 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(prog="python -m products.animind_core.avatar")
     parser.add_argument("name", nargs="*", default=["einstein"])
-    parser.add_argument("--rerig", action="store_true", help="re-rig the cached plate; no image call")
+    parser.add_argument("--rerig", action="store_true", help="re-rig the cached plate; no new plate")
+    parser.add_argument("--no-edit", action="store_true", help="do not call Gemini to blank painted lips")
     args = parser.parse_args(argv)
     tokens = list(args.name or ["einstein"])
     rerig = bool(args.rerig)
@@ -852,10 +916,13 @@ def main(argv: list[str] | None = None) -> None:
         except ValueError:
             return path.name
 
+    edit = not args.no_edit
     if rerig:
-        built = rerig_from_plate(skin, description=description, url=url, character_id=folder, name=display)
+        built = rerig_from_plate(
+            skin, description=description, url=url, character_id=folder, name=display, edit=edit,
+        )
     else:
-        built = create_avatar(description, "cartoon", skin=skin, url=url)
+        built = create_avatar(description, "cartoon", skin=skin, url=url, edit_mouth=edit)
         write_character_json(skin, built, character_id=folder, name=display, url=url)
     print(
         f"avatar {folder} cost US${built['qa']['costUsd']:.4f} "

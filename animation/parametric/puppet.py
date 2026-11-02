@@ -565,8 +565,17 @@ class PuppetRig:
                 f"puppet {skin.character_id!r} head/body canvases differ: "
                 f"head={layers['head'].size}, body={self.canvas_size}"
             )
+        mouth_keys = set(VISEME_LAYER_KEYS) | set(REST_MOUTH_LAYER_KEYS)
+        mouth_at = self.skin.anchors.mouth
         for key, image in tuple(layers.items()):
             if key == "bg" or image.size == self.canvas_size:
+                continue
+            if key in mouth_keys:
+                # A viseme file that is not the body canvas used to be letterboxed
+                # into that canvas. C, D, E and H (the tall mecha bars) then drew
+                # the character smaller inside the frame. Seat the sprite at the
+                # mouth anchor at its own pixels instead.
+                layers[key] = seat_sprite(image, self.canvas_size, mouth_at)
                 continue
             _LOG.warning(
                 "resizing puppet %r layer %s from %s to body canvas %s",
@@ -633,10 +642,6 @@ class PuppetRig:
             head_stack.alpha_composite(mouth_layer)
             head_arr = np.asarray(head_stack, dtype=np.uint8).copy()
             self._head_stack[viseme] = head_arr
-            self._head_bbox[viseme] = _alpha_bbox(
-                head_arr[..., 3].astype(np.float32),
-                pad=80,
-            )
         bare_head = Image.new("RGBA", self.canvas_size, (0, 0, 0, 0))
         bare_head.alpha_composite(layers["head"])
         bare_head.alpha_composite(layers["eyes_open"])
@@ -644,6 +649,11 @@ class PuppetRig:
         self._head_content_bbox = _alpha_bbox(
             self._bare_head[..., 3].astype(np.float32),
         )
+        # One crop for every viseme. A taller mouth must not grow the head box
+        # that the camera then scales into the frame.
+        shared_head = _alpha_bbox(self._bare_head[..., 3].astype(np.float32), pad=80)
+        for viseme in VISEMES:
+            self._head_bbox[viseme] = shared_head
         component_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(
             np.where(self._bare_head[..., 3] > 8, 255, 0).astype(np.uint8),
             connectivity=8,
@@ -1420,6 +1430,21 @@ class PuppetRig:
         out = np.zeros_like(arr)
         _paste_np(out, arr, 0, int(round(y_offset)))
         return out
+
+
+def seat_sprite(image: Image.Image, canvas_size: tuple[int, int], anchor: tuple[int, int]) -> Image.Image:
+    """Put a mouth sprite on the body canvas without scaling it."""
+    canvas = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    box = image.getchannel("A").getbbox()
+    if box is None:
+        return canvas
+    part = image.crop(box)
+    origin = (
+        int(round(anchor[0] - part.width / 2)),
+        int(round(anchor[1] - part.height / 2)),
+    )
+    canvas.paste(part, origin, part)
+    return canvas
 
 
 def _contain_rgba(image: Image.Image, canvas_size: tuple[int, int]) -> Image.Image:

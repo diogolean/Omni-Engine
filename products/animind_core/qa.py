@@ -425,10 +425,8 @@ def review_sheet(skin: Path, gates: dict[str, Any], total: int, cost: float, des
         fb = json.loads((skin / ("rig.json" if vname == "left" else "rig_front.json")).read_text())["boxes"]["face"]
         fw = fb[2] - fb[0]
         box = (max(0, fb[0] - fw // 3), max(0, fb[1] - fw // 4), fb[2] + fw // 3, fb[3] + fw // 3)
-        tiles = [comp("X", False).crop(box), comp("D", False).crop(box), comp("X", True).crop(box)]
-        tiles += [comp(k, False).crop((v["visemes"]["X"]["x"] - 10, v["visemes"]["X"]["y"] - 10,
-                                       v["visemes"]["X"]["x"] + Image.open(d / v["visemes"]["X"]["url"]).width + 10,
-                                       v["visemes"]["X"]["y"] + Image.open(d / v["visemes"]["X"]["url"]).height + 10)) for k in "XABCDEFGH"]
+        tiles = [comp(k, False).crop(box) for k in "XABCDEFGH"]
+        tiles = [comp("X", False).crop(box), comp("D", False).crop(box), comp("X", True).crop(box)] + tiles
         row = Image.new("RGB", (260 * 3 + 120 * 9, 300), (30, 30, 34))
         for i, t in enumerate(tiles):
             t = t.convert("RGB")
@@ -551,6 +549,153 @@ def lids_within_iris(lid_box: tuple[int, int, int, int], iris: tuple[int, int], 
     """The lid's vertical centre sits on the iris, not in the under-eye wrinkle."""
     mid = (lid_box[1] + lid_box[3]) / 2
     return abs(mid - iris[1]) <= tol
+
+
+def lips_in_polygon(image: Image.Image, polygon: tuple | list) -> bool:
+    """Lip colour inside the FaceLandmarker lip ring, compared with the cheek beside it."""
+    import cv2  # noqa: PLC0415
+
+    if len(polygon) < 3:
+        return False
+    arr = np.asarray(image.convert("RGBA"))
+    mask = Image.new("L", (arr.shape[1], arr.shape[0]), 0)
+    ImageDraw.Draw(mask).polygon([tuple(p) for p in polygon], fill=255)
+    inside = np.asarray(mask) > 128
+    if int(inside.sum()) < 6:
+        return False
+    rgb = arr[:, :, :3].astype(np.int16)
+    opaque = arr[:, :, 3] > 128
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    sat = chroma / np.maximum(rgb.max(axis=2), 1)
+    lum = rgb.mean(axis=2)
+    ring = cv2.dilate(inside.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    skin = ring & ~inside & opaque & (rgb[:, :, 0] > rgb[:, :, 2] + 6) & (lum > 80) & (sat < 0.45)
+    if int(skin.sum()) < 8:
+        return False
+    skin_rg = float(np.median((rgb[:, :, 0] - rgb[:, :, 1])[skin]))
+    lips = (
+        inside & opaque
+        & ((rgb[:, :, 0] - rgb[:, :, 1]) > skin_rg + 14)
+        & (rgb[:, :, 0] > rgb[:, :, 2] + 12)
+        & (sat >= 0.14)
+        & (lum > 60)
+        & (lum < 235)
+    )
+    return int(lips.sum()) > max(8, int(0.08 * inside.sum()))
+
+
+def robot_mouth_sprite(sprite: Image.Image) -> bool:
+    """A grey or black mecha bar. A lip-coloured mouth, and a thin rest line, are human."""
+    arr = np.asarray(sprite.convert("RGBA"))
+    ink = arr[:, :, 3] > 128
+    if int(ink.sum()) < 24:
+        return False
+    rgb = arr[:, :, :3].astype(np.int16)
+    lip = ink & ((rgb[:, :, 0] - rgb[:, :, 1]) > 18) & (rgb[:, :, 0] > rgb[:, :, 2] + 10)
+    if int(lip.sum()) > 12:
+        return False
+    lum_map = rgb.mean(axis=2)
+    body = ink & (lum_map < 180)
+    if int(body.sum()) < 24:
+        return False
+    ys, xs = np.nonzero(body)
+    height = int(ys.max() - ys.min()) + 1
+    width = int(xs.max() - xs.min()) + 1
+    if height < 8 or width < height * 1.15:
+        return False
+    chroma = (rgb.max(axis=2) - rgb.min(axis=2))[body]
+    # Mecha bars are grey. A human E is dark but still warm (chroma around 10).
+    return float(chroma.mean()) < 8 and float(lum_map[body].mean()) < 110
+
+
+def visemes_share_one_scale(view: dict) -> bool:
+    """Every viseme uses one canvas and one anchor, so the puppet cannot jump."""
+    mouths = list((view.get("visemes") or {}).values())
+    if len(mouths) < 2:
+        return True
+    first = mouths[0]
+    return all(m["x"] == first["x"] and m["y"] == first["y"] and m["w"] == first["w"] and m["h"] == first["h"] for m in mouths)
+
+
+def brow_still_in_head(head: Image.Image, brow: Image.Image, brow_xy: tuple[int, int], head_xy: tuple[int, int]) -> bool:
+    """The inpainted head should not still carry the dark brow under the cut layer."""
+    brow_a = np.asarray(brow.getchannel("A")) > 160
+    if int(brow_a.sum()) < 8:
+        return True
+    ys, xs = np.nonzero(brow_a)
+    head_arr = np.asarray(head.convert("RGBA"))
+    dark = 0
+    seen = 0
+    for y, x in zip(ys[::3], xs[::3]):
+        px = brow_xy[0] + int(x) - head_xy[0]
+        py = brow_xy[1] + int(y) - head_xy[1]
+        if not (0 <= px < head_arr.shape[1] and 0 <= py < head_arr.shape[0]):
+            continue
+        seen += 1
+        pixel = head_arr[py, px]
+        if pixel[3] > 128 and int(pixel[:3].mean()) < 70:
+            dark += 1
+    return seen == 0 or dark / seen < 0.15
+
+
+def _view_file(root: Path | None, layer: dict[str, Any], code: str | None = None) -> Path | None:
+    url = layer.get("url")
+    if url and Path(str(url)).is_file():
+        return Path(str(url))
+    if root is None:
+        return None
+    if code:
+        path = root / "mouths" / f"{code}.png"
+        return path if path.is_file() else None
+    name = str(layer.get("name") or "")
+    path = root / f"{name}.png"
+    return path if path.is_file() else None
+
+
+def human_avatar_faults(view: dict, *, root: Path | None = None, head: Image.Image | None = None,
+                        brow: Image.Image | None = None, brow_xy: tuple[int, int] | None = None,
+                        head_xy: tuple[int, int] | None = None, forehead: tuple | None = None) -> list[str]:
+    """Why a human rig must not pass: robot mouths, a jumping scale, or a double brow."""
+    faults: list[str] = []
+    human = (view.get("mouthQA") or {}).get("mouths") == "human"
+    if human:
+        for name, layer in (view.get("visemes") or {}).items():
+            path = _view_file(root, layer, name)
+            if path is None:
+                continue
+            if robot_mouth_sprite(Image.open(path).convert("RGBA")):
+                faults.append(f"viseme {name} is a robot mouth")
+                break
+        if not visemes_share_one_scale(view):
+            faults.append("viseme canvases differ, so the character scale jumps")
+    info = view.get("humanEyes") or {}
+    if forehead is None and info.get("forehead"):
+        forehead = tuple(info["forehead"])
+    layers = {layer.get("name"): layer for layer in view.get("layers") or []}
+    if brow is None and root is not None and layers.get("brow_left"):
+        path = _view_file(root, layers["brow_left"])
+        if path is not None:
+            brow = Image.open(path).convert("RGBA")
+            brow_xy = (int(layers["brow_left"]["x"]), int(layers["brow_left"]["y"]))
+    if head is None and root is not None and layers.get("head"):
+        path = _view_file(root, layers["head"])
+        if path is not None:
+            head = Image.open(path).convert("RGBA")
+            head_xy = (int(layers["head"]["x"]), int(layers["head"]["y"]))
+    if forehead and brow is not None and brow_xy is not None:
+        box = brow.getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox()
+        if box:
+            left = brow_xy[0] + box[0]
+            top = brow_xy[1] + box[1]
+            right = brow_xy[0] + box[2]
+            bottom = brow_xy[1] + box[3]
+            span = max(12, int(forehead[3] - forehead[1]))
+            if top < forehead[1] - span or bottom > forehead[3] + span // 2 or left < forehead[0] - span or right > forehead[2] + span:
+                faults.append("brow leaves the forehead")
+    if head is not None and brow is not None and brow_xy is not None and head_xy is not None:
+        if not brow_still_in_head(head, brow, brow_xy, head_xy):
+            faults.append("original brow is still painted in the head")
+    return faults
 
 
 def features_on_face(

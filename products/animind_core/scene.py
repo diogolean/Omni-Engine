@@ -225,6 +225,12 @@ def tuck_mustache_over_mouth(mouth: Image.Image, head: Image.Image, mouth_xy: tu
     return Image.fromarray(arr)
 
 
+def qa_robot_mouth(sprite: Image.Image | str) -> bool:
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    return qa_mod.robot_mouth_sprite(layer_image(sprite))
+
+
 def structured_mouth(img: Image.Image | str, face_w: int = 0, *, open_shape: bool = True) -> Image.Image:
     """Load a path mouth, scale a chin-dot up to the face, and replace a flat dark oval.
 
@@ -270,6 +276,7 @@ class RigView:
     mouthless: bool = False
     seated_eyes: tuple = ()  # (lid box, iris xy) in rig pixels, for the 4px lid check
     human_eyes: dict | None = None
+    human_mouth: bool = False
 
 
 def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None) -> RigView:
@@ -295,6 +302,7 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
             for box, iris in zip(mq["eyes"], irises)
         )
     rv.human_eyes = view.get("humanEyes")
+    rv.human_mouth = (view.get("mouthQA") or {}).get("mouths") == "human"
     if view.get("eyeRig"):
         mx, my = view["eyeRig"]["maxShift"]
         rv.eye_shift = (mx * scale, my * scale)
@@ -804,9 +812,14 @@ class Scene:
             else None
         ) or rv.visemes.get(cur_v) or rv.visemes.get("X")
         mouth_tag = f"X_{expression}" if cur_v == "X" and expression in rv.expressions else cur_v
+        face_row["puppet"] = {"x": int(x0), "y": int(y0), "w": int(rv.size[0]), "h": int(rv.size[1])}
+        if rv.human_mouth and mouth is not None and qa_robot_mouth(mouth[0]):
+            face_row["robotMouth"] = True
         head = next((part for part in rv.layers if part[0] == "head"), None)
         face_w = layer_image(head[1]).width if head is not None else 0
-        if mouth is not None:
+        if mouth is not None and not rv.human_mouth:
+            # A human set is already one canvas and one anchor. Rescaling a
+            # viseme here changes the sprite box and the character jumps.
             grow_w = round(face_w * F_FACE_SHARE) if cur_v == "F" else face_w
             mouth = (structured_mouth(mouth[0], grow_w, open_shape=cur_v not in "XA"), mouth[1], mouth[2])
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
@@ -828,6 +841,7 @@ class Scene:
             self._mouth_log.append({"char": idx, "v": mouth_tag, "layers": len(mouths), "view": view,
                                     "box": _qa_box((ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3]))})
         names = {p[0] for p in parts}
+        brow_box: list[int] | None = None
         movable = {"eye_white", "iris", "eye_socket"} <= names
         socket = next((p for p in parts if p[0] == "eye_socket"), None)
         for name, img, (lx, ly), _z in sorted(parts, key=lambda p: p[3]):
@@ -847,13 +861,18 @@ class Scene:
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
             if name in {"brow_left", "brow_right"}:
+                from . import human_eyes as human_mod  # noqa: PLC0415
                 side = 0 if name == "brow_left" else 1
-                angle = brow_pose[2 + side]
-                original = img
-                img = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
-                lx -= (img.width - original.width) // 2
-                ly -= (img.height - original.height) // 2
-                dy += brow_pose[side] * SS
+                info = rv.human_eyes or {}
+                img, (lx, ly) = human_mod.pose_brow(
+                    img, (lx, ly), brow_pose[side] * SS, brow_pose[2 + side],
+                    info.get("browHeight") or max(8, img.height), info.get("forehead"),
+                )
+                box = [lx, ly, lx + img.width, ly + img.height]
+                brow_box = box if brow_box is None else [
+                    min(brow_box[0], box[0]), min(brow_box[1], box[1]),
+                    max(brow_box[2], box[2]), max(brow_box[3], box[3]),
+                ]
             elif name in {"arm_left", "arm_right"}:
                 side = 0 if name == "arm_left" else 1
                 angle = arm_pose[side]
@@ -862,6 +881,9 @@ class Scene:
                 lx -= (img.width - original.width) // 2
                 ly -= (img.height - original.height) // 2
             stage.alpha_composite(img, (x0 + lx + hdx, y0 + ly + round(dy) + hdy))
+        if brow_box and rv.human_eyes and rv.human_eyes.get("forehead"):
+            face_row["browBox"] = brow_box
+            face_row["forehead"] = [int(v) for v in rv.human_eyes["forehead"]]
         if mouths:  # reference: the one mouth as drawn, measured the way the video QA measures frames
             key = (idx, view, mouth_tag)
             if key not in self._mouth_ref:

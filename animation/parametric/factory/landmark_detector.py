@@ -57,6 +57,7 @@ class FacialLandmarks:
     right_lower: tuple[tuple[int, int], ...] = ()
     left_brow: tuple[tuple[int, int], ...] = ()
     right_brow: tuple[tuple[int, int], ...] = ()
+    lip_ring: tuple[tuple[int, int], ...] = ()
 
     def pixel_point(self, point: Point3D) -> tuple[int, int]:
         x0, y0, x1, y1 = self.head_bbox
@@ -227,6 +228,7 @@ def _mesh_landmarks(
         right_lower=chain((263, 249, 390, 373, 374, 380, 381, 382, 362)),
         left_brow=chain((70, 63, 105, 66, 107)),
         right_brow=chain((300, 293, 334, 296, 336)),
+        lip_ring=chain((61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146)),
     )
 
 

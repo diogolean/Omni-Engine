@@ -69,15 +69,20 @@ def compose(
         with Image.open(l["url"]) as im:
             img = im.convert("RGBA")
         xy = (l["x"], l["y"])
+        stored = (int(l.get("w") or img.width), int(l.get("h") or img.height))
+        if img.size != stored:
+            # The viseme file must not bring its own scale. The rig box is shared.
+            img = img.resize(stored, Image.Resampling.LANCZOS)
         if name in {"brow_left", "brow_right", "brows"}:
+            from . import human_eyes as human_mod  # noqa: PLC0415
             side = 0 if name == "brow_left" else 1
             if name == "brows":
                 dy = (brow_pose[0] + brow_pose[1]) / 2
                 angle = (brow_pose[2] + brow_pose[3]) / 2
             else:
                 dy, angle = brow_pose[side], brow_pose[2 + side]
-            img = img.rotate(angle, Image.Resampling.BICUBIC, expand=True)
-            xy = (round(xy[0] - (img.width - l["w"]) / 2), round(xy[1] + dy - (img.height - l["h"]) / 2))
+            info = view.get("humanEyes") or {}
+            img, xy = human_mod.pose_brow(img, xy, dy, angle, info.get("browHeight") or max(8, l["h"]), info.get("forehead"))
         if name == "iris" and movable:
             s = layers["eye_socket"]
             with Image.open(s["url"]) as im:

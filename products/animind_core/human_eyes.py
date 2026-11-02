@@ -125,19 +125,40 @@ def paint_lid(
     amount: float,
     skin: tuple[int, int, int],
 ) -> Image.Image:
-    """Skin from the drawn upper lid down to the blink line. Empty when open."""
+    """Cover from the drawn upper lid down to the closing edge.
+
+    The top of the lid is a lighter grade of the cheek. The crease is a
+    little darker. A dark lash sits on the moving edge, so the painted lid
+    line does not remain above the blink.
+    """
     image = Image.new("RGBA", size, (0, 0, 0, 0))
-    if amount <= 0.02:
+    if amount <= 0.02 or not upper or not lower:
         return image
-    top = _resample(upper)
+    # Step the cover up over the original lash so it cannot read as a sticker.
+    top = [(int(x), int(y) - 3) for x, y in _resample(upper, 24)]
     bottom = lowered_lid(upper, lower, amount)
     if len(top) < 2 or len(bottom) < 2:
         return image
-    poly = top + list(reversed(bottom))
-    draw = ImageDraw.Draw(image)
-    draw.polygon(poly, fill=(*skin, 255))
-    # One soft pixel on the lash line so the edge is the lid, not a hard box.
-    draw.line(bottom, fill=(*tuple(max(0, c - 35) for c in skin), 255), width=1)
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).polygon(top + list(reversed(bottom)), fill=255)
+    covered = np.asarray(mask) > 0
+    if not covered.any():
+        return image
+    light = np.clip(np.array(skin, np.float32) * np.array([1.08, 1.05, 1.02]), 0, 255)
+    shadow = np.clip(np.array(skin, np.float32) * np.array([0.78, 0.70, 0.66]), 0, 255)
+    out = np.zeros((size[1], size[0], 4), np.uint8)
+    xs = np.unique(np.nonzero(covered)[1])
+    for x in xs:
+        column = np.nonzero(covered[:, x])[0]
+        y0, y1 = int(column.min()), int(column.max())
+        span = max(1, y1 - y0)
+        shade = np.linspace(0.0, 1.0, column.size)
+        colours = light * (1 - shade[:, None]) + shadow * shade[:, None]
+        out[column, x, :3] = np.clip(colours, 0, 255).astype(np.uint8)
+        out[column, x, 3] = 255
+    image = Image.fromarray(out, "RGBA")
+    lash = tuple(int(v) for v in np.clip(np.array(skin) * 0.35, 0, 255))
+    ImageDraw.Draw(image).line(bottom, fill=(*lash, 255), width=2)
     return image
 
 
@@ -198,20 +219,63 @@ def _mask_rgba(mask: Image.Image) -> Image.Image:
     return image
 
 
-def cut_brow(plate: Image.Image, polygon: Sequence[tuple[int, int]]) -> tuple[Image.Image, Image.Image]:
-    """Lift the brow off the plate and fill the hole with the surrounding skin."""
-    size = plate.size
+def brow_mask(size: tuple[int, int], polygon: Sequence[tuple[int, int]]) -> Image.Image:
+    """Soft alpha around the landmark brow. The hard core is what gets inpainted."""
     mask = Image.new("L", size, 0)
+    if len(polygon) < 2:
+        return mask
+    draw = ImageDraw.Draw(mask)
+    width = max(4, int(max(p[0] for p in polygon) - min(p[0] for p in polygon)) // 8)
+    draw.line(list(polygon), fill=255, width=width)
     if len(polygon) >= 3:
-        ImageDraw.Draw(mask).polygon(list(polygon), fill=255)
+        draw.polygon(list(polygon), fill=255)
+    blurred = mask.filter(__import__("PIL.ImageFilter", fromlist=["GaussianBlur"]).GaussianBlur(1.2))
+    return blurred
+
+
+def cut_brow(plate: Image.Image, polygon: Sequence[tuple[int, int]]) -> tuple[Image.Image, Image.Image]:
+    """Lift the brow once. The plate hole is skin, so a posed copy is not a second brow."""
+    size = plate.size
+    soft = brow_mask(size, polygon)
     brow = plate.convert("RGBA")
-    brow.putalpha(mask)
+    brow.putalpha(soft)
+    hole = (np.asarray(soft) > 40).astype(np.uint8) * 255
+    hole = cv2.dilate(hole, np.ones((5, 5), np.uint8))
     rgb = np.ascontiguousarray(np.asarray(plate.convert("RGB")))
-    hole = np.asarray(mask)
-    painted = cv2.inpaint(rgb, hole, 3, cv2.INPAINT_TELEA)
+    painted = cv2.inpaint(rgb, hole, 5, cv2.INPAINT_TELEA) if int(hole.sum()) else rgb
     filled = plate.convert("RGBA").copy()
     filled.paste(Image.fromarray(painted), (0, 0))
     return brow, filled
+
+
+def pose_brow(
+    sprite: Image.Image,
+    xy: tuple[int, int],
+    dy: float,
+    angle: float,
+    brow_height: float,
+    forehead: Sequence[float] | None = None,
+) -> tuple[Image.Image, tuple[int, int]]:
+    """Shift and rotate a brow without stretching it, and keep it on the forehead."""
+    box = sprite.getchannel("A").getbbox()
+    if box is None:
+        return sprite, xy
+    part = sprite.crop(box)
+    height = max(4.0, float(brow_height) or part.height)
+    lift = max(-0.4 * height, min(0.4 * height, float(dy)))
+    turn = max(-20.0, min(20.0, float(angle)))
+    center_x = xy[0] + (box[0] + box[2]) / 2
+    center_y = xy[1] + (box[1] + box[3]) / 2 + lift
+    turned = part.rotate(turn, resample=Image.Resampling.BILINEAR, expand=True)
+    # Uniform only. A non-uniform scale above 1.15 is what smeared the angry brow.
+    origin = (int(round(center_x - turned.width / 2)), int(round(center_y - turned.height / 2)))
+    if forehead and len(forehead) == 4:
+        x0, y0, x1, y1 = (int(v) for v in forehead)
+        origin = (
+            int(min(max(origin[0], x0), max(x0, x1 - turned.width))),
+            int(min(max(origin[1], y0), max(y0, y1 - turned.height))),
+        )
+    return turned, origin
 
 
 def _almond(center: tuple[int, int], radius: int) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
@@ -301,6 +365,10 @@ def build(plate: Image.Image, marks: Any | None = None, *, eyes_geom: list[dict[
         painted[state] = {"drawn": ys, "edge": measured}
     eye_top = min(min(p[1] for p in one["upper"]) for one in cut)
     brow_bottom = max((max(p[1] for p in poly) for poly in brows if len(poly)), default=eye_top - 4)
+    brow_top = min((min(p[1] for p in poly) for poly in brows if len(poly)), default=brow_bottom - 8)
+    brow_height = max(4, brow_bottom - brow_top)
+    brow_left_x = min((min(p[0] for p in poly) for poly in brows if len(poly)), default=0)
+    brow_right_x = max((max(p[0] for p in poly) for poly in brows if len(poly)), default=size[0])
     return {
         "head": head,
         "eye_white": sclera,
@@ -317,6 +385,8 @@ def build(plate: Image.Image, marks: Any | None = None, *, eyes_geom: list[dict[
             "iris": [one["irisXY"] + [one["radius"]] for one in cut],
             "eyeTop": int(eye_top),
             "browBottom": int(brow_bottom),
+            "browHeight": int(brow_height),
+            "forehead": [int(brow_left_x) - 4, int(brow_top) - int(0.4 * brow_height), int(brow_right_x) + 4, int(eye_top)],
             "shift": [max(1, min(one["radius"] for one in cut) // 2), max(1, min(one["radius"] for one in cut) // 3)] if cut else [1, 1],
         },
         "emotions": {
@@ -440,12 +510,13 @@ def render_still_sheet(skin: Path, dest: Path | None = None) -> Path:
             lid = paint_amount(layers, amount)
             if lid is not None:
                 cell.alpha_composite(lid)
+            info = built.get("qa") or {}
             for layer, dy, angle in (
                 (layers["brow_left"], pose[0], pose[2]),
                 (layers["brow_right"], pose[1], pose[3]),
             ):
-                turned = layer.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
-                cell.alpha_composite(turned, ((layer.width - turned.width) // 2, (layer.height - turned.height) // 2 + int(dy)))
+                turned, origin = pose_brow(layer, (0, 0), dy, angle, info.get("browHeight") or 12, info.get("forehead"))
+                cell.alpha_composite(turned, origin)
             thumb = cell.convert("RGB")
             thumb.thumbnail((cell_w - 8, cell_h - 36))
             x = col * cell_w + (cell_w - thumb.width) // 2
