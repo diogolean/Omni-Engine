@@ -129,6 +129,25 @@ def timeline_seconds(speech: list[float], lines: list[dict[str, Any]]) -> float:
     return titles.TITLE_S + sum(speech) + pauses + gaps + titles.END_S
 
 
+def _full_line(text: str) -> str:
+    """A replacement is a finished sentence. A chopped word is not spoken."""
+    text = " ".join(str(text or "").split())
+    if len(text.split()) < 3 or text[-1:] not in ".?!…":
+        return ""
+    return text
+
+
+def _middle_nonquote(lines: list[dict[str, Any]]) -> int | None:
+    """Index of a paraphrase that is neither the opening nor the closing line."""
+    choices = [
+        i for i in range(1, len(lines) - 1)
+        if lines[i].get("kind") != "quote"
+    ]
+    if not choices:
+        return None
+    return choices[len(choices) // 2]
+
+
 def fit_measured_duration(
     lines: list[dict[str, Any]],
     speech: list[float],
@@ -138,54 +157,67 @@ def fit_measured_duration(
     tolerance: float = MEASURED_TOLERANCE_S,
     rewrite=None,
 ) -> tuple[list[dict[str, Any]], list[float]]:
-    """Move only the last line until the measured timeline is within ``tolerance`` of ``target``.
+    """Land the measured timeline within ``tolerance`` of ``target``.
 
-    ``respeak(text) -> seconds`` synthesizes a replacement. ``rewrite(line, *, shorter, words)``
-    may return new last-line copy; otherwise the line is trimmed from the end and voiced again.
+    ``respeak(text, line) -> seconds`` voices a whole line. ``rewrite(line, *, shorter, words)``
+    may return a new complete sentence. Audio is never sliced, so a word cannot be cut in half.
+    When a shorter sentence is not enough, a middle non-quote line is dropped and the rest
+    stay as fully synthesized takes.
     """
     lines = [dict(line) for line in lines]
     speech = [float(item) for item in speech]
     if not lines:
         return lines, speech
-    for _ in range(8):
+    for _ in range(12):
         delta = timeline_seconds(speech, lines) - float(target)
         if abs(delta) <= tolerance:
             break
-        last = lines[-1]
         if delta > tolerance:
-            pause = float(last.get("pauseAfterS") or 0)
-            spare = delta - tolerance
-            if pause > 0.05 and spare > 0:
-                last["pauseAfterS"] = round(max(0.0, pause - min(pause, spare)), 3)
+            pause_cut = False
+            for line in lines:
+                pause = float(line.get("pauseAfterS") or 0)
+                if pause > 0.05:
+                    line["pauseAfterS"] = round(max(0.0, pause - min(pause, delta - tolerance)), 3)
+                    pause_cut = True
+                    break
+            if pause_cut:
                 continue
-            tokens = str(last.get("text") or "").split()
-            if len(tokens) > 4 and speech[-1] > 1.05:
-                need = max(0.3, delta - tolerance * 0.5)
-                frac = min(0.6, need / max(speech[-1], 0.2))
-                keep = max(4, int(round(len(tokens) * (1.0 - frac))))
-                if keep < len(tokens):
-                    text = " ".join(tokens[:keep]).rstrip(",;:—-")
-                    if text[-1:] not in ".?!…":
-                        text += "."
-                    if rewrite is not None:
-                        fresh = rewrite(last, shorter=True, words=keep)
-                        if fresh:
-                            text = str(fresh).strip()
-                    last["text"] = text
-                    speech[-1] = float(respeak(text))
-                    continue
-            floor = max(0.8, speech[-1] - max(0.0, delta - tolerance * 0.5))
-            if floor < speech[-1] - 0.05:
-                speech[-1] = floor
+            rewritten = False
+            if rewrite is not None:
+                order = sorted(range(len(lines)), key=lambda i: speech[i], reverse=True)
+                for index in order:
+                    if lines[index].get("kind") == "quote":
+                        continue
+                    fresh = _full_line(rewrite(
+                        lines[index], shorter=True, words=max(4, scripts.words(str(lines[index].get("text") or "")) // 2),
+                    ))
+                    if not fresh or fresh == lines[index].get("text"):
+                        continue
+                    lines[index]["text"] = fresh
+                    speech[index] = float(respeak(fresh, lines[index]))
+                    rewritten = True
+                    break
+            if rewritten:
                 continue
-            break
+            middle = _middle_nonquote(lines)
+            if middle is None:
+                break
+            trial_lines = lines[:middle] + lines[middle + 1:]
+            trial_speech = speech[:middle] + speech[middle + 1:]
+            before = abs(delta)
+            after = abs(timeline_seconds(trial_speech, trial_lines) - float(target))
+            if after >= before:
+                break
+            lines, speech = trial_lines, trial_speech
+            continue
         if rewrite is None:
             break
-        fresh = rewrite(last, shorter=False, words=scripts.words(str(last.get("text") or "")) + 6)
-        if not fresh or str(fresh).strip() == last.get("text"):
+        last = lines[-1]
+        fresh = _full_line(rewrite(last, shorter=False, words=scripts.words(str(last.get("text") or "")) + 6))
+        if not fresh or fresh == last.get("text"):
             break
-        last["text"] = str(fresh).strip()
-        speech[-1] = float(respeak(last["text"]))
+        last["text"] = fresh
+        speech[-1] = float(respeak(fresh, last))
     return lines, speech
 
 
@@ -415,13 +447,22 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             target_duration = max(10.0, min(180.0, float(req.get("duration") or 45)))
         except (TypeError, ValueError):
             target_duration = 45.0
-        written = scripts.write(template, topic, [str(c.get("name") or "") for c in chars], language.script, mode=mode,
-                                tone=tone, objective=objective, duration=target_duration)
-        lines = written["lines"]
         fmt = "9:16" if req.get("format") == "9:16" else "16:9"
         n = len(chars) if template == "dialogue" else (2 if template == "debate" else 1)
         cast = [chars[min(i, len(chars) - 1)] for i in range(n)]
         voices = casting.cast(cast, lang, req.get("voices"))
+        # One short take measures this cast's real pace so the beat plan is not
+        # built on a word-count guess that runs long.
+        probe = "Keep the facts and leave room to daydream."
+        probe_pcm, _probe_rate = _voice_line(
+            probe, voices[0], work / "probe.mp3", work / "probe.wav", 8.0, 0,
+        )
+        words_per_s = scripts.measured_rate(probe, len(probe_pcm) / SAMPLE_RATE)
+        written = scripts.write(
+            template, topic, [str(c.get("name") or "") for c in chars], language.script, mode=mode,
+            tone=tone, objective=objective, duration=target_duration, words_per_s=words_per_s,
+        )
+        lines = written["lines"]
         # Silence for the film titles: a cold open before the first line, a beat before each new act
         # (the dip and its chapter card) and the end card after the last line (see titles.py).
         silence = lambda s: np.zeros(int(s * SAMPLE_RATE), dtype=np.int16)  # noqa: E731
@@ -434,25 +475,34 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             voiced.append({"pcm": pcm, "rate": rate})
             _set(job_id, progress=0.1 + 0.2 * (i + 1) / max(1, len(lines)))
 
-        def _respeak(text: str) -> float:
-            last = len(lines) - 1
-            speaker = lines[last]["speaker"]
-            mp3, clip = work / f"line_{last}.mp3", work / f"line_{last}.wav"
+        takes: dict[tuple[int, str], dict[str, Any]] = {}
+        for planned, item in zip(lines, voiced):
+            takes[(int(planned["speaker"]), planned["text"])] = item
+
+        def _respeak(text: str, line: dict[str, Any]) -> float:
+            speaker = int(line["speaker"])
+            slot = len(takes)
+            mp3, clip = work / f"line_fit_{slot}.mp3", work / f"line_fit_{slot}.wav"
             pcm, rate = _voice_line(
-                text, voices[min(speaker, len(voices) - 1)], mp3, clip, lines[last]["maxS"],
-                int(lines[last].get("rateAdj", 0)),
+                text, voices[min(speaker, len(voices) - 1)], mp3, clip,
+                float(line.get("maxS") or 8.0), int(line.get("rateAdj", 0)),
             )
-            voiced[last] = {"pcm": pcm, "rate": rate}
+            takes[(speaker, text)] = {"pcm": pcm, "rate": rate}
             return len(pcm) / SAMPLE_RATE
 
         lines, speech = fit_measured_duration(
             lines, [len(item["pcm"]) / SAMPLE_RATE for item in voiced], target_duration, _respeak,
+            rewrite=scripts.rewrite_for_duration if written.get("writer") in {"deepseek", "gemini"} else None,
         )
-        if speech and voiced:
-            keep = int(speech[-1] * SAMPLE_RATE)
-            if 0 < keep < len(voiced[-1]["pcm"]):
-                voiced[-1]["pcm"] = voiced[-1]["pcm"][:keep]
-                _write_pcm(work / f"line_{len(lines) - 1}.wav", voiced[-1]["pcm"])
+        voiced = []
+        for planned, seconds in zip(lines, speech):
+            item = takes[(int(planned["speaker"]), planned["text"])]
+            pcm = item["pcm"]
+            # The take is the whole sentence. A shorter clock only happens when
+            # that sentence was synthesized again, never by slicing the waveform.
+            if abs(len(pcm) / SAMPLE_RATE - seconds) > 0.05:
+                raise RuntimeError("duration fit returned a take that was not re-synthesized")
+            voiced.append(item)
         pcm_parts, script, sources, t = [silence(titles.TITLE_S)], [], set(), titles.TITLE_S
         for i, planned in enumerate(lines):
             speaker = planned["speaker"]

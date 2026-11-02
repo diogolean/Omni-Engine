@@ -133,31 +133,60 @@ def test_an_unfitting_quote_is_paraphrased_and_still_sourced():
         assert out["lines"][index]["replyTo"]["idea"]
 
 
-def test_measured_tts_lands_within_two_seconds_of_the_target():
+def test_measured_tts_rewrites_a_full_line_instead_of_cutting_a_word():
+    from products.animind_core import render
+
+    original = "So keep the facts, sure. Just don't forget to daydream on top."
+    shorter = "So keep the facts, and still daydream."
+    lines = [
+        {"speaker": 0, "text": "Facts come first in this exchange.", "pauseAfterS": 0.2, "kind": "paraphrase"},
+        {"speaker": 1, "text": "Dreams still answer those facts.", "pauseAfterS": 0.2, "kind": "quote"},
+        {"speaker": 0, "text": "A middle remark can leave when the cut runs long.", "pauseAfterS": 0.2, "kind": "paraphrase"},
+        {"speaker": 1, "text": original, "pauseAfterS": 0.15, "kind": "paraphrase"},
+    ]
+    speech = [7.2, 7.4, 7.2, 8.0]
+    spoken: list[str] = []
+
+    def respeak(text: str, line: dict) -> float:
+        spoken.append(text)
+        assert text[-1] in ".?!"
+        assert not text.endswith("-")
+        return 2.5
+
+    def rewrite(line: dict, *, shorter: bool, words: int) -> str:
+        assert shorter and words >= 4
+        return "So keep the facts, and still daydream."
+
+    fitted, durations = render.fit_measured_duration(lines, speech, 30.0, respeak, rewrite=rewrite)
+    total = render.timeline_seconds(durations, fitted)
+    assert abs(total - 30.0) <= render.MEASURED_TOLERANCE_S, total
+    assert original not in [line["text"] for line in fitted]
+    assert shorter in [line["text"] for line in fitted]
+    assert all(not line["text"].rstrip(".?!").endswith("-") for line in fitted)
+    assert spoken == [shorter]
+    # Every duration is a full take, never a 0.8s slice of a longer sentence.
+    assert min(durations) >= 2.5 - 0.01
+
+
+def test_overrun_drops_a_middle_non_quote_when_the_model_is_silent():
     from products.animind_core import render
 
     lines = [
-        {"text": "Curiosity opens the first question today.", "pauseAfterS": 0.4, "act": "abertura"},
-        {"text": "Evidence has to survive a serious rival.", "pauseAfterS": 0.4, "act": "abertura"},
-        {"text": "Practice shows where this claim breaks apart.", "pauseAfterS": 0.4, "act": "confronto"},
-        {"text": "Doubt keeps every easy answer honest enough.", "pauseAfterS": 0.4, "act": "confronto"},
-        {"text": "Method matters more than a loud slogan here.", "pauseAfterS": 0.35, "act": "fechamento"},
+        {"speaker": 0, "text": "Facts come first in this exchange.", "pauseAfterS": 0.15, "kind": "paraphrase"},
+        {"speaker": 1, "text": "A sourced sentence stays.", "pauseAfterS": 0.15, "kind": "quote"},
+        {"speaker": 0, "text": "This middle remark is the one that can leave.", "pauseAfterS": 0.15, "kind": "paraphrase"},
+        {"speaker": 1, "text": "The close still names the facts.", "pauseAfterS": 0.1, "kind": "paraphrase"},
     ]
-    # The last take is long, the way a 30s request came back at 33s.
-    speech = [4.4, 4.5, 4.4, 4.5, 7.2]
-    spoken = {}
-    per_word = speech[-1] / len(lines[-1]["text"].split())
+    speech = [8.0, 8.2, 4.5, 8.0]
 
-    def respeak(text: str) -> float:
-        spoken["text"] = text
-        return max(0.9, per_word * len(text.split()))
+    def respeak(text: str, line: dict) -> float:
+        raise AssertionError("a dropped line is not re-sliced")
 
-    fitted, durations = render.fit_measured_duration(lines, speech, 30.0, respeak)
-    total = render.timeline_seconds(durations, fitted)
-    assert abs(total - 30.0) <= render.MEASURED_TOLERANCE_S, total
-    assert [line["text"] for line in fitted[:-1]] == [line["text"] for line in lines[:-1]]
-    assert fitted[-1]["text"] != lines[-1]["text"]
-    assert spoken["text"] == fitted[-1]["text"]
+    fitted, durations = render.fit_measured_duration(lines, speech, 30.0, respeak, rewrite=lambda *a, **k: "")
+    assert "This middle remark is the one that can leave." not in [line["text"] for line in fitted]
+    assert any(line.get("kind") == "quote" for line in fitted)
+    assert abs(render.timeline_seconds(durations, fitted) - 30.0) <= render.MEASURED_TOLERANCE_S
+    assert durations == [8.0, 8.2, 8.0]
 
 
 def test_tts_retries_no_audio_received(monkeypatch, tmp_path):

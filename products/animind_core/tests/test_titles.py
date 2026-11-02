@@ -90,7 +90,8 @@ def test_close_up_keeps_headroom_and_the_name_card_below_the_chin():
     assert "PERSPECTIVE" in " ".join(rows)
     assert not any(row.endswith("PERSPEC") for row in rows)
     card = sc._lower_third(0)
-    assert sc.lower_third_y(shot, card.height) >= sc.OH - card.height - round(12 * sc.k)
+    card_y = sc.lower_third_y(shot, card.height)
+    assert card_y + card.height <= sc.cap_y - round(8 * sc.k)
 
 
 def test_key_light_leans_toward_the_speaker_in_wide_shots():

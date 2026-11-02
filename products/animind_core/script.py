@@ -935,17 +935,53 @@ def runtime_seconds(lines: list[dict[str, Any]]) -> float:
     return titles.TITLE_S + speech + pauses + gaps + titles.END_S
 
 
-def _solo_count(duration: float) -> int:
+def measured_rate(text: str, seconds: float) -> float:
+    """Words per second from one synthesized probe."""
+    return max(0.4, words(text) / max(0.3, float(seconds)))
+
+
+def _solo_count(duration: float, beat_s: float = _BEAT_S) -> int:
     target = max(10.0, min(180.0, float(duration)))
-    best_n, best_err = 4, abs(_CARD_S + 4 * _BEAT_S - target)
+    beat_s = max(1.5, float(beat_s))
+    best_n, best_err = 4, abs(_CARD_S + 4 * beat_s - target)
     for count in range(4, 17):
-        err = abs(_CARD_S + count * _BEAT_S - target)
+        err = abs(_CARD_S + count * beat_s - target)
         if err < best_err:
             best_n, best_err = count, err
     return best_n
 
 
-def plan_for(template: str, n_chars: int, duration: int | float | None = None) -> list[Beat]:
+def _trim_plan(plan: list[Beat], duration: float | None, words_per_s: float | None) -> list[Beat]:
+    """Drop middle paraphrases and shrink word caps when the measured voice is slower than the guess.
+
+    A faster probe leaves the historical plan alone. A slower one is what made a 30s
+    request land at 34s.
+    """
+    if duration is None or not words_per_s or words_per_s >= WORDS_PER_S:
+        return plan
+    budget = max(6.0, float(duration) - _CARD_S - 1.0)
+    plan = list(plan)
+
+    def estimate(beats: list[Beat]) -> float:
+        spoken = sum(beat.max_words for beat in beats) / words_per_s
+        pauses = sum(beat.pause_s for beat in beats)
+        acts = [beat.act for beat in beats if beat.act]
+        gaps = 0.7 * sum(1 for i in range(1, len(acts)) if acts[i] != acts[i - 1])
+        return spoken + pauses + gaps
+
+    while len(plan) > 4 and estimate(plan) > budget + 2:
+        middle = [i for i in range(1, len(plan) - 1) if plan[i].kind != "quote"]
+        if not middle:
+            break
+        del plan[middle[len(middle) // 2]]
+    if plan and estimate(plan) > budget + 2:
+        scale = max(0.45, budget / estimate(plan))
+        plan = [replace(beat, max_words=max(6, int(beat.max_words * scale))) for beat in plan]
+    return plan
+
+
+def plan_for(template: str, n_chars: int, duration: int | float | None = None,
+             words_per_s: float | None = None) -> list[Beat]:
     if template == "debate" and n_chars < 2:
         template = "solo"
     if template == "dialogue":
@@ -959,7 +995,8 @@ def plan_for(template: str, n_chars: int, duration: int | float | None = None) -
         ]
     plan = list(PLANS.get(template, PLANS["solo"]))
     if template == "solo" and duration is not None:
-        extra = _solo_count(float(duration)) - len(plan)
+        beat_s = _BEAT_S if not words_per_s or words_per_s >= WORDS_PER_S else max(1.5, 10 / words_per_s)
+        extra = _solo_count(float(duration), beat_s) - len(plan)
         if extra > 0:
             plan = [*plan[:-1], *[Beat("argumento", 0, "paraphrase", 16, 0.28, 2) for _ in range(extra)], plan[-1]]
     if template == "debate" and duration is not None:
@@ -979,7 +1016,7 @@ def plan_for(template: str, n_chars: int, duration: int | float | None = None) -
             for speaker in (0, 1)
         ]
         plan[4:4] = exchange
-    return plan
+    return _trim_plan(plan, None if duration is None else float(duration), words_per_s)
 
 
 def _universal_write(
@@ -1083,6 +1120,58 @@ def _ask_writer(prompt: str, *, allow_unavailable_gemini: bool) -> list[dict[str
     return list(result.lines) if result is not None else []
 
 
+_UNANSWERED = re.compile(r"line (\d+): does not answer line (\d+)")
+
+
+def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: str, topic: str, names: list[str], *,
+                       allow_unavailable_gemini: bool) -> bool:
+    """When debate QA says a line ignores the one before it, ask the model again with that line in view."""
+    changed = False
+    for problem in problems:
+        match = _UNANSWERED.match(problem)
+        if not match:
+            continue
+        index = int(match.group(1))
+        if not 0 <= index < len(lines):
+            continue
+        previous = lines[int(match.group(2))]["text"]
+        quote = lines[index].get("quote") if lines[index].get("kind") == "quote" else None
+        rewritten = _rewrite_line(
+            index,
+            "this line does not answer the previous line. "
+            f"Previous line: {previous}. Answer it in one full sentence and repeat one content word from it.",
+            lines[index]["text"], lang, topic, names, allow_unavailable_gemini=allow_unavailable_gemini,
+        )
+        if not rewritten or not link(previous, rewritten, names=names):
+            continue
+        if quote:
+            # The spoken line now answers. The source the writer chose stays on basis.
+            lines[index]["kind"] = "paraphrase"
+            lines[index].pop("quote", None)
+            lines[index]["basis"] = _basis_of(quote)
+            lines[index]["basis"]["text"] = quote.get("text") or lines[index]["text"]
+        lines[index]["text"] = rewritten
+        lines[index]["replyTo"] = {"line": index - 1, "idea": link(previous, rewritten, names=names)}
+        changed = True
+    return changed
+
+
+def rewrite_for_duration(line: dict[str, Any], *, shorter: bool, words: int, topic: str = "",
+                         names: list[str] | None = None, lang: str = "en-US") -> str:
+    """Ask for a complete shorter or longer line. Never returns a chopped word."""
+    current = str(line.get("text") or "")
+    direction = "shorter" if shorter else "longer"
+    fresh = _rewrite_line(
+        int(line.get("i") or 0),
+        f"the spoken cut is the wrong length. Write one {direction} full sentence of about {words} words. "
+        "Do not stop in the middle of a word.",
+        current, lang, topic, names or [], allow_unavailable_gemini=True,
+    )
+    if not fresh or fresh[-1:] not in ".?!…":
+        return ""
+    return fresh
+
+
 def _rewrite_line(index: int, problem: str, current: str, lang: str, topic: str, names: list[str], *,
                   allow_unavailable_gemini: bool) -> str:
     """Ask the writer for one replacement line. Never invents template copy here."""
@@ -1167,7 +1256,7 @@ def _keyword_streak(lines: list[dict[str, Any]]) -> tuple[int, str] | None:
 def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
           indexes: list[Any] | None = None, tone: str = "comedia", objective: str = "entreter",
-          duration: int | float | None = None) -> dict[str, Any]:
+          duration: int | float | None = None, words_per_s: float | None = None) -> dict[str, Any]:
     """Script lines (before TTS) plus the sheets used.
 
     ``use_llm`` None selects the configured provider when a DeepSeek or Gemini
@@ -1196,7 +1285,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     names = [personas.persona_name(names[min(i, len(names) - 1)]) if names else "" for i in range(n)]
     if sheets is None:
         sheets = [personas.load(nm, lang, fetch=settings.personas_online()) for nm in names]
-    plan = plan_for(template, n, duration)
+    plan = plan_for(template, n, duration, words_per_s=words_per_s)
     mode = mode if mode in knowledge.MODES else "quick"
     if indexes is None:
         indexes = [knowledge.ensure(nm, lang, mode, sheet=sh) for nm, sh in zip(names, sheets)]
@@ -1415,6 +1504,14 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         problems += check_debate(lines, sheets, names, topic)
     elif template == "lesson":
         problems += check_lesson(lines, sheets, topic)
+    if writer in {"deepseek", "gemini"} and _repair_unanswered(
+        lines, problems, lang, topic, names, allow_unavailable_gemini=explicit_llm,
+    ):
+        problems = check(lines, sheets, topic, names)
+        if debate:
+            problems += check_debate(lines, sheets, names, topic)
+        elif template == "lesson":
+            problems += check_lesson(lines, sheets, topic)
     # notes: weaknesses worth a look that do not fail the script (an idea carried three lines in a row)
     notes = _repeated_idea(lines)
     if duration is not None:

@@ -156,6 +156,39 @@ def draw_expressions(
     return scaled
 
 
+def flat_dark_blob(image: Image.Image) -> bool:
+    """One nearly black mass with no teeth or lip contrast: the oval that covers a mustache.
+
+    Visemes E and F are drawn as a single dark ellipse. That reads as a flat sticker
+    on a cached Einstein front view. A real mouth has a lighter lip or a teeth crescent.
+    """
+    arr = np.asarray(image.convert("RGBA"))
+    alpha = arr[..., 3]
+    ink = alpha > 128
+    if int(ink.sum()) < 30:
+        return False
+    rgb = arr[ink][:, :3].astype(np.float32)
+    if float(rgb.mean()) > 60:
+        return False
+    light = float((rgb.mean(axis=1) > 150).mean())
+    return float(rgb.std()) < 28 and light < 0.03
+
+
+def painted_mouth_is_flat(rgb: np.ndarray) -> bool:
+    """Frame crop: the mouth ink is one flat dark blob, not lips plus a cavity."""
+    if rgb.ndim != 3 or rgb.shape[2] < 3:
+        return False
+    lum = rgb.astype(np.float32).mean(axis=2)
+    border = np.concatenate([lum[0], lum[-1], lum[:, 0], lum[:, -1]])
+    skin = float(np.median(border)) if border.size else 180.0
+    ink = lum < skin - 28
+    if int(ink.sum()) < 25:
+        return False
+    cols = rgb[ink][:, :3].astype(np.float32)
+    light = float((cols.mean(axis=1) > 150).mean())
+    return float(cols.std()) < 18 and light < 0.03 and float(cols.mean()) < 55
+
+
 def _is_black_bar(image: Image.Image) -> bool:
     """A wide, nearly black fill with square corners: the front-view mouth that reads as a sticker."""
     arr = np.asarray(image)

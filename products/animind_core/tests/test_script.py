@@ -653,6 +653,44 @@ def test_llm_line_that_claims_to_be_literal_is_rewritten(monkeypatch):
     assert out["scriptQA"]["pass"], out["scriptQA"]
 
 
+def test_slow_voice_plans_fewer_words_before_tts():
+    slow = script.plan_for("solo", 1, duration=30, words_per_s=1.2)
+    historical = script.plan_for("solo", 1, duration=30)
+    assert sum(beat.max_words for beat in slow) < sum(beat.max_words for beat in historical)
+    assert slow[0].name == "gancho" and slow[-1].name == "fechamento"
+
+
+def test_unanswered_debate_line_is_rewritten_with_the_previous_line(monkeypatch):
+    seen: list[str] = []
+
+    def fake(prompt):
+        seen.append(prompt)
+        if "does not answer the previous line" in prompt:
+            assert "Previous line:" in prompt
+            index = int(prompt.split("Rewrite only line ", 1)[1].split(" ", 1)[0])
+            previous = prompt.split("Previous line:", 1)[1]
+            word = next(part.strip(" .,?!") for part in previous.split() if len(part.strip(" .,?!")) > 4)
+            return [{"i": index, "text": f"{word} still needs one concrete test."}]
+        return [
+            {"i": 0, "text": "Is opinion the whole of knowledge?"},
+            {"i": 1, "text": "Cats sleep through the long afternoon."},
+            {"i": 2, "text": "Birds leave without drawing a map."},
+            {"i": 3, "text": "The audience can leave quietly now."},
+            {"i": 4, "text": "Nothing here follows that last claim."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write(
+        "debate", "knowledge", ["Ada", "Ben"], "en-US",
+        sheets=[{"quotes": []}, {"quotes": []}], use_llm=True, duration=30,
+    )
+    problems = out["scriptQA"]["problems"]
+    assert not any("line 2: does not answer" in item for item in problems), problems
+    assert not any("line 4: does not answer" in item for item in problems), problems
+    assert any("Previous line:" in prompt for prompt in seen)
+    assert "concrete test" in out["lines"][2]["text"]
+
+
 def test_english_lesson_passes_qa():
     out = script.write("lesson", "What is truth?", ["Nietzsche"], "en", sheets=[nietzsche()], use_llm=False)
     assert out["scriptQA"]["pass"], out["scriptQA"]

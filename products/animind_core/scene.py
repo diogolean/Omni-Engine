@@ -31,14 +31,31 @@ W, H, FPS = look.W, look.H, 24
 XFADE_S = 0.0
 
 
+_LAYER_IMAGES: dict[str, Image.Image] = {}
+
+
+def layer_image(img: Image.Image | str) -> Image.Image:
+    """A rig layer is a PIL image, or a file path from a cached puppet."""
+    if isinstance(img, Image.Image):
+        return img
+    path = str(img)
+    cached = _LAYER_IMAGES.get(path)
+    if cached is None:
+        with Image.open(path) as opened:
+            cached = opened.convert("RGBA")
+        _LAYER_IMAGES[path] = cached
+    return cached
+
+
 def clear_mustache(mouth: tuple, mustache: tuple) -> tuple[int, int]:
     """Pixels to drop an open mouth and lift a walrus mustache so the cavity is visible.
 
-    The mustache layer is painted over the mouth. On a left-view Nietzsche that stacks
-    a second dark mass on viseme C and hides viseme F. Returns ``(mouth_drop, mustache_lift)``.
+    ``mouth`` and ``mustache`` are ``(name, image-or-path, xy, z)``. The image slot of a
+    cached rig is often the PNG path. On a left-view Nietzsche the mustache stacks a second
+    dark mass on viseme C and hides viseme F. Returns ``(mouth_drop, mustache_lift)``.
     """
-    m_img, m_xy = mouth[0], mouth[1]
-    s_img, s_xy = mustache[1], mustache[2]
+    m_img, m_xy = layer_image(mouth[1]), mouth[2]
+    s_img, s_xy = layer_image(mustache[1]), mustache[2]
 
     def rows(img: Image.Image) -> np.ndarray:
         alpha = np.asarray(img.getchannel("A"))
@@ -132,6 +149,35 @@ EMO_MOUTH = {
     "triste": "sad", "surpreso": "surprised", "pensativo": "thoughtful",
     "desdenhoso": "ironic", "ironico": "ironic", "irônico": "ironic",
 }
+
+
+def structured_mouth(img: Image.Image | str) -> Image.Image:
+    """Load a path mouth and replace a flat dark oval before it is painted.
+
+    The replacement keeps the same canvas, so the rig anchor does not move.
+    This runs while the frame is drawn, including mouths already saved on a puppet.
+    """
+    from . import mouthset  # noqa: PLC0415
+
+    sprite = layer_image(img)
+    if not mouthset.flat_dark_blob(sprite):
+        return sprite
+    box = sprite.getchannel("A").getbbox()
+    if not box:
+        return sprite
+    width = max(12, box[2] - box[0])
+    drawn = mouthset._lipped_open(width, {
+        "outline": (40, 24, 26, 255),
+        "cavity": (52, 24, 26, 255),
+        "teeth": (246, 242, 236, 255),
+        "tongue": (190, 86, 92, 255),
+        "lip": (150, 72, 70, 255),
+    })
+    canvas = Image.new("RGBA", sprite.size, (0, 0, 0, 0))
+    x = box[0] + (box[2] - box[0] - drawn.width) // 2
+    y = box[1] + (box[3] - box[1] - drawn.height) // 2
+    canvas.paste(drawn, (x, y), drawn)
+    return canvas
 
 
 def _qa_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
@@ -541,7 +587,7 @@ class Scene:
             parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
             for name, layer, xy, _z in sorted(parts, key=lambda p: p[3]):
                 if name not in ("eyes_closed", "eyes_half", "eye_white", "iris", "eye_socket"):
-                    img.alpha_composite(layer, xy)
+                    img.alpha_composite(layer_image(layer), xy)
             img = img.filter(ImageFilter.GaussianBlur(7 * SS))
             r, g, b, a = img.split()
             dim = lambda v: int(v * 0.62)  # noqa: E731
@@ -589,8 +635,9 @@ class Scene:
             stage.alpha_composite(self._soft(idx, view, rv), (x0, sy))
             mouth = rv.visemes.get("X")
             if mouth:
-                bb = mouth[0].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (
-                    0, 0, *mouth[0].size
+                sprite = layer_image(mouth[0])
+                bb = sprite.getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (
+                    0, 0, *sprite.size
                 )
                 box = _qa_box((
                     x0 + mouth[1][0] + bb[0], sy + mouth[1][1] + bb[1],
@@ -638,7 +685,8 @@ class Scene:
             mouth_drop, mustache_lift = clear_mustache(mouths[-1], mustache)
         if mouths:  # frame trace for the video QA: how many mouth layers were drawn, and where
             m0 = mouths[-1]
-            bx = m0[1].getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *m0[1].size)
+            sprite = structured_mouth(m0[1]) if m0[0] == "mouth" else layer_image(m0[1])
+            bx = sprite.getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *sprite.size)
             # Mouth follows the head's breathing offset; trace the actual painted position.
             ox, oy = x0 + m0[2][0] + hx, y0 + m0[2][1] + round(breathe) + hy + mouth_drop
             self._mouth_log.append({"char": idx, "v": mouth_tag, "layers": len(mouths), "view": view,
@@ -655,6 +703,7 @@ class Scene:
             # The face no longer rides the jaw: only the mouth layer changes with speech.
             dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 2 * SS if name == "brows" else 0) + (brow if name == "brows" else 0)
             hdx, hdy = (0, 0) if name in BODY_LAYERS else (hx, hy)
+            img = structured_mouth(img) if name == "mouth" else layer_image(img)
             if name == "mouth":
                 dy += mouth_drop
             elif name == "mustache" and mustache_lift:
@@ -1018,11 +1067,13 @@ class Scene:
         return self._cache[key]
 
     def lower_third_y(self, shot: Shot | None, card_h: int) -> int:
-        """Name card below the chin. Close-ups used to park it on the mouth."""
-        margin = round(10 * self.k)
-        if shot is not None and shot.kind in ("cu", "ots", "mcu", "single"):
-            return max(margin, self.OH - card_h - margin)
-        return min(self.cap_y, self.OH - card_h - margin)
+        """Name card in its own band, above the subtitle strip.
+
+        The card used to share the caption band, so the first lower-third covered
+        the first subtitle. ``cap_y`` is the top of the captions.
+        """
+        gap = round(12 * self.k)
+        return max(0, self.cap_y - card_h - gap)
 
     def _overlays(self, frame: Image.Image, t: float, line: dict[str, Any] | None, shot: Shot | None = None) -> None:
         frame.alpha_composite(self.scrim)
