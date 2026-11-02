@@ -1581,3 +1581,153 @@ def test_writer_varies_a_keyword_repeated_on_three_lines(monkeypatch):
     assert "Practice is the part that changes." in out["lines"][2]["text"]
     assert any("Rewrite only line 2" in prompt for prompt in calls)
     assert script._keyword_streak(out["lines"][:3]) is None or "knowledge" not in out["lines"][2]["text"].lower()
+
+
+def _pipe_sheets():
+    pipe = "Pipe smoking contributes to a calm and objective judgment in human affairs."
+    einstein = {"found": True, "name": "Albert Einstein", "quotes": [
+        _quote("q10", pipe, "Albert_Einstein"),
+    ]}
+    nietzsche = {"found": True, "name": "Friedrich Nietzsche", "quotes": [
+        _quote("q4", "Convictions are more dangerous enemies of truth than lies.", "Friedrich_Nietzsche"),
+    ]}
+    return pipe, einstein, nietzsche
+
+
+def _bad_order_draft(pipe_reply: str) -> list[dict]:
+    return [
+        {"i": 0, "text": "Nietzsche, is judgment only a habit?"},
+        {"i": 1, "quoteId": "q4"},
+        {"i": 2, "text": "Convictions still need a witness."},
+        {"i": 3, "text": pipe_reply},
+        {"i": 4, "quoteId": "q10"},
+        {"i": 5, "text": "A witness can still fail."},
+        {"i": 6, "text": "Failure stays small here."},
+        {"i": 7, "text": "Keep one small witness."},
+        {"i": 8, "text": "The witness stays."},
+    ]
+
+
+def _good_order_draft() -> list[dict]:
+    draft = _bad_order_draft("Judgment needs a witness.")
+    draft[3] = {"i": 3, "text": "Judgment needs a witness."}
+    return draft
+
+
+def _drive_render(monkeypatch, tmp_path, *, fix_on_redraft: bool):
+    """POST /v1/render's worker: a fresh DeepSeek draft, then the repair calls."""
+    import wave
+
+    import numpy as np
+
+    from animation.parametric import renderer as parametric_renderer
+    from products.animind_core import llm_providers, render, telemetry
+
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "configured")
+    monkeypatch.delenv("ANIMIND_FORCE_MOCK", raising=False)
+    pipe, einstein, nietzsche = _pipe_sheets()
+    reply = "Pipe smoke proves judgment, Albert?"
+
+    def load(name, lang="en-US", fetch=True):  # noqa: ARG001
+        return einstein if "einstein" in name.lower() else nietzsche
+
+    monkeypatch.setattr(script.personas, "load", load)
+    monkeypatch.setattr(script.knowledge, "ensure", lambda *_a, **_k: ({"mode": "quick", "chunks": []}, None))
+    monkeypatch.setattr(script.knowledge, "retrieve", lambda *_a, **_k: [])
+    monkeypatch.setattr(script, "measured_rate", lambda *_a, **_k: 20.0)
+    calls: list[str] = []
+    redrafts = {"n": 0}
+
+    def complete(self, prompt):
+        calls.append(prompt)
+        if "Judge this debate" in prompt:
+            return llm_providers.LLMResult(
+                [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}],
+                "deepseek", self.model, 80, 20, 0.00004,
+            )
+        if "The draft failed QA" in prompt:
+            redrafts["n"] += 1
+            lines = _good_order_draft() if fix_on_redraft and redrafts["n"] == 1 else _bad_order_draft(reply)
+            return llm_providers.LLMResult(lines, "deepseek", self.model, 400, 80, 0.0002)
+        if "Attempt " in prompt or prompt.startswith("Write beat"):
+            return llm_providers.LLMResult(
+                [{"i": 0, "text": reply}], "deepseek", self.model, 40, 12, 0.00002,
+            )
+        if prompt.startswith("You write"):
+            return llm_providers.LLMResult(
+                _bad_order_draft(reply), "deepseek", self.model, 3292, 236, 0.0012,
+            )
+        return llm_providers.LLMResult(
+            [{"i": 0, "text": "Judgment needs a witness."}], "deepseek", self.model, 20, 8, 0.00001,
+        )
+
+    monkeypatch.setattr(llm_providers.DeepSeekProvider, "complete", complete)
+
+    def voice(text, pick, mp3, clip, max_s, rate_adj=0):  # noqa: ARG001
+        pcm = np.zeros(render.SAMPLE_RATE // 2, np.int16)
+        clip.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(clip), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(render.SAMPLE_RATE)
+            handle.writeframes(pcm.tobytes())
+        return pcm, "+0%"
+
+    monkeypatch.setattr(render, "_voice_line", voice)
+    monkeypatch.setattr(render, "fit_measured_duration", lambda lines, speech, target, respeak, **_k: (lines, speech))
+    monkeypatch.setattr(render, "line_visemes", lambda *_a, **_k: ([{"t": 0.0, "v": "X"}], "envelope"))
+    monkeypatch.setattr(render.frameqa, "check", lambda *_a, **_k: {"pass": True, "badFrames": 0, "warnings": []})
+
+    def encode(self, frame_iter=None, audio_path=None, output_path=None, **_kwargs):  # noqa: ARG001
+        from pathlib import Path
+        Path(output_path).write_bytes(b"mp4")
+
+    monkeypatch.setattr(parametric_renderer.AnimationRenderer, "render", encode)
+    job_id = "order-repair"
+    render._JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0.0}
+    render._run(job_id, {
+        "characters": [{"name": "Albert Einstein"}, {"name": "Friedrich Nietzsche"}],
+        "template": "debate",
+        "scenario": "studio",
+        "topic": "judgment",
+        "language": "en-US",
+        "duration": 45,
+    }, "http://test")
+    return job_id, calls, pipe, telemetry.read()
+
+
+def test_api_render_repairs_a_fresh_draft_that_names_a_later_quote(tmp_path, monkeypatch):
+    from products.animind_core import render, settings
+
+    job_id, calls, pipe, rows = _drive_render(monkeypatch, tmp_path, fix_on_redraft=True)
+    job = render._JOBS[job_id]
+    assert job["status"] == "done", job.get("error")
+    saved = json.loads((settings.data_dir() / "jobs" / job_id / "script.json").read_text(encoding="utf-8"))
+    texts = [line["text"] for line in saved["lines"]]
+    assert saved["scriptQA"]["pass"], saved["scriptQA"]
+    assert "pipe" not in texts[3].lower()
+    assert texts[texts.index(pipe) - 1] != "Pipe smoke proves judgment, Albert?"
+    assert not (settings.data_dir() / "jobs" / job_id / "script.failed.json").exists()
+    repairs = [row for row in rows if row["operation"] == "script-repair"]
+    kinds = [row["metadata"]["kind"] for row in repairs]
+    assert kinds.count("rewrite") == 2
+    assert "regenerate" in kinds
+    assert "redraft" in kinds
+    assert any(row["inputTokens"] > 0 and row["metadata"]["kind"] == "redraft" for row in repairs)
+    assert any("The draft failed QA" in prompt and "refers to a quote spoken later" in prompt for prompt in calls)
+    assert sum(1 for row in rows if row["operation"] == "script-judge") >= 1
+
+
+def test_api_render_keeps_the_failed_script_when_redrafts_do_not_pass(tmp_path, monkeypatch):
+    from products.animind_core import render, settings
+
+    job_id, _calls, _pipe, rows = _drive_render(monkeypatch, tmp_path, fix_on_redraft=False)
+    job = render._JOBS[job_id]
+    assert job["status"] == "failed"
+    assert "refers to a quote spoken later" in job["error"]
+    failed = json.loads((settings.data_dir() / "jobs" / job_id / "script.failed.json").read_text(encoding="utf-8"))
+    assert any("line 3: refers to a quote spoken later on line 4" in item for item in failed["problems"])
+    assert failed["lines"][3]["text"].startswith("Pipe smoke")
+    redrafts = [row for row in rows if row["operation"] == "script-repair" and row["metadata"]["kind"] == "redraft"]
+    assert [row["metadata"]["attempt"] for row in redrafts] == [1, 2]

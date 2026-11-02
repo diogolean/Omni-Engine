@@ -1206,16 +1206,62 @@ def _basis_of(quote: dict[str, Any], *, translated: bool = False) -> dict[str, A
     return out
 
 
-def _ask_writer(prompt: str, *, allow_unavailable_gemini: bool) -> list[dict[str, Any]]:
-    """One more writer call for a single line. Empty when no provider answers."""
-    result, _failures = llm_providers.generate(
+def _ask_writer(prompt: str, *, allow_unavailable_gemini: bool, kind: str = "writer",
+                attempt: int = 0) -> list[dict[str, Any]]:
+    """One more writer call. Every attempt is its own telemetry row, including a miss."""
+    started_call = perf_counter()
+    result, failures = llm_providers.generate(
         prompt,
         settings.data_dir() / "cache" / "script",
         _gemini,
         allow_unavailable_gemini=allow_unavailable_gemini,
         version=SCRIPT_QA_VERSION,
     )
+    telemetry.record(
+        "script-repair",
+        provider=result.provider if result is not None else None,
+        model=result.model if result is not None else None,
+        input_tokens=result.input_tokens if result is not None else 0,
+        output_tokens=result.output_tokens if result is not None else 0,
+        cost_usd=result.cost_usd if result is not None else 0.0,
+        latency_ms=(perf_counter() - started_call) * 1000,
+        status="ok" if result is not None else "empty",
+        metadata={
+            "kind": kind,
+            "attempt": attempt,
+            "cached": bool(result.cached) if result is not None else False,
+            "failures": failures[:3],
+        },
+    )
     return list(result.lines) if result is not None else []
+
+
+def _draft_index(entry: dict[str, Any]) -> int | None:
+    raw = entry.get("i")
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _take_reply(entries: list[dict[str, Any]], index: int, lines: list[dict[str, Any]], topic: str) -> str:
+    """The replacement sentence. One returned line is used even when its index is 0."""
+    dicts = [entry for entry in entries if isinstance(entry, dict)]
+    only = len(dicts) == 1
+    current = lines[index]["text"] if 0 <= index < len(lines) else ""
+    for entry in dicts:
+        numbered = _draft_index(entry)
+        if numbered is not None and numbered != index and not only:
+            continue
+        text = tidy(_unquoted(entry.get("text") or ""))
+        if not text or personas.fold(text) == personas.fold(current):
+            continue
+        if words(text) > 16 or _names_a_later_quote(text, lines, index, topic):
+            continue
+        return text
+    return ""
 
 
 _UNANSWERED = re.compile(r"line (\d+): does not answer line (\d+)")
@@ -1413,6 +1459,21 @@ def mentions_speaker(text: str, name: str, *, first: bool = False) -> bool:
     folded = personas.fold(text)
     padded = f" {folded} "
     return any(f" {mark} " in padded for mark in _name_marks(name, first=first))
+
+
+def _order_failure_request(base_prompt: str, lines: list[dict[str, Any]], problems: list[str], attempt: int) -> str:
+    """A new draft. The failure names the reply that spoke a quote too early."""
+    detail = "\n".join(f"- {problem}" for problem in problems) or "- a reply names a later quote"
+    spoken = "\n".join(f"- line {i}: {line.get('text')}" for i, line in enumerate(lines))
+    return (
+        base_prompt
+        + f"\n\nThe draft failed QA. Attempt {attempt} of 2. Write every beat again from the plan.\n"
+        "A reply named a quote that is spoken only on a later line. "
+        "Do not mention that quote before the line that speaks it. "
+        "Either speak the quote first, or write the reply using only what was already said.\n"
+        f"Failures:\n{detail}\n"
+        f"Rejected draft:\n{spoken}\n"
+    )
 
 
 def _quote_replan_request(base_prompt: str, lines: list[dict[str, Any]], problems: list[str]) -> str:
@@ -1619,17 +1680,16 @@ def _rewrite_from_prior(lines: list[dict[str, Any]], index: int, lang: str, topi
         f"This speaker's quotes:\n{_own_sheet_block(sheet, name)}\n"
         'Return JSON only: {"lines": [{"i": %d, "text": "...", "words": 0}]}.' % index
     )
-    for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini):
-        if not isinstance(entry, dict) or entry.get("i") not in (index, None):
-            continue
-        text = tidy(_unquoted(entry.get("text") or ""))
-        if not text or personas.fold(text) == personas.fold(lines[index]["text"]):
-            continue
-        if words(text) > 16 or _names_a_later_quote(text, lines, index, topic):
-            continue
-        _apply_reply(lines, index, text, names)
-        return True
-    return False
+    text = _take_reply(
+        _ask_writer(
+            prompt, allow_unavailable_gemini=allow_unavailable_gemini, kind="rewrite", attempt=attempt,
+        ),
+        index, lines, topic,
+    )
+    if not text:
+        return False
+    _apply_reply(lines, index, text, names)
+    return True
 
 
 def _swap_reply_before_quote(lines: list[dict[str, Any]], index: int, later: int) -> bool:
@@ -1656,17 +1716,16 @@ def _regenerate_beat(lines: list[dict[str, Any]], index: int, lang: str, topic: 
         f"This speaker's quotes:\n{_own_sheet_block(sheet, name)}\n"
         'Return JSON only: {"lines": [{"i": %d, "text": "...", "words": 0}]}.' % index
     )
-    for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini):
-        if not isinstance(entry, dict) or entry.get("i") not in (index, None):
-            continue
-        text = tidy(_unquoted(entry.get("text") or ""))
-        if not text or personas.fold(text) == personas.fold(lines[index]["text"]):
-            continue
-        if words(text) > 16 or _names_a_later_quote(text, lines, index, topic):
-            continue
-        _apply_reply(lines, index, text, names)
-        return True
-    return False
+    text = _take_reply(
+        _ask_writer(
+            prompt, allow_unavailable_gemini=allow_unavailable_gemini, kind="regenerate", attempt=1,
+        ),
+        index, lines, topic,
+    )
+    if not text:
+        return False
+    _apply_reply(lines, index, text, names)
+    return True
 
 
 def _resolve_forward_reply(lines: list[dict[str, Any]], index: int, later: int, lang: str, topic: str,
@@ -1992,6 +2051,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     displaced: list[tuple[int, str, str]] = []
     authored: set[int] = set()
     qa_quote_replan = False
+    order_redrafts = 0
     while True:
         for _pass in (0, 1):
             used: set[tuple[int, str]] = set()
@@ -2229,11 +2289,11 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
                 qa_quote_replan = True
                 fresh = _ask_writer(
                     _quote_replan_request(base_prompt, lines, problems_now),
-                    allow_unavailable_gemini=explicit_llm,
+                    allow_unavailable_gemini=explicit_llm, kind="quote-replan", attempt=1,
                 )
                 nxt_source = {
-                    entry["i"]: entry for entry in fresh
-                    if isinstance(entry, dict) and isinstance(entry.get("i"), int)
+                    _draft_index(entry): entry for entry in fresh
+                    if isinstance(entry, dict) and _draft_index(entry) is not None
                 }
                 if nxt_source:
                     _correct_draft_shape(
@@ -2241,6 +2301,27 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
                         allow_unavailable_gemini=explicit_llm,
                     )
                     draft_source = nxt_source
+                    continue
+            forward = _unsaid_quote_refs(lines, topic) if debate else []
+            if forward and order_redrafts < 2 and base_prompt:
+                order_redrafts += 1
+                fresh = _ask_writer(
+                    _order_failure_request(base_prompt, lines, forward, order_redrafts),
+                    allow_unavailable_gemini=explicit_llm, kind="redraft", attempt=order_redrafts,
+                )
+                nxt_source = {
+                    _draft_index(entry): entry for entry in fresh
+                    if isinstance(entry, dict) and _draft_index(entry) is not None
+                }
+                # One sentence is not a new debate. Keep the current draft and use the other attempt.
+                if len(nxt_source) >= max(5, len(plan) // 2):
+                    _correct_draft_shape(
+                        nxt_source, plan, topic, names, sheets, budget, lang,
+                        allow_unavailable_gemini=explicit_llm,
+                    )
+                    draft_source = nxt_source
+                    continue
+                if order_redrafts < 2:
                     continue
         break
     personas_out = [
