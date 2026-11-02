@@ -790,14 +790,14 @@ def _prompt(plan: list[Beat], sheets: list[dict[str, Any]], names: list[str], to
     for k, (name, sheet) in enumerate(zip(names, sheets)):
         bg = "\n".join(f'    [{p["source"]}] {p["text"][:600]}' for p in (passages[k] if passages else []))
         qs = "\n".join(
-            f'    {q["id"]}: {q["text"]}' + ("   [on topic]" if topic_score(q, topic) else "")
+            f'    {personas.slug(name)}:{q["id"]}: {q["text"]}' + ("   [on topic]" if topic_score(q, topic) else "")
             for q in _rank(_quotable(sheet), topic)
         ) or "    (no quotes)"
         who.append(f"Speaker {k}: {name}\n  Real quotes from primary sources, best for the topic first (id: text):\n{qs}"
                    + (f"\n  Background passages about {name} (ideas, facts and vocabulary only; NOT quotes):\n{bg}" if bg else ""))
     beats = "\n".join(
         f"  {i}. speaker {b.speaker}, beat '{b.name}'" + (f" (act: {b.act})" if b.act else "") + ", "
-        + (f"PICK a quoteId of speaker {b.speaker} (only quotes of at most {b.max_words} words), do not write text"
+        + (f"PICK a quoteId copied from speaker {b.speaker}'s list, prefix included (only quotes of at most {b.max_words} words), do not write text"
            + (" (if no quote answers the previous line, WRITE text of at most 16 words instead)" if b.optional else "")
            if b.kind == "quote" else f"WRITE text of at most {b.max_words} words")
         for i, b in enumerate(plan)
@@ -831,6 +831,7 @@ Beats, in order:
 
 Rules:
 - Quote beats: choose the quoteId whose idea best fits the topic and the previous line (prefer [on topic] quotes); never reuse a quoteId.
+- A quoteId belongs to one speaker. Copy it with the speaker prefix (`albert_einstein:q1`). The same q-number on the other speaker is a different quote and is rejected.
 - Never reword a famous line of the speaker in a written beat: if you want it, it must be a quote beat with its quoteId.
 - Written beats: spoken lines in the character's voice and ideas, reacting to the line before. Short sentences, concrete words,
   no stage directions, no emoji, no quotation marks. Never present your text as a quote and never copy a quote into it.
@@ -1128,6 +1129,46 @@ def counts_as_sheet_quote(line: dict[str, Any]) -> bool:
     return bool(basis.get("translated") and basis.get("id"))
 
 
+def sheet_quote(sheet: dict[str, Any], name: str, raw_id: Any) -> dict[str, Any] | None:
+    """The quote ``raw_id`` names on this speaker's sheet.
+
+    Sheets number quotes ``q1``, ``q2``, … independently. A bare id is read on
+    ``name``'s sheet. An id prefixed with another speaker is not his quote.
+    """
+    token = str(raw_id or "").strip()
+    if not token or token.lower() == "null":
+        return None
+    by_id = {str(q.get("id")): q for q in _quotable(sheet)}
+    if ":" in token:
+        owner, local = token.split(":", 1)
+        if personas.fold(owner) != personas.fold(name):
+            return None
+        token = local
+    return by_id.get(token)
+
+
+def other_speaker_quote_id(raw_id: Any, name: str) -> bool:
+    """True when ``raw_id`` is explicitly namespaced to someone other than ``name``."""
+    token = str(raw_id or "").strip()
+    if ":" not in token:
+        return False
+    owner, _local = token.split(":", 1)
+    folded = personas.fold(owner)
+    return bool(folded) and folded != personas.fold(name)
+
+
+def owns_sheet_quote(line: dict[str, Any], sheet: dict[str, Any], name: str) -> bool:
+    """The line speaks a quote that is on this speaker's sheet, not a shared id from someone else."""
+    if line.get("quoteId") and sheet_quote(sheet, name, line.get("quoteId")) is not None:
+        return True
+    if line.get("kind") == "quote":
+        quoted = line.get("quote") or {}
+        own = sheet_quote(sheet, name, quoted.get("id"))
+        return bool(own and own.get("text") == quoted.get("text") == line.get("text"))
+    basis = line.get("basis") or {}
+    return bool(basis.get("translated") and sheet_quote(sheet, name, basis.get("id")) is not None)
+
+
 def _basis_of(quote: dict[str, Any], *, translated: bool = False) -> dict[str, Any]:
     out = {"id": quote["id"], "source": quote.get("source", ""),
            "label": source_label(quote.get("source", "")), "url": quote.get("url", "")}
@@ -1202,10 +1243,9 @@ def structural_problems(lines: list[dict[str, Any]], topic: str, names: list[str
     for speaker, sheet in enumerate(list(sheets)[:2]):
         if not _eligible(sheet, QUOTE_MAX_WORDS):
             continue
+        name = names[speaker] if speaker < len(names) else ""
         has = any(
-            line.get("speaker") == speaker and (
-                line.get("kind") == "quote" or line.get("quoteId") or counts_as_sheet_quote(line)
-            )
+            line.get("speaker") == speaker and owns_sheet_quote(line, sheet, name)
             for line in lines
         )
         if not has:
@@ -1217,12 +1257,16 @@ def structural_problems(lines: list[dict[str, Any]], topic: str, names: list[str
     return problems
 
 
-def _draft_rows(drafted: dict[int, dict[str, Any]], plan: list[Beat], names: list[str]) -> list[dict[str, Any]]:
+def _draft_rows(drafted: dict[int, dict[str, Any]], plan: list[Beat], names: list[str],
+                sheets: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     rows = []
     for index, beat in enumerate(plan):
         entry = drafted.get(index) or {}
-        # A quote beat with no real id is a written line, so the 16-word cap applies.
-        kind = "quote" if beat.kind == "quote" and entry.get("quoteId") else (
+        sp = min(beat.speaker, max(0, len(names) - 1)) if names else beat.speaker
+        sheet = sheets[sp] if sheets and sp < len(sheets) else {}
+        owned = sheet_quote(sheet, names[sp] if names else "", entry.get("quoteId")) if entry.get("quoteId") else None
+        # A quote beat with no id on this speaker's sheet is a written line.
+        kind = "quote" if beat.kind == "quote" and owned else (
             "paraphrase" if beat.kind == "quote" else beat.kind
         )
         rows.append({
@@ -1239,7 +1283,7 @@ def _correct_draft_shape(drafted: dict[int, dict[str, Any]], plan: list[Beat], t
                          sheets: list[dict[str, Any]], budget: int | None, lang: str, *,
                          allow_unavailable_gemini: bool) -> None:
     """One structural pass on the JSON. A longer rewrite is ignored."""
-    rows = _draft_rows(drafted, plan, names)
+    rows = _draft_rows(drafted, plan, names, sheets)
     problems = structural_problems(rows, topic, names, sheets, budget)
     if not problems:
         return
@@ -1317,40 +1361,14 @@ def _replan_request(base_prompt: str, displaced: list[tuple[int, str, str]], lin
     )
 
 
-def _restore_speaker_quote(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], speaker: int) -> bool:
-    """Give a speaker one sheet quote when the draft used none. Leave the hook and the close alone."""
-    pool = _eligible(sheets[speaker], QUOTE_MAX_WORDS) if speaker < len(sheets) else []
-    if not pool:
-        return False
-    if any(line.get("speaker") == speaker and counts_as_sheet_quote(line) for line in lines):
-        return False
-    quote = pool[0]
-    order = sorted(
-        range(len(lines)),
-        key=lambda i: (i == 0 or i == len(lines) - 1, lines[i].get("kind") == "quote", i),
-    )
-    for index in order:
-        line = lines[index]
-        if line.get("speaker") != speaker or line.get("kind") == "quote":
-            continue
-        line["kind"] = "quote"
-        line["text"] = quote["text"]
-        line["quote"] = cite(quote)
-        line.pop("basis", None)
-        return True
-    return False
-
-
 def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: str, topic: str, names: list[str], *,
                        allow_unavailable_gemini: bool, sheets: list[dict[str, Any]] | None = None) -> bool:
-    """When debate QA says a line ignores the one before it, ask the model again with that line in view."""
+    """Rewrite a line whose own rule can be fixed. Quote ownership is not one of those rules."""
+    del sheets  # ownership is reported, not patched onto a neighbouring line
     changed = False
-    if sheets is not None:
-        for problem in problems:
-            missing = _NO_QUOTE.match(problem)
-            if missing:
-                changed = _restore_speaker_quote(lines, sheets, int(missing.group(1))) or changed
     for problem in problems:
+        if _NO_QUOTE.match(problem):
+            continue
         match = _UNANSWERED.match(problem)
         if not match:
             continue
@@ -1618,6 +1636,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             sp = min(beat.speaker, n - 1)
             sheet = sheets[sp]
             by_id = {q["id"]: q for q in _quotable(sheet)}
+            speaker_name = names[sp] if sp < len(names) else ""
             draft = draft_source.get(i) or {}
             line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words, beat.rate),
                                     "pauseAfterS": beat.pause_s, "rateAdj": beat.rate, "emotion": emotion_of(draft, beat.name)}
@@ -1637,9 +1656,11 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
                     ranked = sorted(ranked, key=lambda q: not answers_prev(q["text"], True))
                 elif not writer_line and template == "lesson":
                     ranked = sorted(ranked, key=lambda q: not on_thread(q["text"], previous, topic))
-                named_quote = by_id.get(qid) if qid else None
+                named_quote = sheet_quote(sheet, speaker_name, qid) if qid else None
                 chosen_quote = named_quote if named_quote in pool else None
-                if writer_line and chosen_quote is not None:
+                if writer_line and other_speaker_quote_id(qid, speaker_name):
+                    quote = None  # the other speaker's q-number is not this speaker's quote
+                elif writer_line and chosen_quote is not None:
                     quote = chosen_quote  # the writer's quote is not re-picked later
                 else:
                     quote = chosen_quote
@@ -1734,7 +1755,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
                 line.update(kind="paraphrase", text=text)
                 if beat.name == "citação":  # a written line is never labelled as a quote
                     line["beat"] = "ideia"
-                basis = by_id.get(draft.get("basisId") or "") if drafted_text else None  # a replaced draft keeps no basis
+                basis = sheet_quote(sheet, speaker_name, draft.get("basisId")) if drafted_text else None
                 if translated_from is not None:
                     basis = translated_from
                 elif mismatched is not None:
@@ -1756,7 +1777,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
                 idea = link(previous, line["text"], quote=line["kind"] == "quote", names=names)
                 line["replyTo"] = {"line": len(lines) - 1, "idea": idea}
             if writer_line and beat.kind == "quote":
-                named = by_id.get(draft.get("quoteId")) if draft.get("quoteId") else None
+                named = sheet_quote(sheet, speaker_name, draft.get("quoteId")) if draft.get("quoteId") else None
                 spoken = line["text"]
                 if named is not None and (line.get("kind") != "quote" or line.get("quote", {}).get("id") != named["id"] or spoken != named["text"]):
                     displaced.append((i, named["text"], spoken))
@@ -1822,7 +1843,11 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             found += check_debate(lines, sheets, names, topic)
         elif template == "lesson":
             found += check_lesson(lines, sheets, topic)
-        return found
+        unique: list[str] = []
+        for item in found:
+            if item not in unique:
+                unique.append(item)
+        return unique
 
     problems = _problems()
     # One correction. Further rounds were making lines longer and keeping the old idea.
@@ -2084,8 +2109,9 @@ def check_debate(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], name
     if not any(len(lines) / 4 <= i <= 3 * len(lines) / 4 for i in turns):
         errors.append("debate: no turn in the middle")
     for sp, sheet in enumerate(sheets[:2]):
+        name = names[sp] if sp < len(names) else ""
         if _eligible(sheet, QUOTE_MAX_WORDS - 2) and not any(
-                ln["speaker"] == sp and counts_as_sheet_quote(ln) for ln in lines):
+                ln.get("speaker") == sp and owns_sheet_quote(ln, sheet, name) for ln in lines):
             errors.append(f"speaker {sp}: no real quote of his own sheet")
     counts = [words(ln["text"]) for ln in lines]
     for i, (ln, w) in enumerate(zip(lines, counts)):

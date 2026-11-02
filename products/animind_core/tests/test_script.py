@@ -755,6 +755,77 @@ def test_a_swapped_quote_regenerates_the_whole_debate(monkeypatch):
     assert any("Imagination is not a proof" in line["text"] for line in out["lines"])
 
 
+def _shared_id_quote(qid: str, text: str, page: str) -> dict:
+    return {
+        "id": qid,
+        "text": text,
+        "source": "Essays",
+        "sourceKind": "primary",
+        "url": f"https://en.wikiquote.org/wiki/{page}",
+    }
+
+
+def test_shared_quote_ids_resolve_on_the_speakers_own_sheet(monkeypatch):
+    """q1 on Einstein is not q1 on Nietzsche. The other speaker's id does not rewrite the debate."""
+    einstein = {"quotes": [
+        _shared_id_quote("q1", "That price can drop.", "Albert_Einstein"),
+        _shared_id_quote("q10", "Keep the proof.", "Albert_Einstein"),
+    ]}
+    nietzsche = {"quotes": [
+        _shared_id_quote("q1", "Simplicity has a price.", "Friedrich_Nietzsche"),
+        _shared_id_quote("q10", "Power hides in a mask.", "Friedrich_Nietzsche"),
+    ]}
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    sheets = [einstein, nietzsche]
+    hook = "Is simplicity worth the cost?"
+    reply = "A drop still needs proof."
+    calls: list[str] = []
+
+    def run(drafts):
+        calls.clear()
+
+        def fake(prompt):
+            if "Rewrite only line" in prompt or "Write every beat again" in prompt:
+                calls.append(prompt)
+                return []
+            return drafts
+
+        monkeypatch.setattr(script, "_gemini", fake)
+        return script.write("debate", "simplicity", names, "en-US", sheets=sheets, use_llm=True, duration=30)
+
+    owned = run([
+        {"i": 0, "text": hook},
+        {"i": 1, "quoteId": "q1"},
+        {"i": 2, "quoteId": "albert_einstein:q1"},
+        {"i": 3, "text": reply},
+        {"i": 4, "quoteId": "q10"},
+    ])
+    assert owned["scriptQA"]["pass"], owned["scriptQA"]
+    assert owned["lines"][1]["text"] == "Simplicity has a price."
+    assert owned["lines"][1]["speaker"] == 1
+    assert owned["lines"][2]["text"] == "That price can drop."
+    assert owned["lines"][2]["speaker"] == 0 and owned["lines"][2]["quote"]["id"] == "q1"
+    assert owned["lines"][4]["text"] == "Keep the proof."
+    assert owned["lines"][4]["quote"]["id"] == "q10"
+    assert calls == []
+    prompt = script._prompt(script.plan_for("debate", 2, 30), sheets, names, "simplicity", "en-US", "debate", duration=30)
+    assert "albert_einstein:q1" in prompt and "friedrich_nietzsche:q1" in prompt
+
+    stolen = run([
+        {"i": 0, "text": hook},
+        {"i": 1, "quoteId": "friedrich_nietzsche:q1"},
+        {"i": 2, "quoteId": "friedrich_nietzsche:q1", "text": "That price can drop."},
+        {"i": 3, "text": reply},
+        {"i": 4, "quoteId": "friedrich_nietzsche:q10", "text": "Keep the proof."},
+    ])
+    problems = stolen["scriptQA"]["problems"]
+    assert stolen["scriptQA"]["pass"] is False
+    assert problems.count("speaker 0: no real quote of his own sheet") == 1
+    assert not any(line["speaker"] == 0 and line["text"] == "Simplicity has a price." for line in stolen["lines"])
+    assert not any(line["speaker"] == 0 and line.get("kind") == "quote" for line in stolen["lines"])
+    assert calls == []
+
+
 def test_long_lines_are_shortened_before_qa_or_the_failure_names_the_cap(monkeypatch):
     """A writer that comes back long, then longer, must not keep the longer line."""
     long_lines = [
