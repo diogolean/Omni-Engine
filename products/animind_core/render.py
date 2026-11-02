@@ -268,6 +268,20 @@ def tighten(pcm: np.ndarray, gap_s: float = SENTENCE_GAP_S, edge_s: float = EDGE
     return np.concatenate([pcm[: n * hop][mask], pcm[n * hop:] if keep[-1] else pcm[:0]])
 
 
+def sync_line_takes(work: Path, pcms: list[np.ndarray]) -> None:
+    """Write the final take over ``line_N.wav`` and delete leftover fit files.
+
+    A rewritten debate line used to leave the first synthesis on disk, so the
+    viseme pass and any later listen did not match the soundtrack.
+    """
+    keep = {f"line_{index}.wav" for index in range(len(pcms))}
+    for index, pcm in enumerate(pcms):
+        _write_pcm(work / f"line_{index}.wav", pcm)
+    for path in list(work.glob("line_*.wav")) + list(work.glob("line_*.mp3")):
+        if path.name not in keep:
+            path.unlink()
+
+
 def _write_pcm(path: Path, pcm: np.ndarray) -> None:
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
@@ -463,6 +477,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             tone=tone, objective=objective, duration=target_duration, words_per_s=words_per_s,
         )
         lines = written["lines"]
+        scripts.require_passing_script(written, template)
         # Silence for the film titles: a cold open before the first line, a beat before each new act
         # (the dip and its chapter card) and the end card after the last line (see titles.py).
         silence = lambda s: np.zeros(int(s * SAMPLE_RATE), dtype=np.int16)  # noqa: E731
@@ -503,6 +518,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             if abs(len(pcm) / SAMPLE_RATE - seconds) > 0.05:
                 raise RuntimeError("duration fit returned a take that was not re-synthesized")
             voiced.append(item)
+        sync_line_takes(work, [item["pcm"] for item in voiced])
         pcm_parts, script, sources, t = [silence(titles.TITLE_S)], [], set(), titles.TITLE_S
         for i, planned in enumerate(lines):
             speaker = planned["speaker"]

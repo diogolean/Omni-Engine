@@ -41,15 +41,60 @@ def test_open_mouth_sits_below_a_walrus_mustache():
     ImageDraw.Draw(mouth).ellipse((8, 6, 62, 30), fill=(48, 18, 20, 255))
     mouth_xy, stache_xy = (12, 8), (4, 0)
     drop, lift = clear_mustache(("mouth", mouth, mouth_xy, 10), ("mustache", stache, stache_xy, 11))
-    assert drop > 0 or lift > 0
-    canvas = Image.new("RGB", (160, 140), (232, 196, 168))
-    canvas.paste(stache, (stache_xy[0], stache_xy[1] - lift), stache)
-    canvas.paste(mouth, (mouth_xy[0], mouth_xy[1] + drop), mouth)
-    box = (mouth_xy[0], mouth_xy[1] + drop, mouth_xy[0] + mouth.width, mouth_xy[1] + drop + mouth.height)
-    measured = frameqa.measure(np.asarray(canvas), box)
-    assert measured is not None
-    assert measured["blobs"] == 1
-    assert measured["cav"] >= frameqa.VISEME_CAV_MIN["F"] or measured["cav"] >= frameqa.VISEME_CAV_MIN["C"]
+    mouth_top = mouth_xy[1] + 6 + drop
+    mouth_bot = mouth_xy[1] + 30 + drop
+    stache_bot = stache_xy[1] + 40 - lift
+    # The opening extends below the mustache, and the top still tucks under it.
+    assert mouth_bot > stache_bot
+    assert mouth_top < stache_bot
+    plate = Image.new("RGB", mouth.size, (232, 196, 168))
+    plate.paste(mouth, (0, 0), mouth)
+    measured = frameqa.measure(np.asarray(plate), (0, 0, mouth.width, mouth.height))
+    assert measured is not None and measured["blobs"] == 1 and measured["cav"] > 0.1
+
+
+def test_a_chin_dot_grows_to_the_face_and_tucks_under_the_mustache():
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from products.animind_core.scene import scale_mouth_to_face, tuck_mustache_over_mouth
+
+    face_w = 200
+    dot = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
+    ImageDraw.Draw(dot).ellipse((36, 28, 44, 36), fill=(16, 10, 12, 255))
+    grown = scale_mouth_to_face(dot, face_w, open_shape=True)
+    box = grown.getchannel("A").getbbox()
+    assert box is not None and box[2] - box[0] >= int(face_w * 0.28)
+    slit = Image.new("RGBA", (90, 30), (0, 0, 0, 0))
+    ImageDraw.Draw(slit).rectangle((10, 14, 80, 17), fill=(12, 8, 8, 255))
+    opened = scale_mouth_to_face(slit, face_w, open_shape=True)
+    opened_box = opened.getchannel("A").getbbox()
+    assert opened_box[3] - opened_box[1] > 8
+    head = Image.new("RGBA", (120, 80), (230, 196, 170, 255))
+    ImageDraw.Draw(head).rectangle((20, 18, 100, 36), fill=(32, 28, 28, 255))
+    mouth = Image.new("RGBA", (70, 40), (0, 0, 0, 0))
+    ImageDraw.Draw(mouth).ellipse((8, 4, 62, 34), fill=(40, 16, 18, 255))
+    tucked = np.asarray(tuck_mustache_over_mouth(mouth, head, (20, 16), (0, 0)))
+    assert tuple(tucked[6, 30][:3]) == (32, 28, 28)
+
+
+def test_stale_line_takes_are_replaced(tmp_path):
+    import numpy as np
+
+    from products.animind_core.render import sync_line_takes
+
+    (tmp_path / "line_0.wav").write_bytes(b"old")
+    (tmp_path / "line_2.wav").write_bytes(b"dropped")
+    (tmp_path / "line_fit_4.wav").write_bytes(b"fit")
+    (tmp_path / "line_fit_4.mp3").write_bytes(b"fit")
+    pcm = np.zeros(240, np.int16)
+    pcm[:10] = 1000
+    sync_line_takes(tmp_path, [pcm, pcm])
+    assert (tmp_path / "line_0.wav").stat().st_size > 100
+    assert (tmp_path / "line_1.wav").is_file()
+    assert not (tmp_path / "line_2.wav").exists()
+    assert not (tmp_path / "line_fit_4.wav").exists()
+    assert not (tmp_path / "line_fit_4.mp3").exists()
 
 
 def test_debate_frame_loads_mouths_that_are_file_paths(tmp_path):

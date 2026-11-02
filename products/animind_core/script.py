@@ -273,8 +273,12 @@ def matching_quote(text: str, pool: list[dict[str, Any]], max_words: int) -> dic
     return None
 
 
+def _unquoted(text: str) -> str:
+    return " ".join(str(text or "").translate({ord(c): None for c in QUOTE_MARKS}).split())
+
+
 def _clean_paraphrase(text: str, max_words: int) -> str:
-    text = " ".join(str(text or "").translate({ord(c): None for c in QUOTE_MARKS}).split())
+    text = _unquoted(text)
     w = text.split()
     if len(w) > max_words:
         text = " ".join(w[:max_words]).rstrip(",;:—-") + "…"
@@ -1123,8 +1127,76 @@ def _ask_writer(prompt: str, *, allow_unavailable_gemini: bool) -> list[dict[str
 _UNANSWERED = re.compile(r"line (\d+): does not answer line (\d+)")
 
 
+QA_REWRITES = 3
+_TOO_LONG = re.compile(r"line (\d+): (\d+) words is too long")
+_NO_QUOTE = re.compile(r"speaker (\d+): no real quote")
+
+
+class ScriptQAError(RuntimeError):
+    """Debate or dialogue QA still failed after the rewrite loop."""
+
+
+def require_passing_script(out: dict[str, Any], template: str) -> None:
+    """An LLM debate that still fails QA does not render. The problems are the error."""
+    if template not in {"debate", "dialogue"}:
+        return
+    if out.get("writer") not in {"deepseek", "gemini"}:
+        return
+    qa = out.get("scriptQA") or {}
+    if qa.get("pass"):
+        return
+    problems = qa.get("problems") or ["script QA failed"]
+    raise ScriptQAError("script QA failed after rewrites: " + "; ".join(problems))
+
+
+def _regenerate_after_swapped_quotes(lines: list[dict[str, Any]], displaced: list[tuple[int, str, str]],
+                                     lang: str, topic: str, names: list[str], *,
+                                     allow_unavailable_gemini: bool) -> None:
+    """A later line that still names the quote we removed (``A pipe is not a proof``) is written again."""
+    for index, old, new in displaced:
+        lost = set(_stems(old)) - set(_stems(new))
+        if not lost:
+            continue
+        for follow in range(index + 1, len(lines)):
+            if lines[follow].get("kind") == "quote":
+                continue
+            if not (set(_stems(lines[follow]["text"])) & lost):
+                continue
+            word = next(old_word for stem, old_word in _stems(old).items() if stem in lost)
+            rewritten = _rewrite_line(
+                follow,
+                "the quote this line answers was replaced. "
+                f"Old quote: {old}. New line before this one: {lines[follow - 1]['text']}. "
+                f"Do not mention {word!r}. Answer the new line in one full sentence.",
+                lines[follow]["text"], lang, topic, names, allow_unavailable_gemini=allow_unavailable_gemini,
+            )
+            if not rewritten:
+                continue
+            lines[follow]["text"] = rewritten
+            lines[follow]["replyTo"] = {
+                "line": follow - 1,
+                "idea": link(lines[follow - 1]["text"], rewritten, names=names),
+            }
+
+
+def _restore_speaker_quote(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], speaker: int) -> bool:
+    pool = _eligible(sheets[speaker], QUOTE_MAX_WORDS) if speaker < len(sheets) else []
+    if not pool:
+        return False
+    quote = pool[0]
+    for line in lines:
+        if line.get("speaker") != speaker or line.get("kind") == "quote":
+            continue
+        line["kind"] = "quote"
+        line["text"] = quote["text"]
+        line["quote"] = cite(quote)
+        line.pop("basis", None)
+        return True
+    return False
+
+
 def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: str, topic: str, names: list[str], *,
-                       allow_unavailable_gemini: bool) -> bool:
+                       allow_unavailable_gemini: bool, sheets: list[dict[str, Any]] | None = None) -> bool:
     """When debate QA says a line ignores the one before it, ask the model again with that line in view."""
     changed = False
     for problem in problems:
@@ -1153,6 +1225,37 @@ def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: s
         lines[index]["text"] = rewritten
         lines[index]["replyTo"] = {"line": index - 1, "idea": link(previous, rewritten, names=names)}
         changed = True
+    for problem in problems:
+        long = _TOO_LONG.match(problem)
+        if long:
+            index = int(long.group(1))
+            if not 0 <= index < len(lines) or lines[index].get("kind") == "quote":
+                continue
+            rewritten = _rewrite_line(
+                index,
+                f"this line is {long.group(2)} words. Rewrite it as one complete sentence of at most 16 words. "
+                "Do not stop mid-sentence.",
+                lines[index]["text"], lang, topic, names, allow_unavailable_gemini=allow_unavailable_gemini,
+            )
+            if rewritten and words(rewritten) <= PARAPHRASE_MAX_WORDS + 1:
+                lines[index]["text"] = rewritten
+                changed = True
+            continue
+        if problem.startswith("debate: the close is not memorable") and lines:
+            rewritten = _rewrite_line(
+                len(lines) - 1,
+                "the close is weak. Rewrite it as one memorable sentence of at most 12 words, with a turn.",
+                lines[-1]["text"], lang, topic, names, allow_unavailable_gemini=allow_unavailable_gemini,
+            )
+            if rewritten and memorable_close({**lines[-1], "text": rewritten, "kind": "paraphrase"}):
+                lines[-1]["text"] = rewritten
+                lines[-1]["kind"] = "paraphrase"
+                lines[-1].pop("quote", None)
+                changed = True
+            continue
+        missing = _NO_QUOTE.match(problem)
+        if missing and sheets is not None:
+            changed = _restore_speaker_quote(lines, sheets, int(missing.group(1))) or changed
     return changed
 
 
@@ -1328,6 +1431,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     used: set[tuple[int, str]] = set()
     lines: list[dict[str, Any]] = []
     authored: set[int] = set()
+    displaced: list[tuple[int, str, str]] = []
     molds: set[str] = set()
     seed = _seed(topic, names, lang)
     debate = template == "debate" and n > 1
@@ -1354,7 +1458,8 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
                 ranked = sorted(ranked, key=lambda q: not answers_prev(q["text"], True))
             elif not writer_line and template == "lesson":
                 ranked = sorted(ranked, key=lambda q: not on_thread(q["text"], previous, topic))
-            chosen_quote = next((q for q in pool if q["id"] == qid), None)
+            named_quote = by_id.get(qid) if qid else None
+            chosen_quote = named_quote if named_quote in pool else None
             if writer_line and chosen_quote is not None:
                 quote = chosen_quote  # the writer's quote is not re-picked later
             else:
@@ -1409,10 +1514,13 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             if beat.kind == "quote":  # a quote beat without a fitting quote gets a short written line
                 beat = replace(beat, max_words=min(beat.max_words, 16))
             taken = {personas.fold(ln["text"]) for ln in lines}
-            draft_text = tidy(_clean_paraphrase(draft.get("text") or "", beat.max_words))
+            # A model sentence stays whole. Slicing it to the beat cap cut
+            # "we can hold" off the debate line and spoke the stump.
+            raw_draft = draft.get("text") or ""
+            draft_text = tidy(_unquoted(raw_draft) if writer_line else _clean_paraphrase(raw_draft, beat.max_words))
             locked = False
             if spoken_translation:
-                text = tidy(_clean_paraphrase(spoken_translation, max(beat.max_words, words(spoken_translation))))
+                text = tidy(_unquoted(spoken_translation))
                 drafted_text = True
                 locked = True
                 authored.add(i)
@@ -1467,7 +1575,16 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         if lines:
             idea = link(previous, line["text"], quote=line["kind"] == "quote", names=names)
             line["replyTo"] = {"line": len(lines) - 1, "idea": idea}
+        if writer_line and beat.kind == "quote":
+            named = by_id.get(draft.get("quoteId")) if draft.get("quoteId") else None
+            spoken = line["text"]
+            if named is not None and (line.get("kind") != "quote" or line.get("quote", {}).get("id") != named["id"] or spoken != named["text"]):
+                displaced.append((i, named["text"], spoken))
         lines.append(line)
+    if writer in {"deepseek", "gemini"}:
+        _regenerate_after_swapped_quotes(
+            lines, displaced, lang, topic, names, allow_unavailable_gemini=explicit_llm,
+        )
     if writer in {"deepseek", "gemini"} and authored:
         stems = [_stems(str(line.get("text") or "")) for line in lines]
         for index in range(2, len(lines)):
@@ -1499,19 +1616,25 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     out = {"lines": lines, "writer": writer, "scriptCost": script_cost, "personas": personas_out, "topic": topic, "tone": tone,
            "objective": objective, "targetDurationS": float(duration) if duration is not None else None,
            "quoteLines": sum(1 for ln in lines if ln["kind"] == "quote")}
-    problems = check(lines, sheets, topic, names)  # quote fidelity holds for every template
-    if debate:
-        problems += check_debate(lines, sheets, names, topic)
-    elif template == "lesson":
-        problems += check_lesson(lines, sheets, topic)
-    if writer in {"deepseek", "gemini"} and _repair_unanswered(
-        lines, problems, lang, topic, names, allow_unavailable_gemini=explicit_llm,
-    ):
-        problems = check(lines, sheets, topic, names)
+    def _problems() -> list[str]:
+        found = check(lines, sheets, topic, names)
         if debate:
-            problems += check_debate(lines, sheets, names, topic)
+            found += check_debate(lines, sheets, names, topic)
         elif template == "lesson":
-            problems += check_lesson(lines, sheets, topic)
+            found += check_lesson(lines, sheets, topic)
+        return found
+
+    problems = _problems()
+    if writer in {"deepseek", "gemini"}:
+        for _attempt in range(QA_REWRITES):
+            if not problems:
+                break
+            if not _repair_unanswered(
+                lines, problems, lang, topic, names,
+                allow_unavailable_gemini=explicit_llm, sheets=sheets,
+            ):
+                break
+            problems = _problems()
     # notes: weaknesses worth a look that do not fail the script (an idea carried three lines in a row)
     notes = _repeated_idea(lines)
     if duration is not None:

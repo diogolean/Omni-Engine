@@ -71,12 +71,14 @@ def clear_mustache(mouth: tuple, mustache: tuple) -> tuple[int, int]:
     overlap = stache_bot - mouth_top
     if overlap <= 1:
         return 0, 0
-    drop = overlap + 2
     mouth_h = max(1, mouth_bot - mouth_top)
+    # Keep the top of the mouth under the mustache. Dropping it clear of the
+    # hair parked a tiny mouth on the chin.
+    cover = max(2, int(mouth_h * 0.35))
+    drop = max(0, (stache_bot - cover) - mouth_top)
     lift = 0
-    if drop > mouth_h * 0.65:
-        # A thick mustache: lift it on the open viseme and seat the mouth in the gap.
-        lift = min(drop // 2, int((stache_bot - stache_top) * 0.45))
+    if drop > mouth_h:
+        lift = min(drop // 3, int((stache_bot - stache_top) * 0.35))
         drop = max(0, drop - lift)
     return drop, lift
 
@@ -151,32 +153,94 @@ EMO_MOUTH = {
 }
 
 
-def structured_mouth(img: Image.Image | str) -> Image.Image:
-    """Load a path mouth and replace a flat dark oval before it is painted.
+_MOUTH_OF_FACE = 0.30
 
-    The replacement keeps the same canvas, so the rig anchor does not move.
-    This runs while the frame is drawn, including mouths already saved on a puppet.
-    """
-    from . import mouthset  # noqa: PLC0415
 
-    sprite = layer_image(img)
-    if not mouthset.flat_dark_blob(sprite):
-        return sprite
-    box = sprite.getchannel("A").getbbox()
-    if not box:
-        return sprite
-    width = max(12, box[2] - box[0])
-    drawn = mouthset._lipped_open(width, {
+def _open_colours() -> dict[str, tuple[int, int, int, int]]:
+    return {
         "outline": (40, 24, 26, 255),
         "cavity": (52, 24, 26, 255),
         "teeth": (246, 242, 236, 255),
         "tongue": (190, 86, 92, 255),
         "lip": (150, 72, 70, 255),
-    })
+    }
+
+
+def scale_mouth_to_face(sprite: Image.Image, face_w: int, *, open_shape: bool = True) -> Image.Image:
+    """A cached Nietzsche mouth can be a few dark pixels on the chin. Grow an open viseme to the face.
+
+    Closed rests (X, A) stay as drawn. A shut open-viseme such as front G is redrawn open.
+    """
+    from . import mouthset  # noqa: PLC0415
+
+    box = sprite.getchannel("A").getbbox()
+    if not box or face_w < 24 or not open_shape:
+        return sprite
+    ink_w, ink_h = box[2] - box[0], box[3] - box[1]
+    target = max(12, int(face_w * _MOUTH_OF_FACE))
+    tiny = ink_w < int(face_w * 0.16)
+    shut = ink_h < max(4, int(ink_w * 0.22))
+    blob = mouthset.flat_dark_blob(sprite)
+    if not tiny and not shut and not blob:
+        return sprite
+    if shut or blob:
+        drawn = mouthset._lipped_open(target, _open_colours())
+    else:
+        drawn = sprite.crop(box).resize((target, max(4, int(ink_h * target / max(1, ink_w)))), Image.LANCZOS)
+    canvas = Image.new("RGBA", (max(sprite.width, drawn.width + 4), max(sprite.height, drawn.height + 4)), (0, 0, 0, 0))
+    cx = (box[0] + box[2]) // 2
+    cy = (box[1] + box[3]) // 2
+    canvas.paste(drawn, (max(0, cx - drawn.width // 2), max(0, cy - drawn.height // 2)), drawn)
+    return canvas
+
+
+def tuck_mustache_over_mouth(mouth: Image.Image, head: Image.Image, mouth_xy: tuple[int, int],
+                             head_xy: tuple[int, int]) -> Image.Image:
+    """Paint the head's mustache across the top of an open mouth so it is not a sticker on the hair."""
+    sprite = mouth.copy()
+    arr = np.array(sprite)
+    hair = np.asarray(head)
+    box = sprite.getchannel("A").getbbox()
+    if not box:
+        return sprite
+    top = box[1] + int((box[3] - box[1]) * 0.42)
+    for y in range(box[1], top):
+        for x in range(box[0], box[2]):
+            sx = mouth_xy[0] + x - head_xy[0]
+            sy = mouth_xy[1] + y - head_xy[1]
+            if not (0 <= sx < hair.shape[1] and 0 <= sy < hair.shape[0]):
+                continue
+            pixel = hair[sy, sx]
+            if pixel[3] < 128:
+                continue
+            lum = float(pixel[:3].mean())
+            chroma = int(pixel[:3].max()) - int(pixel[:3].min())
+            if lum < 90 and chroma < 40:
+                arr[y, x] = pixel
+    return Image.fromarray(arr)
+
+
+def structured_mouth(img: Image.Image | str, face_w: int = 0, *, open_shape: bool = True) -> Image.Image:
+    """Load a path mouth, scale a chin-dot up to the face, and replace a flat dark oval.
+
+    This runs while the frame is drawn, including mouths already saved on a puppet.
+    """
+    from . import mouthset  # noqa: PLC0415
+
+    sprite = layer_image(img)
+    if face_w:
+        sprite = scale_mouth_to_face(sprite, face_w, open_shape=open_shape)
+    if not open_shape or not mouthset.flat_dark_blob(sprite):
+        return sprite
+    box = sprite.getchannel("A").getbbox()
+    if not box:
+        return sprite
+    width = max(12, int(face_w * _MOUTH_OF_FACE) if face_w else box[2] - box[0])
+    drawn = mouthset._lipped_open(width, _open_colours())
     canvas = Image.new("RGBA", sprite.size, (0, 0, 0, 0))
     x = box[0] + (box[2] - box[0] - drawn.width) // 2
     y = box[1] + (box[3] - box[1] - drawn.height) // 2
-    canvas.paste(drawn, (x, y), drawn)
+    canvas.paste(drawn, (max(0, x), max(0, y)), drawn)
     return canvas
 
 
@@ -671,6 +735,10 @@ class Scene:
             else None
         ) or rv.visemes.get(cur_v) or rv.visemes.get("X")
         mouth_tag = f"X_{expression}" if cur_v == "X" and expression in rv.expressions else cur_v
+        head = next((part for part in rv.layers if part[0] == "head"), None)
+        face_w = layer_image(head[1]).width if head is not None else 0
+        if mouth is not None:
+            mouth = (structured_mouth(mouth[0], face_w, open_shape=cur_v not in "XA"), mouth[1], mouth[2])
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
         before = rv.visemes.get(prev_v) or rv.visemes.get("X")
         if XFADE_S > 0 and mouth and before and wv < 1.0 and before[0] is not mouth[0]:
@@ -685,7 +753,7 @@ class Scene:
             mouth_drop, mustache_lift = clear_mustache(mouths[-1], mustache)
         if mouths:  # frame trace for the video QA: how many mouth layers were drawn, and where
             m0 = mouths[-1]
-            sprite = structured_mouth(m0[1]) if m0[0] == "mouth" else layer_image(m0[1])
+            sprite = layer_image(m0[1])
             bx = sprite.getchannel("A").point(lambda a: 255 if a > 128 else 0).getbbox() or (0, 0, *sprite.size)
             # Mouth follows the head's breathing offset; trace the actual painted position.
             ox, oy = x0 + m0[2][0] + hx, y0 + m0[2][1] + round(breathe) + hy + mouth_drop
@@ -703,8 +771,10 @@ class Scene:
             # The face no longer rides the jaw: only the mouth layer changes with speech.
             dy = breathe * BREATH_SHARE.get(name, 1.0) - (amp * 2 * SS if name == "brows" else 0) + (brow if name == "brows" else 0)
             hdx, hdy = (0, 0) if name in BODY_LAYERS else (hx, hy)
-            img = structured_mouth(img) if name == "mouth" else layer_image(img)
+            img = layer_image(img)
             if name == "mouth":
+                if head is not None and cur_v not in "XA":
+                    img = tuck_mustache_over_mouth(img, layer_image(head[1]), (lx, ly), head[2])
                 dy += mouth_drop
             elif name == "mustache" and mustache_lift:
                 dy -= mustache_lift

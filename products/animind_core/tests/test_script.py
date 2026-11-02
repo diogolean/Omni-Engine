@@ -653,6 +653,110 @@ def test_llm_line_that_claims_to_be_literal_is_rewritten(monkeypatch):
     assert out["scriptQA"]["pass"], out["scriptQA"]
 
 
+def test_debate_transcript_keeps_the_writer_ending(monkeypatch):
+    import numpy as np
+
+    from products.animind_core import scene
+
+    plan = script.plan_for("debate", 2)
+    hold = "I want us to keep on testing it from here every perspective we can hold."
+    truest = "What he said is careful but it is not always the truest."
+    drafts = []
+    used = {"hold": False, "truest": False}
+    for index, beat in enumerate(plan):
+        if beat.kind == "quote":
+            continue
+        if not used["hold"] and script.words(hold) > beat.max_words:
+            drafts.append({"i": index, "text": hold})
+            used["hold"] = True
+        elif not used["truest"] and script.words(truest) > beat.max_words:
+            drafts.append({"i": index, "text": truest})
+            used["truest"] = True
+        else:
+            drafts.append({"i": index, "text": f"Knowledge still needs line {index} checked."})
+    assert used == {"hold": True, "truest": True}
+
+    monkeypatch.setattr(script, "_gemini", lambda prompt: drafts)
+    out = script.write(
+        "debate", "knowledge", ["Ada", "Ben"], "en-US",
+        sheets=[{"quotes": []}, {"quotes": []}], use_llm=True,
+    )
+    texts = [line["text"] for line in out["lines"]]
+    assert any(text.endswith("we can hold.") for text in texts), texts
+    assert any(text.endswith("the truest.") for text in texts), texts
+    timed = []
+    cursor = 2000
+    for line in out["lines"]:
+        timed.append({**line, "startMs": cursor, "endMs": cursor + 2000})
+        cursor += 2300
+    sc = scene.Scene(
+        template="debate", scenario="studio", rigs=[None, None], script=timed,
+        envelope=np.ones(800), env_fps=100, duration_s=cursor / 1000 + 3,
+        disclaimer="Parody", names=["Ada", "Ben"], lang="en-US",
+    )
+    captions = [" ".join(row for page in sc._pages(line) for row in page) for line in sc.script]
+    assert any(caption.endswith("we can hold.") for caption in captions)
+    assert any(caption.endswith("the truest.") for caption in captions)
+
+
+def test_a_swapped_quote_regenerates_the_line_that_named_it(monkeypatch):
+    pipe = "A pipe is only a thought " * 6
+    pipe = pipe.strip() + "."
+    short = {
+        "id": "q-short",
+        "text": "Imagination matters more than knowledge.",
+        "source": "Essays",
+        "sourceKind": "primary",
+        "url": "https://en.wikiquote.org/wiki/Albert_Einstein",
+    }
+    long = {
+        "id": "q-pipe",
+        "text": pipe,
+        "source": "Letters",
+        "sourceKind": "primary",
+        "url": "https://en.wikiquote.org/wiki/Friedrich_Nietzsche",
+    }
+
+    def fake(prompt):
+        if "Rewrite only line 2" in prompt:
+            return [{"i": 2, "text": "Imagination is not a proof by itself."}]
+        return [
+            {"i": 0, "text": "Is imagination only a decoration?"},
+            {"i": 1, "quoteId": "q-pipe"},
+            {"i": 2, "text": "A pipe is not a proof."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write(
+        "debate", "imagination", ["Albert Einstein", "Friedrich Nietzsche"], "en-US",
+        sheets=[{"quotes": [short]}, {"quotes": [long, short]}], use_llm=True,
+    )
+    assert all("pipe" not in line["text"].lower() for line in out["lines"]), [line["text"] for line in out["lines"]]
+    assert any("Imagination is not a proof" in line["text"] for line in out["lines"])
+
+
+def test_debate_qa_fails_loudly_when_rewrites_do_not_land(monkeypatch):
+    def fake(prompt):
+        if "Rewrite only line" in prompt or "does not answer" in prompt:
+            return [{"i": 1, "text": "Cats sleep through the long afternoon."}]
+        return [
+            {"i": 0, "text": "Is knowledge only opinion?"},
+            {"i": 1, "text": "Cats sleep through the long afternoon."},
+            {"i": 2, "text": "Birds leave without a map at all."},
+            {"i": 3, "text": "The room can stay quiet now."},
+            {"i": 4, "text": "Nothing follows from that claim."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write(
+        "debate", "knowledge", ["Ada", "Ben"], "en-US",
+        sheets=[{"quotes": []}, {"quotes": []}], use_llm=True, duration=30,
+    )
+    assert out["scriptQA"]["pass"] is False
+    with pytest.raises(script.ScriptQAError, match="script QA failed"):
+        script.require_passing_script(out, "debate")
+
+
 def test_slow_voice_plans_fewer_words_before_tts():
     slow = script.plan_for("solo", 1, duration=30, words_per_s=1.2)
     historical = script.plan_for("solo", 1, duration=30)
