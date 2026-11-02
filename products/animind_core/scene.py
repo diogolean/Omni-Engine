@@ -47,75 +47,25 @@ def layer_image(img: Image.Image | str) -> Image.Image:
     return cached
 
 
-def mustache_lower_edge(stache: Image.Image) -> int | None:
-    """Row of the moustache's lower edge, not a beard tail hanging to the chin.
+def _ink_top(img: Image.Image) -> int | None:
+    rows = np.flatnonzero((np.asarray(img.getchannel("A")) > 128).any(axis=1))
+    return int(rows[0]) if rows.size else None
 
-    The walrus band is the widest dark mass. A narrow beard below it is ignored,
-    otherwise the mouth is seated on the chin.
+
+def rest_lip_drop(rv: RigView, mouth: tuple, face_w: int = 0) -> int:
+    """Shift so an open mouth's upper lip sits on the rest (X) mouth's upper lip.
+
+    The cached rig already places X on the real mouth. A mustache layer that also
+    holds the coat, or a white moustache the face detector reads as eyes, is ignored.
     """
-    alpha = np.asarray(stache.getchannel("A")) > 128
-    if not alpha.any():
-        return None
-    widths = alpha.sum(axis=1)
-    peak = int(np.argmax(widths))
-    if widths[peak] <= 0:
-        return None
-    limit = max(2, int(widths[peak] * 0.45))
-    edge = peak
-    for row in range(peak + 1, len(widths)):
-        if widths[row] < limit:
-            break
-        edge = row
-    return edge
-
-
-def facial_hair_lower_edge(head: Image.Image, head_xy: tuple[int, int], mouth: Image.Image,
-                           mouth_xy: tuple[int, int]) -> int | None:
-    """Stage Y of the moustache bottom on a cached head, when hair is baked into the face."""
-    rgb = np.asarray(head.convert("RGBA"))
-    if rgb.ndim != 3 or rgb.shape[2] < 4:
-        return None
-    lum = rgb[..., :3].astype(np.int16).mean(axis=2)
-    chroma = rgb[..., :3].max(axis=2) - rgb[..., :3].min(axis=2)
-    hair = (lum < 90) & (chroma < 40) & (rgb[..., 3] > 128)
-    ink = np.asarray(mouth.getchannel("A")) > 128
-    cols = np.flatnonzero(ink.any(axis=0))
-    if cols.size == 0 or not hair.any():
-        return None
-    x0 = int(np.clip(mouth_xy[0] + int(cols[0]) - head_xy[0], 0, hair.shape[1] - 1))
-    x1 = int(np.clip(mouth_xy[0] + int(cols[-1]) - head_xy[0], 0, hair.shape[1]))
-    band = hair[:, x0:x1]
-    if not band.any():
-        return None
-    widths = band.sum(axis=1)
-    peak = int(np.argmax(widths))
-    limit = max(2, int(widths[peak] * 0.45))
-    edge = peak
-    for row in range(peak + 1, len(widths)):
-        if widths[row] < limit:
-            break
-        edge = row
-    return head_xy[1] + edge
-
-
-def clear_mustache(mouth: tuple, mustache: tuple) -> tuple[int, int]:
-    """Shift so the upper lip sits on the moustache's lower edge.
-
-    ``mouth`` and ``mustache`` are ``(name, image-or-path, xy, z)``. A cached rig
-    often stores the PNG path. Dropping the whole mouth clear of a beard tail
-    parked viseme C on the chin. Returns ``(mouth_drop, mustache_lift)``.
-    """
-    m_img, m_xy = layer_image(mouth[1]), mouth[2]
-    s_img, s_xy = layer_image(mustache[1]), mustache[2]
-    edge = mustache_lower_edge(s_img)
-    alpha = np.asarray(m_img.getchannel("A"))
-    rows = np.flatnonzero((alpha > 128).any(axis=1))
-    if edge is None or rows.size == 0:
-        return 0, 0
-    lip = m_xy[1] + int(rows[0])
-    # One pixel of tuck, so the lip meets the hair instead of floating on the chin.
-    drop = (s_xy[1] + edge + 1) - lip
-    return drop, 0
+    rest = rv.visemes.get("X")
+    if rest is None:
+        return 0
+    r_img = structured_mouth(rest[0], face_w, open_shape=False)
+    r_top, m_top = _ink_top(r_img), _ink_top(layer_image(mouth[1]))
+    if r_top is None or m_top is None:
+        return 0
+    return (rest[1][1] + r_top) - (mouth[2][1] + m_top)
 
 
 def viseme_mix(cues: list[dict[str, Any]], t: float, fade: float = XFADE_S) -> tuple[str, str, float]:
@@ -253,37 +203,6 @@ def tuck_mustache_over_mouth(mouth: Image.Image, head: Image.Image, mouth_xy: tu
             if lum < 90 and chroma < 40:
                 arr[y, x] = pixel
     return Image.fromarray(arr)
-
-
-def open_cavity_below_mustache(sprite: Image.Image, viseme: str) -> Image.Image:
-    """Give a shut open-viseme a dark hole inside the lip, not a second mouth on the chin.
-
-    Front G and D on a cached Nietzsche are thin lips. Measured alone they are 0,
-    then the frame crop full of moustache reads 0.12–0.25.
-    """
-    code = (viseme or "X")[:1].upper()
-    if code in "XA":
-        return sprite
-    from . import mouthset  # noqa: PLC0415
-
-    floor = frameqa.VISEME_CAV_MIN.get(code, 0.10)
-    box = sprite.getchannel("A").getbbox()
-    if not box:
-        return sprite
-    plate = Image.new("RGB", sprite.size, (232, 196, 168))
-    plate.paste(sprite, (0, 0), sprite)
-    measured = frameqa.measure(np.asarray(plate), (0, 0, sprite.width, sprite.height))
-    if measured and measured["cav"] + 1e-6 >= floor:
-        return sprite
-    width = max(16, box[2] - box[0])
-    drawn = mouthset._lipped_open(width, _open_colours())
-    # Open downward from the lip line. The dark hole stays one mouth tall, under the hair.
-    x = box[0] + max(0, (box[2] - box[0] - drawn.width) // 2)
-    y = int(box[3]) + 2
-    canvas = Image.new("RGBA", (max(sprite.width, x + drawn.width + 2), y + drawn.height + 2), (0, 0, 0, 0))
-    canvas.paste(sprite, (0, 0), sprite)
-    canvas.paste(drawn, (x, y), drawn)
-    return canvas
 
 
 def structured_mouth(img: Image.Image | str, face_w: int = 0, *, open_shape: bool = True) -> Image.Image:
@@ -812,23 +731,9 @@ class Scene:
             fading.putalpha(fading.getchannel("A").point(lambda a: int(a * wv)))
             parts = list(rv.layers) + [("mouth", before[0], before[1], before[2]), ("mouth", fading, mouth[1], mouth[2] + 0.001)]
         mouths = [p for p in parts if p[0] == "mouth"]
-        mustache = next((p for p in parts if p[0] == "mustache"), None)
-        if mouths and mustache is not None and cur_v not in "XA":
-            opened = open_cavity_below_mustache(layer_image(mouths[-1][1]), cur_v)
-            mouths[-1] = ("mouth", opened, mouths[-1][2], mouths[-1][3])
-            parts = [mouths[-1] if p[0] == "mouth" else p for p in parts]
-        mouth_drop, mustache_lift = (0, 0)
-        if mouths and mustache is not None and cur_v not in "XA":
-            # Upper lip on the moustache edge. A beard tail must not drag the mouth to the chin.
-            mouth_drop, mustache_lift = clear_mustache(mouths[-1], mustache)
-        elif mouths and head is not None and cur_v not in "XA":
-            edge = facial_hair_lower_edge(
-                layer_image(head[1]), head[2], layer_image(mouths[-1][1]), mouths[-1][2],
-            )
-            if edge is not None:
-                ink = np.flatnonzero((np.asarray(layer_image(mouths[-1][1]).getchannel("A")) > 128).any(axis=1))
-                if ink.size:
-                    mouth_drop = (edge + 1) - (mouths[-1][2][1] + int(ink[0]))
+        mouth_drop = 0
+        if mouths and cur_v not in "XA":
+            mouth_drop = rest_lip_drop(rv, mouths[-1], face_w)
         if mouths:  # frame trace for the video QA: how many mouth layers were drawn, and where
             m0 = mouths[-1]
             sprite = layer_image(m0[1])
@@ -854,8 +759,6 @@ class Scene:
                 if head is not None and cur_v not in "XA":
                     img = tuck_mustache_over_mouth(img, layer_image(head[1]), (lx, ly), head[2])
                 dy += mouth_drop
-            elif name == "mustache" and mustache_lift:
-                dy -= mustache_lift
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
             if name in {"brow_left", "brow_right"}:

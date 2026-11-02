@@ -842,7 +842,7 @@ Rules:
 - If a written line restates one of the speaker's quotes, give that quoteId as basisId; else basisId is null.
 - QA, checked on the JSON before the video is made:
   - The hook is a question of at most 14 words and it names the topic.
-  - The hook addresses the other speaker by name. No line addresses its own speaker by name.
+  - The hook addresses the other speaker by name. No line addresses its own speaker by first name or surname.
   - Every written line is at most 16 words. At least one line is at most 9 words.
   - The close is one punch of at most 12 words.
   - Each speaker uses at least one quoteId from that speaker's own sheet.
@@ -857,7 +857,7 @@ Rules:
 - The turn (tréplica) uses the opponent's own words against him. Closing: the second-to-last line concedes nothing and
   strikes once; the last line is the strongest quote, a punchline that ends the video.
 - Rhythm: written lines of at most 16 words and at least one jab of at most 9 words; vary the lengths; one idea per sentence, sentences of 3 to 9 words, commas and "…" where the voice should breathe; never two
-  lines built on the same pattern; address the other speaker by name in replies. Never address the speaker of the line by their own name.
+  lines built on the same pattern; address the other speaker by name in replies. Never address the speaker of the line by their own first name or surname.
 - In a lesson, the question beat reframes the hook, the example is concrete and everyday and ties to the quote before it,
   and the synthesis closes the loop in one line.
 
@@ -1390,8 +1390,8 @@ def _replan_request(base_prompt: str, displaced: list[tuple[int, str, str]], lin
     )
 
 
-def _name_marks(name: str) -> list[str]:
-    """Full name, plus the surname, folded. A first name alone is not enough."""
+def _name_marks(name: str, *, first: bool = False) -> list[str]:
+    """Full name and surname. The first name counts only when the line addresses its own speaker."""
     full = personas.persona_name(name)
     marks = []
     if full:
@@ -1399,14 +1399,20 @@ def _name_marks(name: str) -> list[str]:
         bits = full.split()
         if len(bits) >= 2 and len(bits[-1]) >= 4:
             marks.append(personas.fold(bits[-1]))
+        if first and len(bits) >= 2 and len(bits[0]) >= 4:
+            marks.append(personas.fold(bits[0]))
     return [mark for mark in marks if mark]
 
 
-def mentions_speaker(text: str, name: str) -> bool:
-    """True when ``text`` says ``name`` (or that person's surname) as a word."""
+def mentions_speaker(text: str, name: str, *, first: bool = False) -> bool:
+    """True when ``text`` says ``name`` (or that person's surname) as a word.
+
+    ``first`` also matches the given name. The opener uses the strict form, so a
+    first name alone does not count as addressing the other speaker.
+    """
     folded = personas.fold(text)
     padded = f" {folded} "
-    return any(f" {mark} " in padded for mark in _name_marks(name))
+    return any(f" {mark} " in padded for mark in _name_marks(name, first=first))
 
 
 def _quote_replan_request(base_prompt: str, lines: list[dict[str, Any]], problems: list[str]) -> str:
@@ -2566,7 +2572,7 @@ def check_debate(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], name
             errors.append("line 0: opener does not address the other speaker")
     for i, line in enumerate(lines):
         speaker = int(line.get("speaker") or 0)
-        if speaker < len(names) and mentions_speaker(line["text"], names[speaker]):
+        if speaker < len(names) and mentions_speaker(line["text"], names[speaker], first=True):
             errors.append(f"line {i}: addresses its own speaker")
     errors += _unsaid_quote_refs(lines, topic)
     if lines[-1].get("beat") != "fechamento":

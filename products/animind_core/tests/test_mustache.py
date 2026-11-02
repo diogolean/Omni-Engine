@@ -28,29 +28,27 @@ def test_keep_hair_keeps_mustache_and_erases_lips_only():
     assert (out[255:, :] == src[255:, :]).all()  # collar below keeps the master's art
 
 
-def test_open_mouth_sits_below_a_walrus_mustache():
-    import numpy as np
+def test_open_viseme_sits_on_the_rest_mouth():
+    """X is already on the real mouth. G moves so its top ink row matches X, not the coat or the eyes."""
     from PIL import Image, ImageDraw
 
-    from products.animind_core import frameqa
-    from products.animind_core.scene import clear_mustache
+    from products.animind_core.scene import RigView, _ink_top, rest_lip_drop
 
-    stache = Image.new("RGBA", (90, 46), (0, 0, 0, 0))
-    ImageDraw.Draw(stache).ellipse((4, 4, 86, 40), fill=(32, 28, 28, 255))
-    mouth = Image.new("RGBA", (70, 36), (0, 0, 0, 0))
-    ImageDraw.Draw(mouth).ellipse((8, 6, 62, 30), fill=(48, 18, 20, 255))
-    mouth_xy, stache_xy = (12, 8), (4, 0)
-    drop, lift = clear_mustache(("mouth", mouth, mouth_xy, 10), ("mustache", stache, stache_xy, 11))
-    mouth_top = mouth_xy[1] + 6 + drop
-    mouth_bot = mouth_xy[1] + 30 + drop
-    stache_bot = stache_xy[1] + 40 - lift
-    # The opening extends below the mustache, and the top still tucks under it.
-    assert mouth_bot > stache_bot
-    assert mouth_top < stache_bot
-    plate = Image.new("RGB", mouth.size, (232, 196, 168))
-    plate.paste(mouth, (0, 0), mouth)
-    measured = frameqa.measure(np.asarray(plate), (0, 0, mouth.width, mouth.height))
-    assert measured is not None and measured["blobs"] == 1 and measured["cav"] > 0.1
+    rest = Image.new("RGBA", (48, 24), (0, 0, 0, 0))
+    ImageDraw.Draw(rest).rectangle((6, 8, 40, 14), fill=(150, 70, 64, 255))
+    opened = Image.new("RGBA", (48, 36), (0, 0, 0, 0))
+    ImageDraw.Draw(opened).rectangle((6, 18, 40, 32), fill=(40, 16, 18, 255))
+    rest_xy, open_xy = (20, 100), (18, 40)
+    rv = RigView(
+        size=(120, 160),
+        layers=[],
+        visemes={"X": (rest, rest_xy, 10), "G": (opened, open_xy, 10)},
+    )
+    drop = rest_lip_drop(rv, ("mouth", opened, open_xy, 10), face_w=120)
+    assert _ink_top(rest) == 8 and _ink_top(opened) == 18
+    assert drop == (rest_xy[1] + 8) - (open_xy[1] + 18)
+    assert rest_xy[1] + 8 == open_xy[1] + 18 + drop
+    assert rest_lip_drop(rv, ("mouth", rest, rest_xy, 10), face_w=120) == 0
 
 
 def test_a_chin_dot_grows_to_the_face_and_tucks_under_the_mustache():
@@ -76,77 +74,6 @@ def test_a_chin_dot_grows_to_the_face_and_tucks_under_the_mustache():
     ImageDraw.Draw(mouth).ellipse((8, 4, 62, 34), fill=(40, 16, 18, 255))
     tucked = np.asarray(tuck_mustache_over_mouth(mouth, head, (20, 16), (0, 0)))
     assert tuple(tucked[6, 30][:3]) == (32, 28, 28)
-
-
-def test_mouth_sits_on_the_mustache_edge_not_the_beard_tip():
-    """A cached face keeps the walrus band and a beard tail. The lip uses the band, not the chin."""
-    import numpy as np
-    from PIL import Image, ImageDraw
-
-    from products.animind_core import frameqa
-    from products.animind_core.scene import clear_mustache, mustache_lower_edge, open_cavity_below_mustache
-
-    hair = Image.new("RGBA", (120, 160), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(hair)
-    draw.ellipse((8, 36, 112, 78), fill=(24, 20, 20, 255))  # wide moustache
-    draw.rectangle((52, 120, 68, 155), fill=(24, 20, 20, 255))  # beard on the chin, below the lip
-    edge = mustache_lower_edge(hair)
-    assert edge is not None and edge < 90  # not the beard tip at row 150
-    shut = Image.new("RGBA", (70, 16), (0, 0, 0, 0))
-    ImageDraw.Draw(shut).line((6, 8, 64, 8), fill=(40, 24, 26, 255), width=2)
-    opened = open_cavity_below_mustache(shut, "G")
-    mouth_xy = (24, 40)  # overlaps the moustache, as a cached lip box does
-    drop, lift = clear_mustache(("mouth", opened, mouth_xy, 10), ("mustache", hair, (0, 0), 11))
-    assert lift == 0
-    ink = np.flatnonzero((np.asarray(opened.getchannel("A")) > 128).any(axis=1))
-    lip = mouth_xy[1] + int(ink[0]) + drop
-    assert abs(lip - (edge + 1)) <= 2
-    assert lip < 100  # chin is the beard tail, far below
-    stage = Image.new("RGBA", (120, 180), (232, 196, 168, 255))
-    stage.alpha_composite(hair, (0, 0))
-    stage.alpha_composite(opened, (mouth_xy[0], mouth_xy[1] + drop))
-    box = opened.getchannel("A").getbbox()
-    x0, y0 = mouth_xy[0] + box[0], mouth_xy[1] + drop + box[1]
-    measured = frameqa.measure(
-        np.asarray(stage.convert("RGB")),
-        (max(0, x0 - 4), max(0, y0 - 4), mouth_xy[0] + box[2] + 4, mouth_xy[1] + drop + box[3] + 4),
-    )
-    assert measured is not None and measured["cav"] + 1e-6 >= frameqa.VISEME_CAV_MIN["G"]
-    opened_d = open_cavity_below_mustache(shut, "D")
-    alone = Image.new("RGB", opened_d.size, (232, 196, 168))
-    alone.paste(opened_d, (0, 0), opened_d)
-    drawn = frameqa.measure(np.asarray(alone), (0, 0, opened_d.width, opened_d.height))
-    assert drawn is not None and drawn["cav"] + 1e-6 >= frameqa.VISEME_CAV_MIN["D"]
-
-
-def test_front_g_under_a_heavy_mustache_draws_a_measurable_opening():
-    import numpy as np
-    from PIL import Image, ImageDraw
-
-    from products.animind_core import frameqa
-    from products.animind_core.scene import clear_mustache, open_cavity_below_mustache
-
-    shut = Image.new("RGBA", (80, 20), (0, 0, 0, 0))
-    ImageDraw.Draw(shut).line((10, 10, 70, 10), fill=(48, 28, 30, 255), width=2)
-    bare = Image.new("RGB", shut.size, (232, 196, 168))
-    bare.paste(shut, (0, 0), shut)
-    closed = frameqa.measure(np.asarray(bare), (0, 0, shut.width, shut.height))
-    assert closed is not None and closed["cav"] + 1e-6 < frameqa.VISEME_CAV_MIN["G"]
-    opened = open_cavity_below_mustache(shut, "G")
-    stache = Image.new("RGBA", (100, 34), (0, 0, 0, 0))
-    ImageDraw.Draw(stache).ellipse((4, 2, 96, 30), fill=(26, 22, 22, 255))
-    drop, _lift = clear_mustache(("mouth", opened, (40, 90), 10), ("mustache", stache, (28, 78), 11))
-    stage = Image.new("RGBA", (180, 200), (232, 196, 168, 255))
-    stage.alpha_composite(stache, (28, 78))
-    stage.alpha_composite(opened, (40, 90 + drop))
-    box = opened.getchannel("A").getbbox()
-    assert box is not None
-    x0, y0 = 40 + box[0], 90 + drop + box[1]
-    x1, y1 = 40 + box[2], 90 + drop + box[3]
-    measured = frameqa.measure(np.asarray(stage.convert("RGB")), (max(0, x0 - 6), max(0, y0 - 6), x1 + 6, y1 + 6))
-    assert measured is not None
-    assert measured["cav"] + 1e-6 >= frameqa.VISEME_CAV_MIN["G"]
-    assert 90 + drop + box[3] > 78 + 30
 
 
 def test_stale_line_takes_are_replaced(tmp_path):

@@ -5,6 +5,16 @@ import pytest
 
 from products.animind_core import personas, script
 
+_PROVIDER_KEYS = ("DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_script_providers(monkeypatch):
+    """A developer key in the environment must not turn these tests into live calls."""
+    for name in _PROVIDER_KEYS:
+        monkeypatch.delenv(name, raising=False)
+
+
 WIKI = """{{Wikipedia}}
 '''Sócrates''' foi um filósofo.
 
@@ -864,6 +874,27 @@ def test_a_line_must_not_address_its_own_speaker():
     assert "line 0: opener does not address the other speaker" in problems
     prompt = script._prompt(script.plan_for("debate", 2), [s, n], cast, "a verdade", "pt-BR", "debate")
     assert "own speaker" in prompt and "other speaker by name" in prompt
+
+
+def test_nietzsche_naming_friedrich_addresses_himself():
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    said = "Wisdom and power rarely mix, Friedrich."
+    assert script.mentions_speaker(said, names[1], first=True)
+    assert not script.mentions_speaker(said, names[1])
+    assert not script.mentions_speaker("Friedrich, is wisdom power?", names[1])
+    lines = [
+        {"speaker": 0, "beat": "gancho", "kind": "paraphrase", "text": "Nietzsche, is wisdom power?"},
+        {"speaker": 1, "beat": "tese", "kind": "paraphrase", "text": said},
+        {"speaker": 0, "beat": "réplica", "kind": "paraphrase", "text": "Wisdom still needs a test."},
+        {"speaker": 1, "beat": "virada", "act": "virada", "kind": "paraphrase", "text": "A test can fail."},
+        {"speaker": 0, "beat": "fechamento", "kind": "paraphrase", "text": "Keep the test."},
+    ]
+    problems = script.check_debate(lines, [{}, {}], names, "wisdom")
+    assert "line 1: addresses its own speaker" in problems
+    assert "line 0: opener does not address the other speaker" not in problems
+    lines[0] = {**lines[0], "text": "Friedrich, is wisdom power?"}
+    opener = script.check_debate(lines, [{}, {}], names, "wisdom")
+    assert "line 0: opener does not address the other speaker" in opener
 
 
 def test_an_unanswered_quote_is_swapped_not_the_neighbour(monkeypatch):
