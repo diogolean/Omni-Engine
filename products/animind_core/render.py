@@ -645,14 +645,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "rhubarbRecognizer": language.rhubarb,
         }
         _set(job_id, status="done", progress=1.0, result=result, warnings=result.get("warnings") or [])
-        cost = written["scriptCost"]
         telemetry.record(
             "render",
-            provider=cost.get("provider"),
-            model=cost.get("model"),
-            input_tokens=cost.get("inputTokens", 0),
-            output_tokens=cost.get("outputTokens", 0),
-            cost_usd=cost.get("costUsd", 0.0),
             latency_ms=(time.perf_counter() - started) * 1000,
             script_qa=written.get("scriptQA"),
             frame_qa=frame_qa,

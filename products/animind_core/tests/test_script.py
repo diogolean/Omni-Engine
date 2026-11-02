@@ -779,7 +779,7 @@ def test_shared_quote_ids_resolve_on_the_speakers_own_sheet(monkeypatch):
     """q1 on Einstein is not q1 on Nietzsche. The other speaker's id does not rewrite the debate."""
     einstein = {"quotes": [
         _shared_id_quote("q1", "That price can drop.", "Albert_Einstein"),
-        _shared_id_quote("q10", "Keep the proof.", "Albert_Einstein"),
+        _shared_id_quote("q10", "Keep the price.", "Albert_Einstein"),
     ]}
     nietzsche = {"quotes": [
         _shared_id_quote("q1", "Simplicity has a price.", "Friedrich_Nietzsche"),
@@ -788,7 +788,7 @@ def test_shared_quote_ids_resolve_on_the_speakers_own_sheet(monkeypatch):
     names = ["Albert Einstein", "Friedrich Nietzsche"]
     sheets = [einstein, nietzsche]
     hook = "Nietzsche, is simplicity worth the cost?"
-    reply = "A drop still needs proof."
+    reply = "A drop still needs care."
     calls: list[str] = []
 
     def run(drafts):
@@ -815,7 +815,7 @@ def test_shared_quote_ids_resolve_on_the_speakers_own_sheet(monkeypatch):
     assert owned["lines"][1]["speaker"] == 1
     assert owned["lines"][2]["text"] == "That price can drop."
     assert owned["lines"][2]["speaker"] == 0 and owned["lines"][2]["quote"]["id"] == "q1"
-    assert owned["lines"][4]["text"] == "Keep the proof."
+    assert owned["lines"][4]["text"] == "Keep the price."
     assert owned["lines"][4]["quote"]["id"] == "q10"
     assert calls == []
     prompt = script._prompt(script.plan_for("debate", 2, 30), sheets, names, "simplicity", "en-US", "debate", duration=30)
@@ -826,7 +826,7 @@ def test_shared_quote_ids_resolve_on_the_speakers_own_sheet(monkeypatch):
         {"i": 1, "quoteId": "friedrich_nietzsche:q1"},
         {"i": 2, "quoteId": "friedrich_nietzsche:q1", "text": "That price can drop."},
         {"i": 3, "text": reply},
-        {"i": 4, "quoteId": "friedrich_nietzsche:q10", "text": "Keep the proof."},
+        {"i": 4, "quoteId": "friedrich_nietzsche:q10", "text": "Keep the price."},
     ])
     problems = stolen["scriptQA"]["problems"]
     assert stolen["scriptQA"]["pass"] is False
@@ -933,7 +933,7 @@ def test_an_unanswered_quote_replans_once_when_no_other_quote_answers(monkeypatc
         if "Write every beat again" in prompt:
             return [
                 {"i": 0, "text": "Nietzsche, is truth a witness?"},
-                {"i": 1, "text": "Imagination needs one witness."},
+                {"i": 1, "text": "A witness needs one look."},
                 {"i": 2, "quoteId": "q1"},
                 {"i": 3, "text": "Decoration still needs a witness."},
                 {"i": 4, "text": "Keep that witness."},
@@ -954,7 +954,7 @@ def test_an_unanswered_quote_replans_once_when_no_other_quote_answers(monkeypatc
     assert not any("Rewrite only line 3" in prompt for prompt in calls)
     assert out["lines"][2]["text"] == "Imagination is a decoration."
     assert out["lines"][2]["kind"] == "quote"
-    assert out["lines"][1]["text"] == "Imagination needs one witness."
+    assert out["lines"][1]["text"] == "A witness needs one look."
     assert out["scriptQA"]["pass"], out["scriptQA"]
 
 
@@ -1112,6 +1112,53 @@ def test_the_coherent_pipe_draft_is_kept(monkeypatch):
     assert sum("Judge this debate" in prompt for prompt in calls) == 1
 
 
+def test_pipe_reply_before_the_quote_fails_the_final_script(monkeypatch):
+    """The 6cb0930 script: Nietzsche names the pipe, then Einstein says the pipe quote, and QA passed."""
+    pipe = "Pipe smoking contributes to a calm and objective judgment in human affairs."
+    reply = "Pipe smoke proves judgment, Albert?"
+    earlier = [
+        {"kind": "paraphrase", "speaker": 0, "text": "Nietzsche, is judgment only a habit?"},
+        {"kind": "quote", "speaker": 1, "text": "Convictions are more dangerous enemies of truth than lies."},
+        {"kind": "paraphrase", "speaker": 0, "text": "Convictions still need a witness."},
+        {"kind": "paraphrase", "speaker": 1, "text": reply},
+        {"kind": "quote", "speaker": 0, "text": pipe},
+    ]
+    flagged = script._unsaid_quote_refs(earlier, "judgment")
+    assert any("line 3: refers to a quote spoken later on line 4" in item for item in flagged)
+    einstein = {"quotes": [_quote("q10", pipe, "Albert_Einstein")]}
+    nietzsche = {"quotes": [_quote("q4", earlier[1]["text"], "Friedrich_Nietzsche")]}
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+
+    def fake(prompt):
+        if "Judge this debate" in prompt:
+            # The real judge accepted this order. The final check must not.
+            return [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}]
+        if "names a quote that is spoken only later" in prompt:
+            assert "Do not reorder lines" in prompt
+            return [{"i": 3, "text": "Judgment needs a witness."}]
+        if "Write every beat again" in prompt or "Score each candidate quote" in prompt:
+            raise AssertionError(prompt)
+        return [
+            {"i": 0, "text": earlier[0]["text"]},
+            {"i": 1, "quoteId": "q4"},
+            {"i": 2, "text": earlier[2]["text"]},
+            {"i": 3, "text": reply},
+            {"i": 4, "quoteId": "q10"},
+            {"i": 5, "text": "A witness can still fail."},
+            {"i": 6, "text": "Failure stays small here."},
+            {"i": 7, "text": "Keep one small witness."},
+            {"i": 8, "text": "The witness stays."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write("debate", "judgment", names, "en-US", sheets=[einstein, nietzsche], use_llm=True)
+    texts = [line["text"] for line in out["lines"]]
+    pipe_at = texts.index(pipe)
+    assert all("pipe" not in text.lower() for text in texts[:pipe_at])
+    assert texts[pipe_at] == pipe and out["lines"][pipe_at]["speaker"] == 0
+    assert not any("refers to a quote spoken later" in problem for problem in out["scriptQA"]["problems"]), out["scriptQA"]
+
+
 def test_a_reply_cannot_name_a_quote_that_is_spoken_later(monkeypatch):
     pipe = "Pipe smoking contributes to a calm and objective judgment in human affairs."
     einstein = {"quotes": [_quote("q10", pipe, "Albert_Einstein")]}
@@ -1152,7 +1199,7 @@ def test_a_reply_cannot_name_a_quote_that_is_spoken_later(monkeypatch):
     assert texts[4] == pipe
     assert "pipe" not in texts[3].lower()
     assert texts.index(pipe) > 3
-    assert order == ["rewrite-early"]
+    assert "rewrite-early" in order
     assert not any("refers to a quote spoken later" in problem for problem in out["scriptQA"]["problems"]), out["scriptQA"]
 
 

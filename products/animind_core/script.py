@@ -1564,6 +1564,29 @@ def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: s
     for problem in problems:
         if _NO_QUOTE.match(problem):
             continue
+        later_ref = re.match(r"line (\d+): refers to a quote spoken later on line (\d+)", problem)
+        if later_ref:
+            index = int(later_ref.group(1))
+            later = int(later_ref.group(2))
+            if not 0 <= index < len(lines) or lines[index].get("kind") == "quote":
+                continue
+            quote_text = lines[later]["text"] if later < len(lines) else ""
+            previous = lines[index - 1]["text"] if index else ""
+            following = lines[index + 1]["text"] if index + 1 < len(lines) else ""
+            before = lines[index]["text"]
+            rewritten = _rewrite_line(
+                index,
+                "this line names a quote that is spoken only later. "
+                f"Do not mention: {quote_text}. Answer only what was already said. Do not reorder lines.",
+                before, lang, topic, names, allow_unavailable_gemini=allow_unavailable_gemini,
+                max_words=min(16, words(before)), previous=previous, following=following,
+            )
+            if not rewritten or _names_a_later_quote(rewritten, lines, index, topic):
+                continue
+            lines[index]["text"] = rewritten
+            lines[index]["replyTo"] = {"line": index - 1, "idea": link(previous, rewritten, names=names)}
+            changed = True
+            continue
         match = _UNANSWERED.match(problem)
         if not match:
             continue
@@ -2330,6 +2353,24 @@ def check_lesson(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], topi
     return errors
 
 
+def _unsaid_quote_refs(lines: list[dict[str, Any]], topic: str = "") -> list[str]:
+    """A reply that names a quote which has not been spoken yet. Checked on the final script."""
+    problems = []
+    spoken = ""
+    topic_stems = set(_stems(topic))
+    for index, line in enumerate(lines):
+        if index and line.get("kind") != "quote":
+            novel_pool = set(_stems(str(line.get("text") or ""))) - set(_stems(spoken)) - topic_stems
+            for later in range(index + 1, len(lines)):
+                if lines[later].get("kind") != "quote":
+                    continue
+                if novel_pool & set(_stems(str(lines[later].get("text") or ""))):
+                    problems.append(f"line {index}: refers to a quote spoken later on line {later}")
+                    break
+        spoken = f"{spoken} {line.get('text') or ''}"
+    return problems
+
+
 def _names_a_later_quote(text: str, lines: list[dict[str, Any]], index: int, topic: str = "") -> bool:
     """True when ``text`` uses a word that belongs to a quote which has not been spoken yet."""
     stems = set(_stems(text)) - set(_stems(topic))
@@ -2379,6 +2420,7 @@ def check_debate(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], name
         speaker = int(line.get("speaker") or 0)
         if speaker < len(names) and mentions_speaker(line["text"], names[speaker]):
             errors.append(f"line {i}: addresses its own speaker")
+    errors += _unsaid_quote_refs(lines, topic)
     if lines[-1].get("beat") != "fechamento":
         errors.append("debate: does not close")
     elif not memorable_close(lines[-1]):
