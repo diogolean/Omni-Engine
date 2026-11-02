@@ -66,6 +66,9 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.delenv("ANIMIND_FORCE_MOCK", raising=False)
+    # The plate is nano-banana, not the old US$0.01 Qwen call. A redraw needs two plates.
+    plate = image_models.selected("nano-banana").usdPerImage
+    budget = image_models.RunBudget(plate * 2)
     prompts = []
 
     def generate(prompt, destination, **options):  # noqa: ARG001
@@ -82,7 +85,7 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
     skin = tmp_path / "skin"
     built = avatar.create_avatar(
         "a calm teacher with round glasses", "stick", kind="stick",
-        skin=skin, url=lambda path: path.as_uri(), model_id="together-qwen-image",
+        skin=skin, url=lambda path: path.as_uri(), model_id="nano-banana", budget=budget,
     )
     assert prompts
     assert "South Park" in prompts[0] and "stick-figure" in prompts[0]
@@ -112,7 +115,7 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
     sent = len(prompts)
     again = avatar.create_avatar(
         "a calm teacher with round glasses", "stick", kind="stick",
-        skin=tmp_path / "skin2", url=lambda path: path.as_uri(), model_id="together-qwen-image",
+        skin=tmp_path / "skin2", url=lambda path: path.as_uri(), model_id="nano-banana", budget=budget,
     )
     assert again["cached"] is True and len(prompts) == sent
 
@@ -145,6 +148,7 @@ def _assert_mouth_inside_face(skin, view) -> None:
 def test_realistic_bust_keeps_the_mouth_on_the_face(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
 
     def generate(prompt, destination, **options):  # noqa: ARG001
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -217,6 +221,7 @@ def test_beard_does_not_pull_the_mouth_up_to_the_nose():
 def test_side_edit_failure_does_not_reuse_the_front(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
 
     def generate(prompt, destination, **options):  # noqa: ARG001
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -241,6 +246,7 @@ def test_side_edit_failure_does_not_reuse_the_front(tmp_path, monkeypatch):
 def test_reuse_false_ignores_the_avatar_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
     calls = {"n": 0}
 
     def generate(prompt, destination, **options):  # noqa: ARG001

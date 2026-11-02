@@ -725,14 +725,14 @@ def _opaque(image: Image.Image) -> bool:
     return image.getchannel("A").getbbox() is not None
 
 
-if __name__ == "__main__":
-    main()
-
-
 def _fingerprint(description: str, style_id: str, kind: str, model_id: str, stick_figure: bool) -> str:
     payload = json.dumps(
         {"description": description, "style": style_id, "kind": kind, "model": model_id, "stick": stick_figure, "v": _FINGERPRINT_VERSION},
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:24]
+
+
+if __name__ == "__main__":
+    main()
 

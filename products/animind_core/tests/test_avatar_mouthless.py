@@ -1,4 +1,7 @@
 """Mouthless heads: the animated mouth is drawn on blank skin, never inpainted over a lip."""
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -146,3 +149,27 @@ def test_the_run_cap_is_refused_before_the_call(tmp_path, monkeypatch):
             model_id="nano-banana", budget=image_models.RunBudget(price),
         )
     assert calls["n"] == 1  # the mouth redraw is refused before it is sent
+
+
+def test_avatar_module_entry_defines_the_fingerprint(tmp_path):
+    """``python -m`` runs main only after the module body, including ``_fingerprint``."""
+    env = os.environ.copy()
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "TOGETHER_API_KEY", "OPENROUTER_API_KEY"):
+        env.pop(key, None)
+    env["ANIMIND_DATA_DIR"] = str(tmp_path)
+    env["ANIMIND_RUN_BUDGET_USD"] = "0.20"
+    root = Path(__file__).resolve().parents[3]
+    help_run = subprocess.run(
+        [sys.executable, "-m", "products.animind_core.avatar", "--help"],
+        cwd=root, env=env, capture_output=True, text=True, check=False,
+    )
+    assert help_run.returncode == 0, help_run.stderr
+    assert "usage" in help_run.stdout.lower()
+    run = subprocess.run(
+        [sys.executable, "-m", "products.animind_core.avatar", "einstein"],
+        cwd=root, env=env, capture_output=True, text=True, check=False,
+    )
+    assert "NameError" not in run.stderr
+    assert "_fingerprint" not in run.stderr
+    assert run.returncode != 0
+    assert "no image provider is configured" in run.stderr
