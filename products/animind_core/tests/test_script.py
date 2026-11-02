@@ -501,9 +501,15 @@ def test_llm_lines_are_not_replaced_with_template_filler(monkeypatch):
 
 def test_prompt_describes_the_arc():
     names = ["Sócrates", "Nietzsche"]
-    prompt = script._prompt(script.plan_for("debate", 2), [socrates(), nietzsche()], names, "a verdade", "pt-BR", "debate")
+    prompt = script._prompt(
+        script.plan_for("debate", 2, 30), [socrates(), nietzsche()], names, "a verdade", "pt-BR", "debate",
+        duration=30, words_per_s=2.4,
+    )
     assert "act: virada" in prompt and "act: abertura" in prompt
     assert "repeat one content word" in prompt and "at least one of his real quotes" in prompt
+    assert "at most 14 words" in prompt and "at most 16 words" in prompt
+    assert "at most 9 words" in prompt and "at most 12 words" in prompt
+    assert "quoteId" in prompt and "Spoken word budget" in prompt and "2.40 words/second" in prompt
 
 
 # --- quote fidelity and lesson/debate quality (scriptQA) ---------------------------------------------------------
@@ -699,7 +705,7 @@ def test_debate_transcript_keeps_the_writer_ending(monkeypatch):
     assert any(caption.endswith("the truest.") for caption in captions)
 
 
-def test_a_swapped_quote_regenerates_the_line_that_named_it(monkeypatch):
+def test_a_swapped_quote_regenerates_the_whole_debate(monkeypatch):
     pipe = "A pipe is only a thought " * 6
     pipe = pipe.strip() + "."
     short = {
@@ -716,10 +722,23 @@ def test_a_swapped_quote_regenerates_the_line_that_named_it(monkeypatch):
         "sourceKind": "primary",
         "url": "https://en.wikiquote.org/wiki/Friedrich_Nietzsche",
     }
+    calls = {"replan": 0}
 
     def fake(prompt):
-        if "Rewrite only line 2" in prompt:
-            return [{"i": 2, "text": "Imagination is not a proof by itself."}]
+        if "Write every beat again" in prompt:
+            calls["replan"] += 1
+            assert "Discarded quotes:" in prompt and "pipe" in prompt.lower()
+            return [
+                {"i": 0, "text": "Is imagination only a decoration?"},
+                {"i": 1, "quoteId": "q-short"},
+                {"i": 2, "text": "Imagination is not a proof by itself."},
+                {"i": 3, "text": "Then imagination still needs a test."},
+                {"i": 5, "text": "A test can fail and still teach."},
+                {"i": 7, "text": "Keep the test."},
+            ]
+        if "Rewrite only line" in prompt:
+            # A longer line that keeps the discarded idea must not replace the draft.
+            return [{"i": 2, "text": "A pipe is not a proof and the pipe idea keeps growing longer every time."}]
         return [
             {"i": 0, "text": "Is imagination only a decoration?"},
             {"i": 1, "quoteId": "q-pipe"},
@@ -731,8 +750,96 @@ def test_a_swapped_quote_regenerates_the_line_that_named_it(monkeypatch):
         "debate", "imagination", ["Albert Einstein", "Friedrich Nietzsche"], "en-US",
         sheets=[{"quotes": [short]}, {"quotes": [long, short]}], use_llm=True,
     )
+    assert calls["replan"] == 1
     assert all("pipe" not in line["text"].lower() for line in out["lines"]), [line["text"] for line in out["lines"]]
     assert any("Imagination is not a proof" in line["text"] for line in out["lines"])
+
+
+def test_long_lines_are_shortened_before_qa_or_the_failure_names_the_cap(monkeypatch):
+    """A writer that comes back long, then longer, must not keep the longer line."""
+    long_lines = [
+        "Today I would like to discuss several unrelated matters before we begin this session please",
+        "Horses wander slowly across empty fields while silent clouds gather above distant hills after sunset finally ends outdoors",
+        "Bakers measure daily flour prior sunrise because ovens cool down without constant careful attention inside large metal trays",
+        "Children paint tiny bright murals beside rivers until colors fade beneath heavy rainstorms each spring using brushes freely",
+        "Markets close early whenever thunder warns merchants about broken stalls near quiet harbor gates later anyway folks",
+    ]
+    assert script.words(long_lines[0]) > 14 and "?" not in long_lines[0]
+    assert "knowledge" not in long_lines[0].lower()
+    assert script.words(long_lines[1]) > 16 and script.words(long_lines[4]) > 12
+    assert min(script.words(text) for text in long_lines) > 9
+    seen = {"rules": False, "rewrite": 0}
+
+    def content_words(text: str) -> list[str]:
+        return [part.strip(".,?!") for part in text.split() if len(part.strip(".,?!")) > 4]
+
+    def short_line(index: int, cap: int, previous: str, problem: str) -> str:
+        if "different concrete word" in problem:
+            banned = ""
+            if "word '" in problem:
+                banned = problem.split("word '", 1)[1].split("'", 1)[0].lower()
+            choices = [word for word in content_words(previous) if word.lower() != banned] or ["knowledge"]
+            text = f"Keep {choices[-1]}."
+        elif index == 0 or "hook" in problem:
+            text = "Is knowledge only a rumor?"
+        elif "close" in problem:
+            word = (content_words(previous) or ["knowledge"])[-1]
+            text = f"Keep {word}."
+        else:
+            word = (content_words(previous) or ["knowledge"])[-1]
+            text = (
+                f"{word} still needs proof.",
+                f"{word} can fail one test.",
+                f"Then {word} stays small.",
+                f"Keep {word} honest.",
+            )[index % 4]
+        parts = text.split()
+        if len(parts) > cap:
+            text = "Is knowledge real?" if index == 0 and cap >= 3 else " ".join(parts[:cap]).rstrip(",;:") + "."
+        return text
+
+    def fake(prompt):
+        if "Rewrite only line" in prompt:
+            seen["rewrite"] += 1
+            assert "Failing rule:" in prompt
+            assert "Maximum words:" in prompt
+            assert "Previous line:" in prompt
+            assert "Next line:" in prompt
+            index = int(prompt.split("Rewrite only line ", 1)[1].split(" ", 1)[0])
+            cap = int(prompt.split("Maximum words: ", 1)[1].split(".", 1)[0])
+            previous = prompt.split("Previous line: ", 1)[1].split("\n", 1)[0]
+            problem = prompt.split("Failing rule: ", 1)[1].split("\n", 1)[0]
+            current = prompt.split("Current line (", 1)[1].split(":", 1)[1].strip()
+            short = short_line(index, cap, previous, problem)
+            longer = current + " UNACCEPTABLY LONGER than the line it rewrites"
+            return [
+                {"i": index, "text": longer, "words": script.words(longer)},
+                {"i": index, "text": short, "words": script.words(short)},
+            ]
+        seen["rules"] = True
+        assert "at most 14 words" in prompt and "at most 16 words" in prompt
+        assert "at most 9 words" in prompt and "at most 12 words" in prompt
+        assert "Spoken word budget" in prompt and "words/second" in prompt
+        return [{"i": index, "text": text, "words": script.words(text)} for index, text in enumerate(long_lines)]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write(
+        "debate", "knowledge", ["Ada", "Ben"], "en-US",
+        sheets=[{"quotes": []}, {"quotes": []}], use_llm=True, duration=30, words_per_s=2.6,
+    )
+    texts = [line["text"] for line in out["lines"]]
+    assert seen["rules"] and seen["rewrite"]
+    assert all("UNACCEPTABLY LONGER" not in text for text in texts), texts
+    assert all(script.words(text) <= script.words(long_lines[index]) for index, text in enumerate(texts)), texts
+    if not out["scriptQA"]["pass"]:
+        reason = "; ".join(out["scriptQA"]["problems"])
+        assert any(token in reason for token in ("maximum", "words", "too long", "hook", "close")), reason
+        with pytest.raises(script.ScriptQAError, match="script QA failed"):
+            script.require_passing_script(out, "debate")
+    else:
+        assert script.words(texts[0]) <= 14 and "?" in texts[0] and "knowledge" in texts[0].lower()
+        assert min(script.words(text) for text in texts) <= 9
+        assert script.words(texts[-1]) <= 12
 
 
 def test_debate_qa_fails_loudly_when_rewrites_do_not_land(monkeypatch):
