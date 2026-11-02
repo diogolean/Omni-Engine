@@ -50,6 +50,13 @@ class FacialLandmarks:
     backend: str
     facial_plate_bbox: tuple[float, float, float, float] | None = None
     forehead_plate_bbox: tuple[float, float, float, float] | None = None
+    # Pixel polylines from FaceLandmarker. Empty on the robotic fallback.
+    left_upper: tuple[tuple[int, int], ...] = ()
+    left_lower: tuple[tuple[int, int], ...] = ()
+    right_upper: tuple[tuple[int, int], ...] = ()
+    right_lower: tuple[tuple[int, int], ...] = ()
+    left_brow: tuple[tuple[int, int], ...] = ()
+    right_brow: tuple[tuple[int, int], ...] = ()
 
     def pixel_point(self, point: Point3D) -> tuple[int, int]:
         x0, y0, x1, y1 = self.head_bbox
@@ -195,6 +202,14 @@ def _mesh_landmarks(
     chin_px = mean_point((152,))
     _bx0, by0, _bx1, by1 = bbox
     neck_px = (chin_px[0], min(float(by1), chin_px[1] + height * 0.075), chin_px[2])
+
+    def chain(indices: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            (int(round(x0 + points[index].x * width)), int(round(y0 + points[index].y * height)))
+            for index in indices
+            if index < len(points)
+        )
+
     return FacialLandmarks(
         left_eye=EyeLandmark(_uv(*eye_pixels[0], bbox), iris_radius(left_indices, eye_pixels[0])),
         right_eye=EyeLandmark(_uv(*eye_pixels[1], bbox), iris_radius(right_indices, eye_pixels[1])),
@@ -206,6 +221,12 @@ def _mesh_landmarks(
         head_bbox=bbox,
         confidence=confidence,
         backend=backend,
+        left_upper=chain((33, 246, 161, 160, 159, 158, 157, 173, 133)),
+        left_lower=chain((33, 7, 163, 144, 145, 153, 154, 155, 133)),
+        right_upper=chain((263, 466, 388, 387, 386, 385, 384, 398, 362)),
+        right_lower=chain((263, 249, 390, 373, 374, 380, 381, 382, 362)),
+        left_brow=chain((70, 63, 105, 66, 107)),
+        right_brow=chain((300, 293, 334, 296, 336)),
     )
 
 

@@ -176,6 +176,12 @@ def facial_check(trace: dict[str, Any]) -> tuple[list[tuple[int, str]], dict[str
         if len(brow_emotions[char]) > 1 and len(brow_states[char]) < 2:
             bad.append((states[0][0], f"char {char}: brows do not vary across emotions"))
         for index, face in states:
+            human = face.get("humanEyes")
+            if human:
+                from . import human_eyes as human_mod  # noqa: PLC0415
+                for fault in human_mod.frame_faults(human):
+                    bad.append((index, f"char {char}: {fault}"))
+                    break
             for eye in face.get("eyes") or []:
                 lid, iris = tuple(eye["lid"]), tuple(eye["iris"])
                 if not lids_on_iris(lid, iris, tol=4):

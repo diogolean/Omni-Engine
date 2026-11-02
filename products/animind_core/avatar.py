@@ -351,6 +351,7 @@ def _acquire(
         raise SideViewMissing(
             f"side view missing: the Aiwake rigger did not return a puppet ({type(exc).__name__})"
         ) from exc
+    _install_human_eyes(skin)
     character = Image.open(skin / "character.png").convert("RGBA")
     spec = image_models.selected(_FLASH_MODEL_ID)
     return character, character.copy(), spec.provider, spec.model, cost, False, "aiwake v3 mouthless", True
@@ -719,6 +720,18 @@ def _rig_views(left: Image.Image, front: Image.Image, skin: Path, url: Callable[
 
 
 
+def _install_human_eyes(skin: Path) -> None:
+    """Cut the drawn eyes and brows. Uses the plate already on disk."""
+    from animation.parametric.factory.landmark_detector import detect_landmarks  # noqa: PLC0415
+
+    from . import human_eyes  # noqa: PLC0415
+
+    plate_path = skin / "head.png" if (skin / "head.png").is_file() else skin / "character.png"
+    plate = Image.open(plate_path).convert("RGBA")
+    marks = detect_landmarks(plate, require_human_face=True)
+    human_eyes.install(skin, plate, marks)
+
+
 def _placed_features(skin: Path) -> dict[str, Any]:
     rig_doc = json.loads((skin / "rig.json").read_text(encoding="utf-8"))
     return qa.features_on_face(rig_doc["boxes"], rig_doc.get("irises"))
@@ -793,6 +806,7 @@ def rerig_from_plate(skin: Path, *, description: str, url: Callable[[Path], str]
         rerig=(skin / "puppet.json").is_file(),
         require_human_face=True,
     )
+    _install_human_eyes(skin)
     views = puppet_v3.adapt(skin, url)
     placed = _placed_features(skin)
     if not placed["pass"]:

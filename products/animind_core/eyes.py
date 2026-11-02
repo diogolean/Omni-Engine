@@ -10,7 +10,7 @@ iris at the right edge of its socket, ``gy = +1`` at the bottom. Behaviour:
 - sometimes at the camera, more often in the front view and on close-ups;
   in a 3/4 view "at camera" turns the iris toward the viewer side;
 - short wanders (up, down, aside) with small saccadic jitter.
-Blinks: every 2-6 s, closing over about 3 frames and opening over about 4,
+Blinks: every 3-6 s, closing in about 120 ms and opening just after,
 with an occasional deterministic double blink.
 """
 from __future__ import annotations
@@ -18,8 +18,8 @@ from __future__ import annotations
 import math
 
 SEG_MIN, SEG_MAX = 0.8, 2.4  # seconds per gaze segment
-BLINK_MIN, BLINK_MAX = 2.0, 6.0
-BLINK_CLOSE_S, BLINK_SHUT_S, BLINK_OPEN_S = 3 / 24, 2 / 24, 4 / 24
+BLINK_MIN, BLINK_MAX = 3.0, 6.0
+BLINK_CLOSE_S, BLINK_SHUT_S, BLINK_OPEN_S = 0.12, 0.05, 0.10
 SACCADE_S = 0.07
 
 

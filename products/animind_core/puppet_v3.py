@@ -202,6 +202,28 @@ def _place(image: Image.Image) -> tuple[Image.Image, tuple[int, int]]:
     return image.crop(box), (box[0], box[1])
 
 
+def _seat_human(qa: dict, scale: float, offset: tuple[int, int], socket: Image.Image) -> dict:
+    """Move the cut-eye measurements onto the seated canvas."""
+    def ty(y: float) -> int:
+        return int(round(float(y) * scale + offset[1]))
+
+    def tp(x: float, y: float) -> tuple[int, int]:
+        return (int(round(float(x) * scale + offset[0])), int(round(float(y) * scale + offset[1])))
+
+    iris = qa["iris"][0]
+    ix, iy = tp(iris[0], iris[1])
+    box = _alpha_bbox(socket) or (ix - 4, iy - 4, ix + 4, iy + 4)
+    return {
+        "lines": {state: ty(qa["painted"][state]["drawn"][0]) for state in ("open", "half", "closed")},
+        "painted": {state: ty(qa["painted"][state]["edge"][0]) for state in ("open", "half", "closed")},
+        "iris": [ix, iy, max(1, int(round(iris[2] * scale)))],
+        "sclera": list(box),
+        "browBottom": ty(qa["browBottom"]),
+        "eyeTop": ty(qa["eyeTop"]),
+        "shift": [max(1.0, float(qa["shift"][0]) * scale), max(1.0, float(qa["shift"][1]) * scale)],
+    }
+
+
 def _point(x: float, y: float, scale: float, offset: tuple[int, int]) -> tuple[int, int]:
     return (int(round(x * scale + offset[0])), int(round(y * scale + offset[1])))
 
@@ -244,23 +266,40 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     left_eye = _point(float(anchors["left_eye"][0]), float(anchors["left_eye"][1]), scale, offset)
     right_eye = _point(float(anchors["right_eye"][0]), float(anchors["right_eye"][1]), scale, offset)
     mouth_at = _point(float(anchors["mouth"][0]), float(anchors["mouth"][1]), scale, offset)
-    whites = Image.new("RGBA", canvas, (0, 0, 0, 0))
-    irises = Image.new("RGBA", canvas, (0, 0, 0, 0))
-    sockets = Image.new("RGBA", canvas, (0, 0, 0, 0))
-    brows = Image.new("RGBA", canvas, (0, 0, 0, 0))
-    draw_brows = ImageDraw.Draw(brows)
-    for center in (left_eye, right_eye):
-        whites.alpha_composite(_disc(canvas, center, radius, (248, 248, 246, 255)))
-        irises.alpha_composite(_disc(canvas, center, max(2, radius // 3), (20, 16, 14, 255)))
-        sockets.alpha_composite(_disc(canvas, center, radius, (255, 255, 255, 255)))
-        draw_brows.arc(
-            (center[0] - radius, center[1] - radius - 4, center[0] + radius, center[1] - 2),
-            200, 340, fill=(30, 22, 18, 255), width=3,
-        )
-    half_path = skin / "eyes_half.png"
-    blink_path = skin / "eyes_blink.png"
-    eyes_half = _bake(_open(half_path), scale, offset, canvas) if half_path.is_file() else whites
-    eyes_closed = _bake(_open(blink_path), scale, offset, canvas) if blink_path.is_file() else whites
+    human_dir = skin / "human_eyes"
+    human_meta = None
+    brow_left = brow_right = None
+    if (human_dir / "geometry.json").is_file():
+        def baked(name: str) -> Image.Image:
+            return _bake(_open(human_dir / f"{name}.png"), scale, offset, canvas)
+        whites = baked("eye_white")
+        irises = baked("iris")
+        sockets = baked("eye_socket")
+        eyes_half = baked("eyes_half")
+        eyes_closed = baked("eyes_closed")
+        brows = baked("brows")
+        brow_left = baked("brow_left")
+        brow_right = baked("brow_right")
+        head = _bake(_open(human_dir / "head.png"), scale, offset, canvas)
+        human_meta = _seat_human(json.loads((human_dir / "geometry.json").read_text(encoding="utf-8"))["qa"], scale, offset, sockets)
+    else:
+        whites = Image.new("RGBA", canvas, (0, 0, 0, 0))
+        irises = Image.new("RGBA", canvas, (0, 0, 0, 0))
+        sockets = Image.new("RGBA", canvas, (0, 0, 0, 0))
+        brows = Image.new("RGBA", canvas, (0, 0, 0, 0))
+        draw_brows = ImageDraw.Draw(brows)
+        for center in (left_eye, right_eye):
+            whites.alpha_composite(_disc(canvas, center, radius, (248, 248, 246, 255)))
+            irises.alpha_composite(_disc(canvas, center, max(2, radius // 3), (20, 16, 14, 255)))
+            sockets.alpha_composite(_disc(canvas, center, radius, (255, 255, 255, 255)))
+            draw_brows.arc(
+                (center[0] - radius, center[1] - radius - 4, center[0] + radius, center[1] - 2),
+                200, 340, fill=(30, 22, 18, 255), width=3,
+            )
+        half_path = skin / "eyes_half.png"
+        blink_path = skin / "eyes_blink.png"
+        eyes_half = _bake(_open(half_path), scale, offset, canvas) if half_path.is_file() else whites
+        eyes_closed = _bake(_open(blink_path), scale, offset, canvas) if blink_path.is_file() else whites
 
     head_box = (manifest.get("calibration") or {}).get("head_bbox") or [0, 0, body.width // 2, body.height // 2]
     face = (
@@ -296,6 +335,7 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         "eyes_half": _place(eyes_half),
         "eyes_closed": _place(eyes_closed),
         "brows": _place(brows),
+        **({"brow_left": _place(brow_left), "brow_right": _place(brow_right)} if brow_left is not None else {}),
         "visemes": visemes,
         "expressions": {"happy": happy},
         "eyeRig": {
@@ -311,6 +351,7 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
             "irises": [[left_eye[0], left_eye[1]], [right_eye[0], right_eye[1]]],
             "mouthless": True,
         },
+        **({"humanEyes": human_meta} if human_meta else {}),
     }
     boxes = {
         "face": list(face),

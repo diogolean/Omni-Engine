@@ -127,6 +127,23 @@ EMO_BROW_POSE = {
     "desdenhoso": (-2.0, 1.0, -8.0, 5.0),
     "ironico": (-2.0, 1.0, -8.0, 5.0),
     "irônico": (-2.0, 1.0, -8.0, 5.0),
+    "neutral": (0.0, 0.0, 0.0, 0.0),
+    "angry": (2.5, 2.5, 12.0, -12.0),
+    "sad": (-1.0, -1.0, -10.0, 10.0),
+    "surprised": (-4.0, -4.0, 1.0, -1.0),
+    "sceptical": (-2.0, 1.0, -8.0, 5.0),
+    "skeptical": (-2.0, 1.0, -8.0, 5.0),
+    "thinking": (-1.8, 0.6, -5.0, 4.0),
+}
+# How far a resting blink-open lid squints. Surprised stays wide (0).
+EMO_LID = {
+    "neutro": 0.0, "neutral": 0.0, "alegre": 0.0,
+    "irritado": 0.40, "bravo": 0.40, "angry": 0.40,
+    "triste": 0.22, "sad": 0.22,
+    "surpreso": 0.0, "surprised": 0.0,
+    "pensativo": 0.18, "thinking": 0.18,
+    "desdenhoso": 0.32, "sceptical": 0.32, "skeptical": 0.32,
+    "ironico": 0.32, "irônico": 0.32,
 }
 EMO_ARM_ROT = {"alegre": (-5.0, 5.0), "irritado": (7.0, -7.0), "bravo": (7.0, -7.0),
                 "triste": (4.0, -4.0), "surpreso": (-10.0, 10.0), "pensativo": (-3.0, -8.0),
@@ -135,6 +152,8 @@ EMO_MOUTH = {
     "neutro": "neutral", "alegre": "happy", "irritado": "angry", "bravo": "angry",
     "triste": "sad", "surpreso": "surprised", "pensativo": "thoughtful",
     "desdenhoso": "ironic", "ironico": "ironic", "irônico": "ironic",
+    "neutral": "neutral", "angry": "angry", "sad": "sad", "surprised": "surprised",
+    "sceptical": "ironic", "skeptical": "ironic", "thinking": "thoughtful",
 }
 
 
@@ -250,6 +269,7 @@ class RigView:
     eye_shift: tuple[float, float] = (0.0, 0.0)  # iris travel (stage px) for a gaze of +-1
     mouthless: bool = False
     seated_eyes: tuple = ()  # (lid box, iris xy) in rig pixels, for the 4px lid check
+    human_eyes: dict | None = None
 
 
 def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None) -> RigView:
@@ -274,6 +294,7 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
             (tuple(int(v) for v in box), (int(round(iris[0])), int(round(iris[1]))))
             for box, iris in zip(mq["eyes"], irises)
         )
+    rv.human_eyes = view.get("humanEyes")
     if view.get("eyeRig"):
         mx, my = view["eyeRig"]["maxShift"]
         rv.eye_shift = (mx * scale, my * scale)
@@ -746,6 +767,9 @@ class Scene:
                 )
             return
         lids = eyes.blink(t, 7 + idx * 13)
+        emotion_now, _blend = self._emotion(idx, t)
+        if lids == "open" and EMO_LID.get(emotion_now, 0.0) >= 0.25:
+            lids = "half"  # angry, sad, sceptical and thinking squint; surprise stays wide
         # head micro-movements: slow sway + a small nod with the speech envelope (whole head group, mouth included)
         hx = round((math.sin(t * 0.63 + seed * 2.1) * 0.9 + math.sin(t * 1.37 + seed) * 0.4) * SS)
         hy = round(amp * 1.5 * SS)
@@ -757,9 +781,21 @@ class Scene:
                                     "brows": [round(v, 2) for v in brow_pose]}
         if rv.seated_eyes:
             face_row["eyes"] = [{"lid": list(lid), "iris": list(iris)} for lid, iris in rv.seated_eyes]
-        self._face_log.append(face_row)
         gx, gy = self.gaze(idx, t, view)
-        gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))  # eye_shift is the socket-safe maximum
+        gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))
+        if rv.human_eyes:
+            info = rv.human_eyes
+            state = lids if lids in info.get("lines", {}) else "open"
+            ix, iy, ir = info["iris"]
+            face_row["humanEyes"] = {
+                "lidY": info["painted"][state],
+                "lineY": info["lines"][state],
+                "iris": [ix + gx * info["shift"][0], iy + gy * info["shift"][1], ir],
+                "sclera": info["sclera"],
+                "browBottom": info["browBottom"] + brow_pose[0] * blend,
+                "eyeTop": info["eyeTop"],
+            }
+        self._face_log.append(face_row)
         cur_v, prev_v, wv = vis
         expression = EMO_MOUTH.get(emotion, "neutral")
         mouth = (

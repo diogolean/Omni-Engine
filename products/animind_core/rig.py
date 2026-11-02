@@ -1006,7 +1006,8 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
     # z: eyes (rest pose, for older clients) and eye_white share a slot; renderers that know
     # eye_white draw white -> iris (shifted by gaze, clipped to eye_socket) -> lids instead.
     order = (("body", 0), ("torso", 0), ("neck", 1), ("head", 2), ("eyes", 3), ("eye_white", 3), ("iris", 4), ("eye_socket", 4),
-             ("eyes_half", 5), ("eyes_closed", 6), ("brows", 7), ("mustache", 11))  # mustache over the mouth (z 10)
+             ("eyes_half", 5), ("eyes_closed", 6), ("brows", 7), ("brow_left", 8), ("brow_right", 8),
+             ("mustache", 11))  # mustache over the mouth (z 10)
     for name, z in order:
         if name in parts:
             img, xy = place(*parts[name])
@@ -1033,6 +1034,13 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
             if mq.get("irises"):
                 mq["irises"] = [[W - p[0], p[1]] for p in mq["irises"]]
         view["mouthQA"] = mq
+    if parts.get("humanEyes"):
+        he = json.loads(json.dumps(parts["humanEyes"]))
+        if mirror and he.get("iris") and he.get("sclera"):
+            he["iris"][0] = W - he["iris"][0]
+            box = he["sclera"]
+            he["sclera"] = [W - box[2], box[1], W - box[0], box[3]]
+        view["humanEyes"] = he
     if "eyeRig" in parts:  # screen-space travel; irises mirrored with the view
         meta = parts["eyeRig"]
         view["eyeRig"] = {"maxShift": meta["maxShift"],
