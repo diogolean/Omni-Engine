@@ -487,15 +487,21 @@ class Scene:
             return shot
         mouth_y = (H * BUST_BOTTOM * SS - rv.size[1] + rest[1][1] + layer_image(rest[0]).height) / SS
         head_top = (H * BUST_BOTTOM * SS - rv.size[1]) / SS
-        z = look.clamp_shot(shot).zoom * (1 + PUSH_CU)
         limit = self.cap_y - 64
-        margin = 8.0
-        span = mouth_y - head_top
+        margin = 12.0
+        z = look.clamp_shot(shot).zoom * (1 + PUSH_CU)
         floor = 1.04 * (1 + PUSH_CU)
-        if span > 1 and z * span > (limit - margin):
-            # Mouth clearance and the crown cannot share this zoom. Pull back until both fit.
-            z = max(floor, (limit - margin) / span)
-        cy = max(shot.cy, mouth_y - (limit - H / 2) / z)
+        cy = shot.cy
+        for _ in range(6):
+            cy = max(shot.cy, mouth_y - (limit - H / 2) / z)
+            # Lowering the camera (larger cy) pushes the crown out. Zoom out until it fits.
+            need = cy - head_top + margin
+            if need <= 0:
+                break
+            z_fit = H / (2 * need)
+            if z <= z_fit + 1e-3:
+                break
+            z = max(floor, z_fit)
         cy_max = head_top - (margin - H / 2) / z
         cy = min(cy, cy_max)
         zoom = shot.zoom

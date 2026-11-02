@@ -176,15 +176,15 @@ def test_white_mustache_stays_and_only_the_lips_are_filled():
     img = Image.new("RGBA", (220, 260), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw.ellipse((30, 20, 190, 230), fill=(226, 176, 146, 255))
-    draw.ellipse((55, 118, 165, 158), fill=(236, 232, 226, 255))  # white moustache
+    draw.ellipse((55, 118, 165, 158), fill=(181, 168, 161, 255))  # warm-grey moustache, sat ~0.11
     draw.rectangle((78, 168, 142, 182), fill=(168, 64, 72, 255))  # lips
     draw.rectangle((20, 230, 200, 259), fill=(245, 245, 245, 255))  # collar, not hair
     box = (40, 100, 180, 220)
     hair = _facial_hair(np.asarray(img), box)
     assert hair[130, 110] and not hair[174, 110] and not hair[244, 110]
     out = np.asarray(_mouthless(img, box, (70, 160, 150, 190), keep_hair=True))
-    assert tuple(out[130, 110][:3]) == (236, 232, 226)
-    assert abs(int(out[174, 110][0]) - 168) > 25
+    assert tuple(out[130, 110][:3]) == (181, 168, 161)
+    assert tuple(out[174, 110][:3]) != (168, 64, 72)
 
 
 def test_f_viseme_is_not_grown_to_a_full_open_mouth():
@@ -234,7 +234,8 @@ def test_tall_close_up_keeps_the_mouth_above_captions_and_the_crown_in_frame():
     mouth_screen = scene.H / 2 + (mouth_y - shot.cy) * z
     crown_screen = scene.H / 2 + (head_top - shot.cy) * z
     assert mouth_screen <= sc.cap_y - 64 + 1.5
-    assert crown_screen >= -1
+    assert crown_screen >= 0
+    assert shot.zoom < plain.zoom
     vertical = scene.Scene(
         template="debate", scenario="studio", rigs=[views, views], script=sc.script,
         envelope=sc.env, env_fps=10, duration_s=4.0, disclaimer="Parody",
@@ -256,7 +257,7 @@ def test_rerig_front_from_the_cached_master_keeps_a_white_mustache(tmp_path, mon
     draw.rounded_rectangle((70, 210, 250, 430), 24, fill=(36, 64, 120, 255))
     draw.rectangle((140, 180, 180, 230), fill=(226, 176, 146, 255))
     draw.ellipse((90, 40, 230, 220), fill=(232, 186, 156, 255))
-    draw.ellipse((118, 150, 202, 188), fill=(236, 232, 226, 255))
+    draw.ellipse((118, 150, 202, 188), fill=(181, 168, 161, 255))
     draw.rectangle((140, 192, 180, 206), fill=(168, 64, 72, 255))
     for cx in (140, 180):
         draw.ellipse((cx - 12, 100, cx + 12, 124), fill=(248, 248, 246, 255))

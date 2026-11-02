@@ -38,7 +38,8 @@ VISEME_CAV_MIN = {
 VISEME_CAV_MAX = {"X": 0.08, "A": 0.08}
 CAV_GROW = 1.3  # x the drawn sprite's own cavity, plus CAV_SLACK, before a frame counts as over-open
 CAV_SLACK = 0.08
-NORM_W = 64  # mouth crops are measured at this width
+NORM_W = 64  # mouth crops on the video are measured at this width
+MIN_QA_REST_W = 28  # a side-view X upscaled a few times is narrower than this; its shadow is not a cavity
 SPEECH_MIN_S = 0.4  # shorter voiced lines are not judged for a frozen mouth
 OPEN_MIN = 0.05  # measured cavity / mouth width that counts as a visibly open mouth
 MIN_MEASURED = 6  # measured frames of the speaker a line needs before its openness is judged
@@ -46,17 +47,22 @@ BLINK_RATE_MIN = 8.0
 BLINK_RATE_MAX = 36.0
 
 
-def measure(img: np.ndarray, box: Any) -> dict[str, Any] | None:
-    """Cavity rows per mouth width and stacked-cavity count inside box (x0, y0, x1, y1) of an RGB array."""
+def measure(img: np.ndarray, box: Any, *, norm_w: int | None = None) -> dict[str, Any] | None:
+    """Cavity rows per mouth width and stacked-cavity count inside box (x0, y0, x1, y1) of an RGB array.
+
+    Video frames stay at ``NORM_W``. A drawn sprite can pass its own width so a
+    real D is not quantized to 10/64, under the 0.16 floor.
+    """
     x0, y0, x1, y1 = (int(v) for v in box)
     H, W = img.shape[:2]
     if x0 < 0 or y0 < 0 or x1 > W or y1 > H:
         return None  # mouth partly off-frame: not measurable
     if x1 - x0 < 6 or y1 - y0 < 6:
         return None
+    nw = NORM_W if norm_w is None else max(6, int(norm_w))
     # one scale for every measurement (stage reference at 2x supersampling, frames at any zoom)
     crop = Image.fromarray(np.ascontiguousarray(img[y0:y1, x0:x1]))
-    c = np.asarray(crop.resize((NORM_W, max(6, round(NORM_W * (y1 - y0) / (x1 - x0)))), Image.LANCZOS)).astype(np.float32)
+    c = np.asarray(crop.resize((nw, max(6, round(nw * (y1 - y0) / (x1 - x0)))), Image.LANCZOS)).astype(np.float32)
     x0, y0, x1, y1 = 0, 0, c.shape[1], c.shape[0]
     lum = c @ np.array([0.299, 0.587, 0.114], np.float32)
     border = np.concatenate([lum[0], lum[-1], lum[:, 0], lum[:, -1]])
@@ -177,7 +183,7 @@ def facial_check(trace: dict[str, Any]) -> tuple[list[tuple[int, str]], dict[str
     return bad, report
 
 
-def happy_cavity(sprite: Image.Image) -> float:
+def happy_cavity(sprite: Image.Image, *, norm_w: int | None = None) -> float:
     """Cavity ratio of one resting mouth on a skin plate, measured like a frame.
 
     The plate is larger than the sprite so the QA padding is skin, the same
@@ -194,8 +200,21 @@ def happy_cavity(sprite: Image.Image) -> float:
     plate = Image.new("RGBA", (sprite.width + 2 * margin, sprite.height + 2 * margin), (236, 200, 170, 255))
     plate.alpha_composite(sprite, (margin, margin))
     box = (margin + x0 - pad_x, margin + y0 - pad_y, margin + x1 + pad_x, margin + y1 + pad_y)
-    measured = measure(np.asarray(plate.convert("RGB")), box)
+    measured = measure(np.asarray(plate.convert("RGB")), box, norm_w=norm_w)
     return float(measured["cav"]) if measured else 0.0
+
+
+def sprite_cavity(sprite: Image.Image) -> float:
+    """Cavity of a drawn mouth at its own resolution.
+
+    ``happy_cavity`` still uses the 64px frame scale. A real D is about 16px
+    open on a wider sprite; at 64px that becomes 10/64 and loses to the 0.16 floor.
+    """
+    ink = sprite.getchannel("A").point(lambda value: 255 if value > 128 else 0).getbbox()
+    if ink is None:
+        return 0.0
+    pad_x = max(3, round((ink[2] - ink[0]) * 0.2))
+    return happy_cavity(sprite, norm_w=max(NORM_W, (ink[2] - ink[0]) + 2 * pad_x))
 
 
 def preflight_happy(view_dir: Path) -> str | None:
@@ -283,7 +302,7 @@ def repair_closed_visemes(view_dir: Path) -> list[str]:
         if floor is None or floor <= 0:
             continue
         with Image.open(path) as image:
-            cavity = happy_cavity(image.convert("RGBA"))
+            cavity = sprite_cavity(image.convert("RGBA"))
         if cavity + 1e-6 >= floor:
             continue
         if safe is None:
@@ -312,7 +331,8 @@ def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:
             if m["layers"] != 1:
                 bad.append((i, f"{who}: {m['layers']} mouth layers"))
             ref = m.get("ref")
-            r = measure(img, m["box"]) if f["blur"] == 0 else None
+            tiny = m["v"][:1] in "XA" and m["box"][2] - m["box"][0] < MIN_QA_REST_W
+            r = measure(img, m["box"]) if f["blur"] == 0 and not tiny else None
             if not r or not ref:
                 continue
             measured += 1

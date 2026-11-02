@@ -82,6 +82,20 @@ needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not
 
 
 @needs_ffmpeg
+def test_a_narrow_rest_mouth_is_not_scored(tmp_path):
+    """A 19px side-view X, upscaled, reads moustache shadow as an open cavity."""
+    n = 8
+    video = _mp4(tmp_path / "rest.mp4", [True] * n)
+    trace = _trace(["X"] * n, speech=False)
+    for frame in trace["frames"]:
+        frame["mouths"][0]["box"] = [70, 50, 89, 63]  # 19px wide
+        frame["mouths"][0]["ref"] = {"cav": 0.0, "blobs": 0}
+    out = frameqa.check(video, trace)
+    assert out["pass"], out["examples"]
+    assert out["mouthsMeasured"] == 0
+
+
+@needs_ffmpeg
 def test_frameqa_fails_a_shut_mouth_during_speech(tmp_path):
     n = 36
     video = _mp4(tmp_path / "shut.mp4", [False] * n)

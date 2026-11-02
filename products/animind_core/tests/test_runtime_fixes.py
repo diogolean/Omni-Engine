@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from products.animind_core import frameqa, llm_providers, script
 
@@ -247,6 +247,18 @@ def test_mouth_qa_keeps_a_video_and_repairs_a_shut_viseme(tmp_path):
     notes = frameqa.repair_closed_visemes(view.parent)
     assert notes and "safe mouth" in notes[0]
     assert frameqa.happy_cavity(Image.open(view / "B.png")) >= frameqa.VISEME_CAV_MIN["B"]
+    drawn = Image.new("RGBA", (120, 70), (0, 0, 0, 0))
+    pen = ImageDraw.Draw(drawn)
+    pen.rounded_rectangle((8, 18, 112, 54), 10, fill=(210, 150, 140, 255))
+    pen.rectangle((22, 28, 98, 51), fill=(24, 10, 12, 255))
+    drawn.save(view / "D.png")
+    before = (view / "D.png").read_bytes()
+    # At the 64px frame scale this D is 10/64 and loses; at its own width it passes.
+    assert frameqa.happy_cavity(drawn) < frameqa.VISEME_CAV_MIN["D"]
+    assert frameqa.sprite_cavity(drawn) + 1e-6 >= frameqa.VISEME_CAV_MIN["D"]
+    again = frameqa.repair_closed_visemes(view.parent)
+    assert not any(" D:" in note for note in again)
+    assert (view / "D.png").read_bytes() == before
 
 
 def test_outputs_without_output_path_stay_outside_the_repo(monkeypatch):

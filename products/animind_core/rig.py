@@ -890,10 +890,10 @@ def _facial_hair(rgba: np.ndarray, box: Box) -> np.ndarray:
     opaque = rgba[y0:y1, x0:x1, 3] > 128
     lum, chroma = rgb.mean(axis=2), rgb.max(axis=2) - rgb.min(axis=2)
     dark = (lum < 90) & (chroma < 35) & opaque
-    # A white or grey moustache is desaturated, not dark. Warm skin (cheek, lip) stays out.
-    # Only the upper part of the box: a white collar along the bottom is cloth, not hair.
-    skin = (chroma >= 20) & (rgb[..., 0] >= rgb[..., 2] + 12) & (lum > 80) & (lum < 230)
-    pale = opaque & ~skin & (chroma < 34) & (lum >= 130) & (lum <= 252)
+    # Illustrated white hair is a warm grey (sat ~0.08-0.20). Skin sits at ~0.25-0.34,
+    # so a chroma/red test calls the moustache skin and the pale mask misses the mouth.
+    sat = chroma / np.maximum(rgb.max(axis=2), 1)
+    pale = opaque & (sat < 0.21) & (lum >= 120) & (lum <= 252)
     pale[int((y1 - y0) * 0.72):, :] = False
     k = max(3, (x1 - x0) // 25)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
@@ -901,7 +901,7 @@ def _facial_hair(rgba: np.ndarray, box: Box) -> np.ndarray:
     pale_mass = cv2.morphologyEx(pale.astype(np.uint8), cv2.MORPH_OPEN, kernel)
     mass = np.maximum(mass, pale_mass)
     near = cv2.dilate(mass, kernel) > 0
-    rim = (chroma < 45) & opaque & (((lum < 130) & dark) | ((lum >= 130) & pale))
+    rim = opaque & (((lum < 130) & dark) | ((lum >= 120) & (sat < 0.26)))
     out = np.zeros(rgba.shape[:2], bool)
     out[y0:y1, x0:x1] = (mass > 0) | (near & rim)
     return out
