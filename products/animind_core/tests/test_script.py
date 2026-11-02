@@ -490,8 +490,10 @@ def test_check_debate_flags_monologues_fake_quotes_and_long_lines():
     fake["quote"] = {**bad[4]["quote"], "text": fake["text"]}
     bad[4] = fake
     problems = script.check(bad, [s, n]) + script.check_debate(bad, [s, n], ["Sócrates", "Nietzsche"])
+    notes = script.answer_notes(bad, ["Sócrates", "Nietzsche"])
     assert "line 4: quote is not literally in the sheet" in problems
-    assert "line 2: does not answer line 1" in problems
+    assert "line 2: does not answer line 1" not in problems
+    assert any("line 2: keyword overlap" in note for note in notes)
     assert "line 3: same speaker twice in a row" in problems
     assert "line 5: 20 words is too long" in problems
 
@@ -876,6 +878,13 @@ def test_an_unanswered_quote_is_swapped_not_the_neighbour(monkeypatch):
 
     def fake(prompt):
         calls.append(prompt)
+        if "Judge this debate" in prompt:
+            return [
+                {"i": 1, "answers_previous": True, "reason": "follows", "coherent": False},
+                {"i": 2, "answers_previous": True, "reason": "follows", "coherent": False},
+                {"i": 3, "answers_previous": True, "reason": "follows", "coherent": False},
+                {"i": 4, "answers_previous": False, "reason": "the close ignores the break", "coherent": False},
+            ]
         if "Score each candidate quote" in prompt:
             assert "Do not rewrite the previous line" in prompt
             assert "line 3" not in prompt.split("Rewrite only line", 1)[-1] if "Rewrite only line" in prompt else True
@@ -915,6 +924,12 @@ def test_an_unanswered_quote_replans_once_when_no_other_quote_answers(monkeypatc
         calls.append(prompt)
         if "Rewrite only line" in prompt:
             raise AssertionError(prompt)
+        if "Judge this debate" in prompt:
+            if "Truth needs a witness" in prompt:
+                return [{
+                    "i": 2, "answers_previous": False, "reason": "imagination ignores the witness", "coherent": False,
+                }]
+            return [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}]
         if "Write every beat again" in prompt:
             return [
                 {"i": 0, "text": "Nietzsche, is truth a witness?"},
@@ -1052,6 +1067,59 @@ def test_debate_qa_fails_loudly_when_rewrites_do_not_land(monkeypatch):
         script.require_passing_script(out, "debate")
 
 
+def test_the_coherent_pipe_draft_is_kept(monkeypatch):
+    """The real f191b4c draft: Einstein's pipe quote, Nietzsche's reply, Einstein's long close."""
+    pipe = "Pipe smoking contributes to a calm and objective judgment in human affairs."
+    simple = "Make the theory as simple as possible and then leave the remaining work to the measured facts."
+    reply = "A pipe makes your judgment objective? Cute."
+    nietzsche_q = "Convictions are more dangerous enemies of truth than lies."
+    einstein = {"quotes": [
+        _quote("q10", pipe, "Albert_Einstein"),
+        _quote("q1", simple, "Albert_Einstein"),
+    ]}
+    nietzsche = {"quotes": [_quote("q4", nietzsche_q, "Friedrich_Nietzsche")]}
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    calls: list[str] = []
+
+    def fake(prompt):
+        calls.append(prompt)
+        if "Judge this debate" in prompt:
+            return [
+                {"i": index, "answers_previous": True, "reason": "the reply follows the argument", "coherent": True}
+                for index in range(1, 5)
+            ]
+        if "Score each candidate quote" in prompt or "Rewrite only line" in prompt or "Write every beat again" in prompt:
+            raise AssertionError(prompt)
+        return [
+            {"i": 0, "text": "Nietzsche, is a pipe the way to an objective judgment?"},
+            {"i": 1, "quoteId": "q4"},
+            {"i": 2, "quoteId": "q10"},
+            {"i": 3, "text": reply},
+            {"i": 4, "quoteId": "q1"},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write("debate", "judgment", names, "en-US", sheets=[einstein, nietzsche], use_llm=True, duration=30)
+    texts = [line["text"] for line in out["lines"]]
+    assert texts[1] == nietzsche_q
+    assert texts[2] == pipe and out["lines"][2]["quote"]["id"] == "q10"
+    assert texts[3] == reply
+    assert texts[4] == simple and out["lines"][4]["kind"] == "quote"
+    assert script.words(simple) > 14
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+    assert not any("does not answer" in problem for problem in out["scriptQA"]["problems"])
+    assert not any(problem.startswith("debate: the close is not memorable") for problem in out["scriptQA"]["problems"])
+    assert sum("Judge this debate" in prompt for prompt in calls) == 1
+
+
+def test_debate_plan_fits_the_measured_word_budget():
+    rate = 2.6
+    plan = script.plan_for("debate", 2, 30, words_per_s=rate)
+    assert len(plan) >= 5
+    assert any(beat.act == "virada" or beat.name == "virada" for beat in plan)
+    assert sum(beat.max_words for beat in plan) <= script.word_budget(30, rate)
+
+
 def test_slow_voice_plans_fewer_words_before_tts():
     slow = script.plan_for("solo", 1, duration=30, words_per_s=1.2)
     historical = script.plan_for("solo", 1, duration=30)
@@ -1064,6 +1132,11 @@ def test_unanswered_debate_line_is_rewritten_with_the_previous_line(monkeypatch)
 
     def fake(prompt):
         seen.append(prompt)
+        if "Judge this debate" in prompt:
+            return [
+                {"i": 2, "answers_previous": False, "reason": "ignores the previous line", "coherent": False},
+                {"i": 4, "answers_previous": False, "reason": "ignores the previous line", "coherent": False},
+            ]
         if "does not answer the previous line" in prompt:
             assert "Previous line:" in prompt
             index = int(prompt.split("Rewrite only line ", 1)[1].split(" ", 1)[0])

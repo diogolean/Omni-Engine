@@ -982,15 +982,16 @@ def _solo_count(duration: float, beat_s: float = _BEAT_S) -> int:
 
 
 def _trim_plan(plan: list[Beat], duration: float | None, words_per_s: float | None) -> list[Beat]:
-    """Drop middle paraphrases and shrink word caps when the measured voice is slower than the guess.
+    """Fit beat caps to the measured words-per-second budget, including a debate at 2.6 words/second.
 
-    A faster probe leaves the historical plan alone. A slower one is what made a 30s
-    request land at 34s.
+    The historical debate caps sum well past a 30-second request, so the estimate landed at 34s.
     """
-    if duration is None or not words_per_s or words_per_s >= WORDS_PER_S:
+    if duration is None or not words_per_s or words_per_s <= 0:
         return plan
     budget = max(6.0, float(duration) - _CARD_S - 1.0)
+    cap_words = word_budget(duration, words_per_s)
     plan = list(plan)
+    floor = 5 if any(beat.act == "virada" or beat.name == "virada" for beat in plan) else 4
 
     def estimate(beats: list[Beat]) -> float:
         spoken = sum(beat.max_words for beat in beats) / words_per_s
@@ -999,14 +1000,19 @@ def _trim_plan(plan: list[Beat], duration: float | None, words_per_s: float | No
         gaps = 0.7 * sum(1 for i in range(1, len(acts)) if acts[i] != acts[i - 1])
         return spoken + pauses + gaps
 
-    while len(plan) > 4 and estimate(plan) > budget + 2:
+    while len(plan) > floor and estimate(plan) > budget + 2:
         middle = [i for i in range(1, len(plan) - 1) if plan[i].kind != "quote"]
         if not middle:
             break
         del plan[middle[len(middle) // 2]]
-    if plan and estimate(plan) > budget + 2:
-        scale = max(0.45, budget / estimate(plan))
+    if cap_words and sum(beat.max_words for beat in plan) > cap_words:
+        scale = cap_words / sum(beat.max_words for beat in plan)
         plan = [replace(beat, max_words=max(6, int(beat.max_words * scale))) for beat in plan]
+        while sum(beat.max_words for beat in plan) > cap_words:
+            index = max(range(len(plan)), key=lambda i: plan[i].max_words)
+            if plan[index].max_words <= 6:
+                break
+            plan[index] = replace(plan[index], max_words=plan[index].max_words - 1)
     return plan
 
 
@@ -1454,13 +1460,81 @@ def _swap_answering_quote(lines: list[dict[str, Any]], index: int, sheets: list[
         index, previous, candidates, name, lang, topic, allow_unavailable_gemini=allow_unavailable_gemini,
     )
     best = max(linking, key=lambda quote: (scores.get(str(quote["id"]), 0), chain_score(quote, topic, previous)))
+    old_text = str(line.get("text") or "")
     line["kind"] = "quote"
     line["text"] = best["text"]
     line["quote"] = cite(best)
     line.pop("basis", None)
     line["maxS"] = max(float(line.get("maxS") or 0), max_seconds(words(best["text"])))
     line["replyTo"] = {"line": index - 1, "idea": link(previous, best["text"], quote=True, names=names)}
+    _regenerate_lines_that_named(lines, index, old_text, best["text"], lang, topic, names,
+                                 allow_unavailable_gemini=allow_unavailable_gemini)
     return True
+
+
+def _regenerate_lines_that_named(lines: list[dict[str, Any]], index: int, old_text: str, new_text: str, lang: str,
+                                 topic: str, names: list[str], *, allow_unavailable_gemini: bool) -> None:
+    """A later line that used the discarded quote has to be written again against the quote that replaced it."""
+    old_stems = set(_stems(old_text))
+    if not old_stems:
+        return
+    for later in range(index + 1, len(lines)):
+        line = lines[later]
+        if line.get("kind") == "quote":
+            continue
+        if not (set(_stems(str(line.get("text") or ""))) & old_stems):
+            continue
+        previous = new_text if later == index + 1 else lines[later - 1]["text"]
+        following = lines[later + 1]["text"] if later + 1 < len(lines) else ""
+        rewritten = _rewrite_line(
+            later,
+            "the quote this line refers to was replaced. "
+            f"Discarded quote: {old_text}. New quote: {new_text}. "
+            "Answer the new quote and do not mention the discarded one.",
+            line["text"], lang, topic, names, allow_unavailable_gemini=allow_unavailable_gemini,
+            max_words=16, previous=previous, following=following,
+        )
+        if not rewritten:
+            continue
+        line["text"] = rewritten
+        line["replyTo"] = {"line": later - 1, "idea": link(previous, rewritten, names=names)}
+
+
+def judge_debate(lines: list[dict[str, Any]], names: list[str], topic: str, lang: str, *,
+                 allow_unavailable_gemini: bool) -> dict[str, Any] | None:
+    """One cheap call. Keyword overlap is not this judgment.
+
+    The model returns, per line, whether it answers the previous line, plus one coherent flag for the script.
+    """
+    if len(lines) < 2:
+        return {"coherent": True, "lines": []}
+    body = "\n".join(
+        f'{index}. {(names[line["speaker"]] if line.get("speaker", 0) < len(names) else "speaker")}: {line.get("text")}'
+        for index, line in enumerate(lines)
+    )
+    prompt = (
+        "Judge this debate script. Do not rewrite it.\n"
+        f"Topic: {topic}. Language: {lang}.\n"
+        f"{body}\n"
+        "For each line after the first, set answers_previous true only when it responds to the line before it. "
+        "Set coherent true only when the script holds together as one argument.\n"
+        'Return JSON only: {"lines": [{"i": 1, "answers_previous": true, "reason": "...", "coherent": true}]}.'
+    )
+    entries = [entry for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini) if isinstance(entry, dict)]
+    if not entries:
+        return None
+    if not any("coherent" in entry or "answers_previous" in entry for entry in entries):
+        return None
+    flags = [bool(entry["coherent"]) for entry in entries if "coherent" in entry]
+    per = [
+        entry for entry in entries
+        if isinstance(entry.get("i"), int) and entry["i"] >= 1 and "answers_previous" in entry
+    ]
+    if flags:
+        coherent = all(flags)
+    else:
+        coherent = bool(per) and all(bool(entry.get("answers_previous")) for entry in per)
+    return {"coherent": coherent, "lines": per}
 
 
 def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: str, topic: str, names: list[str], *,
@@ -1949,6 +2023,17 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
                 return unique
 
             problems_now = _problems_now()
+            if debate:
+                judged = judge_debate(
+                    lines, names, topic, lang, allow_unavailable_gemini=explicit_llm,
+                )
+                if judged and not judged["coherent"]:
+                    for entry in judged["lines"]:
+                        if entry.get("answers_previous"):
+                            continue
+                        index = int(entry["i"])
+                        reason = str(entry.get("reason") or "judge")
+                        problems_now.append(f"line {index}: does not answer line {index - 1} ({reason})")
             changed, needs_replan = (False, False)
             if problems_now:
                 changed, needs_replan = _repair_unanswered(
@@ -2001,6 +2086,8 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     problems = _problems()
     # notes: weaknesses worth a look that do not fail the script (an idea carried three lines in a row)
     notes = _repeated_idea(lines)
+    if debate:
+        notes += answer_notes(lines, names)
     if duration is not None:
         estimated = runtime_seconds(lines)
         out_duration = round(estimated, 2)
@@ -2160,9 +2247,9 @@ def strong_hook(text: str) -> bool:
 
 
 def memorable_close(line: dict[str, Any]) -> bool:
-    """A last line that sticks: a real quote that hits (a contrast or a turn, see ``punch``), or a short written line."""
+    """A last line that sticks. A real quote is the close; the word cap is only for a written line."""
     if line.get("kind") == "quote":
-        return punch(line.get("quote") or {"text": line["text"]}) >= 1 or words(line["text"]) <= 14
+        return True
     return words(line["text"]) <= CLOSE_MAX_WORDS
 
 
@@ -2222,11 +2309,21 @@ def check_lesson(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], topi
     return errors
 
 
+def answer_notes(lines: list[dict[str, Any]], names: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Keyword overlap is advisory. A missing shared word is not, by itself, a failed script."""
+    notes = []
+    for index in range(1, len(lines)):
+        previous, line = lines[index - 1], lines[index]
+        if link(previous["text"], line["text"], quote=line.get("kind") == "quote", names=names):
+            continue
+        notes.append(f"line {index}: keyword overlap does not tie it to line {index - 1}")
+    return notes
+
+
 def check_debate(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], names: list[str] | tuple[str, ...] = (),
                  topic: str = "") -> list[str]:
-    """Problems with a debate's shape: speakers alternate (no parallel monologues), every line answers the
-    one before (a shared idea), the arc opens on a hook, turns in the middle and closes, each speaker says
-    at least one real quote of his own sheet when it has one that fits, and lines stay short and varied."""
+    """Problems with a debate's shape. Whether a line answers the one before it is a judge's call, not a
+    shared-word check. Speakers alternate, the arc opens, turns, and closes, and each speaker uses a real quote."""
     errors: list[str] = []
     if len(lines) < 5:
         return ["debate: fewer than 5 lines"]
@@ -2234,8 +2331,6 @@ def check_debate(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], name
         prev, line = lines[i - 1], lines[i]
         if line["speaker"] == prev["speaker"]:
             errors.append(f"line {i}: same speaker twice in a row")
-        if not link(prev["text"], line["text"], quote=line.get("kind") == "quote", names=names):
-            errors.append(f"line {i}: does not answer line {i - 1}")
     if lines[0].get("beat") != "gancho":
         errors.append("debate: does not open on a hook")
     elif not strong_hook(lines[0]["text"]):

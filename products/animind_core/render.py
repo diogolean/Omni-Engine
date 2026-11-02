@@ -477,6 +477,13 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             tone=tone, objective=objective, duration=target_duration, words_per_s=words_per_s,
         )
         lines = written["lines"]
+        (work / "script.json").write_text(json.dumps({
+            "lines": lines,
+            "scriptQA": written.get("scriptQA"),
+            "writer": written.get("writer"),
+            "topic": written.get("topic"),
+            "estimatedDurationS": written.get("estimatedDurationS"),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
         scripts.require_passing_script(written, template)
         # Silence for the film titles: a cold open before the first line, a beat before each new act
         # (the dip and its chapter card) and the end card after the last line (see titles.py).

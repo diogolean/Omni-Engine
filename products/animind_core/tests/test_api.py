@@ -1,4 +1,5 @@
 import io
+import json
 import time
 
 import pytest
@@ -105,6 +106,9 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
     assert res["script"][0]["startMs"] >= titles.TITLE_S * 1000 - 1  # silent cold open for the title card
     assert res["durationMs"] >= res["script"][-1]["endMs"] + titles.END_S * 1000 - 1  # and room for the end card
     assert client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1]).status_code == 200
+    from products.animind_core import settings
+    saved = json.loads((settings.data_dir() / "jobs" / job["id"] / "script.json").read_text(encoding="utf-8"))
+    assert [line["text"] for line in saved["lines"]] == [line["text"] for line in res["script"]]
 
 
 def test_unknown_character_is_not_loaded():
