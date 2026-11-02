@@ -13,7 +13,7 @@ def test_english_is_the_writer_default_and_flash_lite_is_the_paid_model():
     )
     assert written["topic"] == "artificial intelligence"
     assert written["lines"][0]["text"].startswith(("Today", "Artificial", "No joke", "Pay attention"))
-    assert script.WRITER_MODEL == "gemini-2.5-flash-lite"
+    assert script.WRITER_MODEL == "gemini-3.5-flash-lite"
     assert written["scriptCost"] == {
         "provider": None, "model": None, "costUsd": 0.0,
         "inputTokens": 0, "outputTokens": 0, "cached": False, "status": "offline",
@@ -42,7 +42,7 @@ def test_writer_reports_flash_lite_cost_metadata(monkeypatch):
     )
     assert written["writer"] == "gemini"
     assert written["scriptCost"] == {
-        "provider": "google", "model": "gemini-2.5-flash-lite",
+        "provider": "google", "model": "gemini-3.5-flash-lite",
         "costUsd": 0.0003, "inputTokens": 1000, "outputTokens": 500,
         "cached": False, "status": "ok",
     }

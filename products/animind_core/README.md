@@ -44,15 +44,17 @@ results were not produced.
 
 ```bash
 python -m products.animind_core.bench \
-  --providers deepseek,gemini,openrouter,together-flux-schnell,openrouter-qwen-image,openrouter-flux-kontext
+  --providers deepseek,gemini,openrouter,together-qwen-image,together-flux-kontext
 ```
 
 `create_avatar(description, style)` in `avatar.py` is the one-call sheet.
-Gemini draws through Aiwake `create_puppet.generate_character_image`. Together
-FLUX.1-schnell and OpenRouter Qwen-Image / FLUX Kontext use the same prompt.
-What is reused is mapped in `docs/aiwake-reuse.md`. A stick figure is an image
-from that path, cached under `ANIMIND_DATA_DIR/avatar_cache/` and reused for
-every scene. `stick.py` draws only when no image provider is configured.
+The default image model is Together `Qwen/Qwen-Image`. Gemini still draws
+through Aiwake `create_puppet.generate_character_image`. FLUX.1-kontext-pro
+also goes through Together. FLUX.1-schnell is not called. Face parts are cut
+by `rig.assemble` so the mouth stays inside the face. `southpark` is its own
+style. What is reused is mapped in `docs/aiwake-reuse.md`. The bust is cached
+under `ANIMIND_DATA_DIR/avatar_cache/` and reused for every scene. `stick.py`
+draws only when no image provider is configured.
 
 **Rig reuse:** a prompt character whose name (accent/case-insensitive) and art style match a saved,
 QA-approved (score >= 80) Gemini rig returns that rig (`"reused": true`, URLs rebased) instead of
@@ -168,7 +170,7 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   `quote {id, text, source, label, url, site, wikisource?}` (`label` is the short on-screen source: no
   page numbers, translators or publishers, <= 48 chars; `source` stays complete). The pluggable
   script writer uses DeepSeek `deepseek-flash` by default and Gemini
-  (`gemini-2.5-flash-lite`) as fallback; either provider only picks
+  (`gemini-3.5-flash-lite`) as fallback; either provider only picks
   quote ids and writes the other lines. Only `primary` quotes can be a "Citação real". Quote beats prefer
   quotes sharing words with the topic (stemmed): an unknown/reused id, or an off-topic id while an on-topic
   quote fits, becomes the best topic match (then the shortest), never model text.

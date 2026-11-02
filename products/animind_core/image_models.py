@@ -1,11 +1,12 @@
 """Image model selection and per-model credit counter (structure only; no billing is charged here).
 
-The default provider is Gemini "nano-banana" (``gemini-2.5-flash-image``), the one the rig pipeline calls.
-Other providers (Flux, ...) plug in through :data:`DEFAULTS`; they are listed but disabled until a key
-env var named in the config is set. Keys are read from env by name only, never stored or logged.
+The default provider is Together Qwen-Image (best quality per dollar in the
+real-key benchmark). Gemini Flash image remains available for the Aiwake rig
+path. FLUX.1-schnell is not called: Together returns 400 unless a dedicated
+endpoint is used. Keys are read from env by name only, never stored or logged.
 
 Config (env):
-  ANIMIND_IMAGE_MODEL      default model id (``nano-banana``)
+  ANIMIND_IMAGE_MODEL      default model id (``together-qwen-image``)
   ANIMIND_IMAGE_MODELS     optional JSON overriding/adding entries: {"flux-pro": {"usdPerImage": 0.05, ...}}
   ANIMIND_FREE_CREDITS     free generations per user per month (credits; default 0 = off)
 """
@@ -64,24 +65,21 @@ DEFAULTS: dict[str, ImageModel] = {
         "FAL_KEY", False, "fal.ai", "processed megapixel",
         "https://fal.ai/pricing",
     ),
-    # Together FLUX.1-schnell list price from production.providers.image.together_image (mid-2026 table).
-    "together-flux-schnell": ImageModel(
-        "together-flux-schnell", "together", "black-forest-labs/FLUX.1-schnell", 0.003, 1,
+    # Together images API. Qwen-Image is the default; FLUX.1-kontext-pro is the edit model.
+    # FLUX.1-schnell is omitted: the shared images endpoint returns 400 for it.
+    "together-qwen-image": ImageModel(
+        "together-qwen-image", "together", "Qwen/Qwen-Image", 0.01, 1,
         "TOGETHER_API_KEY", True, "together", "image",
-        "production/providers/image/together_image.py",
+        "Together Qwen-Image list price",
     ),
-    # OpenRouter returns usage.cost when the gateway knows the model. The figure below is only the preflight estimate.
-    "openrouter-qwen-image": ImageModel(
-        "openrouter-qwen-image", "openrouter", "qwen/qwen-image", 0.03, 1,
-        "OPENROUTER_API_KEY", True, "openrouter", "image",
-        "https://openrouter.ai/docs",
-    ),
-    "openrouter-flux-kontext": ImageModel(
-        "openrouter-flux-kontext", "openrouter", "black-forest-labs/flux.1-kontext", 0.04, 1,
-        "OPENROUTER_API_KEY", True, "openrouter", "image",
-        "https://openrouter.ai/docs",
+    "together-flux-kontext": ImageModel(
+        "together-flux-kontext", "together", "black-forest-labs/FLUX.1-kontext-pro", 0.04, 1,
+        "TOGETHER_API_KEY", True, "together", "image",
+        "Together FLUX.1-kontext-pro list price",
     ),
 }
+
+DEFAULT_IMAGE_MODEL = "together-qwen-image"
 
 
 class PaidImageGenerationDisabled(RuntimeError):
@@ -181,19 +179,19 @@ def models() -> dict[str, ImageModel]:
 
 def _with_env_model(spec: ImageModel) -> ImageModel:
     """Model ids named by env, read at call time. Empty env keeps the registry default."""
-    env_name = {
-        "together-flux-schnell": "TOGETHER_IMAGE_MODEL",
-        "openrouter-qwen-image": "OPENROUTER_QWEN_IMAGE_MODEL",
-        "openrouter-flux-kontext": "OPENROUTER_FLUX_KONTEXT_MODEL",
-    }.get(spec.id, "")
-    override = (os.getenv(env_name) or "").strip() if env_name else ""
+    if spec.id == "together-qwen-image":
+        override = (os.getenv("TOGETHER_QWEN_IMAGE_MODEL") or os.getenv("TOGETHER_IMAGE_MODEL") or "").strip()
+    elif spec.id == "together-flux-kontext":
+        override = (os.getenv("TOGETHER_FLUX_KONTEXT_MODEL") or "").strip()
+    else:
+        override = ""
     if override and override != spec.model:
         return ImageModel(**(asdict(spec) | {"model": override}))
     return spec
 
 
 def selected(model_id: str | None = None) -> ImageModel:
-    mid = model_id or os.environ.get("ANIMIND_IMAGE_MODEL", "nano-banana")
+    mid = model_id or os.environ.get("ANIMIND_IMAGE_MODEL", DEFAULT_IMAGE_MODEL)
     table = models()
     if mid not in table:
         raise ValueError(f"unknown image model {mid!r}; known: {sorted(table)}")

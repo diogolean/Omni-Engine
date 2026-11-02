@@ -27,8 +27,9 @@ key (`ANIMIND_FORCE_MOCK=1` or an empty key).
 | `products/aiwake/animator/render/skia_mouths.py` | Per-view Skia suites for the cyborg archetypes (9 visemes and 5 acting mouths). | Left in place for those puppets. A generic stick or human bust has no cyborg archetype, so Animind does not invent one. |
 | `products/aiwake/animator/render/visemes.py` | Mecha palette mouths and `draw_mouths`. | Same boundary: cyborg palettes stay in Aiwake. |
 | `products/aiwake/animator/render/facial_rig.py` | Brow stamps, emotion poses, mouth docking on the chin. | Emotion brow poses already used by the renderer (`scene.EMO_BROW_POSE`) are written out as one brow sprite per emotion. |
-| `products/aiwake/animator/vision/head_analyzer.py` | Eye landmarks, blink-lid overlays, per-version brow seats. | Blink layers are `eyes_half` and `eyes_closed` on the detected eye line. The full per-version calibrator (`v3` … `v14`, including `v3_southpark_hybrid`) stays on the Aiwake puppets it was tuned for. |
-| `animation/parametric/factory/landmark_detector.py` | MediaPipe, then the OpenCV optic/jaw fallback. | `create_avatar` places the mouth, the neck cut, and the eyes with `detect_landmarks`. |
+| `products/aiwake/animator/vision/head_analyzer.py` | Eye landmarks, blink-lid overlays, chin basin, mouth anchor. | Tried on the generated bust and kept only when the mouth stays inside the head. |
+| `animation/parametric/factory/landmark_detector.py` | MediaPipe, then the OpenCV mecha fallback. | MediaPipe is used when it is installed. The mecha fallback is rejected: it docks the mouth on the torso. |
+| `products/animind_core/rig.py` `assemble` | The working cut: torso, neck, mouthless head, eyes, lids, brows, and the Aiwake mouth bank from face boxes. | `create_avatar` calls this after the bust is generated. Facing-right stays a mirror of left. |
 | `animation/parametric/animator_types.py` | The nine Rhubarb visemes. | The sheet always carries `X A B C D E F G H`. |
 
 ## Debate and picture providers

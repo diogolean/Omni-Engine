@@ -91,17 +91,35 @@ def compose(
 
 
 def _face_box(skin: Path, view: str, size: tuple[int, int]) -> tuple[int, int, int, int]:
+    """Square crop around the face. Image-mode rigs may omit ``boxes``; use the head layer then."""
     own = skin / "rig_front.json"
-    meta = json.loads((own if view == "front" and own.exists() else skin / "rig.json").read_text(encoding="utf-8"))
-    x0, y0, x1, y1 = meta["boxes"]["face"]
-    w, h = x1 - x0, y1 - y0
-    x0, x1 = x0 - w * 0.12, x1 + w * 0.12
-    y0, y1 = y0 - h * 0.08, y1 + h * 0.1
-    side = max(x1 - x0, y1 - y0)
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    if view == "right":
-        cx = size[0] - cx
-    return (round(cx - side / 2), round(cy - side / 2), round(cx + side / 2), round(cy + side / 2))
+    path = own if view == "front" and own.exists() else skin / "rig.json"
+    face = None
+    if path.is_file():
+        try:
+            face = (json.loads(path.read_text(encoding="utf-8")).get("boxes") or {}).get("face")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            face = None
+    if face and len(face) == 4:
+        x0, y0, x1, y1 = (float(v) for v in face)
+        w, h = x1 - x0, y1 - y0
+        x0, x1 = x0 - w * 0.12, x1 + w * 0.12
+        y0, y1 = y0 - h * 0.08, y1 + h * 0.1
+        side = max(x1 - x0, y1 - y0)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        if view == "right":
+            cx = size[0] - cx
+        return (round(cx - side / 2), round(cy - side / 2), round(cx + side / 2), round(cy + side / 2))
+    view_path = skin / "views" / view / "view.json"
+    if view_path.is_file():
+        try:
+            layers = json.loads(view_path.read_text(encoding="utf-8")).get("layers") or []
+        except (OSError, json.JSONDecodeError):
+            layers = []
+        head = next((layer for layer in layers if layer.get("name") == "head"), None)
+        if head:
+            return (int(head["x"]), int(head["y"]), int(head["x"]) + int(head["w"]), int(head["y"]) + int(head["h"]))
+    return (0, 0, size[0], size[1])
 
 
 def build(skin: Path, name: str = "", style: str = "") -> Path:

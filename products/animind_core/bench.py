@@ -6,7 +6,7 @@ mock and the report says real results were not produced.
 
 Run on a machine that has a ``.env`` with the keys::
 
-    python -m products.animind_core.bench --providers deepseek,gemini,openrouter,together-flux-schnell,openrouter-qwen-image,openrouter-flux-kontext
+    python -m products.animind_core.bench --providers deepseek,gemini,openrouter,together-qwen-image,together-flux-kontext
 """
 from __future__ import annotations
 
@@ -43,13 +43,11 @@ def _split(providers: list[str]) -> tuple[list[str], list[str]]:
         elif name in {"gemini", "google"}:
             images.append("nano-banana")
         elif name == "together":
-            images.append("together-flux-schnell")
-        elif name == "openrouter":
-            images.extend(["openrouter-qwen-image", "openrouter-flux-kontext"])
-        elif name == "qwen":
-            images.append("openrouter-qwen-image")
-        elif name == "flux":
-            images.append("openrouter-flux-kontext")
+            images.append("together-qwen-image")
+        elif name in {"qwen", "qwen-image"}:
+            images.append("together-qwen-image")
+        elif name in {"flux", "kontext", "flux-kontext"}:
+            images.append("together-flux-kontext")
     return _unique(scripts), _unique(images)
 
 
@@ -238,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--providers",
-        default="deepseek,gemini,openrouter,together-flux-schnell,openrouter-qwen-image,openrouter-flux-kontext",
+        default="deepseek,gemini,openrouter,together-qwen-image,together-flux-kontext",
         help="Comma-separated script and image providers",
     )
     parser.add_argument("--output", type=Path, default=None)

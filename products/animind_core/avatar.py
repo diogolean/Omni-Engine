@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw
 
 from . import image_models, mouthset, rig, settings, stick, styles
 
@@ -37,24 +36,6 @@ SOURCES = (
     "animation/parametric/factory/landmark_detector.py",
     "animation/parametric/animator_types.py",
 )
-MOUTH_COLOURS = {
-    "outline": (20, 16, 16, 255),
-    "cavity": (30, 16, 18, 255),
-    "teeth": (248, 246, 240, 255),
-    "tongue": (196, 90, 96, 255),
-    "lip": (150, 70, 74, 255),
-}
-
-
-@dataclass(frozen=True)
-class Anchors:
-    left_eye: tuple[int, int]
-    right_eye: tuple[int, int]
-    mouth: tuple[int, int]
-    mouth_width: int
-    chin: int
-    neck: int
-    radius: int
 
 
 def configured_model(model_id: str | None = None) -> str | None:
@@ -73,7 +54,7 @@ def configured_model(model_id: str | None = None) -> str | None:
     if model_id:
         spec = image_models.selected(model_id)
         return spec.id if usable(spec) else None
-    preferred = (os.getenv("ANIMIND_IMAGE_MODEL") or "nano-banana").strip()
+    preferred = (os.getenv("ANIMIND_IMAGE_MODEL") or image_models.DEFAULT_IMAGE_MODEL).strip()
     table = image_models.models()
     if preferred in table and usable(table[preferred]):
         return preferred
@@ -97,8 +78,8 @@ def create_avatar(
 ) -> dict[str, Any]:
     """Generate once, then reuse the cached bust for every later scene."""
     description = " ".join((description or "a person").split())[:400]
-    style_id = style if style == "stick" or style in styles.STYLES else styles.pick(style)
-    stick_figure = kind == "stick" or style_id == "stick"
+    style_id = styles.pick(style)
+    stick_figure = kind == "stick" or style_id in {"stick", "southpark"}
     model_id = model_id or configured_model()
     budget = budget or image_models.run_budget()
     fingerprint = _fingerprint(description, style_id, kind, model_id or "mock", stick_figure)
@@ -128,18 +109,13 @@ def create_avatar(
             "description": description, "style": style_id, "kind": kind,
         }
         (cache / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    left_parts = _parts(left)
-    front_parts = _parts(front)
-    views = {
-        "left": _write_view(left_parts, skin / "views" / "left", url, mirror=False),
-        "right": _write_view(left_parts, skin / "views" / "right", url, mirror=True),
-        "front": _write_view(front_parts, skin / "views" / "front", url, mirror=False),
-    }
-    _preview(skin, left_parts, front_parts)
-    (skin / "rig.json").write_text(json.dumps({
-        "type": "avatar", "size": list(CANVAS), "sources": list(SOURCES),
-        "fingerprint": fingerprint, "mock": mock,
-    }), encoding="utf-8")
+    views = _rig_views(left, front, skin, url)
+    rig_path = skin / "rig.json"
+    saved = json.loads(rig_path.read_text(encoding="utf-8")) if rig_path.is_file() else {}
+    saved.update({
+        "type": "avatar", "sources": list(SOURCES), "fingerprint": fingerprint, "mock": mock,
+    })
+    rig_path.write_text(json.dumps(saved), encoding="utf-8")
     failed = [] if _opaque(left) else ["empty bust"]
     return {
         "views": views,
@@ -186,7 +162,7 @@ def _acquire(
     spec = image_models.selected(model_id)
     client = image_models.provider(model_id)
     left_path = skin / "_gen_left.png"
-    left_prompt = _prompt(description, style_id, stick_figure, "left", spec.provider)
+    left_prompt = _prompt(description, style_id, stick_figure, "left", spec.model)
     if not budget.allow(spec.usdPerImage):
         raise image_models.BudgetExceeded(f"{spec.id} exceeds the run cap")
     left_result = client.generate(
@@ -201,7 +177,7 @@ def _acquire(
         front_path = skin / "_gen_front.png"
         try:
             front_result = client.generate(
-                _prompt(description, style_id, stick_figure, "front", spec.provider),
+                _prompt(description, style_id, stick_figure, "front", spec.model),
                 destination=front_path, aspect_ratio="4:5", budget=budget,
                 reference_path=left_path if spec.provider == "gemini" else None,
             )
@@ -216,7 +192,7 @@ def _acquire(
     return left, front, spec.provider, left_result.model, cost, False, front_status
 
 
-def _prompt(description: str, style_id: str, stick_figure: bool, view: str, provider: str) -> str:
+def _prompt(description: str, style_id: str, stick_figure: bool, view: str, model: str) -> str:
     if stick_figure:
         subject = (
             f"A single stick-figure character: {description}. "
@@ -229,7 +205,7 @@ def _prompt(description: str, style_id: str, stick_figure: bool, view: str, prov
         text = f"{subject}. {rig.FRONT_PROMPT}"
     else:
         text = rig.STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style_id))
-    if provider in {"together", "openrouter"}:
+    if "flux" in model.lower():
         return _compact(text)
     return text
 
@@ -284,219 +260,233 @@ def _seat(image: Image.Image) -> Image.Image:
     return canvas
 
 
-def _anchors(image: Image.Image) -> Anchors:
+def bust_boxes(image: Image.Image) -> dict[str, tuple[int, int, int, int]]:
+    """Face, eyes and mouth on a generated bust, in :func:`rig.assemble` coordinates.
+
+    MediaPipe landmarks and Aiwake's head analyzer are accepted only when the
+    mouth sits inside the face. The mecha fallback that docks the mouth on the
+    torso is rejected. A bust detector then keeps the mouth on the head.
+    """
+    for finder in (_boxes_from_landmarks, _boxes_from_head_analyzer, _boxes_from_bust):
+        try:
+            boxes = finder(image)
+        except Exception:
+            boxes = None
+        if boxes and _mouth_inside_face(boxes) and _face_sits_on_head(image, boxes):
+            return boxes
+    raise RuntimeError("could not place the mouth inside the face")
+
+
+def _face_sits_on_head(image: Image.Image, boxes: dict[str, tuple[int, int, int, int]]) -> bool:
+    """Reject a 'face' whose chin is down on the torso."""
+    alpha = np.asarray(image.convert("RGBA"))[:, :, 3] > 24
+    rows = np.nonzero(alpha.any(axis=1))[0]
+    if not rows.size:
+        return False
+    top, bottom = int(rows.min()), int(rows.max())
+    return boxes["face"][3] <= top + max(1, bottom - top) * 0.72
+
+
+def _mouth_inside_face(boxes: dict[str, tuple[int, int, int, int]]) -> bool:
+    face = boxes.get("face")
+    mouth = boxes.get("mouth")
+    if not face or not mouth:
+        return False
+    cx = (mouth[0] + mouth[2]) / 2
+    cy = (mouth[1] + mouth[3]) / 2
+    if not (face[0] <= cx <= face[2] and face[1] <= cy <= face[3]):
+        return False
+    if mouth[1] < face[1] - 4 or mouth[3] > face[3] + 8:
+        return False
+    for key in ("left_eye", "right_eye"):
+        eye = boxes.get(key)
+        if not eye:
+            return False
+        ex = (eye[0] + eye[2]) / 2
+        ey = (eye[1] + eye[3]) / 2
+        if not (face[0] <= ex <= face[2] and face[1] <= ey <= face[3] and ey < cy):
+            return False
+    return True
+
+
+def _boxes_from_landmarks(image: Image.Image) -> dict[str, tuple[int, int, int, int]] | None:
+    from animation.parametric.factory.landmark_detector import detect_landmarks  # noqa: PLC0415
+
+    marks = detect_landmarks(image)
+    if marks.backend == "opencv_robotic_fallback":
+        return None
     width, height = image.size
-    fallback = Anchors(
-        (int(width * 0.38), int(height * 0.34)),
-        (int(width * 0.62), int(height * 0.34)),
-        (width // 2, int(height * 0.50)),
-        int(width * 0.22),
-        int(height * 0.58),
-        int(height * 0.66),
-        16,
-    )
-    try:
-        from animation.parametric.factory.landmark_detector import detect_landmarks  # noqa: PLC0415
 
-        marks = detect_landmarks(image)
-        left = marks.pixel_point(marks.left_eye.center)
-        right = marks.pixel_point(marks.right_eye.center)
-        mouth = marks.pixel_point(marks.mouth_center)
-        radius = int(max(10, min(26, round(float(marks.left_eye.iris_radius) * width))))
-        chin = int(np.clip(marks.pixel_point(marks.chin_base)[1], height * 0.40, height * 0.78))
-        neck = int(np.clip(max(marks.pixel_point(marks.neck_pivot)[1], chin + 10), chin + 10, height * 0.88))
-        mouth_w = int(max(48, min(width * 0.34, float(marks.mouth_width) * width)))
-        return Anchors(left, right, mouth, mouth_w, chin, neck, radius)
-    except Exception:
-        return fallback
+    def eye_box(point, radius: float) -> tuple[int, int, int, int]:
+        x, y = marks.pixel_point(point)
+        r = max(6, int(radius * width))
+        return _clip_box((x - r, y - r, x + r, y + r), width, height)
 
-
-def _skin_colour(image: Image.Image, chin: int) -> tuple[int, int, int]:
-    arr = np.asarray(image.convert("RGBA"))
-    band = arr[: max(1, chin)]
-    opaque = band[band[:, :, 3] > 160][:, :3]
-    if len(opaque) < 10:
-        return (244, 210, 180)
-    return tuple(int(v) for v in np.median(opaque, axis=0))
-
-
-def _ellipse(size: int, fill: tuple[int, int, int, int], outline: tuple[int, int, int, int] | None = None) -> Image.Image:
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.ellipse((1, 1, size - 2, size - 2), fill=fill, outline=outline, width=2 if outline else 1)
-    return image
-
-
-def _brow(width: int, colour: tuple[int, int, int, int]) -> Image.Image:
-    image = Image.new("RGBA", (width, width // 3), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.arc((1, 1, width - 2, width // 2), 200, 340, fill=colour, width=max(2, width // 14))
-    return image
-
-
-def _punch(image: Image.Image, centers: list[tuple[int, int]], radius: int) -> Image.Image:
-    arr = np.array(image.convert("RGBA"))
-    height, width = arr.shape[:2]
-    yy, xx = np.ogrid[:height, :width]
-    for cx, cy in centers:
-        arr[((xx - cx) ** 2 + (yy - cy) ** 2) <= radius ** 2, 3] = 0
-    return Image.fromarray(arr)
-
-
-def _slice(image: Image.Image, y0: int, y1: int) -> tuple[Image.Image, tuple[int, int]]:
-    y0, y1 = max(0, y0), min(image.height, max(y0 + 1, y1))
-    return image.crop((0, y0, image.width, y1)), (0, y0)
-
-
-def _parts(image: Image.Image) -> dict[str, Any]:
-    anchors = _anchors(image)
-    radius = anchors.radius
-    punched = _punch(image, [anchors.left_eye, anchors.right_eye], radius + 2)
-    head, head_xy = _slice(punched, 0, anchors.chin)
-    neck, neck_xy = _slice(punched, anchors.chin, anchors.neck)
-    torso, torso_xy = _slice(punched, anchors.neck, punched.height)
-    skin = _skin_colour(image, anchors.chin)
-    ink = (25, 22, 22, 255)
-    centers = (anchors.left_eye, anchors.right_eye)
-
-    def both(sprite: Image.Image) -> tuple[Image.Image, tuple[int, int]]:
-        canvas = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
-        for center in centers:
-            canvas.alpha_composite(sprite, (center[0] - sprite.width // 2, center[1] - sprite.height // 2))
-        box = canvas.getchannel("A").getbbox() or (0, 0, 1, 1)
-        return canvas.crop(box), (box[0], box[1])
-
-    white = _ellipse(radius * 2, (250, 250, 248, 255), ink)
-    iris = _ellipse(max(6, radius), (55, 36, 28, 255))
-    socket = _ellipse(radius * 2, (255, 255, 255, 255))
-    lid = _ellipse(radius * 2, (*skin, 230), ink)
-    closed = _ellipse(radius * 2, (*skin, 255), ink)
-    brow = _brow(radius * 3, (45, 32, 28, 255))
-    mouths = mouthset.place(
-        (
-            anchors.mouth[0] - anchors.mouth_width // 2,
-            anchors.mouth[1] - anchors.mouth_width // 5,
-            anchors.mouth[0] + anchors.mouth_width // 2,
-            anchors.mouth[1] + anchors.mouth_width // 5,
-        ),
-        mouthset.draw_set(anchors.mouth_width, MOUTH_COLOURS, open_cap=anchors.mouth_width * 0.46),
-    )
-    expressions = mouthset.place(
-        (
-            anchors.mouth[0] - anchors.mouth_width // 2,
-            anchors.mouth[1] - anchors.mouth_width // 5,
-            anchors.mouth[0] + anchors.mouth_width // 2,
-            anchors.mouth[1] + anchors.mouth_width // 5,
-        ),
-        mouthset.draw_expressions(anchors.mouth_width, MOUTH_COLOURS, open_cap=anchors.mouth_width * 0.46),
-    )
-    def at(sprite: Image.Image, center: tuple[int, int]) -> tuple[Image.Image, tuple[int, int]]:
-        return sprite, (center[0] - sprite.width // 2, center[1] - sprite.height // 2)
-
+    mx, my = marks.pixel_point(marks.mouth_center)
+    mw = max(12, int(float(marks.mouth_width) * width))
+    mh = max(8, mw // 4)
+    chin = marks.pixel_point(marks.chin_base)
+    top = min(marks.pixel_point(marks.left_eye.center)[1], marks.pixel_point(marks.right_eye.center)[1])
+    face = _clip_box((
+        min(marks.pixel_point(marks.left_eye.center)[0], mx) - mw,
+        max(0, top - mh * 2),
+        max(marks.pixel_point(marks.right_eye.center)[0], mx) + mw,
+        max(chin[1], my + mh) + 4,
+    ), width, height)
     return {
-        "torso": (torso, torso_xy),
-        "neck": (neck, neck_xy),
-        "head": (head, head_xy),
-        "eye_white": both(white),
-        "iris": both(iris),
-        "eye_socket": both(socket),
-        "eyes_half": both(lid),
-        "eyes_closed": both(closed),
-        "brow_left": at(brow, (anchors.left_eye[0], anchors.left_eye[1] - radius - 4)),
-        "brow_right": at(brow, (anchors.right_eye[0], anchors.right_eye[1] - radius - 4)),
-        "mouths": mouths,
-        "expressions": expressions,
-        "anchors": anchors,
-        "size": CANVAS,
+        "face": face,
+        "left_eye": eye_box(marks.left_eye.center, marks.left_eye.iris_radius),
+        "right_eye": eye_box(marks.right_eye.center, marks.right_eye.iris_radius),
+        "mouth": _clip_box((mx - mw // 2, my - mh // 2, mx + mw // 2, my + mh // 2), width, height),
     }
 
 
-def _iris_meta(parts: dict[str, Any], width: int, mirror: bool) -> list[list[int]]:
-    radius = max(4, parts["anchors"].radius // 2)
-    points = []
-    for center in (parts["anchors"].left_eye, parts["anchors"].right_eye):
-        x = width - center[0] if mirror else center[0]
-        points.append([int(x), int(center[1]), radius])
-    return points
+def _boxes_from_head_analyzer(image: Image.Image) -> dict[str, tuple[int, int, int, int]] | None:
+    from products.aiwake.animator.vision.head_analyzer import analyze_head  # noqa: PLC0415
 
-
-def _save_layer(name: str, image: Image.Image, xy: tuple[int, int], z: int, folder: Path, url: Callable[[Path], str]) -> dict[str, Any]:
-    path = folder / f"{name}.png"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, "PNG", optimize=True)
-    return {"name": name, "url": url(path), "x": int(xy[0]), "y": int(xy[1]), "w": image.width, "h": image.height, "z": z}
-
-
-def _write_view(parts: dict[str, Any], folder: Path, url: Callable[[Path], str], *, mirror: bool) -> dict[str, Any]:
-    folder.mkdir(parents=True, exist_ok=True)
-    width = CANVAS[0]
-
-    def place(pair: tuple[Image.Image, tuple[int, int]]) -> tuple[Image.Image, tuple[int, int]]:
-        image, xy = pair
-        if not mirror:
-            return image, xy
-        return ImageOps.mirror(image), (width - xy[0] - image.width, xy[1])
-
-    order = (
-        ("torso", 0), ("neck", 1), ("head", 2), ("eye_white", 3), ("iris", 4), ("eye_socket", 4),
-        ("eyes_half", 5), ("eyes_closed", 6), ("brow_left", 7), ("brow_right", 7),
-    )
-    layers = []
-    for name, z in order:
-        image, xy = place(parts[name])
-        layers.append(_save_layer(name, image, xy, z, folder, url))
-    visemes = {}
-    for code, pair in parts["mouths"].items():
-        image, xy = place(pair)
-        visemes[code] = _save_layer(f"mouth_{code}", image, xy, 10, folder / "mouths", url)
-    expressions = {}
-    for emotion, pair in parts["expressions"].items():
-        image, xy = place(pair)
-        expressions[emotion] = _save_layer(f"expression_{emotion}", image, xy, 10, folder / "expressions", url)
-    from .scene import EMO_BROW_POSE  # noqa: PLC0415
-
-    emotion_brows = {}
-    for emotion, pose in EMO_BROW_POSE.items():
-        for side, key in (("left", "brow_left"), ("right", "brow_right")):
-            image, xy = place(parts[key])
-            angle = pose[2] if side == "left" else pose[3]
-            turned = image.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True)
-            emotion_brows[f"{emotion}_{side}"] = _save_layer(
-                f"brow_{emotion}_{side}", turned, xy, 7, folder / "brows", url,
-            )
-    view = {
-        "canvas": {"w": CANVAS[0], "h": CANVAS[1]},
-        "layers": layers,
-        "visemes": visemes,
-        "expressions": expressions,
-        "emotionBrows": emotion_brows,
-        "eyes": {"open": "eye_white", "half": "eyes_half", "closed": "eyes_closed", "blink": "eyes_closed"},
-        "eyeRig": {"maxShift": [10, 6], "irises": _iris_meta(parts, width, mirror)},
-        "procedural": False,
-        "imageModel": True,
+    analysis = analyze_head(image)
+    width, height = image.size
+    left, right = analysis.eye_left, analysis.eye_right
+    if left.center[0] > right.center[0]:
+        left, right = right, left
+    radius = max(6, int(analysis.eye_radius))
+    mouth_w = max(12, int(analysis.mouth_target_width))
+    mx, my = analysis.mouth_center
+    chin = analysis.chin_bbox
+    face = _clip_box((
+        min(left.center[0] - radius * 2, chin[0]),
+        min(left.top, right.top) - radius,
+        max(right.center[0] + radius * 2, chin[2]),
+        max(chin[3], my + mouth_w // 4),
+    ), width, height)
+    return {
+        "face": face,
+        "left_eye": _clip_box((left.center[0] - radius, left.center[1] - radius, left.center[0] + radius, left.center[1] + radius), width, height),
+        "right_eye": _clip_box((right.center[0] - radius, right.center[1] - radius, right.center[0] + radius, right.center[1] + radius), width, height),
+        "mouth": _clip_box((mx - mouth_w // 2, my - max(6, mouth_w // 6), mx + mouth_w // 2, my + max(8, mouth_w // 5)), width, height),
     }
-    local = json.loads(json.dumps({k: v for k, v in view.items() if k != "emotionBrows"}))
-    for layer in local["layers"]:
-        layer["url"] = f"{layer['name']}.png"
-    for code, layer in local["visemes"].items():
-        layer["url"] = f"mouths/{layer['name']}.png"
-    for emotion, layer in local["expressions"].items():
-        layer["url"] = f"expressions/{layer['name']}.png"
-    (folder / "view.json").write_text(json.dumps(local, indent=2), encoding="utf-8")
-    return view
 
 
-def _preview(skin: Path, left: dict[str, Any], front: dict[str, Any]) -> None:
-    def flatten(parts: dict[str, Any]) -> Image.Image:
-        image = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
-        for key in ("torso", "neck", "head", "eye_white", "iris", "brow_left", "brow_right"):
-            sprite, xy = parts[key]
-            image.alpha_composite(sprite, xy)
-        image.alpha_composite(*parts["mouths"]["X"])
-        return image
+def _boxes_from_bust(image: Image.Image) -> dict[str, tuple[int, int, int, int]]:
+    """Head from the neck pinch, then dark eye and mouth blobs inside that head."""
+    import cv2  # noqa: PLC0415
 
-    flatten(left).save(skin / "character.png")
-    flatten(front).save(skin / "character_front.png")
+    rgba = np.asarray(image.convert("RGBA"))
+    height, width = rgba.shape[:2]
+    alpha = rgba[:, :, 3] > 24
+    ys, xs = np.nonzero(alpha)
+    if xs.size < 40:
+        raise ValueError("empty bust")
+    top, bottom = int(ys.min()), int(ys.max())
+    figure_h = max(1, bottom - top + 1)
+    widths = alpha.sum(axis=1)
+    y0 = top + int(figure_h * 0.22)
+    y1 = top + int(figure_h * 0.62)
+    band = widths[y0:y1]
+    neck_y = y0 + int(np.argmin(band)) if band.size else top + int(figure_h * 0.42)
+    head_width = float(np.median(widths[top:max(top + 1, neck_y)])) if neck_y > top else 0.0
+    head_limit = neck_y if head_width > 0 and widths[neck_y] <= head_width * 0.85 else top + int(figure_h * 0.46)
+    head_mask = alpha.copy()
+    head_mask[head_limit + 1:, :] = False
+    hys, hxs = np.nonzero(head_mask)
+    if hxs.size < 20:
+        raise ValueError("no head")
+    face = (int(hxs.min()), int(hys.min()), int(hxs.max()) + 1, int(hys.max()) + 1)
+    fx0, fy0, fx1, fy1 = face
+    fw, fh = max(1, fx1 - fx0), max(1, fy1 - fy0)
+    roi = rgba[fy0:fy1, fx0:fx1]
+    roi_alpha = roi[:, :, 3] > 24
+    lum = roi[:, :, :3].astype(np.float32).mean(axis=2)
+    skin_lum = float(np.median(lum[roi_alpha])) if roi_alpha.any() else 180.0
+    dark = (roi_alpha & (lum < skin_lum * 0.62)).astype(np.uint8)
+    count, _labels, stats, centroids = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    blobs = []
+    for index in range(1, count):
+        x, y, bw, bh, area = (int(stats[index, i]) for i in range(5))
+        if area < max(8, 0.0015 * fw * fh) or area > 0.12 * fw * fh:
+            continue
+        blobs.append((area, x, y, bw, bh, float(centroids[index][0]), float(centroids[index][1])))
+    upper = [blob for blob in blobs if blob[6] < fh * 0.58]
+    pair = _eye_pair(upper, fw, fh)
+    if pair is None:
+        radius = max(6, int(fw * 0.06))
+        ey = fy0 + int(fh * 0.40)
+        eyes = (
+            (fx0 + int(fw * 0.32) - radius, ey - radius, fx0 + int(fw * 0.32) + radius, ey + radius),
+            (fx0 + int(fw * 0.68) - radius, ey - radius, fx0 + int(fw * 0.68) + radius, ey + radius),
+        )
+    else:
+        eyes = tuple(sorted((_blob_box(blob, fx0, fy0) for blob in pair), key=lambda box: box[0]))
+    eye_bottom = max(eyes[0][3], eyes[1][3])
+    mouth_blobs = [
+        blob for blob in blobs
+        if blob[6] > (eye_bottom - fy0) + fh * 0.04 and blob[6] < fh * 0.92 and fw * 0.22 < blob[5] < fw * 0.78
+    ]
+    if mouth_blobs:
+        mouth = _blob_box(max(mouth_blobs, key=lambda blob: blob[0]), fx0, fy0)
+        if mouth[3] - mouth[1] < 6:
+            cy = (mouth[1] + mouth[3]) // 2
+            mouth = (mouth[0], cy - 4, mouth[2], cy + 6)
+    else:
+        mw, mh = int(fw * 0.28), max(8, int(fh * 0.07))
+        cx, cy = (fx0 + fx1) // 2, fy0 + int(fh * 0.72)
+        mouth = (cx - mw // 2, cy - mh // 2, cx + mw // 2, cy + mh // 2)
+    return {
+        "face": _clip_box(face, width, height),
+        "left_eye": _clip_box(eyes[0], width, height),
+        "right_eye": _clip_box(eyes[1], width, height),
+        "mouth": _clip_box(mouth, width, height),
+    }
+
+
+def _eye_pair(blobs: list[tuple], face_w: int, face_h: int) -> tuple | None:
+    best = None
+    for index, left in enumerate(blobs):
+        for right in blobs[index + 1:]:
+            if abs(left[6] - right[6]) > face_h * 0.12:
+                continue
+            gap = abs(left[5] - right[5])
+            if not (face_w * 0.12 <= gap <= face_w * 0.72):
+                continue
+            ratio = min(left[0], right[0]) / max(left[0], right[0])
+            if ratio < 0.35:
+                continue
+            score = ratio - abs(left[6] - right[6]) / max(1, face_h)
+            if best is None or score > best[0]:
+                best = (score, left, right)
+    return None if best is None else (best[1], best[2])
+
+
+def _blob_box(blob: tuple, origin_x: int, origin_y: int) -> tuple[int, int, int, int]:
+    _area, x, y, bw, bh, _cx, _cy = blob
+    return (origin_x + x, origin_y + y, origin_x + x + bw, origin_y + y + bh)
+
+
+def _clip_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = (int(v) for v in box)
+    x0, x1 = sorted((x0, x1))
+    y0, y1 = sorted((y0, y1))
+    x0 = int(np.clip(x0, 0, max(0, width - 2)))
+    y0 = int(np.clip(y0, 0, max(0, height - 2)))
+    x1 = int(np.clip(max(x1, x0 + 2), x0 + 2, width))
+    y1 = int(np.clip(max(y1, y0 + 2), y0 + 2, height))
+    return (x0, y0, x1, y1)
+
+
+def _rig_views(left: Image.Image, front: Image.Image, skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
+    """Cut the bust with :func:`rig.assemble`, the same layer path the Gemini rig uses."""
+
+    def matte(image: Image.Image) -> Image.Image:
+        return image.convert("RGBA")
+
+    left_path = skin / "_seated_left.png"
+    left.save(left_path)
+    views = rig.assemble(skin, {"closed": left_path}, bust_boxes(left), url, matte=matte, front=False)
+    front_path = skin / "_seated_front.png"
+    front.save(front_path)
+    views.update(rig.assemble(skin, {"closed": front_path}, bust_boxes(front), url, matte=matte, front=True))
+    return views
+
 
 
 def _opaque(image: Image.Image) -> bool:

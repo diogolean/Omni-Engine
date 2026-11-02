@@ -24,6 +24,10 @@ STYLES: dict[str, dict[str, Any]] = {
               "prompt": "South Park construction-paper cutout stick figure, flat unshaded colors, thick black contour, "
                         "simple oval eyes, no photorealism",
               "grade": None, "tint": None, "grain": 0.0, "lines": 0.0},
+    "southpark": {"label": "South Park",
+                  "prompt": "South Park construction-paper cutout, flat unshaded colors, thick black contour, "
+                            "simple oval eyes, small oval mouth, no photorealism and no anime cel",
+                  "grade": None, "tint": None, "grain": 0.0, "lines": 0.0},
     "anime": {"label": "Anime",
               "prompt": "Japanese anime character design, crisp thin lineart, large expressive eyes, soft two-tone cel shading, vivid colors",
               "grade": ((0.02, 0.02, 0.04), (1.04, 1.03, 1.08), 0.25, 1.22), "tint": ((255, 214, 236), 0.10), "grain": 0.0, "lines": 0.0},
@@ -86,8 +90,18 @@ def objective_catalog() -> list[dict[str, str]]:
     return [{"id": key, "label": label} for key, label in OBJECTIVES.items()]
 
 
+_STYLE_ALIASES = {
+    "south park": "southpark",
+    "south-park": "southpark",
+    "south_park": "southpark",
+}
+
+
 def pick(style: Any) -> str:
-    return style if isinstance(style, str) and style in STYLES else DEFAULT
+    if not isinstance(style, str):
+        return DEFAULT
+    key = _STYLE_ALIASES.get(style.strip().lower(), style.strip().lower())
+    return key if key in STYLES else DEFAULT
 
 
 def catalog() -> list[dict[str, str]]:

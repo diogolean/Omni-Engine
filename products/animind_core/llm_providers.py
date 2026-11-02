@@ -19,7 +19,7 @@ import httpx
 
 _LOG = logging.getLogger("animind_core")
 DEEPSEEK_MODEL = "deepseek-flash"
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 
 @dataclass(frozen=True)
