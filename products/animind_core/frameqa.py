@@ -175,6 +175,15 @@ def facial_check(trace: dict[str, Any]) -> tuple[list[tuple[int, str]], dict[str
             bad.append((states[0][0], f"char {char}: brows frozen at neutral during emotional speech"))
         if len(brow_emotions[char]) > 1 and len(brow_states[char]) < 2:
             bad.append((states[0][0], f"char {char}: brows do not vary across emotions"))
+        for index, face in states:
+            for eye in face.get("eyes") or []:
+                lid, iris = tuple(eye["lid"]), tuple(eye["iris"])
+                if not lids_on_iris(lid, iris, tol=4):
+                    bad.append((index, f"char {char}: lid centre off the iris by more than 4px"))
+                    break
+            else:
+                continue
+            break
     report = {
         "blinkRatesPerMin": blink_rates,
         "browEmotions": {char: sorted(values) for char, values in brow_emotions.items()},
@@ -313,6 +322,20 @@ def repair_closed_visemes(view_dir: Path) -> list[str]:
         sprite.save(path)
         notes.append(f"{view_dir.name} {code}: cavity {cavity:.2f} replaced with a safe mouth")
     return notes
+
+
+def rest_blank_has_ink(image: Image.Image, box: tuple[int, int, int, int]) -> bool:
+    """A rest frame whose blank skin already contains a mouth."""
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    return qa_mod.blank_area_has_ink(image, box)
+
+
+def lids_on_iris(lid_box: tuple[int, int, int, int], iris: tuple[int, int], tol: int = 4) -> bool:
+    """Lids within ``tol`` px of the iris centre."""
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    return qa_mod.lids_within_iris(lid_box, iris, tol)
 
 
 def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:

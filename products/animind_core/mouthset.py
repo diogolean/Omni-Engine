@@ -323,10 +323,18 @@ def _lips(im: Image.Image, lip: tuple[int, int, int, int]) -> Image.Image:
     return layer  # padded on every side: place() centres each sprite on the rest lips, so the anchor holds
 
 
-def place(lips: tuple[int, int, int, int], sprites: dict[str, Image.Image]) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
-    """Every sprite centred on the rest lips' centre: one fixed anchor for the whole set."""
-    cx, cy = (lips[0] + lips[2]) / 2, (lips[1] + lips[3]) / 2
-    return {v: (im, (round(cx - im.width / 2), round(cy - im.height / 2))) for v, im in sprites.items()}
+def place(lips: tuple[int, int, int, int], sprites: dict[str, Image.Image], *,
+          top: int | None = None) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
+    """Every sprite on one anchor.
+
+    ``top`` seats the sprite under the moustache (the blank skin's top edge)
+    instead of centring it on a painted lip.
+    """
+    cx = (lips[0] + lips[2]) / 2
+    if top is None:
+        cy = (lips[1] + lips[3]) / 2
+        return {v: (im, (round(cx - im.width / 2), round(cy - im.height / 2))) for v, im in sprites.items()}
+    return {v: (im, (round(cx - im.width / 2), int(top))) for v, im in sprites.items()}
 
 
 def describe() -> dict[str, Any]:

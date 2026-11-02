@@ -332,18 +332,18 @@ def test_a_failed_bust_does_not_replace_the_passing_cache(tmp_path, monkeypatch)
         dest = options["destination"]
         dest.parent.mkdir(parents=True, exist_ok=True)
         _bust(flat=calls["n"] > 2).save(dest)
-        return image_models.ImageResult(dest, "together", self.spec.model, 0.06)
+        return image_models.ImageResult(dest, "together", self.spec.model, 0.02)
 
     monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
     kwargs = dict(skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image")
     first = avatar.create_avatar("a teacher with a moustache", "cartoon", **kwargs)
-    assert first["qa"]["score"] == 100 and calls["n"] == 2
+    assert first["qa"]["score"] == 100 and calls["n"] == 4
     passed = (tmp_path / "data" / "avatar_cache").glob("*/passing/source_left.png")
     before = next(passed).read_bytes()
     avatar.create_avatar("a teacher with a moustache", "cartoon", reuse=False, **kwargs)
-    assert calls["n"] == 4  # the failed attempt was paid once
+    assert calls["n"] == 8  # the failed attempt was paid once
     again = avatar.create_avatar("a teacher with a moustache", "cartoon", **kwargs)
-    assert calls["n"] == 4  # the passing bust is reused; no third bill
+    assert calls["n"] == 8  # the passing bust is reused; no third bill
     assert again["cached"] is True and again["qa"]["score"] == 100
     assert next((tmp_path / "data" / "avatar_cache").glob("*/passing/source_left.png")).read_bytes() == before
 
@@ -360,11 +360,14 @@ def test_avatar_image_cap_is_thirty_cents(tmp_path, monkeypatch):
         dest = options["destination"]
         dest.parent.mkdir(parents=True, exist_ok=True)
         _bust(flat=False).save(dest)
-        return image_models.ImageResult(dest, "together", self.spec.model, 0.20)
+        return image_models.ImageResult(dest, "together", self.spec.model, 0.08)
 
     monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
-    kwargs = dict(skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image")
+    kwargs = dict(
+        skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image",
+        budget=image_models.RunBudget(0.50),
+    )
     avatar.create_avatar("a teacher", "cartoon", **kwargs)
-    assert calls["n"] == 2
+    assert calls["n"] == 4
     avatar.create_avatar("a teacher", "cartoon", reuse=False, **kwargs)
-    assert calls["n"] == 2  # 0.40 already spent; the next set would pass US$0.30
+    assert calls["n"] == 4  # US$0.32 already spent; the next set would pass US$0.30

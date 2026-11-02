@@ -84,10 +84,12 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
         "a calm teacher with round glasses", "stick", kind="stick",
         skin=skin, url=lambda path: path.as_uri(), model_id="together-qwen-image",
     )
-    assert len(prompts) == 2
-    assert refs[0] is None and refs[1] is not None
+    assert len(prompts) >= 4
+    assert refs[0] is None and any(ref is not None for ref in refs)
     assert "South Park" in prompts[0] and "stick-figure" in prompts[0]
-    assert "facing left" in prompts[1].lower()
+    assert "NO human mouth" in prompts[0]
+    assert "lips together" not in prompts[0].lower()
+    assert any("facing left" in prompt.lower() for prompt in prompts)
     assert built["generator"] == "together" and built["realImage"] is True
     assert set(built["views"]) == {"front", "left", "right"}
     assert set(built["views"]["left"]["visemes"]) == set("XABCDEFGH")
@@ -110,7 +112,7 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
         "a calm teacher with round glasses", "stick", kind="stick",
         skin=tmp_path / "skin2", url=lambda path: path.as_uri(), model_id="together-qwen-image",
     )
-    assert again["cached"] is True and len(prompts) == 2
+    assert again["cached"] is True and len(prompts) >= 4
 
 
 def _realistic_bust() -> Image.Image:

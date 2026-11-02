@@ -21,13 +21,14 @@ from typing import Any, Callable
 import numpy as np
 from PIL import Image, ImageDraw
 
-from . import image_models, mouthset, rig, settings, stick, styles
+from . import assemble_body, image_models, mouthset, qa, rig, settings, stick, styles
 
 CANVAS = stick.CANVAS
 VISEMES = mouthset.VISEMES
 CHARACTER_SET_CAP_USD = 0.30
-# One Gemini character set (master + mouths + front) bills about US$0.12.
-_SET_ESTIMATE_USD = 0.12
+# Qwen head + body, then two Kontext edits. One head redraw still fits under US$0.15.
+_SET_ESTIMATE_USD = 0.15
+_FINGERPRINT_VERSION = 2
 SOURCES = (
     "products/aiwake/animator/factory/create_puppet.py",
     "products/aiwake/animator/factory/one_shot_factory.py",
@@ -37,7 +38,9 @@ SOURCES = (
     "products/aiwake/animator/render/skia_mouths.py",
     "products/aiwake/animator/vision/head_analyzer.py",
     "animation/parametric/factory/landmark_detector.py",
+    "animation/parametric/factory/puppet_assembler.py",
     "animation/parametric/animator_types.py",
+    "products/animind_core/assemble_body.py",
 )
 
 
@@ -155,6 +158,7 @@ def create_avatar(
         cost = 0.0
         mock = bool(meta.get("mock"))
         front_status = str(meta.get("frontStatus") or "cached")
+        mouthless = bool(meta.get("mouthless"))
         cached = True
     elif over_cap:
         raise image_models.BudgetExceeded(
@@ -162,8 +166,8 @@ def create_avatar(
             f"(spent US${ledger['spentUsd']:.2f}) and no saved bust can be reused"
         )
     else:
-        left, front, spec_provider, spec_model, cost, mock, front_status = _acquire(
-            description, style_id, stick_figure, skin, model_id, budget, allow_mock,
+        left, front, spec_provider, spec_model, cost, mock, front_status, mouthless = _acquire(
+            description, style_id, stick_figure, skin, model_id, budget, allow_mock, ledger,
         )
         passed = _image_ok(left) and _image_ok(front)
         ledger["spentUsd"] = round(float(ledger["spentUsd"]) + float(cost), 4)
@@ -181,12 +185,12 @@ def create_avatar(
             "provider": spec_provider, "model": spec_model, "mock": mock,
             "frontStatus": front_status, "fingerprint": fingerprint,
             "description": description, "style": style_id, "kind": kind,
-            "passed": passed,
+            "passed": passed, "mouthless": mouthless,
         }
         (cache / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         _write_ledger(cache, ledger)
         cached = False
-    views = _rig_views(left, front, skin, url)
+    views = _rig_views(left, front, skin, url, mouthless=mouthless)
     rig_path = skin / "rig.json"
     saved = json.loads(rig_path.read_text(encoding="utf-8")) if rig_path.is_file() else {}
     saved.update({
@@ -222,6 +226,43 @@ def create_avatar(
     }
 
 
+def _reserve(spec: image_models.ImageModel, budget: image_models.RunBudget, spent: float) -> None:
+    """Refuse the call before it is sent when the run cap or the US$0.30 character cap is full."""
+    estimate = float(spec.usdPerImage)
+    if not budget.allow(estimate) or spent + estimate > CHARACTER_SET_CAP_USD + 1e-9:
+        raise image_models.BudgetExceeded(
+            f"{spec.id} at US${estimate:.2f} exceeds the cap "
+            f"(run US${budget.remaining():.2f} left, character spent US${spent:.2f})"
+        )
+
+
+def _draw(client: image_models.ImageProvider, spec: image_models.ImageModel, prompt: str, dest: Path,
+          budget: image_models.RunBudget, spent: float, *, aspect: str, reference: Path | None = None) -> tuple[Image.Image, float]:
+    _reserve(spec, budget, spent)
+    before = budget.spent_usd
+    result = client.generate(
+        prompt, destination=dest, aspect_ratio=aspect, budget=budget, reference_path=reference,
+    )
+    # The live provider charges the run budget itself. A fake must still be counted
+    # or the next call is sent after the cap is already full.
+    if budget.spent_usd == before:
+        budget.charge(float(result.cost_usd) or float(spec.usdPerImage))
+    return Image.open(dest).convert("RGBA"), float(result.cost_usd)
+
+
+def _head_once(client, spec, prompt, dest, budget, spent, *, reference: Path | None = None) -> tuple[Image.Image, float, int]:
+    """Draw a head. One free local check: ink in the lower face pays for a single redraw."""
+    image, cost = _draw(client, spec, prompt, dest, budget, spent, aspect="1:1", reference=reference)
+    draws = 1
+    if qa.lower_face_has_ink(image):
+        image, extra = _draw(
+            client, spec, prompt, dest, budget, spent + cost, aspect="1:1", reference=reference,
+        )
+        cost += extra
+        draws = 2
+    return image, cost, draws
+
+
 def _acquire(
     description: str,
     style_id: str,
@@ -230,39 +271,35 @@ def _acquire(
     model_id: str | None,
     budget: image_models.RunBudget,
     allow_mock: bool,
-) -> tuple[Image.Image, Image.Image, str, str, float, bool, str]:
+    ledger: dict[str, Any],
+) -> tuple[Image.Image, Image.Image, str, str, float, bool, str, bool]:
     if model_id is None or not image_models.selected(model_id).available():
         if not allow_mock:
             raise RuntimeError("no image provider is configured")
         image = _seat(_mock_bust())
-        return image, image.copy(), "mock", "placeholder", 0.0, True, "mock placeholder"
+        return image, image.copy(), "mock", "placeholder", 0.0, True, "mock placeholder", False
     spec = image_models.selected(model_id)
-    client = image_models.provider(model_id)
-    if not budget.allow(spec.usdPerImage):
-        raise image_models.BudgetExceeded(f"{spec.id} exceeds the run cap")
-    # Front is the colour and beard reference. The side is an edit of that
-    # picture, then matched to its skin so a drifted edit cannot change race.
-    front_path = skin / "_gen_front.png"
-    front_result = client.generate(
-        _prompt(description, style_id, stick_figure, "front", spec.model),
-        destination=front_path, aspect_ratio="4:5", budget=budget,
-    )
-    front = _seat(Image.open(front_path).convert("RGBA"))
-    front.save(front_path)
-    cost = float(front_result.cost_usd)
-    front_status = "image-model front"
     edit = image_models.selected("together-flux-kontext")
-    if not budget.allow(edit.usdPerImage):
-        raise image_models.BudgetExceeded(
-            f"side view needs {edit.model} at ${edit.usdPerImage:.2f}; "
-            f"${budget.remaining():.4f} remains and the front portrait is not a profile"
-        )
-    left_path = skin / "_gen_left.png"
+    draw_client = image_models.provider(model_id)
+    edit_client = image_models.provider("together-flux-kontext")
+    spent = float(ledger.get("spentUsd") or 0.0)
+    cost = 0.0
+    front_head, part, _draws = _head_once(
+        draw_client, spec, head_prompt(description, style_id, stick_figure, "front"),
+        skin / "_head_front.png", budget, spent,
+    )
+    cost += part
+    spent += part
+    front_body, part = _draw(
+        draw_client, spec, body_prompt(description, style_id, stick_figure, "front"),
+        skin / "_body_front.png", budget, spent, aspect="9:16",
+    )
+    cost += part
+    spent += part
     try:
-        side_result = image_models.provider("together-flux-kontext").generate(
-            _prompt(description, style_id, stick_figure, "left", edit.model, edit=True),
-            destination=left_path, aspect_ratio="4:5", budget=budget,
-            reference_path=front_path,
+        side_head, part, _draws = _head_once(
+            edit_client, edit, head_prompt(description, style_id, stick_figure, "left", edit=True),
+            skin / "_head_left.png", budget, spent, reference=skin / "_head_front.png",
         )
     except image_models.BudgetExceeded:
         raise
@@ -270,35 +307,57 @@ def _acquire(
         raise SideViewMissing(
             f"side view missing: {edit.model} did not return a profile ({type(exc).__name__})"
         ) from exc
-    left = match_skin(_seat(Image.open(left_path).convert("RGBA")), front)
-    left.save(left_path)
-    cost += float(side_result.cost_usd)
-    return left, front, spec.provider, front_result.model, cost, False, front_status
+    cost += part
+    spent += part
+    try:
+        side_body, part = _draw(
+            edit_client, edit, body_prompt(description, style_id, stick_figure, "left", edit=True),
+            skin / "_body_left.png", budget, spent, aspect="9:16", reference=skin / "_body_front.png",
+        )
+    except image_models.BudgetExceeded:
+        raise
+    except Exception as exc:
+        raise SideViewMissing(
+            f"side view missing: {edit.model} did not return a profile ({type(exc).__name__})"
+        ) from exc
+    cost += part
+    side_head = match_skin(side_head, front_head)
+    front = assemble_body.assemble(front_head, front_body, "facing_front")["image"]
+    left = assemble_body.assemble(side_head, side_body, "facing_left")["image"]
+    return left, front, spec.provider, spec.model, cost, False, "mouthless head and body", True
 
 
-def _prompt(description: str, style_id: str, stick_figure: bool, view: str, model: str, *, edit: bool = False) -> str:
-    if stick_figure:
-        subject = (
-            f"A single stick-figure character: {description}. "
-            "South Park construction-paper cutout, flat unshaded colors, thick black contour, "
-            "simple oval eyes, no photorealism, no extra people"
-        )
-    else:
-        subject = description
-    if edit:
-        text = (
-            f"{subject}. Edit the reference. Keep the same person, skin colour, beard, "
-            "moustache, hair, glasses, clothes and line weight. Turn the head and shoulders "
-            "to a three-quarter view facing left, mouth closed. Do not invent a new face. "
-            "Solid flat pure magenta #FF00FF background. No text."
-        )
-    elif view == "front":
-        text = f"{subject}. {rig.FRONT_PROMPT}"
-    else:
-        text = rig.STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style_id))
-    if "flux" in model.lower():
-        return _compact(text)
-    return text
+def head_prompt(description: str, style_id: str, stick_figure: bool, view: str, *, edit: bool = False) -> str:
+    """Square head. Facial hair stays. The skin under it is blank. No mouth and no neck."""
+    who = (
+        f"A single stick-figure character: {description}. "
+        "South Park construction-paper cutout, flat unshaded colors, thick black contour, stick-figure. "
+        "NO mouth, NO nose, lower face one flat colour."
+        if stick_figure else description
+    )
+    facing = "facing left, three-quarter view" if view == "left" else "front-facing, looking at the camera"
+    task = "Edit the reference head. Keep the same person. " if edit else ""
+    text = (
+        f"{task}{who}. Square close-up head only, {facing}. "
+        "Keep any moustache or beard. The skin under the facial hair is blank even skin. "
+        "NO human mouth, NO lips, NO smile creases, NO teeth, NO neck, NO shoulders. "
+        f"{styles.prompt_style(style_id)}. "
+        "Solid flat pure magenta #FF00FF background. No text."
+    )
+    return _compact(text) if edit else text
+
+
+def body_prompt(description: str, style_id: str, stick_figure: bool, view: str, *, edit: bool = False) -> str:
+    """Headless upper body. The collar is empty and the torso fills the bottom of the frame."""
+    who = f"stick-figure clothes for {description}" if stick_figure else description
+    facing = "facing left" if view == "left" else "front-facing"
+    task = "Edit the reference body. Keep the same clothes. " if edit else ""
+    return (
+        f"{task}{who}. Headless upper body, {facing}, ending in a clean empty collar. "
+        "No head, no face, NO human mouth. The collar is at the top and the torso fills the bottom edge. "
+        f"{styles.prompt_style(style_id)}. "
+        "Solid flat pure magenta #FF00FF background. No text."
+    )
 
 
 def _compact(prompt: str) -> str:
@@ -631,29 +690,96 @@ def _clip_box(box: tuple[int, int, int, int], width: int, height: int) -> tuple[
     return (x0, y0, x1, y1)
 
 
-def _rig_views(left: Image.Image, front: Image.Image, skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
-    """Cut the bust with :func:`rig.assemble`, the same layer path the Gemini rig uses."""
+def _boxes_for(image: Image.Image, *, mouthless: bool) -> dict[str, tuple[int, int, int, int]]:
+    try:
+        boxes = bust_boxes(image)
+    except RuntimeError:
+        alpha = np.asarray(image.convert("RGBA"))[:, :, 3] > 24
+        ys, xs = np.nonzero(alpha)
+        if xs.size < 20:
+            raise
+        face = (int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.min() + (ys.max() - ys.min()) * 0.62))
+        fw, fh = face[2] - face[0], face[3] - face[1]
+        boxes = {
+            "face": face,
+            "left_eye": (face[0] + int(fw * 0.22), face[1] + int(fh * 0.28), face[0] + int(fw * 0.42), face[1] + int(fh * 0.48)),
+            "right_eye": (face[0] + int(fw * 0.58), face[1] + int(fh * 0.28), face[0] + int(fw * 0.78), face[1] + int(fh * 0.48)),
+            "mouth": (face[0] + int(fw * 0.3), face[1] + int(fh * 0.7), face[0] + int(fw * 0.7), face[3] - 4),
+        }
+    if mouthless:
+        boxes["mouth"] = rig.blank_mouth_box(image, boxes["face"])
+        boxes["left_eye"] = rig.iris_eye_box(image, boxes["left_eye"])
+        boxes["right_eye"] = rig.iris_eye_box(image, boxes["right_eye"])
+    return boxes
+
+
+def _rig_views(left: Image.Image, front: Image.Image, skin: Path, url: Callable[[Path], str], *,
+               mouthless: bool = False) -> dict[str, Any]:
+    """Cut the bust. A mouthless head is passed as its own mouthless plate so the blur fill never runs."""
 
     def matte(image: Image.Image) -> Image.Image:
         return image.convert("RGBA")
 
-    left_path = skin / "_seated_left.png"
-    left.save(left_path)
-    views = rig.assemble(skin, {"closed": left_path}, bust_boxes(left), url, matte=matte, front=False)
-    front_path = skin / "_seated_front.png"
-    front.save(front_path)
-    views.update(rig.assemble(skin, {"closed": front_path}, bust_boxes(front), url, matte=matte, front=True))
+    def cut(image: Image.Image, path: Path, front_view: bool) -> dict[str, Any]:
+        image.save(path)
+        shots = {"closed": path, "mouthless": path} if mouthless else {"closed": path}
+        return rig.assemble(
+            skin, shots, _boxes_for(image, mouthless=mouthless), url, matte=matte,
+            front=front_view, mouthless=mouthless,
+        )
+
+    views = cut(left, skin / "_seated_left.png", False)
+    views.update(cut(front, skin / "_seated_front.png", True))
     return views
 
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Generate one mouthless character. No call is sent once the run cap is full.
+
+    ``ANIMIND_RUN_BUDGET_USD=0.20 python -m products.animind_core.avatar einstein``
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m products.animind_core.avatar")
+    parser.add_argument("name", nargs="?", default="einstein")
+    args = parser.parse_args(argv)
+    name = args.name
+    if name.lower() in {"einstein", "albert", "albert-einstein"}:
+        description = (
+            "Albert Einstein, elderly man, wild white hair, bushy white moustache, "
+            "no chin beard, dark jacket, warm illustrated portrait"
+        )
+        folder = "albert_einstein"
+    else:
+        description = name
+        folder = "".join(ch if ch.isalnum() else "_" for ch in name.lower())[:32] or "avatar"
+    skin = settings.data_dir() / "assets" / "puppets" / folder
+
+    def url(path: Path) -> str:
+        try:
+            return "/v1/files/" + path.relative_to(settings.data_dir() / "assets").as_posix()
+        except ValueError:
+            return path.name
+
+    built = create_avatar(description, "cartoon", skin=skin, url=url, model_id="together-qwen-image")
+    print(
+        f"avatar {folder} cost US${built['qa']['costUsd']:.4f} "
+        f"mouthless={built.get('frontShot')} cached={built['cached']}"
+    )
 
 
 def _opaque(image: Image.Image) -> bool:
     return image.getchannel("A").getbbox() is not None
 
 
+if __name__ == "__main__":
+    main()
+
+
 def _fingerprint(description: str, style_id: str, kind: str, model_id: str, stick_figure: bool) -> str:
     payload = json.dumps(
-        {"description": description, "style": style_id, "kind": kind, "model": model_id, "stick": stick_figure, "v": 1},
+        {"description": description, "style": style_id, "kind": kind, "model": model_id, "stick": stick_figure, "v": _FINGERPRINT_VERSION},
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:24]

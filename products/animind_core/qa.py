@@ -231,6 +231,18 @@ def double_mouth(view: Path) -> dict[str, Any]:
     head_ink = int(ink_of(base).sum())
     if head_ink >= min_px:
         bad["head"] = f"{head_ink}px ink on mouthless head"
+    if mq.get("mouthless"):
+        head_im = Image.open(view / head["url"]).convert("RGBA")
+        local = (int(mx0 - head["x"]), int(my0 - head["y"]), int(mx1 - head["x"]), int(my1 - head["y"]))
+        if blank_area_has_ink(head_im, local):
+            bad["blank"] = "ink in the blank skin at rest"
+        irises = mq.get("irises") or (v.get("eyeRig") or {}).get("irises") or []
+        for box, iris in zip(mq.get("eyes") or [], irises):
+            point = (int(round(iris[0])), int(round(iris[1])))
+            if not lids_within_iris(tuple(int(x) for x in box), point, tol=4):
+                mid = (box[1] + box[3]) / 2
+                bad["eyes"] = f"lid centre {mid:.0f}px vs iris {point[1]}px"
+                break
     for name, m in v["visemes"].items():
         spr = Image.open(view / m["url"]).convert("RGBA")
         layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -428,6 +440,48 @@ def review_sheet(skin: Path, gates: dict[str, Any], total: int, cost: float, des
         y += r.height
     sheet.save(dest)
     return dest
+
+
+def lower_face_has_ink(image: Image.Image) -> bool:
+    """True when the lower face still has a mouth: lip colour or a dark crease.
+
+    A moustache is low-saturation and is not ink. Blank even skin is not ink.
+    """
+    arr = np.asarray(image.convert("RGBA"))
+    height, width = arr.shape[:2]
+    band = arr[int(height * 0.62):, int(width * 0.22): int(width * 0.78)]
+    if band.size == 0:
+        return False
+    rgb = band[:, :, :3].astype(np.int16)
+    opaque = band[:, :, 3] > 128
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    sat = chroma / np.maximum(rgb.max(axis=2), 1)
+    lum = rgb.mean(axis=2)
+    lips = opaque & (rgb[:, :, 0] > rgb[:, :, 2] + 28) & (chroma > 36) & (lum < 190) & (sat >= 0.22)
+    # A smile crease is a dark line on skin. A jacket outline is dark but not on skin.
+    skin = opaque & (rgb[:, :, 0] > rgb[:, :, 2] + 8) & (lum > 100) & (sat >= 0.12)
+    import cv2  # noqa: PLC0415
+    near_skin = cv2.dilate(skin.astype(np.uint8), np.ones((7, 7), np.uint8), iterations=1) > 0
+    creases = opaque & (lum < 70) & (sat < 0.2) & (chroma < 30) & near_skin
+    return int(lips.sum()) > 16 or int(creases.sum()) > 48
+
+
+def blank_area_has_ink(image: Image.Image, box: tuple[int, int, int, int]) -> bool:
+    """Ink left in the blank skin where the rest mouth will be drawn."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    arr = np.asarray(image.convert("RGBA"))
+    height, width = arr.shape[:2]
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(width, x1), min(height, y1)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return False
+    return lower_face_has_ink(Image.fromarray(arr[y0:y1, x0:x1]))
+
+
+def lids_within_iris(lid_box: tuple[int, int, int, int], iris: tuple[int, int], tol: int = 4) -> bool:
+    """The lid's vertical centre sits on the iris, not in the under-eye wrinkle."""
+    mid = (lid_box[1] + lid_box[3]) / 2
+    return abs(mid - iris[1]) <= tol
 
 
 def finalize(skin: Path, cost: float, attempts: dict[str, int]) -> dict[str, Any]:

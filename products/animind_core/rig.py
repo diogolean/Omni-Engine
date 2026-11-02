@@ -772,7 +772,8 @@ def _iris(base: Image.Image, box: Box) -> tuple[float, float, float]:
     return (x0 + float(cx), y0 + float(cy), float(r))
 
 
-def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], ink: tuple[int, int, int]) -> dict[str, Any]:
+def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], ink: tuple[int, int, int],
+               iris_centres: list[tuple[float, float, float]] | None = None) -> dict[str, Any]:
     """Movable eyes cut from the art.
 
     ``eye_white``: the eye with its iris painted out (sclera colour + inpaint);
@@ -788,10 +789,13 @@ def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], i
     socket = Image.new("RGBA", size, (0, 0, 0, 0))
     half = Image.new("RGBA", size, (0, 0, 0, 0))
     shifts, centres = [], []
-    for b in eyes:
+    for i, b in enumerate(eyes):
         x0, y0, x1, y1 = b
         w, h = x1 - x0, y1 - y0
-        cx, cy, r = _iris(base, b)
+        if iris_centres and i < len(iris_centres):
+            cx, cy, r = iris_centres[i]
+        else:
+            cx, cy, r = _iris(base, b)
         centres.append([round(cx, 1), round(cy, 1), round(r, 1)])
         patch = base.crop(b)
         arr = np.asarray(patch).copy()
@@ -1024,6 +1028,10 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
             for k in ("mouthBox", "mouth"):
                 b = mq[k]
                 mq[k] = [W - b[2], b[1], W - b[0], b[3]]
+            if mq.get("eyes"):
+                mq["eyes"] = [[W - b[2], b[1], W - b[0], b[3]] for b in mq["eyes"]]
+            if mq.get("irises"):
+                mq["irises"] = [[W - p[0], p[1]] for p in mq["irises"]]
         view["mouthQA"] = mq
     if "eyeRig" in parts:  # screen-space travel; irises mirrored with the view
         meta = parts["eyeRig"]
@@ -1233,9 +1241,73 @@ def _half_from_closed(closed: Image.Image, boxes, ink) -> Image.Image:
     return half
 
 
+def iris_point(image: Image.Image, box: Box) -> tuple[int, int]:
+    """Pupil inside an eye box. A box that runs into the under-eye wrinkle is still centred on the iris.
+
+    The pupil is a dark island. The wrinkle is only a little darker than the skin, so a
+    percentile of the whole box lands in the wrinkle and the lid is drawn 15px low.
+    """
+    import cv2  # noqa: PLC0415
+
+    x0, y0, x1, y1 = (int(v) for v in box)
+    crop = np.asarray(image.convert("RGBA").crop((x0, y0, max(x0 + 2, x1), max(y0 + 2, y1))))
+    lum = crop[:, :, :3].astype(np.float32).mean(axis=2)
+    opaque = crop[:, :, 3] > 40
+    fallback = ((x0 + x1) // 2, y0 + max(1, (y1 - y0) // 3))
+    if int(opaque.sum()) < 8:
+        return fallback
+    median = float(np.median(lum[opaque]))
+    dark = opaque & (lum <= min(median * 0.62, median - 28))
+    if int(dark.sum()) < 4:
+        dark = opaque & (lum <= float(np.percentile(lum[opaque], 15)))
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
+    best, best_mean = None, 1e9
+    for i in range(1, n):
+        if int(stats[i, cv2.CC_STAT_AREA]) < 4:
+            continue
+        mean = float(lum[labels == i].mean())
+        if mean < best_mean:
+            best, best_mean = i, mean
+    if best is None:
+        ys, xs = np.nonzero(dark)
+        if xs.size == 0:
+            return fallback
+        return x0 + int(xs.mean()), y0 + int(ys.mean())
+    cx, cy = cents[best]
+    return x0 + int(round(float(cx))), y0 + int(round(float(cy)))
+
+
+def iris_eye_box(image: Image.Image, box: Box) -> Box:
+    """Same-sized eye box recentred on the iris, so the lid is not 15px low."""
+    cx, cy = iris_point(image, box)
+    w, h = max(4, box[2] - box[0]), max(4, box[3] - box[1])
+    width, height = image.size
+    x0 = int(np.clip(cx - w // 2, 0, max(0, width - w)))
+    y0 = int(np.clip(cy - h // 2, 0, max(0, height - h)))
+    return (x0, y0, x0 + w, y0 + h)
+
+
+def blank_mouth_box(image: Image.Image, face: Box) -> Box:
+    """Centre of the blank skin under the facial hair. The top stays below the moustache."""
+    fx0, fy0, fx1, fy1 = (int(v) for v in face)
+    arr = np.asarray(image.convert("RGBA"))
+    hair = _facial_hair(arr, (fx0, fy0, fx1, fy1))
+    rows = np.nonzero(hair[fy0:fy1, fx0:fx1].any(axis=1))[0]
+    if rows.size:
+        stache_bottom = fy0 + int(rows.max()) + 1
+    else:
+        stache_bottom = fy0 + int((fy1 - fy0) * 0.58)
+    top = min(fy1 - 8, max(fy0, stache_bottom))
+    fw = max(8, fx1 - fx0)
+    mw = max(12, int(fw * 0.42))
+    height = max(8, int((fy1 - top) * 0.5))
+    cx = (fx0 + fx1) // 2
+    return (cx - mw // 2, top, cx + mw // 2, min(fy1 - 2, top + height))
+
+
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
              matte: Callable[[Image.Image], Image.Image], front: bool = False,
-             sheet: Path | None = None) -> dict[str, Any]:
+             sheet: Path | None = None, mouthless: bool = False) -> dict[str, Any]:
     """Build view parts from mattes + boxes: left/right from the side art, or ``views/front`` when ``front``."""
     with Image.open(shots["closed"]) as im:
         base = _despill(matte(im).convert("RGBA"))
@@ -1248,6 +1320,12 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
             dx, dy = _shift(np.asarray(base), np.asarray(cut))
             aligned[name] = _translate(cut, dx, dy) if abs(dx) < 40 and abs(dy) < 40 else None
     face, mouth = boxes["face"], _refine_mouth(base, boxes["mouth"])
+    if mouthless:
+        # The head was generated with no mouth. Do not blur a painted lip into the cheek.
+        mouth = blank_mouth_box(base, face)
+        boxes["mouth"] = mouth
+        boxes["left_eye"] = iris_eye_box(base, boxes["left_eye"])
+        boxes["right_eye"] = iris_eye_box(base, boxes["right_eye"])
     mbox = _grow(mouth, size, 0.6, 0.7, 1.3)  # open jaws drop down
     mbox = (mbox[0], mbox[1], mbox[2], min(mbox[3], max(face[3] + 6, mouth[3] + 4)))
     mbox = _union(mbox, _grow(mouth, size, 0.3, 0.3, 0.6))
@@ -1308,18 +1386,20 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     if drawn_mouths:  # Aiwake Rhubarb set over the mouthless head
         from . import mouthset, qa  # noqa: PLC0415
         xb = x_sprite.getchannel("A").point(lambda q: 255 if q > 128 else 0).getbbox()
-        rest = (mbox[0] + xb[0], mbox[1] + xb[1], mbox[0] + xb[2], mbox[1] + xb[3]) if xb else mouth
+        rest = mouth if mouthless else ((mbox[0] + xb[0], mbox[1] + xb[1], mbox[0] + xb[2], mbox[1] + xb[3]) if xb else mouth)
         fw = face[2] - face[0]
-        lw = min(max(rest[2] - rest[0], 0.28 * fw), 0.42 * fw) * (1.0 if front else 0.9)
+        blank_w = max(12, rest[2] - rest[0])
+        lw = blank_w if mouthless else min(max(blank_w, 0.28 * fw), 0.42 * fw) * (1.0 if front else 0.9)
         cols = mouthset.tones(np.asarray(x_sprite), skin_rgb)
         drawn = mouthset.draw_set(lw, cols, squeeze=1.0 if front else 0.85, open_cap={k: 0.95 * c * (face[3] - face[1]) for k, c in qa.OPEN_DRAWN.items()})
-        placed = mouthset.place(rest, drawn)
+        placed = mouthset.place(rest, drawn, top=rest[1] if mouthless else None)
         expressions = mouthset.place(
             rest,
             mouthset.draw_expressions(
                 lw, cols, squeeze=1.0 if front else 0.85,
                 open_cap=0.95 * qa.EXPRESSION_OPEN_ABS * (face[3] - face[1]),
             ),
+            top=rest[1] if mouthless else None,
         )
         mouth_src = "aiwake drawn set"
         hair = _facial_hair(np.asarray(clean), mbox)
@@ -1342,7 +1422,8 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     eyes_closed = _eyes_closed(base, eyes_boxes, skin_rgb, ink)
     if parts_from_sheet and "eyes_closed" in good:
         eyes_closed = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_closed"], eyes_boxes) or eyes_closed
-    eye = _eye_parts(base, eyes_boxes, skin_rgb, ink)
+    seated = [(*iris_point(base, b), max(2.0, min(b[2] - b[0], b[3] - b[1]) * 0.22)) for b in raw_eye_boxes] if mouthless else None
+    eye = _eye_parts(base, eyes_boxes, skin_rgb, ink, iris_centres=seated)
     if parts_from_sheet and "eyes_half" in good:  # Gemini's drawn half lids, registered, over the drawn fallback
         if "eyes_closed" in good:  # consistent with the blink's closed frame (sheet "half" cells are often shut)
             eye["eyes_half"] = _half_from_closed(eyes_closed, raw_eye_boxes, ink)
@@ -1367,7 +1448,10 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "visemes": placed,
         "expressions": expressions,
         **({"mustache": _crop_layer(mustache)} if mustache is not None else {}),
-        "mouthQA": {"head": head_src, "mouths": mouth_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth)},
+        "mouthQA": {"head": head_src, "mouths": mouth_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth),
+                    "eyes": [list(b) for b in raw_eye_boxes],
+                    "irises": [[p[0], p[1]] for p in seated] if seated else [],
+                    "mouthless": mouthless},
     }
     (skin / ("sheet_front.json" if front else "sheet.json")).write_text(json.dumps(
         {"used": sorted(good), "ncc": parts_from_sheet.get("cellNcc") if parts_from_sheet else None}), encoding="utf-8")

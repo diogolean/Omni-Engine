@@ -248,6 +248,8 @@ class RigView:
     expressions: dict[str, tuple[Image.Image, tuple[int, int], int]] = field(default_factory=dict)
     side: int = 1
     eye_shift: tuple[float, float] = (0.0, 0.0)  # iris travel (stage px) for a gaze of +-1
+    mouthless: bool = False
+    seated_eyes: tuple = ()  # (lid box, iris xy) in rig pixels, for the 4px lid check
 
 
 def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None) -> RigView:
@@ -264,6 +266,14 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
         return (look.lit_layer(img, xy, size, light, rim) if light else img), xy
 
     rv = RigView(size=size, side=light.side if light else 1)
+    mq = view.get("mouthQA") or {}
+    rv.mouthless = bool(mq.get("mouthless"))
+    irises = mq.get("irises") or (view.get("eyeRig") or {}).get("irises") or []
+    if rv.mouthless and mq.get("eyes") and irises:
+        rv.seated_eyes = tuple(
+            (tuple(int(v) for v in box), (int(round(iris[0])), int(round(iris[1]))))
+            for box, iris in zip(mq["eyes"], irises)
+        )
     if view.get("eyeRig"):
         mx, my = view["eyeRig"]["maxShift"]
         rv.eye_shift = (mx * scale, my * scale)
@@ -743,8 +753,11 @@ class Scene:
         brow_pose = tuple(v * blend for v in EMO_BROW_POSE.get(emotion, EMO_BROW_POSE["neutro"]))
         arm_pose = tuple(v * blend for v in EMO_ARM_ROT.get(emotion, (0.0, 0.0)))
         brow = self._brow(idx, t) * SS  # legacy rigs keep their single combined brow layer
-        self._face_log.append({"char": idx, "blink": lids, "emotion": emotion,
-                               "brows": [round(v, 2) for v in brow_pose]})
+        face_row: dict[str, Any] = {"char": idx, "blink": lids, "emotion": emotion,
+                                    "brows": [round(v, 2) for v in brow_pose]}
+        if rv.seated_eyes:
+            face_row["eyes"] = [{"lid": list(lid), "iris": list(iris)} for lid, iris in rv.seated_eyes]
+        self._face_log.append(face_row)
         gx, gy = self.gaze(idx, t, view)
         gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))  # eye_shift is the socket-safe maximum
         cur_v, prev_v, wv = vis
