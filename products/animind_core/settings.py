@@ -23,6 +23,17 @@ def gemini_available() -> bool:
     return not gemini_dead_reason()
 
 
+def deepseek_available() -> bool:
+    if (os.getenv("ANIMIND_FORCE_MOCK") or "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    return bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())
+
+
+def script_llm_available() -> bool:
+    """Whether at least one paid script provider can be selected."""
+    return deepseek_available() or gemini_available()
+
+
 def gemini_dead_reason() -> str:
     """Why Gemini is off for this process (402 / depleted credit / bad key seen once), else ""."""
     try:

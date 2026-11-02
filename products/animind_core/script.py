@@ -27,10 +27,10 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any
 
-from . import knowledge, languages, personas, settings
+from . import knowledge, languages, llm_providers, personas, settings
 
 _LOG = logging.getLogger("animind_core")
-WRITER_MODEL = "gemini-2.5-flash-lite"
+WRITER_MODEL = llm_providers.GEMINI_MODEL  # compatibility name for the Gemini fallback
 WORDS_PER_S = 2.6  # edge-tts pt-BR/en-US neural voices at the default rate
 QUOTE_MARKS = "\"“”«»„‟"
 
@@ -921,10 +921,15 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
           indexes: list[Any] | None = None, tone: str = "comedia", objective: str = "entreter",
           duration: int | float | None = None) -> dict[str, Any]:
-    """Script lines (before TTS) plus the sheets used. ``use_llm`` None -> Gemini when a key is set.
+    """Script lines (before TTS) plus the sheets used.
+
+    ``use_llm`` None selects the configured provider when a DeepSeek or Gemini
+    key is present. DeepSeek is tried first by default and Gemini is its
+    fallback; ``ANIMIND_SCRIPT_PROVIDER`` can reverse that order.
 
     ``mode`` picks the knowledge index behind written lines (:mod:`knowledge`): ``quick`` (key terms,
     shallow) or ``deep`` (full texts). Retrieved passages only feed ideas; quotes stay verbatim from the sheet."""
+    explicit_llm = use_llm is True
     lang = languages.profile(lang).script
     template = template if template in (*PLANS, "dialogue") else "solo"
     from . import styles  # noqa: PLC0415
@@ -943,7 +948,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         indexes = [knowledge.ensure(nm, lang, mode, sheet=sh) for nm, sh in zip(names, sheets)]
     passages = [knowledge.retrieve(ix, f"{topic} {nm}", k=4 if mode == "deep" else 2) for ix, nm in zip(indexes, names)]
     if use_llm is None:
-        use_llm = settings.gemini_available()
+        use_llm = settings.script_llm_available()
 
     drafted: dict[int, dict[str, Any]] = {}
     writer = "template"
@@ -958,29 +963,24 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     }
     if use_llm:
         prompt = _prompt(plan, sheets, names, topic, lang, template, passages, tone, objective, duration)
-        cached = _cache_path(prompt).is_file()
-        from production.cost.google_guardrail import get_google_cost_tracker  # noqa: PLC0415
-
-        before = get_google_cost_tracker().snapshot()
-        try:
-            for entry in _gemini(prompt):
+        result, failures = llm_providers.generate(
+            prompt,
+            settings.data_dir() / "cache" / "script",
+            _gemini,
+            # Explicit use_llm=True remains injectable in unit tests and
+            # preserves the former behavior of attempting Gemini without
+            # consulting environment availability first.
+            allow_unavailable_gemini=explicit_llm,
+        )
+        if result is not None:
+            for entry in result.lines:
                 if isinstance(entry, dict) and isinstance(entry.get("i"), int):
                     drafted[entry["i"]] = entry
-            writer = "gemini"
-        except Exception as exc:  # noqa: BLE001 — the template writer always works
-            _LOG.warning("script writer fell back to templates: %s", exc)
-        finally:
-            after = get_google_cost_tracker().snapshot()
-            new_entries = after["entries"][len(before["entries"]):]
-            script_cost = {
-                "provider": "google",
-                "model": WRITER_MODEL,
-                "costUsd": round(sum(float(e.get("cost_usd", 0.0)) for e in new_entries), 8),
-                "inputTokens": sum(int(e.get("input_tokens", 0)) for e in new_entries),
-                "outputTokens": sum(int(e.get("output_tokens", 0)) for e in new_entries),
-                "cached": cached and writer == "gemini",
-                "status": "ok" if writer == "gemini" else "fallback",
-            }
+            writer = "deepseek" if result.provider == "deepseek" else "gemini"
+            script_cost = result.cost()
+        elif failures:
+            _LOG.warning("script writer fell back to templates: %s", "; ".join(failures))
+            script_cost["status"] = "fallback"
 
     used: set[tuple[int, str]] = set()
     lines: list[dict[str, Any]] = []
