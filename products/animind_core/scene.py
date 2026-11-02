@@ -139,6 +139,7 @@ EMO_MOUTH = {
 
 
 _MOUTH_OF_FACE = 0.30
+F_FACE_SHARE = 0.55  # F's mouth is about half an open vowel's width
 
 
 def _open_colours() -> dict[str, tuple[int, int, int, int]]:
@@ -476,6 +477,34 @@ class Scene:
         last = i == len(self.script) - 1 and len(self.script) >= 4
         if speaker < 0:
             return Shot(W / 2, H * 0.5, 1.0, "wide")
+        return self._mouth_above_captions(self._shot_for(speaker, i, quote, last), speaker)
+
+    def _mouth_above_captions(self, shot: Shot, speaker: int) -> Shot:
+        """Keep the rest mouth above the caption scrim on a tall head, without cropping the crown."""
+        rv = (self.rigs[speaker] or {}).get("front") if speaker < len(self.rigs) else None
+        rest = rv.visemes.get("X") if rv else None
+        if self.vertical or shot.kind not in ("cu", "single", "ots", "mcu") or rest is None:
+            return shot
+        mouth_y = (H * BUST_BOTTOM * SS - rv.size[1] + rest[1][1] + layer_image(rest[0]).height) / SS
+        head_top = (H * BUST_BOTTOM * SS - rv.size[1]) / SS
+        z = look.clamp_shot(shot).zoom * (1 + PUSH_CU)
+        limit = self.cap_y - 64
+        margin = 8.0
+        span = mouth_y - head_top
+        floor = 1.04 * (1 + PUSH_CU)
+        if span > 1 and z * span > (limit - margin):
+            # Mouth clearance and the crown cannot share this zoom. Pull back until both fit.
+            z = max(floor, (limit - margin) / span)
+        cy = max(shot.cy, mouth_y - (limit - H / 2) / z)
+        cy_max = head_top - (margin - H / 2) / z
+        cy = min(cy, cy_max)
+        zoom = shot.zoom
+        full = look.clamp_shot(shot).zoom * (1 + PUSH_CU)
+        if z + 1e-6 < full:
+            zoom = max(1.04, z / (1 + PUSH_CU))
+        return replace(shot, cy=cy, zoom=zoom)
+
+    def _shot_for(self, speaker: int, i: int, quote: bool, last: bool) -> Shot:
         px = self.places[min(speaker, len(self.places) - 1)][0]
         toward = 1 if px < 0.5 else -1  # look room toward the other side of the frame
         if self.vertical:  # singles only: the window is too narrow for a two-shot
@@ -723,7 +752,8 @@ class Scene:
         head = next((part for part in rv.layers if part[0] == "head"), None)
         face_w = layer_image(head[1]).width if head is not None else 0
         if mouth is not None:
-            mouth = (structured_mouth(mouth[0], face_w, open_shape=cur_v not in "XA"), mouth[1], mouth[2])
+            grow_w = round(face_w * F_FACE_SHARE) if cur_v == "F" else face_w
+            mouth = (structured_mouth(mouth[0], grow_w, open_shape=cur_v not in "XA"), mouth[1], mouth[2])
         parts = list(rv.layers) + ([("mouth", mouth[0], mouth[1], mouth[2])] if mouth else [])
         before = rv.visemes.get(prev_v) or rv.visemes.get("X")
         if XFADE_S > 0 and mouth and before and wv < 1.0 and before[0] is not mouth[0]:

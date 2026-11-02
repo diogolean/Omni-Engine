@@ -374,6 +374,31 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
     return boxes
 
 
+def rerig_front_from_master(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
+    """Re-cut the front view from the saved master PNG. No image API and no matte model.
+
+    ``character_front.png`` is the matted master written before the mouth inpaint, so a white
+    moustache is still on it. ``source_front.png`` is used only when that file is missing and
+    the PNG already has a transparent background.
+    """
+    master = skin / "character_front.png"
+    if not master.is_file():
+        master = skin / "source_front.png"
+    if not master.is_file():
+        raise FileNotFoundError(f"{skin.name}: no character_front.png or source_front.png to re-rig")
+    with Image.open(master) as im:
+        if im.convert("RGBA").getchannel("A").getextrema()[1] == 0:
+            raise FileNotFoundError(f"{master.name} has no alpha; re-rig needs the matted master")
+    boxes_path = skin / "rig_front.json"
+    if boxes_path.is_file():
+        raw = json.loads(boxes_path.read_text(encoding="utf-8"))["boxes"]
+        boxes = {key: tuple(value) for key, value in raw.items()}
+    else:
+        boxes = detect_features(master)
+    views = assemble(skin, {"closed": master}, boxes, url, matte=lambda image: image.convert("RGBA"), front=True)
+    return {"views": views, "viewStatus": {"front": "re-rigged from the cached master (no image API)"}}
+
+
 def regenerate_front(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     """Redraw only the front view of an existing Gemini rig (checked + one retry) and re-rig it."""
     reset_budget()
@@ -865,10 +890,18 @@ def _facial_hair(rgba: np.ndarray, box: Box) -> np.ndarray:
     opaque = rgba[y0:y1, x0:x1, 3] > 128
     lum, chroma = rgb.mean(axis=2), rgb.max(axis=2) - rgb.min(axis=2)
     dark = (lum < 90) & (chroma < 35) & opaque
+    # A white or grey moustache is desaturated, not dark. Warm skin (cheek, lip) stays out.
+    # Only the upper part of the box: a white collar along the bottom is cloth, not hair.
+    skin = (chroma >= 20) & (rgb[..., 0] >= rgb[..., 2] + 12) & (lum > 80) & (lum < 230)
+    pale = opaque & ~skin & (chroma < 34) & (lum >= 130) & (lum <= 252)
+    pale[int((y1 - y0) * 0.72):, :] = False
     k = max(3, (x1 - x0) // 25)
-    mass = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-    near = cv2.dilate(mass, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))) > 0
-    rim = (lum < 130) & (chroma < 45) & opaque  # strands and the soft edge, only next to a real mass
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    mass = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    pale_mass = cv2.morphologyEx(pale.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    mass = np.maximum(mass, pale_mass)
+    near = cv2.dilate(mass, kernel) > 0
+    rim = (chroma < 45) & opaque & (((lum < 130) & dark) | ((lum >= 130) & pale))
     out = np.zeros(rgba.shape[:2], bool)
     out[y0:y1, x0:x1] = (mass > 0) | (near & rim)
     return out
@@ -1479,3 +1512,43 @@ def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[st
             "failed": [key for key, gate in report["gates"].items() if not gate["pass"]],
         },
     }
+
+
+def main(argv: list[str] | None = None) -> None:
+    """``python -m products.animind_core.rig rerig-front <character-id>``
+
+    Re-cuts ``views/front`` from ``character_front.png`` (else a transparent
+    ``source_front.png``). No Gemini call and no matte model.
+    """
+    import argparse
+    import sys
+
+    from . import characters, settings
+
+    parser = argparse.ArgumentParser(prog="python -m products.animind_core.rig")
+    parser.add_argument("command", choices=["rerig-front"])
+    parser.add_argument("character_id")
+    args = parser.parse_args(argv)
+    skin = characters.puppets_dir() / args.character_id
+    if not skin.is_dir():
+        sys.exit(f"no puppet at {skin}")
+    assets = settings.data_dir() / "assets"
+
+    def url(path: Path) -> str:
+        try:
+            return "/v1/files/" + path.relative_to(assets).as_posix()
+        except ValueError:
+            return path.as_posix()
+
+    built = rerig_front_from_master(skin, url)
+    saved = characters.load(args.character_id)
+    if saved:
+        saved.setdefault("views", {})["front"] = built["views"]["front"]
+        saved.setdefault("viewStatus", {})["front"] = built["viewStatus"]["front"]
+        (skin / "character.json").write_text(json.dumps(saved, indent=2), encoding="utf-8")
+    names = [layer["name"] for layer in built["views"]["front"]["layers"]]
+    print(f"re-rigged {args.character_id} front from the cached master ({', '.join(names)})")
+
+
+if __name__ == "__main__":
+    main()

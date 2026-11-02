@@ -169,6 +169,121 @@ def test_flat_dark_oval_is_not_painted_on_the_frame():
     assert not mouthset.painted_mouth_is_flat(frame[y0:y1, x0:x1])
 
 
+def test_white_mustache_stays_and_only_the_lips_are_filled():
+    """A light moustache is hair, not a dark blob. The lip line is what gets inpainted."""
+    from products.animind_core.rig import _facial_hair, _mouthless
+
+    img = Image.new("RGBA", (220, 260), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((30, 20, 190, 230), fill=(226, 176, 146, 255))
+    draw.ellipse((55, 118, 165, 158), fill=(236, 232, 226, 255))  # white moustache
+    draw.rectangle((78, 168, 142, 182), fill=(168, 64, 72, 255))  # lips
+    draw.rectangle((20, 230, 200, 259), fill=(245, 245, 245, 255))  # collar, not hair
+    box = (40, 100, 180, 220)
+    hair = _facial_hair(np.asarray(img), box)
+    assert hair[130, 110] and not hair[174, 110] and not hair[244, 110]
+    out = np.asarray(_mouthless(img, box, (70, 160, 150, 190), keep_hair=True))
+    assert tuple(out[130, 110][:3]) == (236, 232, 226)
+    assert abs(int(out[174, 110][0]) - 168) > 25
+
+
+def test_f_viseme_is_not_grown_to_a_full_open_mouth():
+    from products.animind_core.scene import F_FACE_SHARE, _MOUTH_OF_FACE, scale_mouth_to_face
+
+    face_w = 200
+    hole = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
+    ImageDraw.Draw(hole).ellipse((28, 12, 52, 28), fill=(40, 16, 18, 255))  # 24px, under 0.16 of the face
+    full = scale_mouth_to_face(hole, face_w, open_shape=True)
+    half = scale_mouth_to_face(hole, round(face_w * F_FACE_SHARE), open_shape=True)
+    full_w = full.getchannel("A").getbbox()
+    half_w = half.getchannel("A").getbbox()
+    assert full_w[2] - full_w[0] >= int(face_w * _MOUTH_OF_FACE) - 4
+    assert half_w[2] - half_w[0] < int(face_w * 0.22)
+    assert F_FACE_SHARE == 0.55
+
+
+def test_tall_close_up_keeps_the_mouth_above_captions_and_the_crown_in_frame():
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from products.animind_core import scene
+
+    rest = Image.new("RGBA", (48, 28), (0, 0, 0, 0))
+    ImageDraw.Draw(rest).rectangle((4, 4, 44, 24), fill=(150, 70, 64, 255))
+    rig = scene.RigView(size=(280, 1000), layers=[], visemes={"X": (rest, (90, 772), 10)})
+    views = {"front": rig, "left": rig, "right": rig}
+    line = {"speaker": 0, "kind": "quote", "text": "Judgment needs a witness.", "beat": "tese",
+            "startMs": 0, "endMs": 3000}
+    sc = scene.Scene(
+        template="debate", scenario="studio", rigs=[views, views], script=[line, line, line, line, line],
+        envelope=np.ones(40), env_fps=10, duration_s=4.0, disclaimer="Parody",
+        names=["Albert Einstein", "Friedrich Nietzsche"], roles=["Debate", "Debate"], lang="en-US",
+    )
+    bare = scene.Scene(
+        template="debate", scenario="studio", rigs=[None, None], script=sc.script,
+        envelope=sc.env, env_fps=10, duration_s=4.0, disclaimer="Parody",
+        names=sc.names, roles=["Debate", "Debate"], lang="en-US",
+    )
+    shot = sc.shot_for(0, 2)
+    plain = bare.shot_for(0, 2)
+    assert shot.kind == "cu" and plain.kind == "cu"
+    assert shot.cy > plain.cy
+    z = scene.look.clamp_shot(shot).zoom * (1 + scene.PUSH_CU)
+    mouth_y = (scene.H * scene.BUST_BOTTOM * scene.SS - rig.size[1] + 772 + rest.height) / scene.SS
+    head_top = (scene.H * scene.BUST_BOTTOM * scene.SS - rig.size[1]) / scene.SS
+    mouth_screen = scene.H / 2 + (mouth_y - shot.cy) * z
+    crown_screen = scene.H / 2 + (head_top - shot.cy) * z
+    assert mouth_screen <= sc.cap_y - 64 + 1.5
+    assert crown_screen >= -1
+    vertical = scene.Scene(
+        template="debate", scenario="studio", rigs=[views, views], script=sc.script,
+        envelope=sc.env, env_fps=10, duration_s=4.0, disclaimer="Parody",
+        names=sc.names, roles=["Debate", "Debate"], lang="en-US", fmt="9:16",
+    )
+    assert vertical.shot_for(0, 2).cy == scene.vertical_cy(scene.V_CU_ZOOM, scene.V_CU_FACE_AT)
+
+
+def test_rerig_front_from_the_cached_master_keeps_a_white_mustache(tmp_path, monkeypatch):
+    import json
+
+    from products.animind_core import rig, settings
+
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    skin = tmp_path / "assets" / "puppets" / "albert"
+    skin.mkdir(parents=True)
+    master = Image.new("RGBA", (320, 420), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(master)
+    draw.rounded_rectangle((70, 210, 250, 430), 24, fill=(36, 64, 120, 255))
+    draw.rectangle((140, 180, 180, 230), fill=(226, 176, 146, 255))
+    draw.ellipse((90, 40, 230, 220), fill=(232, 186, 156, 255))
+    draw.ellipse((118, 150, 202, 188), fill=(236, 232, 226, 255))
+    draw.rectangle((140, 192, 180, 206), fill=(168, 64, 72, 255))
+    for cx in (140, 180):
+        draw.ellipse((cx - 12, 100, cx + 12, 124), fill=(248, 248, 246, 255))
+        draw.ellipse((cx - 5, 106, cx + 5, 118), fill=(30, 24, 22, 255))
+    master.save(skin / "character_front.png")
+    (skin / "rig_front.json").write_text(json.dumps({
+        "boxes": {
+            "face": [90, 40, 230, 230],
+            "left_eye": [128, 100, 152, 124],
+            "right_eye": [168, 100, 192, 124],
+            "mouth": [118, 148, 202, 210],
+        },
+    }), encoding="utf-8")
+    (skin / "character.json").write_text(json.dumps({
+        "id": "albert", "name": "Albert Einstein", "views": {}, "viewStatus": {},
+    }), encoding="utf-8")
+    built = rig.rerig_front_from_master(skin, lambda path: path.name)
+    names = [layer["name"] for layer in built["views"]["front"]["layers"]]
+    assert "mustache" in names
+    stache = Image.open(skin / "views" / "front" / "mustache.png").convert("RGBA")
+    assert stache.getchannel("A").getextrema()[1] > 128
+    rig.main(["rerig-front", "albert"])
+    saved = json.loads((skin / "character.json").read_text(encoding="utf-8"))
+    assert saved["viewStatus"]["front"].startswith("re-rigged from the cached master")
+    assert settings.data_dir() == tmp_path
+
+
 def test_default_inpaint_unchanged_without_hair():
     from products.animind_core.rig import _mouthless
 
