@@ -157,6 +157,7 @@ class ShotReverseShotCompositor:
                 target_width=self.width,
                 target_height=self.height,
                 zoom=CAMERA_NORMAL_ZOOM,
+                apply_roll=True,
             )
             for speaker_id, rig in rigs.items()
         }
@@ -172,12 +173,8 @@ class ShotReverseShotCompositor:
             )
             for y_offset in range(-3, 4):
                 frame = background.copy()
-                _alpha_blend_paste(
-                    frame,
-                    camera.static_body,
-                    camera.body_offset_x,
-                    camera.body_offset_y + y_offset,
-                )
+                body, body_x, body_y = camera.placed_body(y_offset)
+                _alpha_blend_paste(frame, body, body_x, body_y)
                 breathing_states[y_offset] = frame
             self._speaker_base[speaker_id] = breathing_states
 
@@ -386,49 +383,22 @@ class ShotReverseShotCompositor:
             camera = self._camera[current]
             breathing_y = camera.breathing_offset(t)
             head_y = camera.head_breathing_offset(t)
-            if abs(camera.roll_deg) > 0.01:
-                # Pad so the whole robot is on the plate before the tilt.
-                # Rotating a frame-clipped paste leaves a straight cut.
-                pad = 640
-                plate = np.zeros((self.height + pad * 2, self.width + pad * 2, 4), dtype=np.uint8)
-                _paste_rgba(
-                    plate,
-                    camera.static_body,
-                    camera.body_offset_x + pad,
-                    camera.body_offset_y + breathing_y + pad,
-                )
-                camera.render_dirty(
-                    plate,
-                    t=t,
-                    viseme=_sequence_at(analyzed.viseme.get(current), index, REST_VISEME) if is_speaking else REST_VISEME,
-                    eye_state=_sequence_at(analyzed.eye_state.get(current), index, 0),
-                    rms=active_rms,
-                    emphasis_threshold=emphasis_thresholds.get(current, 1.0),
-                    brow_emphasis_threshold=brow_thresholds.get(current, 1.0),
-                    is_speaking=is_speaking,
-                    emotion=emotion,
-                    body_offset_y=head_y,
-                    plate_origin=(pad, pad),
-                    collar_offset_y=breathing_y,
-                )
-                plate = _rotate_rgba(plate, camera.roll_deg)
-                frame = self._backgrounds[current].copy()
-                _alpha_blend_paste(frame, plate, -pad, -pad)
-            else:
-                frame = self._speaker_base[current][breathing_y].copy()
-                camera.render_dirty(
-                    frame,
-                    t=t,
-                    viseme=_sequence_at(analyzed.viseme.get(current), index, REST_VISEME) if is_speaking else REST_VISEME,
-                    eye_state=_sequence_at(analyzed.eye_state.get(current), index, 0),
-                    rms=active_rms,
-                    emphasis_threshold=emphasis_thresholds.get(current, 1.0),
-                    brow_emphasis_threshold=brow_thresholds.get(current, 1.0),
-                    is_speaking=is_speaking,
-                    emotion=emotion,
-                    body_offset_y=head_y,
-                    collar_offset_y=breathing_y,
-                )
+            # Every puppet takes this one path. A fixed roll was baked into
+            # the body base and the cached face sprites when the camera loaded.
+            frame = self._speaker_base[current][breathing_y].copy()
+            camera.render_dirty(
+                frame,
+                t=t,
+                viseme=_sequence_at(analyzed.viseme.get(current), index, REST_VISEME) if is_speaking else REST_VISEME,
+                eye_state=_sequence_at(analyzed.eye_state.get(current), index, 0),
+                rms=active_rms,
+                emphasis_threshold=emphasis_thresholds.get(current, 1.0),
+                brow_emphasis_threshold=brow_thresholds.get(current, 1.0),
+                is_speaking=is_speaking,
+                emotion=emotion,
+                body_offset_y=head_y,
+                collar_offset_y=breathing_y,
+            )
             if view_zoom > 1.001:
                 frame = self._tight_view(
                     frame,
@@ -633,8 +603,10 @@ class _HeroCamera:
         target_width: int = HERO_CONTENT_WIDTH,
         target_height: int = 1920,
         zoom: float = 1.0,
+        apply_roll: bool = False,
     ) -> None:
         self.rig = rig
+        self._roll_matrix: np.ndarray | None = None
         self.facing = (style.facing if style else "right").lower()
         self._head_angle = 0.0
         self._head_target = 0.0
@@ -872,6 +844,88 @@ class _HeroCamera:
             self.body_offset_x = self.offset_x
             self.body_offset_y = self.offset_y
         self.eye_line_y = int(round(native_eye_y * self.scale_y + self.offset_y))
+        if apply_roll and abs(self.roll_deg) > 0.01:
+            self._bake_roll(target_width, target_height)
+
+    # -- Fixed roll, baked once ------------------------------------------ #
+    def _bake_roll(self, target_width: int, target_height: int) -> None:
+        """Rotate the whole seated puppet once, around its visible centroid.
+
+        The pivot is the centroid of the rest pose (body plus rest head),
+        which is where the old per-frame plate rotation pivoted. After this,
+        ``placed_body`` and every cached face sprite come back pre-rotated,
+        so a rolled puppet costs the same per frame as an upright one.
+        """
+        pad = max(target_width, target_height)
+        mask = np.zeros((target_height + pad * 2, target_width + pad * 2), dtype=bool)
+
+        def _mark(alpha: np.ndarray, x: int, y: int) -> None:
+            h, w = alpha.shape[:2]
+            x0, y0 = max(0, x + pad), max(0, y + pad)
+            x1, y1 = min(mask.shape[1], x + pad + w), min(mask.shape[0], y + pad + h)
+            if x1 > x0 and y1 > y0:
+                mask[y0:y1, x0:x1] |= alpha[y0 - y - pad : y1 - y - pad, x0 - x - pad : x1 - x - pad] > 8
+
+        _mark(self.static_body[..., 3], self.body_offset_x, self.body_offset_y)
+        head, bbox = self.rig.articulated_head_overlay(
+            viseme=REST_VISEME,
+            eye_state=0,
+            brow_state=emotion_brow_state("neutral"),
+            brow_emphasized=False,
+            brow_angle_deg=self._brow_angle,
+            rest_mouth_state=onset_rest_mouth("neutral", REST_VISEME),
+            force_static_mouth=True,
+            angle_deg=0.0,
+        )
+        _premultiplied, inv_alpha, head_x, head_y = self._scaled_overlay(
+            ("roll_pivot",), head, bbox
+        )
+        _mark(cv2.bitwise_not(inv_alpha[..., 0]), head_x, head_y)
+        self._overlay_cache.pop(("roll_pivot",), None)
+        ys, xs = np.nonzero(mask)
+        if xs.size == 0:
+            return
+        pivot = (float(xs.mean()) - pad, float(ys.mean()) - pad)
+        self._roll_matrix = cv2.getRotationMatrix2D(pivot, float(self.roll_deg), 1.0)
+
+    def _rotate_placed(self, rgba: np.ndarray, x: int, y: int) -> tuple[np.ndarray, int, int]:
+        """Rotate a straight-alpha sprite seated at ``(x, y)`` by the baked roll."""
+        matrix = self._roll_matrix
+        if matrix is None:
+            return rgba, x, y
+        h, w = rgba.shape[:2]
+        corners = np.array(
+            [[x, y, 1.0], [x + w, y, 1.0], [x, y + h, 1.0], [x + w, y + h, 1.0]]
+        )
+        moved = corners @ matrix.T
+        bx0, by0 = np.floor(moved.min(axis=0)).astype(int)
+        bx1, by1 = np.ceil(moved.max(axis=0)).astype(int)
+        local = matrix.copy()
+        local[:, 2] = matrix[:, 2] + matrix[:, :2] @ np.array([x, y], dtype=float) - (bx0, by0)
+        rotated = cv2.warpAffine(
+            rgba,
+            local,
+            (int(bx1 - bx0), int(by1 - by0)),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0, 0),
+        )
+        return rotated, int(bx0), int(by0)
+
+    def _rolled_shift(self, dy: int) -> tuple[int, int]:
+        """Where a vertical bob of ``dy`` lands once the roll is applied."""
+        if self._roll_matrix is None or not dy:
+            return 0, int(dy)
+        return (
+            int(round(self._roll_matrix[0, 1] * dy)),
+            int(round(self._roll_matrix[1, 1] * dy)),
+        )
+
+    def placed_body(self, y_offset: int = 0) -> tuple[np.ndarray, int, int]:
+        """The seated body sprite and its frame position for one bob offset."""
+        return self._rotate_placed(
+            self.static_body, self.body_offset_x, self.body_offset_y + int(y_offset)
+        )
 
     @staticmethod
     def breathing_offset(t: float) -> int:
@@ -911,6 +965,10 @@ class _HeroCamera:
             (max(1, out_x1 - out_x0), max(1, out_y1 - out_y0)),
             interpolation=cv2.INTER_AREA,
         )
+        placed_x = resolved_offset_x + out_x0
+        placed_y = resolved_offset_y + out_y0
+        if key != ("roll_pivot",):
+            resized, placed_x, placed_y = self._rotate_placed(resized, placed_x, placed_y)
         alpha = resized[..., 3]
         alpha_3ch = cv2.merge([alpha, alpha, alpha])
         premultiplied = cv2.multiply(
@@ -921,8 +979,8 @@ class _HeroCamera:
         result = (
             premultiplied,
             cv2.bitwise_not(alpha_3ch),
-            resolved_offset_x + out_x0,
-            resolved_offset_y + out_y0,
+            placed_x,
+            placed_y,
         )
         self._overlay_cache[key] = result
         return result
@@ -984,12 +1042,13 @@ class _HeroCamera:
             bbox,
         )
         origin_x, origin_y = plate_origin
+        head_dx, head_dy = self._rolled_shift(int(body_offset_y))
         _paste_sprite(
             frame,
             premultiplied,
             inv_alpha,
-            x + origin_x,
-            y + int(body_offset_y) + origin_y,
+            x + head_dx + origin_x,
+            y + head_dy + origin_y,
         )
         collar = self.rig.collar_overlay()
         if collar is not None and not self._matrix_normalized:
@@ -1009,12 +1068,13 @@ class _HeroCamera:
                 offset_y=self.body_offset_y,
             )
             neck_y = body_offset_y if collar_offset_y is None else collar_offset_y
+            neck_dx, neck_dy = self._rolled_shift(int(neck_y))
             _paste_sprite(
                 frame,
                 collar_rgb,
                 collar_inv_alpha,
-                collar_x + origin_x,
-                collar_y + int(neck_y) + origin_y,
+                collar_x + neck_dx + origin_x,
+                collar_y + neck_dy + origin_y,
             )
 
     def render(
@@ -1181,58 +1241,8 @@ def _paste_sprite(
     x: int,
     y: int,
 ) -> None:
-    """Paint a premultiplied sprite onto an RGB frame or an RGBA plate."""
-    if dest.shape[-1] == 4:
-        alpha = cv2.bitwise_not(inv_alpha_3ch[..., 0])
-        scale = np.maximum(alpha.astype(np.float32), 1.0)[..., None]
-        straight = np.clip(
-            premultiplied_rgb.astype(np.float32) * (255.0 / scale),
-            0,
-            255,
-        ).astype(np.uint8)
-        _paste_rgba(dest, np.dstack((straight, alpha)), x, y)
-        return
+    """Paint a cached premultiplied sprite onto an RGB frame."""
     _alpha_blend_paste_precomputed(dest, premultiplied_rgb, inv_alpha_3ch, x, y)
-
-
-def _paste_rgba(dest: np.ndarray, src_rgba: np.ndarray, x: int, y: int) -> None:
-    """Source-over paste of an RGBA sprite onto an RGBA plate."""
-    dh, dw = dest.shape[:2]
-    sh, sw = src_rgba.shape[:2]
-    dst_x0, dst_y0 = max(0, x), max(0, y)
-    dst_x1, dst_y1 = min(dw, x + sw), min(dh, y + sh)
-    if dst_x1 <= dst_x0 or dst_y1 <= dst_y0:
-        return
-    src_x0, src_y0 = dst_x0 - x, dst_y0 - y
-    src_x1 = src_x0 + (dst_x1 - dst_x0)
-    src_y1 = src_y0 + (dst_y1 - dst_y0)
-    src = src_rgba[src_y0:src_y1, src_x0:src_x1].astype(np.float32)
-    dst = dest[dst_y0:dst_y1, dst_x0:dst_x1].astype(np.float32)
-    src_a = src[..., 3:4] / 255.0
-    dst_a = dst[..., 3:4] / 255.0
-    out_a = src_a + dst_a * (1.0 - src_a)
-    out_rgb = src[..., :3] * src_a + dst[..., :3] * dst_a * (1.0 - src_a)
-    safe = np.maximum(out_a, 1.0 / 255.0)
-    merged = np.concatenate((out_rgb / safe, out_a * 255.0), axis=2)
-    dest[dst_y0:dst_y1, dst_x0:dst_x1] = np.clip(merged, 0, 255).astype(np.uint8)
-
-
-def _rotate_rgba(image: np.ndarray, degrees_ccw: float) -> np.ndarray:
-    """Rotate an RGBA plate counter-clockwise around the visible robot."""
-    alpha = image[..., 3]
-    ys, xs = np.nonzero(alpha > 8)
-    if xs.size == 0:
-        return image
-    center = (float(xs.mean()), float(ys.mean()))
-    matrix = cv2.getRotationMatrix2D(center, float(degrees_ccw), 1.0)
-    return cv2.warpAffine(
-        image,
-        matrix,
-        (image.shape[1], image.shape[0]),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0, 0),
-    )
 
 
 def _alpha_blend_paste(dest: np.ndarray, src_rgba: np.ndarray, x: int, y: int) -> None:
