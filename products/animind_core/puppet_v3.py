@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from animation.parametric.factory.puppet_matrix import solve_puppet_matrix
@@ -33,6 +34,7 @@ _V3_FILES = (
     "eyes_half.png",
     "eyes_blink.png",
     "source_original.png",
+    "_gemini.png",
 )
 
 
@@ -52,8 +54,9 @@ def avatar_prompt(description: str, *, stick: bool, facing: str) -> str:
     else:
         subject = (
             f"A human character: {who}. Studio Ghibli 1990s anime cel, clean flat shading, "
-            "hand-drawn dark ink outlines. Keep any moustache or beard. The skin under the "
-            "facial hair is blank even skin. NO human mouth, NO lips, NO smile creases, NO teeth."
+            "hand-drawn dark ink outlines. Keep any moustache or beard. "
+            "NO human mouth, NO lips, NO lip colour, NO pink mouth, NO smile, NO teeth, NO smile creases. "
+            "The skin under the moustache is one even blank skin tone with no line drawn on it."
         )
     side = "left" if facing == "left" else "right"
     return (
@@ -61,9 +64,49 @@ def avatar_prompt(description: str, *, stick: bool, facing: str) -> str:
         "in three-quarter view, never dead-front. "
         "STRICT PROPORTION: crown-to-chin head height is exactly 27 percent of the 9:16 "
         "portrait height; the torso fills the lower 73 percent. "
-        "The head docks into a short collar and the opaque torso continues past the bottom edge. "
-        "Solid pure black background. --ar 9:16"
+        "The head docks into a short collar and the opaque torso is cut off by the bottom edge. "
+        "Solid pure black background on every edge, including the corners and the bottom. "
+        "No white border and no white strip. --ar 9:16"
     )
+
+
+MOUTH_EDIT_PROMPT = (
+    "Edit the reference. Remove the mouth and the lips. Leave blank even skin under the moustache. "
+    "Change nothing else: same person, same hair, same moustache, same clothes, same pose, same framing. "
+    "NO human mouth, NO lips, NO lip colour, NO teeth. Solid black background to every edge."
+)
+
+
+def drop_white_footer(image: Image.Image) -> Image.Image:
+    """If the bottom of the plate is a white strip, scale the figure onto that edge.
+
+    The fill is black, matching the prompted background, and the torso pixels
+    touch the last row.
+    """
+    arr = np.asarray(image.convert("RGBA"))
+    height, width = arr.shape[:2]
+    rgb = arr[:, :, :3].astype(np.int16)
+    lum = rgb.mean(axis=2)
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    white = (lum >= 220) & (chroma <= 18)
+    row_white = white.mean(axis=1) > 0.70
+    if not row_white[int(height * 0.85):].mean() >= 0.5:
+        return image
+    content = np.nonzero(~row_white)[0]
+    if content.size == 0:
+        return image
+    bottom = int(content.max()) + 1
+    if bottom > height * 0.98:
+        return image
+    cropped = image.convert("RGBA").crop((0, 0, width, bottom))
+    scale = height / float(bottom)
+    resized = cropped.resize(
+        (max(1, int(round(width * scale))), height),
+        Image.Resampling.LANCZOS,
+    )
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 255))
+    canvas.paste(resized, ((width - resized.width) // 2, 0), resized)
+    return canvas
 
 
 def snapshot(skin: Path, dest: Path) -> None:
@@ -229,11 +272,12 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     eye_boxes = (_around(left_eye, radius, radius), _around(right_eye, radius, radius))
     mouth_w = max(12, int(radius * 2))
     mouth = _around(mouth_at, mouth_w // 2, max(6, radius // 2))
+    pad = 12
     face = (
-        min(face[0], mouth[0], eye_boxes[0][0], eye_boxes[1][0]),
-        min(face[1], eye_boxes[0][1], eye_boxes[1][1]),
-        max(face[2], mouth[2], eye_boxes[0][2], eye_boxes[1][2]),
-        max(face[3], mouth[3]),
+        min(face[0], eye_boxes[0][0], eye_boxes[1][0]) - pad,
+        min(face[1], eye_boxes[0][1], eye_boxes[1][1]) - pad,
+        max(face[2], eye_boxes[0][2], eye_boxes[1][2]) + pad,
+        face[3] + pad,
     )
     visemes = {code: _mouth_part(skin, code, scale, offset, canvas) for code in rig.VISEMES}
     happy = _mouth_part(skin, "A", scale, offset, canvas)
@@ -278,6 +322,7 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         "size": list(canvas),
         "boxes": boxes,
         "mouthBox": list(mouth),
+        "irises": [[left_eye[0], left_eye[1]], [right_eye[0], right_eye[1]]],
         "framing": dict(manifest.get("framing") or {}),
         "pipeline": "aiwake-v3",
     }

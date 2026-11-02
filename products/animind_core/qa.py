@@ -129,8 +129,15 @@ def _rel(boxes: dict[str, list[int]]) -> np.ndarray:
     return np.array([(ys[0] + ys[1]) / 2, ys[2]])
 
 
-def landmark_alignment(side: dict[str, list[int]], front: dict[str, list[int]] | None) -> dict[str, Any]:
-    """Eye line and mouth height (share of face height) must agree between side and front art."""
+def landmark_alignment(
+    side: dict[str, list[int]],
+    front: dict[str, list[int]] | None,
+    irises: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Eye line and mouth height must agree, and the mouth must sit on the face."""
+    placed = features_on_face(side, irises)
+    if not placed["pass"]:
+        return {"pass": False, "value": placed["value"], "limit": LIMITS["landmarkDrift"], "note": placed["note"]}
     if not front:
         return {"pass": True, "value": 0.0, "limit": LIMITS["landmarkDrift"], "note": "front reuses side art"}
     d = float(np.abs(_rel(side) - _rel(front)).max())
@@ -363,7 +370,9 @@ def run(skin: Path) -> dict[str, Any]:
         "skin": skin_delta_e(left),
         "mouthless": residual_mouth(left, rig["boxes"]["mouth"]),
         "front": front_symmetry(front["boxes"] if front else None),
-        "landmarks": landmark_alignment(rig["boxes"], front["boxes"] if front else None),
+        "landmarks": landmark_alignment(
+            rig["boxes"], front["boxes"] if front else None, rig.get("irises"),
+        ),
         "edges": alpha_edges(left),
         "mouths": mouth_range(left),
         "doubleMouth": double_mouth(left),
@@ -442,6 +451,66 @@ def review_sheet(skin: Path, gates: dict[str, Any], total: int, cost: float, des
     return dest
 
 
+def mouth_under_moustache_has_ink(image: Image.Image, face: tuple[int, int, int, int]) -> bool:
+    """Lip colour or a lip edge in the face, under the moustache.
+
+    The full-plate lower band is the jacket on a 9:16 bust, so pink lips drawn
+    under the moustache never reached ``lower_face_has_ink``.
+    """
+    import cv2  # noqa: PLC0415
+
+    arr = np.asarray(image.convert("RGBA"))
+    height, width = arr.shape[:2]
+    x0, y0, x1, y1 = (int(v) for v in face)
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(width, x1), min(height, y1)
+    if x1 - x0 < 12 or y1 - y0 < 12:
+        return False
+    crop = arr[y0:y1, x0:x1]
+    rgb = crop[:, :, :3].astype(np.int16)
+    opaque = crop[:, :, 3] > 128
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    sat = chroma / np.maximum(rgb.max(axis=2), 1)
+    lum = rgb.mean(axis=2)
+    fh, fw = rgb.shape[:2]
+    # Low-saturation facial hair. The check starts under its lowest row.
+    hair = opaque & (sat < 0.21) & (lum >= 110) & (lum <= 250)
+    hair[: int(fh * 0.35), :] = False
+    hair[int(fh * 0.82):, :] = False
+    rows = np.nonzero(hair[:, int(fw * 0.2): int(fw * 0.8)].any(axis=1))[0]
+    top = int(rows.max()) + 1 if rows.size else int(fh * 0.58)
+    top = min(fh - 8, max(int(fh * 0.4), top))
+    band = np.zeros_like(opaque)
+    band[top:, int(fw * 0.22): int(fw * 0.78)] = True
+    # Warm skin only. Magenta backdrops and black stage are not a skin sample.
+    skin_zone = (
+        opaque & ~band
+        & (rgb[:, :, 0] > rgb[:, :, 2] + 8)
+        & (rgb[:, :, 1] > 40)
+        & (lum > 90)
+        & (sat >= 0.08)
+        & (sat <= 0.55)
+    )
+    if int(skin_zone.sum()) < 8:
+        return False
+    skin_rg = float(np.median((rgb[:, :, 0] - rgb[:, :, 1])[skin_zone]))
+    redder = (rgb[:, :, 0] - rgb[:, :, 1]) > skin_rg + 18
+    lips = (
+        band & opaque & redder
+        & (rgb[:, :, 0] > rgb[:, :, 2] + 16)
+        & (sat >= 0.16)
+        & (lum > 70)
+        & (lum < 230)
+    )
+    gray = lum.astype(np.uint8)
+    edges = cv2.Canny(gray, 40, 120) > 0
+    # An edge counts only where the pixel is also redder than the cheek.
+    lip_px = int(lips.sum())
+    # A red jacket that fills the lower face is not a mouth. A lip is a small patch.
+    small = lip_px < 0.28 * max(1, int((band & opaque).sum()))
+    return small and (lip_px > 12 or int((lips & edges).sum()) > 8)
+
+
 def lower_face_has_ink(image: Image.Image) -> bool:
     """True when the lower face still has a mouth: lip colour or a dark crease.
 
@@ -482,6 +551,42 @@ def lids_within_iris(lid_box: tuple[int, int, int, int], iris: tuple[int, int], 
     """The lid's vertical centre sits on the iris, not in the under-eye wrinkle."""
     mid = (lid_box[1] + lid_box[3]) / 2
     return abs(mid - iris[1]) <= tol
+
+
+def features_on_face(
+    boxes: dict[str, Any],
+    irises: list[Any] | None = None,
+    *,
+    tol: int = 6,
+) -> dict[str, Any]:
+    """Mouth inside the face and under the nose. Eyes within ``tol`` px of each iris."""
+    face = boxes.get("face")
+    mouth = boxes.get("mouth")
+    eyes = [boxes.get("left_eye"), boxes.get("right_eye")]
+    if not face or not mouth or any(eye is None for eye in eyes):
+        return {"pass": False, "value": None, "limit": 0, "note": "missing face, mouth, or eyes"}
+    nose = max(int(eye[3]) for eye in eyes)
+    mcx = (mouth[0] + mouth[2]) / 2
+    mcy = (mouth[1] + mouth[3]) / 2
+    inside = face[0] - 4 <= mcx <= face[2] + 4 and mouth[1] >= face[1] and mouth[3] <= face[3] + 8
+    under_nose = mcy > nose + 2
+    eye_note = ""
+    eyes_ok = True
+    if irises and len(irises) >= 2:
+        for eye, iris in zip(eyes, irises):
+            mid = ((eye[0] + eye[2]) / 2, (eye[1] + eye[3]) / 2)
+            if abs(mid[0] - iris[0]) > tol or abs(mid[1] - iris[1]) > tol:
+                eyes_ok = False
+                eye_note = f"eye at ({mid[0]:.0f},{mid[1]:.0f}) is off the iris ({iris[0]},{iris[1]})"
+                break
+    else:
+        eyes_ok = all((eye[1] + eye[3]) / 2 < mcy for eye in eyes)
+    if inside and under_nose and eyes_ok:
+        return {"pass": True, "value": 0, "limit": 0, "note": "mouth under the nose, eyes on the irises"}
+    note = eye_note or (
+        "mouth is outside the face or above the nose" if not (inside and under_nose) else "eyes off the irises"
+    )
+    return {"pass": False, "value": 1, "limit": 0, "note": note}
 
 
 def finalize(skin: Path, cost: float, attempts: dict[str, int]) -> dict[str, Any]:

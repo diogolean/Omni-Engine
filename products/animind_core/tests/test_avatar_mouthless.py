@@ -9,6 +9,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from products.animind_core import assemble_body, avatar, frameqa, image_models, mouthset, qa, rig
+from products.animind_core.tests.fake_face import patch_human_landmarks
 
 
 def _head(*, mouth: bool) -> Image.Image:
@@ -83,6 +84,7 @@ def test_blank_mouth_sits_under_the_moustache_and_the_iris_is_not_the_wrinkle():
 
 
 def test_fake_model_builds_a_mouthless_einstein_without_network(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
@@ -116,6 +118,7 @@ def test_fake_model_builds_a_mouthless_einstein_without_network(tmp_path, monkey
     assert any("NO human mouth" in prompt for prompt in prompts)
     assert any("25 degrees" in prompt and "27 percent" in prompt for prompt in prompts)
     assert any("black background" in prompt.lower() for prompt in prompts)
+    assert any("Remove the mouth" in prompt for prompt in prompts)
     assert heads["n"] == 2  # the mouthed plate is redrawn once
     front = __import__("json").loads((skin / "rig_front.json").read_text(encoding="utf-8"))
     assert front["boxes"]["mouth"][1] >= front["boxes"]["face"][1]
@@ -128,6 +131,7 @@ def test_fake_model_builds_a_mouthless_einstein_without_network(tmp_path, monkey
 
 
 def test_the_run_cap_is_refused_before_the_call(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     calls = {"n": 0}
@@ -165,6 +169,7 @@ def test_avatar_module_entry_defines_the_fingerprint(tmp_path):
     )
     assert help_run.returncode == 0, help_run.stderr
     assert "usage" in help_run.stdout.lower()
+    assert "rerig" in help_run.stdout.lower()
     run = subprocess.run(
         [sys.executable, "-m", "products.animind_core.avatar", "einstein"],
         cwd=root, env=env, capture_output=True, text=True, check=False,
@@ -173,3 +178,89 @@ def test_avatar_module_entry_defines_the_fingerprint(tmp_path):
     assert "_fingerprint" not in run.stderr
     assert run.returncode != 0
     assert "no image provider is configured" in run.stderr
+
+
+def test_pink_lips_under_the_moustache_count_even_when_the_jacket_is_clean():
+    image = Image.new("RGBA", (120, 300), (0, 0, 0, 255))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((20, 20, 100, 150), fill=(232, 186, 156, 255))
+    draw.ellipse((36, 78, 84, 108), fill=(181, 168, 161, 255))
+    draw.ellipse((48, 112, 76, 132), fill=(220, 150, 160, 255))
+    draw.rectangle((15, 160, 105, 290), fill=(32, 40, 90, 255))
+    assert qa.lower_face_has_ink(image) is False
+    assert qa.mouth_under_moustache_has_ink(image, (20, 20, 100, 150)) is True
+    assert qa.mouth_under_moustache_has_ink(_head(mouth=False), (48, 28, 208, 210)) is False
+
+
+def test_a_white_footer_is_replaced_so_the_torso_reaches_the_bottom():
+    image = Image.new("RGBA", (80, 100), (255, 255, 255, 255))
+    ImageDraw.Draw(image).rectangle((8, 4, 72, 78), fill=(30, 40, 90, 255))
+    fixed = __import__("products.animind_core.puppet_v3", fromlist=["drop_white_footer"]).drop_white_footer(image)
+    bottom = np.asarray(fixed)[-1, :, :3]
+    assert int(bottom.min()) < 200
+
+
+def test_a_person_refuses_the_robotic_landmark_fallback(monkeypatch):
+    from animation.parametric.factory import landmark_detector
+
+    monkeypatch.setattr(landmark_detector, "_mediapipe_tasks", lambda *_a, **_k: None)
+    monkeypatch.setattr(landmark_detector, "_mediapipe_face_mesh", lambda *_a, **_k: None)
+    plate = Image.new("RGBA", (64, 80), (20, 20, 20, 255))
+    with pytest.raises(landmark_detector.RoboticLandmarkRefused, match="robotic"):
+        landmark_detector.detect_landmarks(plate, require_human_face=True)
+    robot = landmark_detector.detect_landmarks(plate)
+    assert robot.backend == "opencv_robotic_fallback"
+
+
+def test_tasks_landmarker_is_preferred_and_legacy_solutions_are_the_fallback(monkeypatch):
+    from animation.parametric.factory import landmark_detector
+    from products.animind_core.tests.fake_face import fake_human_landmarks
+
+    plate = Image.new("RGBA", (64, 80), (30, 30, 30, 255))
+    human = fake_human_landmarks(plate)
+    legacy = landmark_detector.FacialLandmarks(
+        left_eye=human.left_eye, right_eye=human.right_eye, mouth_center=human.mouth_center,
+        mouth_width=human.mouth_width, jawline=(), chin_base=human.chin_base,
+        neck_pivot=human.neck_pivot, head_bbox=human.head_bbox, confidence=0.9,
+        backend="mediapipe_face_mesh",
+    )
+    monkeypatch.setattr(landmark_detector, "_mediapipe_tasks", lambda *_a, **_k: human)
+    monkeypatch.setattr(landmark_detector, "_mediapipe_face_mesh", lambda *_a, **_k: legacy)
+    assert landmark_detector.detect_landmarks(plate).backend == "mediapipe_tasks"
+    monkeypatch.setattr(landmark_detector, "_mediapipe_tasks", lambda *_a, **_k: None)
+    assert landmark_detector.detect_landmarks(plate, require_human_face=True).backend == "mediapipe_face_mesh"
+
+
+def test_a_mouth_on_the_collar_or_an_eye_off_the_iris_fails_frame_qa():
+    face = {"face": [40, 20, 180, 160], "left_eye": [60, 50, 90, 80], "right_eye": [120, 50, 150, 80],
+            "mouth": [80, 220, 140, 260]}
+    assert qa.features_on_face(face)["pass"] is False
+    assert frameqa.feature_positions(face)["pass"] is False
+    seated = {**face, "mouth": [80, 110, 140, 145]}
+    assert qa.features_on_face(seated)["pass"] is True
+    assert qa.features_on_face(seated, irises=[[200, 10], [10, 10]])["pass"] is False
+    trace = {"size": [16, 16], "frames": [], "boxes": face}
+    assert frameqa.check(Path("unused.mp4"), trace)["pass"] is False
+
+
+def test_rerig_reuses_the_cached_plate_and_writes_character_json(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
+
+    def generate(*_args, **_kwargs):  # noqa: ARG001
+        raise AssertionError("rerig must not call the image model")
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
+    skin = tmp_path / "albert_einstein"
+    skin.mkdir()
+    _head(mouth=False).save(skin / "_gemini.png")
+    built = avatar.rerig_from_plate(
+        skin, description="Albert Einstein, bushy white moustache",
+        url=lambda path: path.name, character_id="albert_einstein", name="Albert Einstein",
+    )
+    saved = __import__("json").loads((skin / "character.json").read_text(encoding="utf-8"))
+    assert saved["id"] == "albert_einstein" and saved["name"] == "Albert Einstein"
+    assert saved["status"] == "ready" and (skin / "puppet.json").is_file()
+    assert built["qa"]["costUsd"] == 0.0

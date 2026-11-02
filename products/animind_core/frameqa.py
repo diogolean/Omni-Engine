@@ -338,7 +338,24 @@ def lids_on_iris(lid_box: tuple[int, int, int, int], iris: tuple[int, int], tol:
     return qa_mod.lids_within_iris(lid_box, iris, tol)
 
 
+def feature_positions(boxes: dict[str, Any], irises: list[Any] | None = None, *, tol: int = 6) -> dict[str, Any]:
+    """Mouth inside the face under the nose, eyes within ``tol`` px of the irises."""
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    return qa_mod.features_on_face(boxes, irises, tol=tol)
+
+
 def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:
+    placed = feature_positions(trace["boxes"], trace.get("irises")) if trace.get("boxes") else None
+    if placed is not None and not placed["pass"]:
+        return {
+            "frames": len(trace.get("frames") or []),
+            "mouthsMeasured": 0,
+            "badFrames": 1,
+            "pass": False,
+            "maxOpen": 0.0,
+            "examples": [(0, placed.get("note") or "features off the face")],
+        }
     w, h = trace["size"]
     bad: list[tuple[int, str]] = []
     measured, worst = 0, 0.0

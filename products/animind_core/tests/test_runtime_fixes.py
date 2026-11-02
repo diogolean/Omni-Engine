@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
 from products.animind_core import frameqa, llm_providers, script
+from products.animind_core.tests.fake_face import patch_human_landmarks
 
 H = {"Authorization": "Bearer test-key"}
 
@@ -323,6 +324,7 @@ def _bust(flat: bool) -> Image.Image:
 def test_a_failed_bust_does_not_replace_the_passing_cache(tmp_path, monkeypatch):
     from products.animind_core import avatar, image_models
 
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
@@ -354,6 +356,7 @@ def test_a_failed_bust_does_not_replace_the_passing_cache(tmp_path, monkeypatch)
 def test_avatar_image_cap_is_thirty_cents(tmp_path, monkeypatch):
     from products.animind_core import avatar, image_models
 
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")

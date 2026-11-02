@@ -6,6 +6,7 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageOps
 
 from products.animind_core import avatar, director, image_models, sheet, stick, styles
+from products.animind_core.tests.fake_face import patch_human_landmarks
 
 
 def _png_b64() -> str:
@@ -63,6 +64,7 @@ def test_together_qwen_and_kontext_record_cost_and_stop_at_the_cap(tmp_path, mon
 
 
 def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.delenv("ANIMIND_FORCE_MOCK", raising=False)
@@ -146,6 +148,7 @@ def _assert_mouth_inside_face(skin, view) -> None:
 
 
 def test_realistic_bust_keeps_the_mouth_on_the_face(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
@@ -219,6 +222,7 @@ def test_beard_does_not_pull_the_mouth_up_to_the_nose():
 
 
 def test_side_edit_failure_does_not_reuse_the_front(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
@@ -244,6 +248,7 @@ def test_side_edit_failure_does_not_reuse_the_front(tmp_path, monkeypatch):
 
 
 def test_reuse_false_ignores_the_avatar_cache(tmp_path, monkeypatch):
+    patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")

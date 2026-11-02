@@ -204,6 +204,9 @@ def create_avatar(
         puppet_v3.restore(cache / "v3", skin)
     if not mock and (skin / "puppet.json").is_file():
         views = puppet_v3.adapt(skin, url)
+        placed = _placed_features(skin)
+        if not placed["pass"]:
+            raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
     else:
         views = _rig_views(left, front, skin, url, mouthless=mouthless)
     rig_path = skin / "rig.json"
@@ -257,7 +260,14 @@ def _gemini_ready() -> bool:
     return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
 
 
-def _plate(prompt: str, dest: Path, budget: image_models.RunBudget, spent: float) -> tuple[Image.Image, float]:
+def _plate(
+    prompt: str,
+    dest: Path,
+    budget: image_models.RunBudget,
+    spent: float,
+    *,
+    reference: Path | None = None,
+) -> tuple[Image.Image, float]:
     """One Gemini Flash 9:16 plate through the Aiwake generator. Refused before the call."""
     from products.aiwake.animator.factory import create_puppet  # noqa: PLC0415
 
@@ -266,7 +276,9 @@ def _plate(prompt: str, dest: Path, budget: image_models.RunBudget, spent: float
     spec = image_models.selected(_FLASH_MODEL_ID)
     _reserve(spec, budget, spent)
     before = budget.spent_usd
-    model = create_puppet.generate_character_image(prompt, dest, aspect_ratio="9:16")
+    model = create_puppet.generate_character_image(
+        prompt, dest, aspect_ratio="9:16", reference_path=reference,
+    )
     cost = float(spec.usdPerImage)
     if budget.spent_usd == before:
         budget.charge(cost)
@@ -299,9 +311,29 @@ def _acquire(
     spent = float(ledger.get("spentUsd") or 0.0)
     plate_path = skin / "_gemini.png"
     _image, cost = _plate(prompt, plate_path, budget, spent)
-    if qa.lower_face_has_ink(_image):
-        _image, extra = _plate(prompt, plate_path, budget, spent + cost)
+    _image = puppet_v3.drop_white_footer(_image)
+    _image.save(plate_path)
+    from animation.parametric.factory.landmark_detector import (  # noqa: PLC0415
+        RoboticLandmarkRefused,
+        detect_landmarks,
+    )
+
+    try:
+        marks = detect_landmarks(_image, require_human_face=True)
+    except RoboticLandmarkRefused:
+        raise
+    if qa.mouth_under_moustache_has_ink(_image, marks.head_bbox):
+        reference = skin / "_gemini_ref.png"
+        _image.save(reference)
+        _image, extra = _plate(
+            puppet_v3.MOUTH_EDIT_PROMPT, plate_path, budget, spent + cost, reference=reference,
+        )
         cost += extra
+        _image = puppet_v3.drop_white_footer(_image)
+        _image.save(plate_path)
+        marks = detect_landmarks(_image, require_human_face=True)
+        if qa.mouth_under_moustache_has_ink(_image, marks.head_bbox):
+            raise RuntimeError("mouth still drawn under the moustache after one edit")
     character_id = "".join(ch if ch.isalnum() else "_" for ch in skin.name.lower())[:48] or "avatar"
     try:
         create_puppet(
@@ -311,8 +343,9 @@ def _acquire(
             image_path=plate_path,
             puppets_dir=skin.parent,
             rerig=(skin / "puppet.json").is_file(),
+            require_human_face=True,
         )
-    except image_models.BudgetExceeded:
+    except (image_models.BudgetExceeded, RoboticLandmarkRefused):
         raise
     except Exception as exc:
         raise SideViewMissing(
@@ -686,26 +719,117 @@ def _rig_views(left: Image.Image, front: Image.Image, skin: Path, url: Callable[
 
 
 
+def _placed_features(skin: Path) -> dict[str, Any]:
+    rig_doc = json.loads((skin / "rig.json").read_text(encoding="utf-8"))
+    return qa.features_on_face(rig_doc["boxes"], rig_doc.get("irises"))
+
+
+def _character_identity(name: str) -> tuple[str, str, str]:
+    """``(description, folder id, display name)``."""
+    if name.lower() in {"einstein", "albert", "albert-einstein", "albert_einstein"}:
+        return (
+            "Albert Einstein, elderly man, wild white hair, bushy white moustache, "
+            "no chin beard, dark jacket, warm illustrated portrait",
+            "albert_einstein",
+            "Albert Einstein",
+        )
+    folder = "".join(ch if ch.isalnum() else "_" for ch in name.lower())[:32] or "avatar"
+    return name, folder, name
+
+
+def write_character_json(skin: Path, built: dict[str, Any], *, character_id: str, name: str, url: Callable[[Path], str]) -> Path:
+    """The file ``characters.load`` reads. The CLI used to stop at the rig."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    document = {
+        "id": character_id,
+        "name": name,
+        "status": "ready",
+        "type": "rig",
+        "style": "rig",
+        "artStyle": "cartoon",
+        "generator": built.get("generator") or "gemini",
+        "model": built.get("model"),
+        "views": built.get("views") or {},
+        "viewStatus": built.get("viewStatus") or {},
+        "mouthShots": built.get("mouthShots") or {},
+        "frontShot": built.get("frontShot"),
+        "qa": built.get("qa") or {},
+        "imageUrl": url(skin / "character.png") if (skin / "character.png").is_file() else None,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "pipeline": "aiwake-v3",
+    }
+    path = skin / "character.json"
+    path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    return path
+
+
+def cached_plate(skin: Path) -> Path | None:
+    """A plate already paid for. Re-rigging must not call the image model."""
+    for name in ("_gemini.png", "source_original.png", "_plate.png"):
+        path = skin / name
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def rerig_from_plate(skin: Path, *, description: str, url: Callable[[Path], str], character_id: str, name: str) -> dict[str, Any]:
+    """Cut the saved plate again. No Gemini call."""
+    from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
+
+    plate = cached_plate(skin)
+    if plate is None:
+        raise FileNotFoundError(f"no cached plate in {skin}; nothing to re-rig without an image call")
+    fixed = puppet_v3.drop_white_footer(Image.open(plate).convert("RGBA"))
+    fixed_path = skin / "_plate.png"
+    fixed.save(fixed_path)
+    prompt = puppet_v3.avatar_prompt(description, stick=False, facing="left")
+    create_puppet(
+        character_id=character_id,
+        prompt=prompt,
+        facing="left",
+        image_path=fixed_path,
+        puppets_dir=skin.parent,
+        rerig=(skin / "puppet.json").is_file(),
+        require_human_face=True,
+    )
+    views = puppet_v3.adapt(skin, url)
+    placed = _placed_features(skin)
+    if not placed["pass"]:
+        raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
+    built = {
+        "views": views,
+        "viewStatus": {"left": "image-model", "right": "mirror of left", "front": "aiwake v3 mouthless"},
+        "mouthShots": {"visemes": list(VISEMES)},
+        "frontShot": "aiwake v3 mouthless",
+        "qa": {"score": 100, "costUsd": 0.0, "failed": []},
+        "generator": "gemini",
+        "model": "cached-plate",
+        "cached": True,
+    }
+    write_character_json(skin, built, character_id=character_id, name=name, url=url)
+    return built
+
+
 def main(argv: list[str] | None = None) -> None:
-    """Generate one mouthless character. No call is sent once the run cap is full.
+    """Generate one mouthless character, or re-rig a plate that is already cached.
 
     ``ANIMIND_RUN_BUDGET_USD=0.20 python -m products.animind_core.avatar einstein``
+
+    ``python -m products.animind_core.avatar rerig einstein``
     """
     import argparse
 
     parser = argparse.ArgumentParser(prog="python -m products.animind_core.avatar")
-    parser.add_argument("name", nargs="?", default="einstein")
+    parser.add_argument("name", nargs="*", default=["einstein"])
+    parser.add_argument("--rerig", action="store_true", help="re-rig the cached plate; no image call")
     args = parser.parse_args(argv)
-    name = args.name
-    if name.lower() in {"einstein", "albert", "albert-einstein"}:
-        description = (
-            "Albert Einstein, elderly man, wild white hair, bushy white moustache, "
-            "no chin beard, dark jacket, warm illustrated portrait"
-        )
-        folder = "albert_einstein"
-    else:
-        description = name
-        folder = "".join(ch if ch.isalnum() else "_" for ch in name.lower())[:32] or "avatar"
+    tokens = list(args.name or ["einstein"])
+    rerig = bool(args.rerig)
+    if tokens and tokens[0] == "rerig":
+        rerig = True
+        tokens = tokens[1:] or ["einstein"]
+    description, folder, display = _character_identity(tokens[0] if tokens else "einstein")
     skin = settings.data_dir() / "assets" / "puppets" / folder
 
     def url(path: Path) -> str:
@@ -714,7 +838,11 @@ def main(argv: list[str] | None = None) -> None:
         except ValueError:
             return path.name
 
-    built = create_avatar(description, "cartoon", skin=skin, url=url)
+    if rerig:
+        built = rerig_from_plate(skin, description=description, url=url, character_id=folder, name=display)
+    else:
+        built = create_avatar(description, "cartoon", skin=skin, url=url)
+        write_character_json(skin, built, character_id=folder, name=display, url=url)
     print(
         f"avatar {folder} cost US${built['qa']['costUsd']:.4f} "
         f"mouthless={built.get('frontShot')} cached={built['cached']}"
