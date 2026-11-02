@@ -52,8 +52,12 @@ def record(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Append one secret-free event and return the normalized row."""
-    priced = float(cost_usd or 0.0)
-    if priced <= 0 and (input_tokens or output_tokens):
+    cached_hit = bool((metadata or {}).get("cached"))
+    priced = 0.0 if cached_hit else float(cost_usd or 0.0)
+    if cached_hit:
+        input_tokens = 0
+        output_tokens = 0
+    elif priced <= 0 and (input_tokens or output_tokens):
         from .llm_providers import token_cost_usd  # noqa: PLC0415
 
         priced = token_cost_usd(provider or "", model or "", int(input_tokens or 0), int(output_tokens or 0)) or priced

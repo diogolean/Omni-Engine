@@ -204,11 +204,12 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   `tidy()` (no space before punctuation, no "?." or "..", capital first letter, final mark).
 - Without Gemini (no key, no credit, or `use_llm=False`) the template writer still uses the sheet quotes and
   writes short replies that pick up a noun from the previous line and name the other speaker
-  (hook -> exchange -> climax -> close); no line repeats. Gemini answers are cached on disk by
-  model + prompt (`ANIMIND_DATA_DIR/cache/script/`), so re-rendering the same script costs nothing.
-  Quote ids in that prompt are `speaker:qN` (`albert_einstein:q1`), because every sheet numbers its
-  quotes `q1`, `q2`, …. The prompt text is part of the cache key, so scripts cached before that
-  prefix are not reused.
+  (hook -> exchange -> climax -> close); no line repeats. Gemini and DeepSeek answers are cached
+  on disk by provider, model, QA rule version and prompt (`ANIMIND_DATA_DIR/cache/script/`).
+  A cache hit is logged at cost 0 with `cached: true`. A draft that fails the current QA rules
+  is deleted and is not reused. Quote ids in that prompt are `speaker:qN` (`albert_einstein:q1`),
+  because every sheet numbers its quotes `q1`, `q2`, …. The prompt text is part of the cache key,
+  so scripts cached before that prefix are not reused.
 - Result adds `writer` (`deepseek`|`gemini`|`template`), `scriptCost` (provider, model, tokens, cache hit and USD for this
   script), `quoteLines`, `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
   The character name is cut before a comma or parenthesis to find the person ("Sócrates, de toga" -> "Sócrates").

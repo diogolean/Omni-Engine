@@ -1,4 +1,6 @@
 """Script behaviour: real quotes stay literal and sourced, paraphrases are marked, beats keep their shape."""
+import json
+
 import pytest
 
 from products.animind_core import personas, script
@@ -1133,8 +1135,9 @@ def test_pipe_reply_before_the_quote_fails_the_final_script(monkeypatch):
         if "Judge this debate" in prompt:
             # The real judge accepted this order. The final check must not.
             return [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}]
-        if "names a quote that is spoken only later" in prompt:
-            assert "Do not reorder lines" in prompt
+        if "Prior lines:" in prompt and "This speaker's quotes:" in prompt:
+            assert "Pipe smoking contributes" not in prompt
+            assert "Do not reorder lines" in prompt or "Ignore the current line" in prompt
             return [{"i": 3, "text": "Judgment needs a witness."}]
         if "Write every beat again" in prompt or "Score each candidate quote" in prompt:
             raise AssertionError(prompt)
@@ -1175,9 +1178,11 @@ def test_a_reply_cannot_name_a_quote_that_is_spoken_later(monkeypatch):
                     "reason": "pipe is spoken only on a later line", "coherent": False,
                 }]
             return [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}]
-        if "does not answer the previous line" in prompt or "spoken only later" in prompt:
+        if "Prior lines:" in prompt or "does not answer the previous line" in prompt or "spoken only later" in prompt:
             order.append("rewrite-early")
             assert "line 3" in prompt
+            if "Prior lines:" in prompt:
+                assert "Pipe smoking contributes" not in prompt
             return [{"i": 3, "text": "Judgment needs a witness."}]
         if "Write every beat again" in prompt or "Score each candidate quote" in prompt:
             raise AssertionError("reordered the quote ahead of the reply")
@@ -1203,12 +1208,176 @@ def test_a_reply_cannot_name_a_quote_that_is_spoken_later(monkeypatch):
     assert not any("refers to a quote spoken later" in problem for problem in out["scriptQA"]["problems"]), out["scriptQA"]
 
 
+def test_swap_is_refused_when_the_same_speaker_would_talk_twice():
+    pipe = "Pipe smoking contributes to a calm and objective judgment in human affairs."
+    blocked = [
+        {"speaker": 0, "text": "Nietzsche, is judgment only a habit?"},
+        {"speaker": 1, "text": "Pipe smoke proves judgment, Albert?"},
+        {"speaker": 0, "text": pipe},
+    ]
+    assert script._swap_reply_before_quote(blocked, 1, 2) is False
+    assert blocked[1]["text"].startswith("Pipe smoke")
+    pair = [
+        {"speaker": 0, "text": "Held."},
+        {"speaker": 0, "text": "Pipe smoke proves judgment?"},
+        {"speaker": 1, "text": pipe},
+    ]
+    assert script._swap_reply_before_quote(pair, 1, 2) is True
+    assert pair[1]["text"] == pipe
+    assert [line["speaker"] for line in pair] == [0, 1, 0]
+
+
+def test_failed_script_cache_is_dropped_and_a_hit_costs_nothing(tmp_path, monkeypatch):
+    from products.animind_core import llm_providers, telemetry
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "configured")
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    calls: list[str] = []
+
+    def complete(self, prompt):
+        calls.append(prompt)
+        return llm_providers.LLMResult([{"i": 0, "text": "Fresh."}], "deepseek", self.model, 10, 5, 0.0001)
+
+    monkeypatch.setattr(llm_providers.DeepSeekProvider, "complete", complete)
+    provider = llm_providers.DeepSeekProvider()
+    cache = tmp_path / "cache"
+    path = llm_providers._cache_path(cache, provider, "the draft", script.SCRIPT_QA_VERSION)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "lines": [{"i": 0, "text": "Old."}],
+        "provider": "deepseek",
+        "model": provider.model,
+        "input_tokens": 1800,
+        "output_tokens": 400,
+        "cost_usd": 0.0017,
+        "cached": False,
+    }), encoding="utf-8")
+    hit, _failures = llm_providers.generate(
+        "the draft", cache, lambda _prompt: [], version=script.SCRIPT_QA_VERSION,
+    )
+    assert hit is not None and hit.cached is True
+    assert hit.cost_usd == 0.0 and hit.input_tokens == 0 and hit.output_tokens == 0
+    assert hit.lines[0]["text"] == "Old."
+    assert calls == []
+    row = telemetry.record(
+        "script", provider="deepseek", model=provider.model,
+        input_tokens=1800, output_tokens=400, cost_usd=0.0017,
+        metadata={"cached": True},
+    )
+    assert row["costUsd"] == 0.0 and row["inputTokens"] == 0 and row["outputTokens"] == 0
+    stored = json.loads(path.read_text())
+    stored["qaPass"] = False
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    again, _failures = llm_providers.generate(
+        "the draft", cache, lambda _prompt: [], version=script.SCRIPT_QA_VERSION,
+    )
+    assert calls == ["the draft"]
+    assert again is not None and again.cached is False and again.lines[0]["text"] == "Fresh."
+    assert llm_providers._cache_path(cache, provider, "the draft", "5") != path
+
+
+def test_cached_pipe_reply_before_the_quote_ends_as_a_passing_script(tmp_path, monkeypatch):
+    """The b1d33e4 cache: line 3 names the pipe, line 4 says it, and the hit rebilled the original cost."""
+    from products.animind_core import llm_providers, telemetry
+
+    pipe = "Pipe smoking contributes to a calm and objective judgment in human affairs."
+    reply = "Pipe smoke proves judgment, Albert?"
+    draft = [
+        {"i": 0, "text": "Nietzsche, is judgment only a habit?"},
+        {"i": 1, "quoteId": "q4"},
+        {"i": 2, "text": "Convictions still need a witness."},
+        {"i": 3, "text": reply},
+        {"i": 4, "quoteId": "q10"},
+        {"i": 5, "text": "A witness can still fail."},
+        {"i": 6, "text": "Failure stays small here."},
+        {"i": 7, "text": "Keep one small witness."},
+        {"i": 8, "text": "The witness stays."},
+    ]
+    einstein = {"quotes": [_quote("q10", pipe, "Albert_Einstein")]}
+    nietzsche = {"quotes": [_quote("q4", "Convictions are more dangerous enemies of truth than lies.", "Friedrich_Nietzsche")]}
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "configured")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(script.knowledge, "ensure", lambda *_a, **_k: ({"mode": "quick", "chunks": []}, None))
+    monkeypatch.setattr(script.knowledge, "retrieve", lambda *_a, **_k: [])
+    prompt = script._prompt(
+        script.plan_for("debate", 2), [einstein, nietzsche], names, "judgment", "en-US", "debate",
+    )
+    provider = llm_providers.DeepSeekProvider()
+    cache = tmp_path / "cache" / "script"
+    path = llm_providers._cache_path(cache, provider, prompt, script.SCRIPT_QA_VERSION)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "lines": draft,
+        "provider": "deepseek",
+        "model": provider.model,
+        "input_tokens": 1800,
+        "output_tokens": 400,
+        "cost_usd": 0.0017,
+        "cached": False,
+    }), encoding="utf-8")
+    calls: list[str] = []
+
+    def complete(self, prompt_text):
+        calls.append(prompt_text)
+        if "Judge this debate" in prompt_text:
+            return llm_providers.LLMResult(
+                [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}],
+                "deepseek", self.model, 900, 80, 0.0005,
+            )
+        if "Attempt 1 of 2" in prompt_text or "Attempt 2 of 2" in prompt_text:
+            assert "Pipe smoking contributes" not in prompt_text
+            assert "Prior lines:" in prompt_text and "This speaker's quotes:" in prompt_text
+            return llm_providers.LLMResult(
+                [{"i": 3, "text": reply}], "deepseek", self.model, 200, 40, 0.0002,
+            )
+        if prompt_text.startswith("Write beat 3 again"):
+            assert "Pipe smoking contributes" not in prompt_text
+            assert "Prior lines:" in prompt_text
+            return llm_providers.LLMResult(
+                [{"i": 3, "text": "Judgment needs a witness."}],
+                "deepseek", self.model, 200, 40, 0.0002,
+            )
+        raise AssertionError(prompt_text[:180])
+
+    monkeypatch.setattr(llm_providers.DeepSeekProvider, "complete", complete)
+    out = script.write("debate", "judgment", names, "en-US", sheets=[einstein, nietzsche], use_llm=True)
+    texts = [line["text"] for line in out["lines"]]
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+    pipe_at = texts.index(pipe)
+    assert pipe_at == 4 and out["lines"][pipe_at]["speaker"] == 0
+    assert "pipe" not in texts[3].lower()
+    assert texts[3] == "Judgment needs a witness."
+    assert sum("Attempt 1 of 2" in item for item in calls) == 1
+    assert sum("Attempt 2 of 2" in item for item in calls) == 1
+    assert any(item.startswith("Write beat 3 again") for item in calls)
+    assert not any(item.startswith("You write") for item in calls)
+    script_rows = [row for row in telemetry.read() if row["operation"] == "script"]
+    assert script_rows[-1]["costUsd"] == 0.0
+    assert script_rows[-1]["inputTokens"] == 0 and script_rows[-1]["outputTokens"] == 0
+    assert script_rows[-1]["metadata"]["cached"] is True
+    kept = json.loads(path.read_text())
+    assert kept["qaPass"] is True and kept["qaVersion"] == script.SCRIPT_QA_VERSION
+    assert kept["cost_usd"] == 0.0
+    assert "Pipe smoke proves" not in json.dumps(kept)
+    calls.clear()
+    again = script.write("debate", "judgment", names, "en-US", sheets=[einstein, nietzsche], use_llm=True)
+    assert again["scriptQA"]["pass"], again["scriptQA"]
+    assert again["lines"][3]["text"] == "Judgment needs a witness."
+    assert calls == []
+    second = [row for row in telemetry.read() if row["operation"] == "script"][-1]
+    assert second["costUsd"] == 0.0 and second["metadata"]["cached"] is True
+    assert second["inputTokens"] == 0 and second["outputTokens"] == 0
+
+
 def test_judge_tokens_are_logged(tmp_path, monkeypatch):
     from products.animind_core import llm_providers, telemetry
 
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
 
-    def generate(prompt, cache, gemini, *, allow_unavailable_gemini=False):
+    def generate(prompt, cache, gemini, *, allow_unavailable_gemini=False, version=""):
         return llm_providers.LLMResult(
             [{"i": 1, "answers_previous": True, "reason": "follows", "coherent": True}],
             "deepseek", "deepseek-flash", 320, 40, 0.000144,

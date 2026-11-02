@@ -302,9 +302,27 @@ def token_cost_usd(provider: str, model: str, input_tokens: int, output_tokens: 
     return 0.0
 
 
-def _cache_path(root: Path, provider: LLMProvider, prompt: str) -> Path:
-    digest = hashlib.sha256(f"{provider.id}\n{provider.model}\n{prompt}".encode()).hexdigest()[:24]
+def _cache_path(root: Path, provider: LLMProvider, prompt: str, version: str = "") -> Path:
+    digest = hashlib.sha256(f"{provider.id}\n{provider.model}\n{version}\n{prompt}".encode()).hexdigest()[:24]
     return root / f"{digest}.json"
+
+
+def _cached_result(raw: dict[str, Any], provider: LLMProvider, *, version: str) -> LLMResult | None:
+    """A cache hit costs nothing. A draft that failed the current QA rules is not reused."""
+    if raw.get("qaPass") is False or (raw.get("qaVersion") not in (None, "", version) and version):
+        return None
+    lines = raw.get("lines")
+    if not isinstance(lines, list):
+        return None
+    return LLMResult(
+        [item for item in lines if isinstance(item, dict)],
+        str(raw.get("provider") or provider.id),
+        str(raw.get("model") or provider.model),
+        0,
+        0,
+        0.0,
+        True,
+    )
 
 
 def generate(
@@ -313,6 +331,7 @@ def generate(
     gemini_generate: Callable[[str], list[dict[str, Any]]],
     *,
     allow_unavailable_gemini: bool = False,
+    version: str = "",
 ) -> tuple[LLMResult | None, list[str]]:
     """Try configured providers in order, returning failures for diagnostics."""
     failures: list[str] = []
@@ -328,16 +347,14 @@ def generate(
             and allow_unavailable_gemini
             and not settings.gemini_available()
         )
-        cached = _cache_path(cache_dir, provider, prompt)
+        cached = _cache_path(cache_dir, provider, prompt, version)
         if cache_enabled and cached.is_file():
             raw = json.loads(cached.read_text(encoding="utf-8"))
-            priced = token_cost_usd(
-                str(raw.get("provider") or provider.id),
-                str(raw.get("model") or provider.model),
-                int(raw.get("input_tokens") or 0),
-                int(raw.get("output_tokens") or 0),
-            )
-            return LLMResult(**(raw | {"cached": True, "cost_usd": priced or float(raw.get("cost_usd") or 0.0)})), failures
+            hit = _cached_result(raw, provider, version=version)
+            if hit is None:
+                cached.unlink(missing_ok=True)
+            else:
+                return hit, failures
         try:
             result = provider.complete(prompt)
         except Exception as exc:  # noqa: BLE001 - fallback is the contract
@@ -346,9 +363,33 @@ def generate(
             continue
         if cache_enabled:
             cached.parent.mkdir(parents=True, exist_ok=True)
-            cached.write_text(json.dumps(asdict(result), ensure_ascii=False), encoding="utf-8")
+            payload = asdict(result)
+            payload["qaVersion"] = version
+            cached.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return result, failures
     return None, failures
+
+
+def stamp_script_cache(cache_dir: Path, provider_id: str, model: str, prompt: str, *,
+                       version: str, passed: bool, lines: list[dict[str, Any]] | None = None) -> None:
+    """Keep a draft only when the script that came out of it passes the current rules."""
+    provider = type("P", (), {"id": provider_id, "model": model})()
+    path = _cache_path(cache_dir, provider, prompt, version)  # type: ignore[arg-type]
+    if not passed:
+        path.unlink(missing_ok=True)
+        return
+    current = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    current["lines"] = lines if lines is not None else current.get("lines") or []
+    current["provider"] = provider_id
+    current["model"] = model
+    current["qaVersion"] = version
+    current["qaPass"] = True
+    current["cached"] = True
+    current["cost_usd"] = 0.0
+    current["input_tokens"] = 0
+    current["output_tokens"] = 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
 
 
 def _json_object(text: str) -> dict[str, Any]:
@@ -391,13 +432,15 @@ def generate_text(
         cached = _cache_path(cache_dir, item, prompt)
         if cache_enabled and cached.is_file():
             raw = json.loads(cached.read_text(encoding="utf-8"))
-            priced = token_cost_usd(
-                str(raw.get("provider") or item.id),
-                str(raw.get("model") or item.model),
-                int(raw.get("input_tokens") or 0),
-                int(raw.get("output_tokens") or 0),
-            )
-            return TextResult(**(raw | {"cached": True, "cost_usd": priced or float(raw.get("cost_usd") or 0.0)})), failures
+            if raw.get("qaPass") is False:
+                cached.unlink(missing_ok=True)
+            else:
+                return TextResult(
+                    str(raw.get("text") or ""),
+                    str(raw.get("provider") or item.id),
+                    str(raw.get("model") or item.model),
+                    0, 0, 0.0, True,
+                ), failures
         try:
             result = item.complete_text(prompt)
         except Exception as exc:  # noqa: BLE001 - fallback is the contract

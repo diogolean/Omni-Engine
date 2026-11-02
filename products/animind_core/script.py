@@ -32,6 +32,8 @@ from . import knowledge, languages, llm_providers, personas, settings, telemetry
 
 _LOG = logging.getLogger("animind_core")
 WRITER_MODEL = llm_providers.GEMINI_MODEL  # compatibility name for the Gemini fallback
+# Bump when a QA rule changes so a cached draft that fails the new rule is not reused.
+SCRIPT_QA_VERSION = "6"
 WORDS_PER_S = 2.6  # edge-tts pt-BR/en-US neural voices at the default rate
 QUOTE_MARKS = "\"“”«»„‟"
 
@@ -867,19 +869,38 @@ Answer JSON only: {{"lines": [{{"i": 0, "quoteId": null, "basisId": null, "text"
 def _cache_path(prompt: str):
     import hashlib  # noqa: PLC0415
 
-    key = hashlib.sha256(f"{WRITER_MODEL}\n{prompt}".encode()).hexdigest()[:24]
+    key = hashlib.sha256(f"{WRITER_MODEL}\n{SCRIPT_QA_VERSION}\n{prompt}".encode()).hexdigest()[:24]
     return settings.data_dir() / "cache" / "script" / f"{key}.json"
+
+
+def _store_writer_cache(prompt: str, lines: list[dict[str, Any]], *, passed: bool) -> None:
+    """The Gemini fallback cache follows the same rule: a failed draft is not kept."""
+    cached = _cache_path(prompt)
+    if not passed:
+        cached.unlink(missing_ok=True)
+        return
+    cached.parent.mkdir(parents=True, exist_ok=True)
+    cached.write_text(json.dumps({
+        "model": WRITER_MODEL, "lines": lines, "qaPass": True, "qaVersion": SCRIPT_QA_VERSION,
+    }, ensure_ascii=False), encoding="utf-8")
 
 
 def _gemini(prompt: str) -> list[dict[str, Any]]:
     """One Gemini text call per distinct prompt; answers are cached on disk (``<data>/cache/script``), so a
-    repeated render of the same topic and cast costs nothing."""
+    repeated render of the same topic and cast costs nothing. A draft that failed QA is not served again."""
     cached = _cache_path(prompt)
     if cached.is_file():
-        return list(json.loads(cached.read_text(encoding="utf-8")).get("lines") or [])
+        raw = json.loads(cached.read_text(encoding="utf-8"))
+        version = raw.get("qaVersion")
+        if raw.get("qaPass") is False or (version not in (None, "", SCRIPT_QA_VERSION) and version):
+            cached.unlink(missing_ok=True)
+        else:
+            return list(raw.get("lines") or [])
     lines = _gemini_call(prompt)
     cached.parent.mkdir(parents=True, exist_ok=True)
-    cached.write_text(json.dumps({"model": WRITER_MODEL, "lines": lines}, ensure_ascii=False), encoding="utf-8")
+    cached.write_text(json.dumps({
+        "model": WRITER_MODEL, "lines": lines, "qaVersion": SCRIPT_QA_VERSION,
+    }, ensure_ascii=False), encoding="utf-8")
     return lines
 
 
@@ -1192,6 +1213,7 @@ def _ask_writer(prompt: str, *, allow_unavailable_gemini: bool) -> list[dict[str
         settings.data_dir() / "cache" / "script",
         _gemini,
         allow_unavailable_gemini=allow_unavailable_gemini,
+        version=SCRIPT_QA_VERSION,
     )
     return list(result.lines) if result is not None else []
 
@@ -1527,6 +1549,7 @@ def judge_debate(lines: list[dict[str, Any]], names: list[str], topic: str, lang
         settings.data_dir() / "cache" / "script",
         _gemini,
         allow_unavailable_gemini=allow_unavailable_gemini,
+        version=SCRIPT_QA_VERSION,
     )
     if result is not None:
         telemetry.record(
@@ -1537,7 +1560,7 @@ def judge_debate(lines: list[dict[str, Any]], names: list[str], topic: str, lang
             output_tokens=result.output_tokens,
             cost_usd=result.cost_usd,
             status="ok",
-            metadata={"lines": len(lines), "topic": topic},
+            metadata={"lines": len(lines), "topic": topic, "cached": bool(result.cached)},
         )
     entries = [entry for entry in (result.lines if result is not None else []) if isinstance(entry, dict)]
     if not entries:
@@ -1556,6 +1579,116 @@ def judge_debate(lines: list[dict[str, Any]], names: list[str], topic: str, lang
     return {"coherent": coherent, "lines": per}
 
 
+def _prior_block(lines: list[dict[str, Any]], index: int) -> str:
+    return "\n".join(f"{i}. {lines[i].get('text')}" for i in range(index)) or "(none)"
+
+
+def _own_sheet_block(sheet: dict[str, Any] | None, name: str) -> str:
+    if not sheet:
+        return "(none)"
+    rows = [f"{personas.slug(name)}:{quote['id']}: {quote['text']}" for quote in _quotable(sheet)[:12]]
+    return "\n".join(rows) or "(none)"
+
+
+def _apply_reply(lines: list[dict[str, Any]], index: int, text: str, names: list[str]) -> None:
+    previous = lines[index - 1]["text"] if index else ""
+    lines[index]["text"] = text
+    lines[index]["kind"] = "paraphrase"
+    lines[index].pop("quote", None)
+    lines[index]["replyTo"] = {"line": index - 1, "idea": link(previous, text, names=names)}
+
+
+def _rewrite_from_prior(lines: list[dict[str, Any]], index: int, lang: str, topic: str, names: list[str],
+                        sheets: list[dict[str, Any]] | None, *, allow_unavailable_gemini: bool,
+                        attempt: int) -> bool:
+    """One reply, using only earlier lines and this speaker's sheet. The future quote is not shown."""
+    speaker = int(lines[index].get("speaker") or 0)
+    name = names[speaker] if speaker < len(names) else "the speaker"
+    sheet = sheets[speaker] if sheets and speaker < len(sheets) else None
+    prompt = (
+        f"Rewrite only line {index} for {name}. Attempt {attempt} of 2.\n"
+        "You may use only the prior lines and this speaker's own sheet. "
+        "Do not mention anything that has not already been said. Do not reorder lines.\n"
+        f"Prior lines:\n{_prior_block(lines, index)}\n"
+        f"This speaker's quotes:\n{_own_sheet_block(sheet, name)}\n"
+        'Return JSON only: {"lines": [{"i": %d, "text": "...", "words": 0}]}.' % index
+    )
+    for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini):
+        if not isinstance(entry, dict) or entry.get("i") not in (index, None):
+            continue
+        text = tidy(_unquoted(entry.get("text") or ""))
+        if not text or personas.fold(text) == personas.fold(lines[index]["text"]):
+            continue
+        if words(text) > 16 or _names_a_later_quote(text, lines, index, topic):
+            continue
+        _apply_reply(lines, index, text, names)
+        return True
+    return False
+
+
+def _swap_reply_before_quote(lines: list[dict[str, Any]], index: int, later: int) -> bool:
+    """Put the quote first when that still alternates speakers. Otherwise leave the order alone."""
+    if later != index + 1 or not 0 <= index < len(lines) or later >= len(lines):
+        return False
+    speakers = [int(line.get("speaker") or 0) for line in lines]
+    speakers[index], speakers[later] = speakers[later], speakers[index]
+    if any(speakers[i] == speakers[i - 1] for i in range(1, len(speakers))):
+        return False
+    lines[index], lines[later] = lines[later], lines[index]
+    return True
+
+
+def _regenerate_beat(lines: list[dict[str, Any]], index: int, lang: str, topic: str, names: list[str],
+                     sheets: list[dict[str, Any]] | None, *, allow_unavailable_gemini: bool) -> bool:
+    speaker = int(lines[index].get("speaker") or 0)
+    name = names[speaker] if speaker < len(names) else "the speaker"
+    sheet = sheets[speaker] if sheets and speaker < len(sheets) else None
+    prompt = (
+        f"Write beat {index} again for {name}. Ignore the current line. "
+        "Use only the prior lines and this speaker's own sheet. One sentence of at most 16 words.\n"
+        f"Prior lines:\n{_prior_block(lines, index)}\n"
+        f"This speaker's quotes:\n{_own_sheet_block(sheet, name)}\n"
+        'Return JSON only: {"lines": [{"i": %d, "text": "...", "words": 0}]}.' % index
+    )
+    for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini):
+        if not isinstance(entry, dict) or entry.get("i") not in (index, None):
+            continue
+        text = tidy(_unquoted(entry.get("text") or ""))
+        if not text or personas.fold(text) == personas.fold(lines[index]["text"]):
+            continue
+        if words(text) > 16 or _names_a_later_quote(text, lines, index, topic):
+            continue
+        _apply_reply(lines, index, text, names)
+        return True
+    return False
+
+
+def _resolve_forward_reply(lines: list[dict[str, Any]], index: int, later: int, lang: str, topic: str,
+                           names: list[str], sheets: list[dict[str, Any]] | None, *,
+                           allow_unavailable_gemini: bool) -> bool:
+    """Two tries, then a fresh beat. Re-judge after each change. Do not leave the reply before its quote."""
+    def clear() -> bool:
+        return not any(item.startswith(f"line {index}:") for item in _unsaid_quote_refs(lines, topic))
+
+    for attempt in (1, 2):
+        moved = _rewrite_from_prior(
+            lines, index, lang, topic, names, sheets, allow_unavailable_gemini=allow_unavailable_gemini,
+            attempt=attempt,
+        )
+        if attempt == 2 and not moved:
+            moved = _swap_reply_before_quote(lines, index, later)
+        if not moved:
+            continue
+        judge_debate(lines, names, topic, lang, allow_unavailable_gemini=allow_unavailable_gemini)
+        if clear():
+            return True
+    if _regenerate_beat(
+        lines, index, lang, topic, names, sheets, allow_unavailable_gemini=allow_unavailable_gemini,
+    ):
+        judge_debate(lines, names, topic, lang, allow_unavailable_gemini=allow_unavailable_gemini)
+    return clear()
+
+
 def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: str, topic: str, names: list[str], *,
                        allow_unavailable_gemini: bool, sheets: list[dict[str, Any]] | None = None) -> tuple[bool, bool]:
     """Rewrite a line whose own rule can be fixed. A quote that does not answer is swapped, not its neighbour."""
@@ -1568,24 +1701,11 @@ def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: s
         if later_ref:
             index = int(later_ref.group(1))
             later = int(later_ref.group(2))
-            if not 0 <= index < len(lines) or lines[index].get("kind") == "quote":
-                continue
-            quote_text = lines[later]["text"] if later < len(lines) else ""
-            previous = lines[index - 1]["text"] if index else ""
-            following = lines[index + 1]["text"] if index + 1 < len(lines) else ""
-            before = lines[index]["text"]
-            rewritten = _rewrite_line(
-                index,
-                "this line names a quote that is spoken only later. "
-                f"Do not mention: {quote_text}. Answer only what was already said. Do not reorder lines.",
-                before, lang, topic, names, allow_unavailable_gemini=allow_unavailable_gemini,
-                max_words=min(16, words(before)), previous=previous, following=following,
-            )
-            if not rewritten or _names_a_later_quote(rewritten, lines, index, topic):
-                continue
-            lines[index]["text"] = rewritten
-            lines[index]["replyTo"] = {"line": index - 1, "idea": link(previous, rewritten, names=names)}
-            changed = True
+            if _resolve_forward_reply(
+                lines, index, later, lang, topic, names, sheets,
+                allow_unavailable_gemini=allow_unavailable_gemini,
+            ):
+                changed = True
             continue
         match = _UNANSWERED.match(problem)
         if not match:
@@ -1763,6 +1883,20 @@ def _keyword_streak(lines: list[dict[str, Any]]) -> tuple[int, str] | None:
     return None
 
 
+def _draft_from_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Writer rows for a script that already passed QA, so the next cache hit is that script."""
+    stored: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        entry: dict[str, Any] = {"i": index, "words": words(str(line.get("text") or ""))}
+        quote = line.get("quote") or {}
+        if line.get("kind") == "quote" and quote.get("id"):
+            entry["quoteId"] = quote["id"]
+        else:
+            entry["text"] = line.get("text") or ""
+        stored.append(entry)
+    return stored
+
+
 def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
           sheets: list[dict[str, Any]] | None = None, use_llm: bool | None = None, mode: str = "quick",
           indexes: list[Any] | None = None, tone: str = "comedia", objective: str = "entreter",
@@ -1828,6 +1962,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             # preserves the former behavior of attempting Gemini without
             # consulting environment availability first.
             allow_unavailable_gemini=explicit_llm,
+            version=SCRIPT_QA_VERSION,
         )
         if result is not None:
             for entry in result.lines:
@@ -2147,6 +2282,16 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         out["estimatedDurationS"] = out_duration
     if problems:
         _LOG.warning("%s script QA: %s", template, "; ".join(problems))
+    if writer in {"deepseek", "gemini"} and base_prompt:
+        provider_id = str(script_cost.get("provider") or ("deepseek" if writer == "deepseek" else "google"))
+        model = str(script_cost.get("model") or "")
+        kept = _draft_from_lines(lines) if not problems else None
+        llm_providers.stamp_script_cache(
+            settings.data_dir() / "cache" / "script",
+            provider_id, model, base_prompt,
+            version=SCRIPT_QA_VERSION, passed=not problems, lines=kept,
+        )
+        _store_writer_cache(base_prompt, kept or [], passed=not problems)
     cost = out["scriptCost"]
     telemetry.record(
         "script",
@@ -2158,7 +2303,10 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         latency_ms=(perf_counter() - started) * 1000,
         script_qa=out["scriptQA"],
         status=str(cost.get("status") or "ok"),
-        metadata={"template": template, "language": lang, "writer": writer, "test": bool(settings.force_mock())},
+        metadata={
+            "template": template, "language": lang, "writer": writer,
+            "test": bool(settings.force_mock()), "cached": bool(cost.get("cached")),
+        },
     )
     return out
 
