@@ -81,24 +81,23 @@ def test_blank_mouth_sits_under_the_moustache_and_the_iris_is_not_the_wrinkle():
 
 def test_fake_model_builds_a_mouthless_einstein_without_network(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.setenv("ANIMIND_RUN_BUDGET_USD", "0.20")
     monkeypatch.delenv("ANIMIND_FORCE_MOCK", raising=False)
     prompts: list[str] = []
     heads = {"n": 0}
 
-    def generate(self, prompt, **options):
+    def generate(prompt, destination, **options):  # noqa: ARG001
         prompts.append(prompt)
-        dest = Path(options["destination"])
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if "Headless" in prompt or "headless" in prompt:
-            _body().save(dest)
-        else:
-            heads["n"] += 1
-            _head(mouth=heads["n"] == 1).save(dest)  # first head has a lip and is redrawn
-        return image_models.ImageResult(dest, "together", self.spec.model, self.spec.usdPerImage)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        heads["n"] += 1
+        _head(mouth=heads["n"] == 1).save(destination)  # first plate has a lip and is redrawn
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
     skin = tmp_path / "einstein"
     built = avatar.create_avatar(
         "Albert Einstein, wild white hair, bushy white moustache",
@@ -112,29 +111,38 @@ def test_fake_model_builds_a_mouthless_einstein_without_network(tmp_path, monkey
     assert built["qa"]["costUsd"] <= 0.30
     assert all("lips together" not in prompt.lower() for prompt in prompts)
     assert any("NO human mouth" in prompt for prompt in prompts)
-    assert any("Headless" in prompt or "headless" in prompt for prompt in prompts)
-    assert heads["n"] == 3  # front redraws once, side head is clean
+    assert any("25 degrees" in prompt and "27 percent" in prompt for prompt in prompts)
+    assert any("black background" in prompt.lower() for prompt in prompts)
+    assert heads["n"] == 2  # the mouthed plate is redrawn once
     front = __import__("json").loads((skin / "rig_front.json").read_text(encoding="utf-8"))
     assert front["boxes"]["mouth"][1] >= front["boxes"]["face"][1]
-    assert built["frontShot"] == "mouthless head and body"
+    assert front["pipeline"] == "aiwake-v3"
+    manifest = __import__("json").loads((skin / "puppet.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 3
+    eye_mid = (front["boxes"]["left_eye"][1] + front["boxes"]["left_eye"][3]) / 2
+    assert abs(eye_mid - manifest["framing"]["target_eye_y"]) <= 2
+    assert built["frontShot"] == "aiwake v3 mouthless"
 
 
 def test_the_run_cap_is_refused_before_the_call(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     calls = {"n": 0}
 
-    def generate(self, prompt, **options):  # noqa: ARG002
+    def generate(prompt, destination, **options):  # noqa: ARG001
         calls["n"] += 1
-        dest = Path(options["destination"])
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _head(mouth=False).save(dest)
-        return image_models.ImageResult(dest, "together", self.spec.model, 0.01)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _head(mouth=True).save(destination)
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
+    price = image_models.selected("nano-banana").usdPerImage
     with pytest.raises(image_models.BudgetExceeded):
         avatar.create_avatar(
             "Albert Einstein", "cartoon", skin=tmp_path / "skin", url=lambda path: path.name,
-            model_id="together-qwen-image", budget=image_models.RunBudget(0.01),
+            model_id="nano-banana", budget=image_models.RunBudget(price),
         )
-    assert calls["n"] == 1  # the body is refused before it is sent
+    assert calls["n"] == 1  # the mouth redraw is refused before it is sent

@@ -1,15 +1,15 @@
-"""One-call avatar sheet wrapped around Aiwake's generator.
+"""Avatar sheet wrapped around Aiwake's existing generator.
 
-``create_avatar(description, style)`` draws the bust with the selected image
-provider. Gemini goes through ``create_puppet.generate_character_image``.
-Together and OpenRouter use the same prompt contract. The right view is a
-mirror of the left view. Mouths are Aiwake's organic Rhubarb bank (South Park
-construction-paper shapes: ``smug_smile`` and ``stressed_grimace``). Eyes,
-lids and brows are anchored with Aiwake's landmark detector.
+``create_avatar`` does not draw its own plates. It calls
+``create_puppet``: Gemini ``models/gemini-2.5-flash-image`` at 9:16, a
+BiRefNet cutout, MediaPipe landmarks (OpenCV fallback), and
+``auto_rig_character`` (``puppet.json`` schema 3). The person prompt and the
+stick-figure prompt keep that factory's pose lock: 25° three-quarter, head
+27% of the height, no drawn mouth, solid black background.
 
-The bust is never redrawn with stick primitives. With no key, callers that
-pass ``allow_mock=True`` get an obvious placeholder; the HTTP stick fallback
-stays in :mod:`products.animind_core.stick` for tests.
+The v3 layers are seated once from the manifest framing and adapted into the
+animind rig. Eyes and mouths stay on the slicer's anchors. The right view is
+a mirror made at load. The scene does not rotate the puppet per frame.
 """
 from __future__ import annotations
 
@@ -21,26 +21,21 @@ from typing import Any, Callable
 import numpy as np
 from PIL import Image, ImageDraw
 
-from . import assemble_body, image_models, mouthset, qa, rig, settings, stick, styles
+from . import image_models, mouthset, puppet_v3, qa, rig, settings, stick, styles
 
 CANVAS = stick.CANVAS
 VISEMES = mouthset.VISEMES
 CHARACTER_SET_CAP_USD = 0.30
-# Qwen head + body, then two Kontext edits. One head redraw still fits under US$0.15.
-_SET_ESTIMATE_USD = 0.15
-_FINGERPRINT_VERSION = 2
+# One Gemini Flash plate, plus one mouth redraw. Both fit under the US$0.30 character cap.
+_SET_ESTIMATE_USD = 0.08
+_FLASH_MODEL_ID = "nano-banana"
+_FINGERPRINT_VERSION = 3
 SOURCES = (
     "products/aiwake/animator/factory/create_puppet.py",
-    "products/aiwake/animator/factory/one_shot_factory.py",
-    "products/aiwake/animator/factory/generate_concepts.py",
-    "products/aiwake/animator/asset_generator.py",
-    "products/aiwake/animator/render/facial_rig.py",
-    "products/aiwake/animator/render/skia_mouths.py",
-    "products/aiwake/animator/vision/head_analyzer.py",
+    "animation/parametric/factory/rigger.py",
+    "animation/parametric/factory/layer_slicer.py",
     "animation/parametric/factory/landmark_detector.py",
-    "animation/parametric/factory/puppet_assembler.py",
-    "animation/parametric/animator_types.py",
-    "products/animind_core/assemble_body.py",
+    "animation/parametric/factory/puppet_matrix.py",
 )
 
 
@@ -166,18 +161,33 @@ def create_avatar(
             f"(spent US${ledger['spentUsd']:.2f}) and no saved bust can be reused"
         )
     else:
-        left, front, spec_provider, spec_model, cost, mock, front_status, mouthless = _acquire(
-            description, style_id, stick_figure, skin, model_id, budget, allow_mock, ledger,
-        )
-        passed = _image_ok(left) and _image_ok(front)
+        try:
+            left, front, spec_provider, spec_model, cost, mock, front_status, mouthless = _acquire(
+                description, style_id, stick_figure, skin, model_id, budget, allow_mock, ledger,
+            )
+        except SideViewMissing:
+            if passing is None:
+                raise
+            left, front = passing
+            spec_provider, spec_model = "cached", "cached"
+            cost, mock, mouthless = 0.0, False, True
+            front_status = "cached passing bust"
+            if (cache / "v3" / "puppet.json").is_file():
+                puppet_v3.restore(cache / "v3", skin)
+        fresh = _image_ok(left) and _image_ok(front)
         ledger["spentUsd"] = round(float(ledger["spentUsd"]) + float(cost), 4)
-        ledger["passed"] = bool(ledger.get("passed") or passed)
-        if passed:
+        ledger["passed"] = bool(ledger.get("passed") or fresh)
+        if fresh and not mock and (skin / "puppet.json").is_file():
+            puppet_v3.snapshot(skin, cache / "v3")
+        if fresh:
             _store_passing(cache, left, front)
         elif passing is not None:
             left, front = passing
             front_status = "cached passing bust"
-            passed = True
+            if (cache / "v3" / "puppet.json").is_file():
+                puppet_v3.restore(cache / "v3", skin)
+            fresh = True
+        passed = fresh
         cache.mkdir(parents=True, exist_ok=True)
         left.save(cache / "source_left.png")
         front.save(cache / "source_front.png")
@@ -190,7 +200,12 @@ def create_avatar(
         (cache / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         _write_ledger(cache, ledger)
         cached = False
-    views = _rig_views(left, front, skin, url, mouthless=mouthless)
+    if cached and (cache / "v3" / "puppet.json").is_file():
+        puppet_v3.restore(cache / "v3", skin)
+    if not mock and (skin / "puppet.json").is_file():
+        views = puppet_v3.adapt(skin, url)
+    else:
+        views = _rig_views(left, front, skin, url, mouthless=mouthless)
     rig_path = skin / "rig.json"
     saved = json.loads(rig_path.read_text(encoding="utf-8")) if rig_path.is_file() else {}
     saved.update({
@@ -236,31 +251,30 @@ def _reserve(spec: image_models.ImageModel, budget: image_models.RunBudget, spen
         )
 
 
-def _draw(client: image_models.ImageProvider, spec: image_models.ImageModel, prompt: str, dest: Path,
-          budget: image_models.RunBudget, spent: float, *, aspect: str, reference: Path | None = None) -> tuple[Image.Image, float]:
+def _gemini_ready() -> bool:
+    import os  # noqa: PLC0415
+
+    return bool((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+
+
+def _plate(prompt: str, dest: Path, budget: image_models.RunBudget, spent: float) -> tuple[Image.Image, float]:
+    """One Gemini Flash 9:16 plate through the Aiwake generator. Refused before the call."""
+    from products.aiwake.animator.factory import create_puppet  # noqa: PLC0415
+
+    from . import telemetry  # noqa: PLC0415
+
+    spec = image_models.selected(_FLASH_MODEL_ID)
     _reserve(spec, budget, spent)
     before = budget.spent_usd
-    result = client.generate(
-        prompt, destination=dest, aspect_ratio=aspect, budget=budget, reference_path=reference,
-    )
-    # The live provider charges the run budget itself. A fake must still be counted
-    # or the next call is sent after the cap is already full.
+    model = create_puppet.generate_character_image(prompt, dest, aspect_ratio="9:16")
+    cost = float(spec.usdPerImage)
     if budget.spent_usd == before:
-        budget.charge(float(result.cost_usd) or float(spec.usdPerImage))
-    return Image.open(dest).convert("RGBA"), float(result.cost_usd)
-
-
-def _head_once(client, spec, prompt, dest, budget, spent, *, reference: Path | None = None) -> tuple[Image.Image, float, int]:
-    """Draw a head. One free local check: ink in the lower face pays for a single redraw."""
-    image, cost = _draw(client, spec, prompt, dest, budget, spent, aspect="1:1", reference=reference)
-    draws = 1
-    if qa.lower_face_has_ink(image):
-        image, extra = _draw(
-            client, spec, prompt, dest, budget, spent + cost, aspect="1:1", reference=reference,
-        )
-        cost += extra
-        draws = 2
-    return image, cost, draws
+        budget.charge(cost)
+    telemetry.record(
+        "image-call", provider="gemini", model=str(model or spec.model), images=1,
+        cost_usd=cost, status="ok", artifact=dest, metadata={"modelId": spec.id, "aspect": "9:16"},
+    )
+    return Image.open(dest).convert("RGBA"), cost
 
 
 def _acquire(
@@ -273,102 +287,40 @@ def _acquire(
     allow_mock: bool,
     ledger: dict[str, Any],
 ) -> tuple[Image.Image, Image.Image, str, str, float, bool, str, bool]:
-    if model_id is None or not image_models.selected(model_id).available():
+    del style_id, model_id
+    if not _gemini_ready():
         if not allow_mock:
             raise RuntimeError("no image provider is configured")
         image = _seat(_mock_bust())
         return image, image.copy(), "mock", "placeholder", 0.0, True, "mock placeholder", False
-    spec = image_models.selected(model_id)
-    edit = image_models.selected("together-flux-kontext")
-    draw_client = image_models.provider(model_id)
-    edit_client = image_models.provider("together-flux-kontext")
+    from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
+
+    prompt = puppet_v3.avatar_prompt(description, stick=stick_figure, facing="left")
     spent = float(ledger.get("spentUsd") or 0.0)
-    cost = 0.0
-    front_head, part, _draws = _head_once(
-        draw_client, spec, head_prompt(description, style_id, stick_figure, "front"),
-        skin / "_head_front.png", budget, spent,
-    )
-    cost += part
-    spent += part
-    front_body, part = _draw(
-        draw_client, spec, body_prompt(description, style_id, stick_figure, "front"),
-        skin / "_body_front.png", budget, spent, aspect="9:16",
-    )
-    cost += part
-    spent += part
+    plate_path = skin / "_gemini.png"
+    _image, cost = _plate(prompt, plate_path, budget, spent)
+    if qa.lower_face_has_ink(_image):
+        _image, extra = _plate(prompt, plate_path, budget, spent + cost)
+        cost += extra
+    character_id = "".join(ch if ch.isalnum() else "_" for ch in skin.name.lower())[:48] or "avatar"
     try:
-        side_head, part, _draws = _head_once(
-            edit_client, edit, head_prompt(description, style_id, stick_figure, "left", edit=True),
-            skin / "_head_left.png", budget, spent, reference=skin / "_head_front.png",
+        create_puppet(
+            character_id=character_id,
+            prompt=prompt,
+            facing="left",
+            image_path=plate_path,
+            puppets_dir=skin.parent,
+            rerig=(skin / "puppet.json").is_file(),
         )
     except image_models.BudgetExceeded:
         raise
     except Exception as exc:
         raise SideViewMissing(
-            f"side view missing: {edit.model} did not return a profile ({type(exc).__name__})"
+            f"side view missing: the Aiwake rigger did not return a puppet ({type(exc).__name__})"
         ) from exc
-    cost += part
-    spent += part
-    try:
-        side_body, part = _draw(
-            edit_client, edit, body_prompt(description, style_id, stick_figure, "left", edit=True),
-            skin / "_body_left.png", budget, spent, aspect="9:16", reference=skin / "_body_front.png",
-        )
-    except image_models.BudgetExceeded:
-        raise
-    except Exception as exc:
-        raise SideViewMissing(
-            f"side view missing: {edit.model} did not return a profile ({type(exc).__name__})"
-        ) from exc
-    cost += part
-    side_head = match_skin(side_head, front_head)
-    front = assemble_body.assemble(front_head, front_body, "facing_front")["image"]
-    left = assemble_body.assemble(side_head, side_body, "facing_left")["image"]
-    return left, front, spec.provider, spec.model, cost, False, "mouthless head and body", True
-
-
-def head_prompt(description: str, style_id: str, stick_figure: bool, view: str, *, edit: bool = False) -> str:
-    """Square head. Facial hair stays. The skin under it is blank. No mouth and no neck."""
-    who = (
-        f"A single stick-figure character: {description}. "
-        "South Park construction-paper cutout, flat unshaded colors, thick black contour, stick-figure. "
-        "NO mouth, NO nose, lower face one flat colour."
-        if stick_figure else description
-    )
-    facing = "facing left, three-quarter view" if view == "left" else "front-facing, looking at the camera"
-    task = "Edit the reference head. Keep the same person. " if edit else ""
-    text = (
-        f"{task}{who}. Square close-up head only, {facing}. "
-        "Keep any moustache or beard. The skin under the facial hair is blank even skin. "
-        "NO human mouth, NO lips, NO smile creases, NO teeth, NO neck, NO shoulders. "
-        f"{styles.prompt_style(style_id)}. "
-        "Solid flat pure magenta #FF00FF background. No text."
-    )
-    return _compact(text) if edit else text
-
-
-def body_prompt(description: str, style_id: str, stick_figure: bool, view: str, *, edit: bool = False) -> str:
-    """Headless upper body. The collar is empty and the torso fills the bottom of the frame."""
-    who = f"stick-figure clothes for {description}" if stick_figure else description
-    facing = "facing left" if view == "left" else "front-facing"
-    task = "Edit the reference body. Keep the same clothes. " if edit else ""
-    return (
-        f"{task}{who}. Headless upper body, {facing}, ending in a clean empty collar. "
-        "No head, no face, NO human mouth. The collar is at the top and the torso fills the bottom edge. "
-        f"{styles.prompt_style(style_id)}. "
-        "Solid flat pure magenta #FF00FF background. No text."
-    )
-
-
-def _compact(prompt: str) -> str:
-    words = prompt.replace("\n", " ").split()
-    kept: list[str] = []
-    for word in words:
-        nxt = " ".join([*kept, word])
-        if len(nxt) > 380:
-            break
-        kept.append(word)
-    return " ".join(kept)
+    character = Image.open(skin / "character.png").convert("RGBA")
+    spec = image_models.selected(_FLASH_MODEL_ID)
+    return character, character.copy(), spec.provider, spec.model, cost, False, "aiwake v3 mouthless", True
 
 
 def _mock_bust() -> Image.Image:
@@ -762,7 +714,7 @@ def main(argv: list[str] | None = None) -> None:
         except ValueError:
             return path.name
 
-    built = create_avatar(description, "cartoon", skin=skin, url=url, model_id="together-qwen-image")
+    built = create_avatar(description, "cartoon", skin=skin, url=url)
     print(
         f"avatar {folder} cost US${built['qa']['costUsd']:.4f} "
         f"mouthless={built.get('frontShot')} cached={built['cached']}"

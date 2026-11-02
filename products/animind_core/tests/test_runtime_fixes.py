@@ -324,26 +324,28 @@ def test_a_failed_bust_does_not_replace_the_passing_cache(tmp_path, monkeypatch)
     from products.animind_core import avatar, image_models
 
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     calls = {"n": 0}
 
-    def generate(self, prompt, **options):  # noqa: ARG001
+    def generate(prompt, destination, **options):  # noqa: ARG001
         calls["n"] += 1
-        dest = options["destination"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _bust(flat=calls["n"] > 2).save(dest)
-        return image_models.ImageResult(dest, "together", self.spec.model, 0.02)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _bust(flat=calls["n"] > 1).save(destination)
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
     kwargs = dict(skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image")
     first = avatar.create_avatar("a teacher with a moustache", "cartoon", **kwargs)
-    assert first["qa"]["score"] == 100 and calls["n"] == 4
+    assert first["qa"]["score"] == 100 and calls["n"] == 1
     passed = (tmp_path / "data" / "avatar_cache").glob("*/passing/source_left.png")
     before = next(passed).read_bytes()
     avatar.create_avatar("a teacher with a moustache", "cartoon", reuse=False, **kwargs)
-    assert calls["n"] == 8  # the failed attempt was paid once
+    assert calls["n"] == 2  # the failed attempt was paid once
     again = avatar.create_avatar("a teacher with a moustache", "cartoon", **kwargs)
-    assert calls["n"] == 8  # the passing bust is reused; no third bill
+    assert calls["n"] == 2  # the passing bust is reused; no third bill
     assert again["cached"] is True and again["qa"]["score"] == 100
     assert next((tmp_path / "data" / "avatar_cache").glob("*/passing/source_left.png")).read_bytes() == before
 
@@ -352,22 +354,25 @@ def test_avatar_image_cap_is_thirty_cents(tmp_path, monkeypatch):
     from products.animind_core import avatar, image_models
 
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     calls = {"n": 0}
 
-    def generate(self, prompt, **options):  # noqa: ARG001
+    def generate(prompt, destination, **options):  # noqa: ARG001
         calls["n"] += 1
-        dest = options["destination"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _bust(flat=False).save(dest)
-        return image_models.ImageResult(dest, "together", self.spec.model, 0.08)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _bust(flat=False).save(destination)
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
-    kwargs = dict(
-        skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image",
-        budget=image_models.RunBudget(0.50),
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
     )
+    kwargs = dict(skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image")
     avatar.create_avatar("a teacher", "cartoon", **kwargs)
-    assert calls["n"] == 4
+    assert calls["n"] == 1
+    ledger = next((tmp_path / "data" / "avatar_cache").glob("*/ledger.json"))
+    payload = __import__("json").loads(ledger.read_text(encoding="utf-8"))
+    payload["spentUsd"] = 0.28
+    ledger.write_text(__import__("json").dumps(payload), encoding="utf-8")
     avatar.create_avatar("a teacher", "cartoon", reuse=False, **kwargs)
-    assert calls["n"] == 4  # US$0.32 already spent; the next set would pass US$0.30
+    assert calls["n"] == 1  # US$0.28 already spent; the next plate would pass US$0.30

@@ -64,33 +64,34 @@ def test_together_qwen_and_kontext_record_cost_and_stop_at_the_cap(tmp_path, mon
 
 def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     monkeypatch.delenv("ANIMIND_FORCE_MOCK", raising=False)
     prompts = []
-    refs = []
 
-    def generate(self, prompt, **options):  # noqa: ARG001
+    def generate(prompt, destination, **options):  # noqa: ARG001
         prompts.append(prompt)
-        refs.append(options.get("reference_path"))
-        dest = options["destination"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        avatar._mock_bust().save(dest)
-        return image_models.ImageResult(dest, "together", "black-forest-labs/FLUX.1-schnell", 0.003)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        avatar._mock_bust().save(destination)
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
     monkeypatch.setattr(stick, "build", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("stick primitives")))
     skin = tmp_path / "skin"
     built = avatar.create_avatar(
         "a calm teacher with round glasses", "stick", kind="stick",
         skin=skin, url=lambda path: path.as_uri(), model_id="together-qwen-image",
     )
-    assert len(prompts) >= 4
-    assert refs[0] is None and any(ref is not None for ref in refs)
+    assert prompts
     assert "South Park" in prompts[0] and "stick-figure" in prompts[0]
     assert "NO human mouth" in prompts[0]
+    assert "25 degrees" in prompts[0] and "27 percent" in prompts[0]
+    assert "black background" in prompts[0].lower()
     assert "lips together" not in prompts[0].lower()
-    assert any("facing left" in prompt.lower() for prompt in prompts)
-    assert built["generator"] == "together" and built["realImage"] is True
+    assert "facing left" in prompts[0].lower()
+    assert built["generator"] == "gemini" and built["realImage"] is True
     assert set(built["views"]) == {"front", "left", "right"}
     assert set(built["views"]["left"]["visemes"]) == set("XABCDEFGH")
     assert {"torso", "neck", "head", "eye_white", "iris", "eyes_half", "eyes_closed", "brows"} <= {
@@ -108,11 +109,12 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
     sample = figure.crop((0, 0, max(1, figure.width // 5), figure.height)).resize((1, 1))
     red, _green, blue, _alpha = sample.getpixel((0, 0))
     assert red > blue
+    sent = len(prompts)
     again = avatar.create_avatar(
         "a calm teacher with round glasses", "stick", kind="stick",
         skin=tmp_path / "skin2", url=lambda path: path.as_uri(), model_id="together-qwen-image",
     )
-    assert again["cached"] is True and len(prompts) >= 4
+    assert again["cached"] is True and len(prompts) == sent
 
 
 def _realistic_bust() -> Image.Image:
@@ -142,15 +144,17 @@ def _assert_mouth_inside_face(skin, view) -> None:
 
 def test_realistic_bust_keeps_the_mouth_on_the_face(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
 
-    def generate(self, prompt, **options):  # noqa: ARG001
-        dest = options["destination"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _realistic_bust().save(dest)
-        return image_models.ImageResult(dest, "together", "Qwen/Qwen-Image", 0.01)
+    def generate(prompt, destination, **options):  # noqa: ARG001
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _realistic_bust().save(destination)
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
     skin = tmp_path / "bust"
     built = avatar.create_avatar(
         "a teacher", "southpark", kind="rig", skin=skin,
@@ -212,17 +216,21 @@ def test_beard_does_not_pull_the_mouth_up_to_the_nose():
 
 def test_side_edit_failure_does_not_reuse_the_front(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
 
-    def generate(self, prompt, **options):  # noqa: ARG001
-        if options.get("reference_path"):
-            raise RuntimeError("404")
-        dest = options["destination"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _realistic_bust().save(dest)
-        return image_models.ImageResult(dest, "together", "Qwen/Qwen-Image", 0.01)
+    def generate(prompt, destination, **options):  # noqa: ARG001
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _realistic_bust().save(destination)
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.auto_rig_character",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("404")),
+    )
     with pytest.raises(avatar.SideViewMissing):
         avatar.create_avatar(
             "a teacher", "southpark", skin=tmp_path / "skin",
@@ -232,17 +240,19 @@ def test_side_edit_failure_does_not_reuse_the_front(tmp_path, monkeypatch):
 
 def test_reuse_false_ignores_the_avatar_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
     calls = {"n": 0}
 
-    def generate(self, prompt, **options):  # noqa: ARG001
+    def generate(prompt, destination, **options):  # noqa: ARG001
         calls["n"] += 1
-        dest = options["destination"]
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _realistic_bust().save(dest)
-        return image_models.ImageResult(dest, "together", self.spec.model, self.spec.usdPerImage)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _realistic_bust().save(destination)
+        return "models/gemini-2.5-flash-image"
 
-    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
     kwargs = dict(skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image")
     avatar.create_avatar("a teacher", "southpark", **kwargs)
     first = calls["n"]
