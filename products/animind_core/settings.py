@@ -15,8 +15,12 @@ def api_key() -> str:
     return (os.getenv("CORE_API_KEY") or "").strip()
 
 
+def force_mock() -> bool:
+    return (os.getenv("ANIMIND_FORCE_MOCK") or "").strip().lower() in {"1", "true", "yes"}
+
+
 def gemini_available() -> bool:
-    if (os.getenv("ANIMIND_FORCE_MOCK") or "").strip().lower() in {"1", "true", "yes"}:
+    if force_mock():
         return False
     if not (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip():
         return False
@@ -24,7 +28,7 @@ def gemini_available() -> bool:
 
 
 def deepseek_available() -> bool:
-    if (os.getenv("ANIMIND_FORCE_MOCK") or "").strip().lower() in {"1", "true", "yes"}:
+    if force_mock():
         return False
     return bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())
 

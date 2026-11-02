@@ -15,6 +15,7 @@ import logging
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 import wave
 from pathlib import Path
@@ -22,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-from . import casting, characters, frameqa, languages, rig, scene, settings, styles, titles
+from . import casting, characters, frameqa, languages, rig, scene, settings, styles, telemetry, titles
 from . import script as scripts
 
 _LOG = logging.getLogger("animind_core")
@@ -249,6 +250,7 @@ def _rig_views(char: dict[str, Any], template: str, idx: int, scenario: str = "s
 def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
     from animation.parametric.renderer import AnimationRenderer  # noqa: PLC0415
 
+    started = time.perf_counter()
     try:
         _set(job_id, status="running", progress=0.05)
         chars = req.get("characters") or []
@@ -343,7 +345,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                 f"{frame_qa['examples'][:3]}"
             )
         files = f"{base_url}/v1/files/jobs/{job_id}"
-        _set(job_id, status="done", progress=1.0, result={
+        result = {
             "template": template, "scenario": scenario, "characters": chars,
             "script": script, "durationMs": int(duration * 1000), "audioUrl": f"{files}/voice.wav",
             "videoUrl": f"{files}/preview.mp4", "disclaimer": disclaimer,
@@ -375,10 +377,32 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "frameQaUrl": f"{files}/frame_qa.json",
             "language": lang,
             "rhubarbRecognizer": language.rhubarb,
-        })
+        }
+        _set(job_id, status="done", progress=1.0, result=result)
+        cost = written["scriptCost"]
+        telemetry.record(
+            "render",
+            provider=cost.get("provider"),
+            model=cost.get("model"),
+            input_tokens=cost.get("inputTokens", 0),
+            output_tokens=cost.get("outputTokens", 0),
+            cost_usd=cost.get("costUsd", 0.0),
+            latency_ms=(time.perf_counter() - started) * 1000,
+            script_qa=written.get("scriptQA"),
+            frame_qa=frame_qa,
+            artifact=video,
+            metadata={
+                "jobId": job_id, "template": template, "language": lang,
+                "durationMs": result["durationMs"], "test": bool(settings.force_mock()),
+            },
+        )
     except Exception as exc:  # noqa: BLE001 — surfaced on the job
         _LOG.exception("render job %s failed", job_id)
         _set(job_id, status="failed", error=str(exc)[:500])
+        telemetry.record(
+            "render", latency_ms=(time.perf_counter() - started) * 1000,
+            status="failed", metadata={"jobId": job_id, "errorType": type(exc).__name__},
+        )
 
 
 def submit(req: dict[str, Any], base_url: str) -> dict[str, Any]:

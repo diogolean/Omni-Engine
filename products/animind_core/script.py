@@ -25,9 +25,10 @@ import json
 import logging
 import re
 from dataclasses import dataclass, replace
+from time import perf_counter
 from typing import Any
 
-from . import knowledge, languages, llm_providers, personas, settings
+from . import knowledge, languages, llm_providers, personas, settings, telemetry
 
 _LOG = logging.getLogger("animind_core")
 WRITER_MODEL = llm_providers.GEMINI_MODEL  # compatibility name for the Gemini fallback
@@ -935,13 +936,20 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
 
     ``mode`` picks the knowledge index behind written lines (:mod:`knowledge`): ``quick`` (key terms,
     shallow) or ``deep`` (full texts). Retrieved passages only feed ideas; quotes stay verbatim from the sheet."""
+    started = perf_counter()
     explicit_llm = use_llm is True
     lang = languages.profile(lang).script
     template = template if template in (*PLANS, "dialogue") else "solo"
     from . import styles  # noqa: PLC0415
     tone, objective = styles.pick_tone(tone), styles.pick_objective(objective)
     if lang not in languages.PROFILES:
-        return _universal_write(template, topic, names, lang, tone, objective, duration)
+        out = _universal_write(template, topic, names, lang, tone, objective, duration)
+        telemetry.record(
+            "script", latency_ms=(perf_counter() - started) * 1000,
+            script_qa=out["scriptQA"], status="offline",
+            metadata={"template": template, "language": lang, "test": bool(settings.force_mock())},
+        )
+        return out
     topic = (topic or "").strip() or ("inteligência artificial" if lang == "pt-BR" else "artificial intelligence")
     n = len(names) if template == "dialogue" else (2 if template == "debate" and len(names) >= 2 else 1)
     n = max(1, n)
@@ -1080,6 +1088,19 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     out["scriptQA"] = {"pass": not problems, "problems": problems, "notes": _repeated_idea(lines)}
     if problems:
         _LOG.warning("%s script QA: %s", template, "; ".join(problems))
+    cost = out["scriptCost"]
+    telemetry.record(
+        "script",
+        provider=cost.get("provider"),
+        model=cost.get("model"),
+        input_tokens=cost.get("inputTokens", 0),
+        output_tokens=cost.get("outputTokens", 0),
+        cost_usd=cost.get("costUsd", 0.0),
+        latency_ms=(perf_counter() - started) * 1000,
+        script_qa=out["scriptQA"],
+        status=str(cost.get("status") or "ok"),
+        metadata={"template": template, "language": lang, "writer": writer, "test": bool(settings.force_mock())},
+    )
     return out
 
 
