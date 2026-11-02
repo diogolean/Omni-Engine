@@ -840,11 +840,12 @@ Rules:
 - If a written line restates one of the speaker's quotes, give that quoteId as basisId; else basisId is null.
 - QA, checked on the JSON before the video is made:
   - The hook is a question of at most 14 words and it names the topic.
+  - The hook addresses the other speaker by name. No line addresses its own speaker by name.
   - Every written line is at most 16 words. At least one line is at most 9 words.
   - The close is one punch of at most 12 words.
   - Each speaker uses at least one quoteId from that speaker's own sheet.
   - Put the word count of each line in "words".
-- The hook grabs in 3 seconds: a question about the topic, aimed at the other speaker when there is one.
+- The hook grabs in 3 seconds: a question about the topic, addressed to the other speaker by name.
 - Each reply answers the line right before it: it must repeat one content word (or its idea) of the line right before
   it — the word you attack. No parallel monologues. A quote beat picks the quote that answers the line before.
 - Do not keep that same content keyword on three consecutive lines. Echo it once, then the next line moves to a different concrete word.
@@ -854,7 +855,7 @@ Rules:
 - The turn (tréplica) uses the opponent's own words against him. Closing: the second-to-last line concedes nothing and
   strikes once; the last line is the strongest quote, a punchline that ends the video.
 - Rhythm: written lines of at most 16 words and at least one jab of at most 9 words; vary the lengths; one idea per sentence, sentences of 3 to 9 words, commas and "…" where the voice should breathe; never two
-  lines built on the same pattern; address the other speaker by name in replies.
+  lines built on the same pattern; address the other speaker by name in replies. Never address the speaker of the line by their own name.
 - In a lesson, the question beat reframes the hook, the example is concrete and everyday and ties to the quote before it,
   and the synthesis closes the loop in one line.
 
@@ -1361,11 +1362,112 @@ def _replan_request(base_prompt: str, displaced: list[tuple[int, str, str]], lin
     )
 
 
+def _name_marks(name: str) -> list[str]:
+    """Full name, plus the surname, folded. A first name alone is not enough."""
+    full = personas.persona_name(name)
+    marks = []
+    if full:
+        marks.append(personas.fold(full))
+        bits = full.split()
+        if len(bits) >= 2 and len(bits[-1]) >= 4:
+            marks.append(personas.fold(bits[-1]))
+    return [mark for mark in marks if mark]
+
+
+def mentions_speaker(text: str, name: str) -> bool:
+    """True when ``text`` says ``name`` (or that person's surname) as a word."""
+    folded = personas.fold(text)
+    padded = f" {folded} "
+    return any(f" {mark} " in padded for mark in _name_marks(name))
+
+
+def _quote_replan_request(base_prompt: str, lines: list[dict[str, Any]], problems: list[str]) -> str:
+    """One fresh debate. The quote that failed to answer stays a quote; the neighbour is not patched."""
+    missed = [problem for problem in problems if _UNANSWERED.match(problem)]
+    detail = "\n".join(f"- {problem}" for problem in missed) or "- a quote does not answer the line before it"
+    spoken = "\n".join(
+        f'- line {i} ({line.get("kind")}): {line.get("text")}' for i, line in enumerate(lines)
+    )
+    return (
+        base_prompt
+        + "\n\nA spoken quote does not answer the line before it. "
+        "Write every beat again from the plan. On a quote beat, pick a quoteId from that speaker's "
+        "own list that answers the previous line. Do not keep a quote that ignores the line before it.\n"
+        f"Failures:\n{detail}\n"
+        f"Previous draft:\n{spoken}\n"
+    )
+
+
+def _score_reply_quotes(index: int, previous: str, candidates: list[dict[str, Any]], name: str, lang: str,
+                        topic: str, *, allow_unavailable_gemini: bool) -> dict[str, int]:
+    """Ask which of this speaker's quotes answers the previous line. Scores only; the text is not rewritten."""
+    if not candidates:
+        return {}
+    listing = "\n".join(f'- {personas.slug(name)}:{q["id"]}: {q["text"]}' for q in candidates)
+    prompt = (
+        f"Line {index} is a fixed quote and it does not answer the previous line. "
+        "Do not rewrite the previous line or any other line. "
+        "Score each candidate quote from this speaker's own sheet for how well it answers the previous line. "
+        "A higher score is a better answer.\n"
+        f"Speaker: {name}. Topic: {topic}. Language: {lang}.\n"
+        f"Previous line: {previous}\n"
+        f"Candidates:\n{listing}\n"
+        'Return JSON only: {"lines": [{"i": 0, "quoteId": "...", "score": 0}]}.'
+    )
+    scores: dict[str, int] = {}
+    for entry in _ask_writer(prompt, allow_unavailable_gemini=allow_unavailable_gemini):
+        if not isinstance(entry, dict):
+            continue
+        found = sheet_quote({"quotes": candidates}, name, entry.get("quoteId"))
+        if found is None:
+            continue
+        try:
+            scores[str(found["id"])] = int(entry.get("score") or 0)
+        except (TypeError, ValueError):
+            scores[str(found["id"])] = 0
+    return scores
+
+
+def _swap_answering_quote(lines: list[dict[str, Any]], index: int, sheets: list[dict[str, Any]], names: list[str],
+                          topic: str, lang: str, *, allow_unavailable_gemini: bool) -> bool:
+    """Replace a quote that ignores the previous line with another quote from the same sheet that answers it."""
+    line = lines[index]
+    speaker = int(line.get("speaker") or 0)
+    if speaker >= len(sheets):
+        return False
+    name = names[speaker] if speaker < len(names) else ""
+    previous = lines[index - 1]["text"] if index else ""
+    current_id = str((line.get("quote") or {}).get("id") or "")
+    used = {
+        str((other.get("quote") or {}).get("id") or "")
+        for other in lines
+        if other is not line and other.get("kind") == "quote" and other.get("speaker") == speaker
+    }
+    candidates = [
+        quote for quote in _eligible(sheets[speaker], QUOTE_MAX_WORDS)
+        if quote["id"] != current_id and quote["id"] not in used
+    ]
+    linking = [quote for quote in candidates if link(previous, quote["text"], quote=True, names=names)]
+    if not linking:
+        return False
+    scores = _score_reply_quotes(
+        index, previous, candidates, name, lang, topic, allow_unavailable_gemini=allow_unavailable_gemini,
+    )
+    best = max(linking, key=lambda quote: (scores.get(str(quote["id"]), 0), chain_score(quote, topic, previous)))
+    line["kind"] = "quote"
+    line["text"] = best["text"]
+    line["quote"] = cite(best)
+    line.pop("basis", None)
+    line["maxS"] = max(float(line.get("maxS") or 0), max_seconds(words(best["text"])))
+    line["replyTo"] = {"line": index - 1, "idea": link(previous, best["text"], quote=True, names=names)}
+    return True
+
+
 def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: str, topic: str, names: list[str], *,
-                       allow_unavailable_gemini: bool, sheets: list[dict[str, Any]] | None = None) -> bool:
-    """Rewrite a line whose own rule can be fixed. Quote ownership is not one of those rules."""
-    del sheets  # ownership is reported, not patched onto a neighbouring line
+                       allow_unavailable_gemini: bool, sheets: list[dict[str, Any]] | None = None) -> tuple[bool, bool]:
+    """Rewrite a line whose own rule can be fixed. A quote that does not answer is swapped, not its neighbour."""
     changed = False
+    needs_replan = False
     for problem in problems:
         if _NO_QUOTE.match(problem):
             continue
@@ -1375,8 +1477,16 @@ def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: s
         index = int(match.group(1))
         if not 0 <= index < len(lines):
             continue
+        if lines[index].get("kind") == "quote":
+            # The quote text is fixed. Scoring another quote from this sheet, or one replan, is the repair.
+            if sheets and _swap_answering_quote(
+                lines, index, sheets, names, topic, lang, allow_unavailable_gemini=allow_unavailable_gemini,
+            ):
+                changed = True
+            else:
+                needs_replan = True
+            continue
         previous = lines[int(match.group(2))]["text"]
-        quote = lines[index].get("quote") if lines[index].get("kind") == "quote" else None
         nxt = lines[index + 1]["text"] if index + 1 < len(lines) else ""
         rewritten = _rewrite_line(
             index,
@@ -1386,12 +1496,6 @@ def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: s
         )
         if not rewritten or not link(previous, rewritten, names=names):
             continue
-        if quote:
-            # The spoken line now answers. The source the writer chose stays on basis.
-            lines[index]["kind"] = "paraphrase"
-            lines[index].pop("quote", None)
-            lines[index]["basis"] = _basis_of(quote)
-            lines[index]["basis"]["text"] = quote.get("text") or lines[index]["text"]
         lines[index]["text"] = rewritten
         lines[index]["replyTo"] = {"line": index - 1, "idea": link(previous, rewritten, names=names)}
         changed = True
@@ -1426,7 +1530,7 @@ def _repair_unanswered(lines: list[dict[str, Any]], problems: list[str], lang: s
                 lines[-1]["kind"] = "paraphrase"
                 lines[-1].pop("quote", None)
                 changed = True
-    return changed
+    return changed, needs_replan
 
 
 def rewrite_for_duration(line: dict[str, Any], *, shorter: bool, words: int, topic: str = "",
@@ -1581,6 +1685,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     if use_llm is None:
         use_llm = settings.script_llm_available()
 
+    base_prompt = ""
     drafted: dict[int, dict[str, Any]] = {}
     writer = "template"
     script_cost: dict[str, Any] = {
@@ -1596,6 +1701,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         prompt = _prompt(
             plan, sheets, names, topic, lang, template, passages, tone, objective, duration, words_per_s,
         )
+        base_prompt = prompt
         result, failures = llm_providers.generate(
             prompt,
             settings.data_dir() / "cache" / "script",
@@ -1626,204 +1732,247 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     lines: list[dict[str, Any]] = []
     displaced: list[tuple[int, str, str]] = []
     authored: set[int] = set()
-    for _pass in (0, 1):
-        used: set[tuple[int, str]] = set()
-        lines = []
-        authored = set()
-        displaced = []
-        molds: set[str] = set()
-        for i, beat in enumerate(plan):
-            sp = min(beat.speaker, n - 1)
-            sheet = sheets[sp]
-            by_id = {q["id"]: q for q in _quotable(sheet)}
-            speaker_name = names[sp] if sp < len(names) else ""
-            draft = draft_source.get(i) or {}
-            line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words, beat.rate),
-                                    "pauseAfterS": beat.pause_s, "rateAdj": beat.rate, "emotion": emotion_of(draft, beat.name)}
-            if beat.act:
-                line["act"] = beat.act
-            previous = lines[-1]["text"] if lines else ""
-            answers_prev = (lambda text, quote=False: link(previous, text, quote=quote, names=names)) if debate and lines else None
-            # A line the model actually wrote is final. Template molds fill only beats it left empty.
-            writer_line = writer in {"deepseek", "gemini"} and i in draft_source
-            quote = None
-            chosen_quote = None
-            if beat.kind == "quote":
-                pool = [q for q in _eligible(sheet, beat.max_words) if (sp, q["id"]) not in used]
-                qid = draft.get("quoteId")
-                ranked = _rank_strong(pool, topic, previous) if beat.strong else _rank(pool, topic, previous)
-                if not writer_line and answers_prev:  # offline: a debate quote answers the line before
-                    ranked = sorted(ranked, key=lambda q: not answers_prev(q["text"], True))
-                elif not writer_line and template == "lesson":
-                    ranked = sorted(ranked, key=lambda q: not on_thread(q["text"], previous, topic))
-                named_quote = sheet_quote(sheet, speaker_name, qid) if qid else None
-                chosen_quote = named_quote if named_quote in pool else None
-                if writer_line and other_speaker_quote_id(qid, speaker_name):
-                    quote = None  # the other speaker's q-number is not this speaker's quote
-                elif writer_line and chosen_quote is not None:
-                    quote = chosen_quote  # the writer's quote is not re-picked later
-                else:
-                    quote = chosen_quote
-                    off_topic = bool(
-                        quote is not None and ranked
-                        and not (_tokens(topic) & _tokens(quote["text"]))
-                        and topic_score(quote, topic) < topic_score(ranked[0], topic)
-                    )
-                    ignores = bool(
-                        answers_prev and quote is not None and ranked
-                        and not answers_prev(quote["text"], True) and answers_prev(ranked[0]["text"], True)
-                    )
-                    if quote is None or (not writer_line and (off_topic or ignores)):
-                        quote = next(iter(ranked), None)  # unknown id, or an offline quote that ignores the line before
-                if quote is not None and beat.optional and not (writer_line and chosen_quote is not None):
-                    if template == "lesson" and not on_thread(quote["text"], previous, topic):
-                        quote = None  # an off-thread quote would be a non sequitur: the turn is written instead
-                    elif answers_prev and not answers_prev(quote["text"], True):
-                        quote = None  # no quote answers the line before -> a written line, not a non sequitur
-                    elif not answers_prev and not qid and not answers(quote, topic, previous):
-                        quote = None
-            else:
-                # a written line that *is* one of the speaker's real quotes is shown as that quote, with its source
-                pool = [q for q in _quotable(sheet) if (sp, q["id"]) not in used]
-                quote = matching_quote(draft.get("text") or "", pool, beat.max_words + 6)
-            translated_from: dict[str, Any] | None = None
-            spoken_translation = ""
-            if quote is not None and foreign_quote(quote["text"], lang):
-                # Speak the target language. The German (or other) source stays on basis.
-                translated_from = quote
-                spoken_translation = _spoken_translation(
-                    quote, draft, lang, topic, names,
-                    allow_unavailable_gemini=explicit_llm, use_llm=writer_line,
-                )
+    qa_quote_replan = False
+    while True:
+        for _pass in (0, 1):
+            used: set[tuple[int, str]] = set()
+            lines = []
+            authored = set()
+            displaced = []
+            molds: set[str] = set()
+            for i, beat in enumerate(plan):
+                sp = min(beat.speaker, n - 1)
+                sheet = sheets[sp]
+                by_id = {q["id"]: q for q in _quotable(sheet)}
+                speaker_name = names[sp] if sp < len(names) else ""
+                draft = draft_source.get(i) or {}
+                line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words, beat.rate),
+                                        "pauseAfterS": beat.pause_s, "rateAdj": beat.rate, "emotion": emotion_of(draft, beat.name)}
+                if beat.act:
+                    line["act"] = beat.act
+                previous = lines[-1]["text"] if lines else ""
+                answers_prev = (lambda text, quote=False: link(previous, text, quote=quote, names=names)) if debate and lines else None
+                # A line the model actually wrote is final. Template molds fill only beats it left empty.
+                writer_line = writer in {"deepseek", "gemini"} and i in draft_source
                 quote = None
-            mismatched: dict[str, Any] | None = None
-            if quote is not None and lines and template in {"solo", "dialogue"} and not (writer_line and chosen_quote is quote):
-                fits_line = bool(link(previous, quote["text"], quote=True, names=names))
-                fits_topic = topic_score(quote, topic) > 0 or focus(quote, topic) >= 0.3
-                # A real quote that answers neither the previous line nor the question
-                # becomes a paraphrase. The sheet source stays on ``basis``.
-                # Lessons and debates keep their quote beats; those shapes are checked apart.
-                if not fits_line and not fits_topic:
-                    mismatched = quote
-                    quote = None
-            if quote is not None:
-                used.add((sp, quote["id"]))
-                line.update(kind="quote", text=quote["text"], quote=cite(quote))
-                line["maxS"] = max(line["maxS"], max_seconds(words(quote["text"]), beat.rate))
-            else:
-                if beat.kind == "quote":  # a quote beat without a fitting quote gets a short written line
-                    beat = replace(beat, max_words=min(beat.max_words, 16))
-                taken = {personas.fold(ln["text"]) for ln in lines}
-                # A model sentence stays whole. Slicing it to the beat cap cut
-                # "we can hold" off the debate line and spoke the stump.
-                raw_draft = draft.get("text") or ""
-                draft_text = tidy(_unquoted(raw_draft) if writer_line else _clean_paraphrase(raw_draft, beat.max_words))
-                locked = False
-                if spoken_translation:
-                    text = tidy(_unquoted(spoken_translation))
-                    drafted_text = True
-                    locked = True
-                    authored.add(i)
-                elif writer_line and draft_text:
-                    text = draft_text
-                    reason = _repair_reason(text, sheet, passages[sp], taken)
-                    if reason:
-                        rewritten = _rewrite_line(
-                            i, reason, text, lang, topic, names, allow_unavailable_gemini=explicit_llm,
-                            max_words=16, previous=previous, following="",
+                chosen_quote = None
+                if beat.kind == "quote":
+                    pool = [q for q in _eligible(sheet, beat.max_words) if (sp, q["id"]) not in used]
+                    qid = draft.get("quoteId")
+                    ranked = _rank_strong(pool, topic, previous) if beat.strong else _rank(pool, topic, previous)
+                    if not writer_line and answers_prev:  # offline: a debate quote answers the line before
+                        ranked = sorted(ranked, key=lambda q: not answers_prev(q["text"], True))
+                    elif not writer_line and template == "lesson":
+                        ranked = sorted(ranked, key=lambda q: not on_thread(q["text"], previous, topic))
+                    named_quote = sheet_quote(sheet, speaker_name, qid) if qid else None
+                    chosen_quote = named_quote if named_quote in pool else None
+                    if writer_line and other_speaker_quote_id(qid, speaker_name):
+                        quote = None  # the other speaker's q-number is not this speaker's quote
+                    elif writer_line and chosen_quote is not None:
+                        quote = chosen_quote  # the writer's quote is not re-picked later
+                    else:
+                        quote = chosen_quote
+                        off_topic = bool(
+                            quote is not None and ranked
+                            and not (_tokens(topic) & _tokens(quote["text"]))
+                            and topic_score(quote, topic) < topic_score(ranked[0], topic)
                         )
-                        if rewritten:
-                            text = rewritten
-                    drafted_text = True
-                    locked = True  # the model's line stays; a failed repair does not inject a mold
-                    authored.add(i)
+                        ignores = bool(
+                            answers_prev and quote is not None and ranked
+                            and not answers_prev(quote["text"], True) and answers_prev(ranked[0]["text"], True)
+                        )
+                        if quote is None or (not writer_line and (off_topic or ignores)):
+                            quote = next(iter(ranked), None)  # unknown id, or an offline quote that ignores the line before
+                    if quote is not None and beat.optional and not (writer_line and chosen_quote is not None):
+                        if template == "lesson" and not on_thread(quote["text"], previous, topic):
+                            quote = None  # an off-thread quote would be a non sequitur: the turn is written instead
+                        elif answers_prev and not answers_prev(quote["text"], True):
+                            quote = None  # no quote answers the line before -> a written line, not a non sequitur
+                        elif not answers_prev and not qid and not answers(quote, topic, previous):
+                            quote = None
                 else:
-                    text = draft_text
-                    hook_off_topic = debate and not lines and not link(topic, text, names=names)
-                    drafted_text = bool(text)
-                    if (not text or personas.fold(text) in taken or copies_quote(text, sheet) or hook_off_topic
-                            or _literal_claim(text, sheet)
-                            or knowledge.copies_passage(text, passages[sp]) or (answers_prev and not answers_prev(text))):
-                        drafted_text = False
+                    # a written line that *is* one of the speaker's real quotes is shown as that quote, with its source
+                    pool = [q for q in _quotable(sheet) if (sp, q["id"]) not in used]
+                    quote = matching_quote(draft.get("text") or "", pool, beat.max_words + 6)
+                translated_from: dict[str, Any] | None = None
+                spoken_translation = ""
+                if quote is not None and foreign_quote(quote["text"], lang):
+                    # Speak the target language. The German (or other) source stays on basis.
+                    translated_from = quote
+                    spoken_translation = _spoken_translation(
+                        quote, draft, lang, topic, names,
+                        allow_unavailable_gemini=explicit_llm, use_llm=writer_line,
+                    )
+                    quote = None
+                mismatched: dict[str, Any] | None = None
+                if quote is not None and lines and template in {"solo", "dialogue"} and not (writer_line and chosen_quote is quote):
+                    fits_line = bool(link(previous, quote["text"], quote=True, names=names))
+                    fits_topic = topic_score(quote, topic) > 0 or focus(quote, topic) >= 0.3
+                    # A real quote that answers neither the previous line nor the question
+                    # becomes a paraphrase. The sheet source stays on ``basis``.
+                    # Lessons and debates keep their quote beats; those shapes are checked apart.
+                    if not fits_line and not fits_topic:
+                        mismatched = quote
+                        quote = None
+                if quote is not None:
+                    used.add((sp, quote["id"]))
+                    line.update(kind="quote", text=quote["text"], quote=cite(quote))
+                    line["maxS"] = max(line["maxS"], max_seconds(words(quote["text"]), beat.rate))
+                else:
+                    if beat.kind == "quote":  # a quote beat without a fitting quote gets a short written line
+                        beat = replace(beat, max_words=min(beat.max_words, 16))
+                    taken = {personas.fold(ln["text"]) for ln in lines}
+                    # A model sentence stays whole. Slicing it to the beat cap cut
+                    # "we can hold" off the debate line and spoke the stump.
+                    raw_draft = draft.get("text") or ""
+                    draft_text = tidy(_unquoted(raw_draft) if writer_line else _clean_paraphrase(raw_draft, beat.max_words))
+                    locked = False
+                    if spoken_translation:
+                        text = tidy(_unquoted(spoken_translation))
+                        drafted_text = True
+                        locked = True
+                        authored.add(i)
+                    elif writer_line and draft_text:
+                        text = draft_text
+                        reason = _repair_reason(text, sheet, passages[sp], taken)
+                        if reason:
+                            rewritten = _rewrite_line(
+                                i, reason, text, lang, topic, names, allow_unavailable_gemini=explicit_llm,
+                                max_words=16, previous=previous, following="",
+                            )
+                            if rewritten:
+                                text = rewritten
+                        drafted_text = True
+                        locked = True  # the model's line stays; a failed repair does not inject a mold
+                        authored.add(i)
+                    else:
+                        text = draft_text
+                        hook_off_topic = debate and not lines and not link(topic, text, names=names)
+                        drafted_text = bool(text)
+                        if (not text or personas.fold(text) in taken or copies_quote(text, sheet) or hook_off_topic
+                                or _literal_claim(text, sheet)
+                                or knowledge.copies_passage(text, passages[sp]) or (answers_prev and not answers_prev(text))):
+                            drafted_text = False
+                            nxt = plan[i + 1] if i + 1 < len(plan) else None
+                            nsp = min(nxt.speaker, n - 1) if nxt else 0
+                            upcoming = ([q["text"] for q in _rank([q for q in _eligible(sheets[nsp], nxt.max_words)
+                                                                   if (nsp, q["id"]) not in used], topic, "")]
+                                        if debate and nxt and nxt.kind == "quote" else None)
+                            text = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
+                                                  objective, tone)
+                    line.update(kind="paraphrase", text=text)
+                    if beat.name == "citação":  # a written line is never labelled as a quote
+                        line["beat"] = "ideia"
+                    basis = sheet_quote(sheet, speaker_name, draft.get("basisId")) if drafted_text else None
+                    if translated_from is not None:
+                        basis = translated_from
+                    elif mismatched is not None:
+                        basis = mismatched
+                    if basis is not None:
+                        line["basis"] = _basis_of(basis, translated=translated_from is not None)
+                    if not locked and lines and not link(previous, line["text"], names=names):
+                        taken = {personas.fold(ln["text"]) for ln in lines}
                         nxt = plan[i + 1] if i + 1 < len(plan) else None
                         nsp = min(nxt.speaker, n - 1) if nxt else 0
                         upcoming = ([q["text"] for q in _rank([q for q in _eligible(sheets[nsp], nxt.max_words)
                                                                if (nsp, q["id"]) not in used], topic, "")]
                                     if debate and nxt and nxt.kind == "quote" else None)
-                        text = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
-                                              objective, tone)
-                line.update(kind="paraphrase", text=text)
-                if beat.name == "citação":  # a written line is never labelled as a quote
-                    line["beat"] = "ideia"
-                basis = sheet_quote(sheet, speaker_name, draft.get("basisId")) if drafted_text else None
-                if translated_from is not None:
-                    basis = translated_from
-                elif mismatched is not None:
-                    basis = mismatched
-                if basis is not None:
-                    line["basis"] = _basis_of(basis, translated=translated_from is not None)
-                if not locked and lines and not link(previous, line["text"], names=names):
-                    taken = {personas.fold(ln["text"]) for ln in lines}
-                    nxt = plan[i + 1] if i + 1 < len(plan) else None
-                    nsp = min(nxt.speaker, n - 1) if nxt else 0
-                    upcoming = ([q["text"] for q in _rank([q for q in _eligible(sheets[nsp], nxt.max_words)
-                                                           if (nsp, q["id"]) not in used], topic, "")]
-                                if debate and nxt and nxt.kind == "quote" else None)
-                    repaired = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
-                                              objective, tone)
-                    if link(previous, repaired, names=names):
-                        line["text"] = repaired
-            if lines:
-                idea = link(previous, line["text"], quote=line["kind"] == "quote", names=names)
-                line["replyTo"] = {"line": len(lines) - 1, "idea": idea}
-            if writer_line and beat.kind == "quote":
-                named = sheet_quote(sheet, speaker_name, draft.get("quoteId")) if draft.get("quoteId") else None
-                spoken = line["text"]
-                if named is not None and (line.get("kind") != "quote" or line.get("quote", {}).get("id") != named["id"] or spoken != named["text"]):
-                    displaced.append((i, named["text"], spoken))
-            lines.append(line)
-        if not displaced or _pass == 1 or writer not in {"deepseek", "gemini"} or not debate:
-            break
-        fresh = _ask_writer(
-            _replan_request(prompt, displaced, lines), allow_unavailable_gemini=explicit_llm,
-        )
-        nxt_source = {
-            entry["i"]: entry for entry in fresh
-            if isinstance(entry, dict) and isinstance(entry.get("i"), int)
-        }
-        if not nxt_source:
-            break
-        _correct_draft_shape(
-            nxt_source, plan, topic, names, sheets, budget, lang,
-            allow_unavailable_gemini=explicit_llm,
-        )
-        draft_source = nxt_source
-    if writer in {"deepseek", "gemini"} and authored:
-        stems = [_stems(str(line.get("text") or "")) for line in lines]
-        for index in range(2, len(lines)):
-            if index not in authored or lines[index].get("kind") == "quote":
-                continue
-            shared = set(stems[index]) & set(stems[index - 1]) & set(stems[index - 2])
-            if not shared:
-                continue
-            word = stems[index][next(iter(shared))]
-            nxt = lines[index + 1]["text"] if index + 1 < len(lines) else ""
-            prev = lines[index - 1]["text"] if index else ""
-            rewritten = _rewrite_line(
-                index,
-                f"the word {word!r} is already on the two lines before this one; use a different concrete word "
-                "and still repeat one content word from the previous line",
-                lines[index]["text"], lang, topic, names, allow_unavailable_gemini=explicit_llm,
-                max_words=min(16, words(lines[index]["text"])), previous=prev, following=nxt,
+                        repaired = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
+                                                  objective, tone)
+                        if link(previous, repaired, names=names):
+                            line["text"] = repaired
+                if lines:
+                    idea = link(previous, line["text"], quote=line["kind"] == "quote", names=names)
+                    line["replyTo"] = {"line": len(lines) - 1, "idea": idea}
+                if writer_line and beat.kind == "quote":
+                    named = sheet_quote(sheet, speaker_name, draft.get("quoteId")) if draft.get("quoteId") else None
+                    spoken = line["text"]
+                    if named is not None and (line.get("kind") != "quote" or line.get("quote", {}).get("id") != named["id"] or spoken != named["text"]):
+                        displaced.append((i, named["text"], spoken))
+                lines.append(line)
+            if not displaced or _pass == 1 or writer not in {"deepseek", "gemini"} or not debate:
+                break
+            fresh = _ask_writer(
+                _replan_request(prompt, displaced, lines), allow_unavailable_gemini=explicit_llm,
             )
-            keeps_reply = link(prev, rewritten, names=names) if rewritten else ""
-            if rewritten and personas.fold(word) not in personas.fold(rewritten) and (not debate or keeps_reply):
-                lines[index]["text"] = rewritten
-                lines[index]["replyTo"] = {
-                    "line": index - 1,
-                    "idea": link(lines[index - 1]["text"], rewritten, names=names),
+            nxt_source = {
+                entry["i"]: entry for entry in fresh
+                if isinstance(entry, dict) and isinstance(entry.get("i"), int)
+            }
+            if not nxt_source:
+                break
+            _correct_draft_shape(
+                nxt_source, plan, topic, names, sheets, budget, lang,
+                allow_unavailable_gemini=explicit_llm,
+            )
+            draft_source = nxt_source
+        if writer in {"deepseek", "gemini"} and authored:
+            stems = [_stems(str(line.get("text") or "")) for line in lines]
+            for index in range(2, len(lines)):
+                if index not in authored or lines[index].get("kind") == "quote":
+                    continue
+                shared = set(stems[index]) & set(stems[index - 1]) & set(stems[index - 2])
+                if not shared:
+                    continue
+                word = stems[index][next(iter(shared))]
+                nxt = lines[index + 1]["text"] if index + 1 < len(lines) else ""
+                prev = lines[index - 1]["text"] if index else ""
+                rewritten = _rewrite_line(
+                    index,
+                    f"the word {word!r} is already on the two lines before this one; use a different concrete word "
+                    "and still repeat one content word from the previous line",
+                    lines[index]["text"], lang, topic, names, allow_unavailable_gemini=explicit_llm,
+                    max_words=min(16, words(lines[index]["text"])), previous=prev, following=nxt,
+                )
+                keeps_reply = link(prev, rewritten, names=names) if rewritten else ""
+                if rewritten and personas.fold(word) not in personas.fold(rewritten) and (not debate or keeps_reply):
+                    lines[index]["text"] = rewritten
+                    lines[index]["replyTo"] = {
+                        "line": index - 1,
+                        "idea": link(lines[index - 1]["text"], rewritten, names=names),
+                    }
+                break
+        if writer in {"deepseek", "gemini"}:
+            def _problems_now() -> list[str]:
+                found: list[str] = []
+                if debate:
+                    found += structural_problems(lines, topic, names, sheets, budget)
+                found += check(lines, sheets, topic, names)
+                if debate:
+                    found += check_debate(lines, sheets, names, topic)
+                elif template == "lesson":
+                    found += check_lesson(lines, sheets, topic)
+                unique: list[str] = []
+                for item in found:
+                    if item not in unique:
+                        unique.append(item)
+                return unique
+
+            problems_now = _problems_now()
+            changed, needs_replan = (False, False)
+            if problems_now:
+                changed, needs_replan = _repair_unanswered(
+                    lines, problems_now, lang, topic, names,
+                    allow_unavailable_gemini=explicit_llm, sheets=sheets,
+                )
+            if needs_replan and debate and not qa_quote_replan and base_prompt:
+                qa_quote_replan = True
+                fresh = _ask_writer(
+                    _quote_replan_request(base_prompt, lines, problems_now),
+                    allow_unavailable_gemini=explicit_llm,
+                )
+                nxt_source = {
+                    entry["i"]: entry for entry in fresh
+                    if isinstance(entry, dict) and isinstance(entry.get("i"), int)
                 }
-            break
+                if nxt_source:
+                    _correct_draft_shape(
+                        nxt_source, plan, topic, names, sheets, budget, lang,
+                        allow_unavailable_gemini=explicit_llm,
+                    )
+                    draft_source = nxt_source
+                    continue
+        break
     personas_out = [
         {"name": nm, "found": bool(s.get("found")), "wikiquote": s.get("wikiquote"), "wikipedia": s.get("wikipedia"),
          "quotes": len(s.get("quotes") or []), "primaryQuotes": len(_quotable(s)), "license": s.get("license"),
@@ -1850,14 +1999,6 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
         return unique
 
     problems = _problems()
-    # One correction. Further rounds were making lines longer and keeping the old idea.
-    if writer in {"deepseek", "gemini"} and problems and not _repair_unanswered(
-        lines, problems, lang, topic, names,
-        allow_unavailable_gemini=explicit_llm, sheets=sheets,
-    ):
-        pass
-    elif writer in {"deepseek", "gemini"} and problems:
-        problems = _problems()
     # notes: weaknesses worth a look that do not fail the script (an idea carried three lines in a row)
     notes = _repeated_idea(lines)
     if duration is not None:
@@ -2101,6 +2242,15 @@ def check_debate(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], name
         errors.append("debate: weak hook (more than 14 words, no question, no short punch)")
     if topic and not link(topic, lines[0]["text"], names=names):
         errors.append("debate: the hook does not name the topic")
+    if len(names) > 1:
+        opener = int(lines[0].get("speaker") or 0)
+        other = names[1 if opener == 0 else 0]
+        if not mentions_speaker(lines[0]["text"], other):
+            errors.append("line 0: opener does not address the other speaker")
+    for i, line in enumerate(lines):
+        speaker = int(line.get("speaker") or 0)
+        if speaker < len(names) and mentions_speaker(line["text"], names[speaker]):
+            errors.append(f"line {i}: addresses its own speaker")
     if lines[-1].get("beat") != "fechamento":
         errors.append("debate: does not close")
     elif not memorable_close(lines[-1]):

@@ -318,7 +318,15 @@ def test_written_line_that_is_a_real_quote_is_marked_with_its_source(monkeypatch
 def test_quote_beats_prefer_the_topic_and_pacing_stays_tight(monkeypatch):
     s, n = socrates(), nietzsche()
     off_topic = next(q["id"] for q in n["quotes"] if q["text"].startswith("Sem música"))
-    monkeypatch.setattr(script, "_gemini", lambda prompt: [{"i": 1, "quoteId": off_topic}])
+
+    def fake(prompt):
+        # The quote answers the hook, so a later pass must not swap it for a more topical one.
+        return [
+            {"i": 0, "text": "Nietzsche, sem música a verdade existe?"},
+            {"i": 1, "quoteId": off_topic},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
     out = script.write("debate", "a verdade", ["Sócrates", "Nietzsche"], sheets=[s, n], use_llm=True)
     lines = out["lines"]
     # the writer picked this quote; a later pass must not swap it for a more topical one
@@ -777,7 +785,7 @@ def test_shared_quote_ids_resolve_on_the_speakers_own_sheet(monkeypatch):
     ]}
     names = ["Albert Einstein", "Friedrich Nietzsche"]
     sheets = [einstein, nietzsche]
-    hook = "Is simplicity worth the cost?"
+    hook = "Nietzsche, is simplicity worth the cost?"
     reply = "A drop still needs proof."
     calls: list[str] = []
 
@@ -826,6 +834,115 @@ def test_shared_quote_ids_resolve_on_the_speakers_own_sheet(monkeypatch):
     assert calls == []
 
 
+def _quote(qid: str, text: str, page: str) -> dict:
+    return {
+        "id": qid,
+        "text": text,
+        "source": "Essays",
+        "sourceKind": "primary",
+        "url": f"https://en.wikiquote.org/wiki/{page}",
+    }
+
+
+def test_a_line_must_not_address_its_own_speaker():
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    assert script.mentions_speaker("Einstein, is truth objective?", names[0])
+    assert not script.mentions_speaker("Nietzsche, is truth objective?", names[0])
+    assert script.mentions_speaker("Nietzsche, is truth objective?", names[1])
+    s, n = socrates(), nietzsche()
+    cast = ["Sócrates", "Nietzsche"]
+    good = script.write("debate", "A verdade existe?", cast, sheets=[s, n], use_llm=False)["lines"]
+    assert script.check_debate(good, [s, n], cast, "A verdade existe?") == []
+    bad = [dict(line) for line in good]
+    bad[0] = {**bad[0], "text": "Sócrates, a verdade existe mesmo?"}
+    problems = script.check_debate(bad, [s, n], cast, "A verdade existe?")
+    assert "line 0: addresses its own speaker" in problems
+    assert "line 0: opener does not address the other speaker" in problems
+    prompt = script._prompt(script.plan_for("debate", 2), [s, n], cast, "a verdade", "pt-BR", "debate")
+    assert "own speaker" in prompt and "other speaker by name" in prompt
+
+
+def test_an_unanswered_quote_is_swapped_not_the_neighbour(monkeypatch):
+    einstein = {"quotes": [
+        _quote("q1", "Imagination is a decoration.", "Albert_Einstein"),
+        _quote("q2", "Keep that break.", "Albert_Einstein"),
+        _quote("q3", "A witness can break.", "Albert_Einstein"),
+    ]}
+    nietzsche = {"quotes": [
+        _quote("q1", "Truth needs a witness.", "Friedrich_Nietzsche"),
+    ]}
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    calls: list[str] = []
+
+    def fake(prompt):
+        calls.append(prompt)
+        if "Score each candidate quote" in prompt:
+            assert "Do not rewrite the previous line" in prompt
+            assert "line 3" not in prompt.split("Rewrite only line", 1)[-1] if "Rewrite only line" in prompt else True
+            return [
+                {"i": 0, "quoteId": "albert_einstein:q1", "score": 1},
+                {"i": 0, "quoteId": "albert_einstein:q2", "score": 9},
+            ]
+        if "Rewrite only line" in prompt:
+            raise AssertionError(prompt)
+        return [
+            {"i": 0, "text": "Nietzsche, is truth a witness?"},
+            {"i": 1, "quoteId": "q1"},
+            {"i": 2, "quoteId": "q3"},
+            {"i": 3, "text": "The break stays small."},
+            {"i": 4, "quoteId": "q1"},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write(
+        "debate", "truth", names, "en-US", sheets=[einstein, nietzsche], use_llm=True, duration=30,
+    )
+    assert any("Score each candidate quote" in prompt for prompt in calls)
+    assert not any("Rewrite only line 3" in prompt for prompt in calls)
+    assert out["lines"][3]["text"] == "The break stays small."
+    assert out["lines"][4]["text"] == "Keep that break."
+    assert out["lines"][4]["kind"] == "quote" and out["lines"][4]["quote"]["id"] == "q2"
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+
+
+def test_an_unanswered_quote_replans_once_when_no_other_quote_answers(monkeypatch):
+    einstein = {"quotes": [_quote("q1", "Imagination is a decoration.", "Albert_Einstein")]}
+    nietzsche = {"quotes": [_quote("q1", " ".join(["Truth"] * 32) + ".", "Friedrich_Nietzsche")]}
+    names = ["Albert Einstein", "Friedrich Nietzsche"]
+    calls: list[str] = []
+
+    def fake(prompt):
+        calls.append(prompt)
+        if "Rewrite only line" in prompt:
+            raise AssertionError(prompt)
+        if "Write every beat again" in prompt:
+            return [
+                {"i": 0, "text": "Nietzsche, is truth a witness?"},
+                {"i": 1, "text": "Imagination needs one witness."},
+                {"i": 2, "quoteId": "q1"},
+                {"i": 3, "text": "Decoration still needs a witness."},
+                {"i": 4, "text": "Keep that witness."},
+            ]
+        return [
+            {"i": 0, "text": "Nietzsche, is truth a witness?"},
+            {"i": 1, "text": "Truth needs a witness."},
+            {"i": 2, "quoteId": "q1"},
+            {"i": 3, "text": "Imagination stays small."},
+            {"i": 4, "text": "Keep the small."},
+        ]
+
+    monkeypatch.setattr(script, "_gemini", fake)
+    out = script.write(
+        "debate", "truth", names, "en-US", sheets=[einstein, nietzsche], use_llm=True, duration=30,
+    )
+    assert sum("Write every beat again" in prompt for prompt in calls) == 1
+    assert not any("Rewrite only line 3" in prompt for prompt in calls)
+    assert out["lines"][2]["text"] == "Imagination is a decoration."
+    assert out["lines"][2]["kind"] == "quote"
+    assert out["lines"][1]["text"] == "Imagination needs one witness."
+    assert out["scriptQA"]["pass"], out["scriptQA"]
+
+
 def test_long_lines_are_shortened_before_qa_or_the_failure_names_the_cap(monkeypatch):
     """A writer that comes back long, then longer, must not keep the longer line."""
     long_lines = [
@@ -852,7 +969,7 @@ def test_long_lines_are_shortened_before_qa_or_the_failure_names_the_cap(monkeyp
             choices = [word for word in content_words(previous) if word.lower() != banned] or ["knowledge"]
             text = f"Keep {choices[-1]}."
         elif index == 0 or "hook" in problem:
-            text = "Is knowledge only a rumor?"
+            text = "Ben, is knowledge only a rumor?"
         elif "close" in problem:
             word = (content_words(previous) or ["knowledge"])[-1]
             text = f"Keep {word}."
