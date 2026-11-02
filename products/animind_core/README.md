@@ -51,10 +51,11 @@ python -m products.animind_core.bench \
 The default image model is Together `Qwen/Qwen-Image`. Only
 `TOGETHER_QWEN_IMAGE_MODEL` overrides it. `TOGETHER_IMAGE_MODEL` is ignored,
 because an owner's FLUX.1-schnell value makes Together return 400. The front
-portrait is generated first and the side view is an edit of it
-(`Qwen/Qwen-Image-Edit`), then skin-matched. Gemini still draws through Aiwake
-`create_puppet.generate_character_image`. FLUX.1-kontext-pro also goes through
-Together. FLUX.1-schnell is not called. Face parts are cut by `rig.assemble`
+portrait is generated first. The side view is a `FLUX.1-kontext-pro` edit of
+that portrait; if the edit fails the profile is missing and the front picture
+is not reused as a side view. Skin is then matched to the front. Gemini still
+draws through Aiwake `create_puppet.generate_character_image`. FLUX.1-schnell
+is not called. Face parts are cut by `rig.assemble`
 so the mouth stays inside the face. `southpark` is its own style. What is reused is mapped in `docs/aiwake-reuse.md`. The bust is cached
 under `ANIMIND_DATA_DIR/avatar_cache/` and reused for every scene. `stick.py`
 draws only when no image provider is configured.

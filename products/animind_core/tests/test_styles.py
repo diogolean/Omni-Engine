@@ -138,6 +138,20 @@ def test_short_open_cues_are_softened():
     assert [c["v"] for c in out] == ["X", "C", "B", "D", "C", "X"]
 
 
+def test_half_lid_is_not_a_thick_bar():
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    from products.animind_core.rig import _eye_parts
+    base = Image.new("RGBA", (200, 160), (232, 186, 156, 255))
+    draw = ImageDraw.Draw(base)
+    draw.ellipse((60, 50, 140, 110), fill=(248, 248, 246, 255))
+    draw.ellipse((88, 68, 112, 96), fill=(40, 28, 24, 255))
+    half = np.asarray(_eye_parts(base, [(60, 50, 140, 110)], (232, 186, 156), (40, 28, 24))["eyes_half"].getchannel("A"))
+    covered = int((half[50:110, 60:140] > 40).sum())
+    assert covered < 0.30 * 60 * 80
+
+
 def test_blink_lid_stays_warm_when_grey_hair_sits_above_the_eye():
     from PIL import Image, ImageDraw
 

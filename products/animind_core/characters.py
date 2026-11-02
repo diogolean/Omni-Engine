@@ -165,7 +165,8 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     def url(path: Path) -> str:
         return f"{files_base}/{path.relative_to(assets).as_posix()}"
 
-    if character_type == "stick" and (skin / "character.json").is_file():
+    reuse_art = req.get("reuse", True) is not False
+    if character_type == "stick" and reuse_art and (skin / "character.json").is_file():
         saved = json.loads((skin / "character.json").read_text(encoding="utf-8"))
         saved["gender"] = casting.public_gender({**saved, **req, "name": name, "prompt": subject})
         if req.get("voiceId"):
@@ -218,6 +219,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
                 built = avatar.create_avatar(
                     subject, "stick" if character_type == "stick" else art_style,
                     kind=character_type, skin=skin, url=url, model_id=image_model,
+                    reuse=reuse_art,
                 )
                 if character_type == "stick":
                     built.setdefault("preset", stick_options.get("preset"))

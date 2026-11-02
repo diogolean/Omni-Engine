@@ -642,7 +642,7 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
     bare = re.sub(r"^(?:a|o|as|os|the)\s+", "", noun)
     fields = {"Q": head, "q": head[:1].lower() + head[1:], "noun": noun, "bare": bare, "the": the, "The": the[:1].upper() + the[1:],
               "a": a, "b": b, "kw": kw, "Kw": kw[:1].upper() + kw[1:], "kq": kq, "Kq": kq[:1].upper() + kq[1:], "kt": kt, "kn": kn}
-    if beat.name == "fechamento" and sp == 1 and upcoming == []:
+    if beat.name == "fechamento" and sp == 1 and upcoming == [] and _kw_is_topical(kw, topic, names):
         return tidy(
             f"{kw} reaches one final verdict, {a}: test it in practice"
             if lang == "en-US"
@@ -1079,7 +1079,7 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     out = {"lines": lines, "writer": writer, "scriptCost": script_cost, "personas": personas_out, "topic": topic, "tone": tone,
            "objective": objective, "targetDurationS": float(duration) if duration is not None else None,
            "quoteLines": sum(1 for ln in lines if ln["kind"] == "quote")}
-    problems = check(lines, sheets)  # quote fidelity holds for every template
+    problems = check(lines, sheets, topic, names)  # quote fidelity holds for every template
     if debate:
         problems += check_debate(lines, sheets, names, topic)
     elif template == "lesson":
@@ -1140,7 +1140,31 @@ def closest_quote(text: str, sheet: dict[str, Any]) -> tuple[dict[str, Any] | No
     return best, round(share, 3)
 
 
-def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]]) -> list[str]:
+_VERDICT = re.compile(r"^([A-Za-zÀ-ÿ][\wÀ-ÿ']*) reaches one final verdict\b", re.I)
+
+
+def _kw_is_topical(kw: str, topic: str, names: list[str]) -> bool:
+    folded = personas.fold(kw or "")
+    if not folded:
+        return False
+    if folded in personas.fold(topic):
+        return True
+    return any(folded == personas.fold(name) or folded in personas.fold(name).split() for name in names)
+
+
+def incoherent(text: str, topic: str = "", names: list[str] | None = None) -> str:
+    """A mold that picked up a stray noun, such as ``Child reaches one final verdict``."""
+    names = names or []
+    match = _VERDICT.match((text or "").strip())
+    if not match:
+        return ""
+    subject = match.group(1)
+    if _kw_is_topical(subject, topic, names):
+        return ""
+    return f"stray subject {subject!r} is not the topic or a speaker"
+
+
+def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], topic: str = "", names: list[str] | None = None) -> list[str]:
     """Quote fidelity of a script (any template).
 
     * ``quote`` lines: the text and the source are the sheet's own, byte for byte, the quote is a primary source
@@ -1187,6 +1211,9 @@ def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]]) -> list[str
                 errors.append(f"line {i}: written line labelled as a quote")
         else:
             errors.append(f"line {i}: unmarked line")
+        stray = incoherent(str(line.get("text") or ""), topic, names)
+        if stray:
+            errors.append(f"line {i}: incoherent ({stray})")
     return errors
 
 

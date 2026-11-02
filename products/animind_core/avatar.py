@@ -38,6 +38,10 @@ SOURCES = (
 )
 
 
+class SideViewMissing(RuntimeError):
+    """The profile edit failed. The front portrait is not used as a side view."""
+
+
 def configured_model(model_id: str | None = None) -> str | None:
     """First implemented image model whose key is set, or None under the mock flag."""
     import os  # noqa: PLC0415
@@ -174,24 +178,28 @@ def _acquire(
     front.save(front_path)
     cost = float(front_result.cost_usd)
     front_status = "image-model front"
-    left = front
-    if budget.allow(spec.usdPerImage):
-        left_path = skin / "_gen_left.png"
-        try:
-            side_result = client.generate(
-                _prompt(description, style_id, stick_figure, "left", spec.model, edit=True),
-                destination=left_path, aspect_ratio="4:5", budget=budget,
-                reference_path=front_path,
-            )
-            left = match_skin(_seat(Image.open(left_path).convert("RGBA")), front)
-            left.save(left_path)
-            cost += float(side_result.cost_usd)
-        except image_models.BudgetExceeded:
-            front_status = "front art on the side; budget cap"
-        except Exception:
-            front_status = "front art on the side; side edit failed"
-    else:
-        front_status = "front art on the side; budget cap"
+    edit = image_models.selected("together-flux-kontext")
+    if not budget.allow(edit.usdPerImage):
+        raise image_models.BudgetExceeded(
+            f"side view needs {edit.model} at ${edit.usdPerImage:.2f}; "
+            f"${budget.remaining():.4f} remains and the front portrait is not a profile"
+        )
+    left_path = skin / "_gen_left.png"
+    try:
+        side_result = image_models.provider("together-flux-kontext").generate(
+            _prompt(description, style_id, stick_figure, "left", edit.model, edit=True),
+            destination=left_path, aspect_ratio="4:5", budget=budget,
+            reference_path=front_path,
+        )
+    except image_models.BudgetExceeded:
+        raise
+    except Exception as exc:
+        raise SideViewMissing(
+            f"side view missing: {edit.model} did not return a profile ({type(exc).__name__})"
+        ) from exc
+    left = match_skin(_seat(Image.open(left_path).convert("RGBA")), front)
+    left.save(left_path)
+    cost += float(side_result.cost_usd)
     return left, front, spec.provider, front_result.model, cost, False, front_status
 
 
@@ -275,21 +283,30 @@ def match_skin(side: Image.Image, front: Image.Image) -> Image.Image:
     return Image.fromarray(arr.astype(np.uint8), "RGBA")
 
 
-def _drop_high_mouth(
+def _chin_mouth(face: tuple[int, int, int, int], eye_bottom: int) -> tuple[int, int, int, int]:
+    """Mouth by proportion: below the nose, on the chin, not between the eyes."""
+    fx0, fy0, fx1, fy1 = face
+    chin_span = max(1, fy1 - eye_bottom)
+    cy = eye_bottom + int(chin_span * 0.62)
+    mw, mh = int((fx1 - fx0) * 0.28), max(8, int(chin_span * 0.16))
+    cx = (fx0 + fx1) // 2
+    return (cx - mw // 2, cy - mh // 2, cx + mw // 2, cy + mh // 2)
+
+
+def _seat_mouth(
     face: tuple[int, int, int, int],
+    eye_bottom: int,
     mouth: tuple[int, int, int, int],
 ) -> tuple[int, int, int, int]:
-    """A detected mouth above the lower face is the nose. Seat it on the chin."""
-    fx0, fy0, fx1, fy1 = face
-    height = max(1, fy1 - fy0)
-    cy = (mouth[1] + mouth[3]) / 2
-    if cy >= fy0 + height * 0.62:
+    """Reject a mouth above the nose line, and shrink a beard box onto the chin."""
+    _fx0, _fy0, _fx1, fy1 = face
+    chin_span = max(1, fy1 - eye_bottom)
+    nose = eye_bottom + int(chin_span * 0.22)
+    too_tall = mouth[3] - mouth[1] > chin_span * 0.40
+    too_high = (mouth[1] + mouth[3]) / 2 < nose or mouth[1] < nose
+    if not too_tall and not too_high:
         return mouth
-    shift = int(round(fy0 + height * 0.70 - cy))
-    moved = (mouth[0], mouth[1] + shift, mouth[2], mouth[3] + shift)
-    if moved[3] > fy1 - 2:
-        moved = (moved[0], moved[1] - (moved[3] - (fy1 - 2)), moved[2], fy1 - 2)
-    return moved
+    return _chin_mouth(face, eye_bottom)
 
 
 def _matte(image: Image.Image) -> Image.Image:
@@ -334,7 +351,8 @@ def bust_boxes(image: Image.Image) -> dict[str, tuple[int, int, int, int]]:
         except Exception:
             boxes = None
         if boxes and _mouth_inside_face(boxes) and _face_sits_on_head(image, boxes):
-            boxes["mouth"] = _drop_high_mouth(boxes["face"], boxes["mouth"])
+            eye_bottom = max(boxes["left_eye"][3], boxes["right_eye"][3])
+            boxes["mouth"] = _seat_mouth(boxes["face"], eye_bottom, boxes["mouth"])
             return boxes
     raise RuntimeError("could not place the mouth inside the face")
 
@@ -480,19 +498,24 @@ def _boxes_from_bust(image: Image.Image) -> dict[str, tuple[int, int, int, int]]
     else:
         eyes = tuple(sorted((_blob_box(blob, fx0, fy0) for blob in pair), key=lambda box: box[0]))
     eye_bottom = max(eyes[0][3], eyes[1][3])
+    # Nose line: a dark beard or moustache above this is not the mouth.
+    nose = eye_bottom + int(0.18 * max(1, fy1 - eye_bottom))
     mouth_blobs = [
         blob for blob in blobs
-        if blob[6] > (eye_bottom - fy0) + fh * 0.04 and blob[6] < fh * 0.92 and fw * 0.22 < blob[5] < fw * 0.78
+        if (fy0 + blob[2]) >= nose
+        and blob[6] < fh * 0.92
+        and fw * 0.18 < blob[5] < fw * 0.82
+        and blob[4] < fh * 0.34
     ]
     if mouth_blobs:
-        mouth = _blob_box(max(mouth_blobs, key=lambda blob: blob[0]), fx0, fy0)
+        # The lowest compact blob, not the largest (a beard wins on area and sits too high).
+        mouth = _blob_box(max(mouth_blobs, key=lambda blob: blob[6]), fx0, fy0)
         if mouth[3] - mouth[1] < 6:
             cy = (mouth[1] + mouth[3]) // 2
             mouth = (mouth[0], cy - 4, mouth[2], cy + 6)
     else:
-        mw, mh = int(fw * 0.28), max(8, int(fh * 0.07))
-        cx, cy = (fx0 + fx1) // 2, fy0 + int(fh * 0.72)
-        mouth = (cx - mw // 2, cy - mh // 2, cx + mw // 2, cy + mh // 2)
+        mouth = _chin_mouth(face, eye_bottom)
+    mouth = _seat_mouth(face, eye_bottom, mouth)
     return {
         "face": _clip_box(face, width, height),
         "left_eye": _clip_box(eyes[0], width, height),

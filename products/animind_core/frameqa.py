@@ -28,6 +28,14 @@ CAV_ABS = 0.50  # cavity height / mouth width, any viseme or emotional mouth
 # the encoded frame, which still shows the open shape, fails against it.
 HAPPY_REST_CAV = 0.38
 HAPPY_REST_FLOOR = 0.30
+# Measured cavity (dark rows / padded width). Closed shapes stay near 0.
+# Open shapes, including left-view E, must stay open. These are asset floors,
+# not a change to CAV_ABS or the speech gates.
+VISEME_CAV_MIN = {
+    "X": 0.0, "A": 0.0, "B": 0.08, "C": 0.12, "D": 0.16,
+    "E": 0.32, "F": 0.24, "G": 0.10, "H": 0.12,
+}
+VISEME_CAV_MAX = {"X": 0.08, "A": 0.08}
 CAV_GROW = 1.3  # x the drawn sprite's own cavity, plus CAV_SLACK, before a frame counts as over-open
 CAV_SLACK = 0.08
 NORM_W = 64  # mouth crops are measured at this width

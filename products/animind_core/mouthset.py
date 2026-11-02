@@ -48,15 +48,10 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
         ).rotate(-1.5 if v in "XABCGH" else 1.0, Image.Resampling.BICUBIC, expand=False)
         for v in VISEMES
     }
-    # Aiwake's F pucker is a ringed bullseye that reads as two stacked mouths at video size: use a small round O
-    e = raw["E"]
-    bb = e.getchannel("A").getbbox()
-    if bb:
-        o = e.crop(bb)
-        o = o.resize((max(1, round(o.width * 0.55)), max(1, round(o.height * 0.75))), Image.LANCZOS)
-        f = Image.new("RGBA", e.size, (0, 0, 0, 0))
-        f.paste(o, ((e.width - o.width) // 2, (e.height - o.height) // 2))
-        raw["F"] = f
+    # E is a rounded vowel. Aiwake's patch collapses to a closed line once the
+    # left view squeezes it. Draw an open round hole, and a smaller one for F.
+    raw["E"] = _round_open(max(28, int(round(_REF_PLATE[0] * 0.34))))
+    raw["F"] = _round_open(max(18, int(round(_REF_PLATE[0] * 0.22))))
     pw = raw["X"].width
     k = lip_width / (0.73 * pw)
     out: dict[str, Image.Image] = {}
@@ -66,14 +61,25 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
         cap = open_cap.get(v) if isinstance(open_cap, dict) else open_cap
         if cap and lip and v not in "XA":
             cap /= 1.3  # the lip rim adds ~0.27 of the shape height; the cap applies to the whole mouth
-        if cap and bb and bb[3] - bb[1] > cap:  # proportional opening limit, centre kept
+        if v in "EF" and cap and bb and bb[3] - bb[1] > cap:
+            # Squashing a round hole into a wide slot closes it. Redraw the hole
+            # at the allowed height so E stays the open viseme frame QA measures.
+            im = _round_open(max(12, int(float(cap) / OPEN_ASPECT_CAP)))
+        elif cap and bb and bb[3] - bb[1] > cap:  # proportional opening limit, centre kept
             part = im.crop(bb)
             nh = max(1, int(cap))
             canvas = Image.new("RGBA", im.size, (0, 0, 0, 0))
             canvas.paste(part.resize((part.width, nh), Image.LANCZOS), (bb[0], (bb[1] + bb[3] - nh) // 2))
             im = canvas
-        im = _lips(im, lip) if lip and v not in "XA" else im
-        out[v] = _limit_opening(im, max_aspect=OPEN_ASPECT_CAP)
+        if v == "E":
+            # Keep a round open hole. A lip rim or a height squash closes it,
+            # and the left view then fails frame QA around cavity 0.36.
+            allowed = int(cap) if cap else int(round(lip_width * squeeze * 0.5))
+            im = _round_open(max(12, int(allowed / OPEN_ASPECT_CAP)))
+        else:
+            im = _lips(im, lip) if lip and v not in "XA" else im
+            im = _limit_opening(im, max_aspect=OPEN_ASPECT_CAP)
+        out[v] = im
     W = max(i.width for i in out.values())
     H = max(i.height for i in out.values())
     for v, im in out.items():  # one shared canvas size again, centred: same anchor, comparable sprites
@@ -144,6 +150,22 @@ def draw_expressions(
     seated.paste(smile, ((width - smile.width) // 2, (height - smile.height) // 2))
     scaled["happy"] = seated
     return scaled
+
+
+def _round_open(width: int) -> Image.Image:
+    """Open round viseme. Height stays inside the aspect cap so the hole is not squashed shut."""
+    from PIL import ImageDraw  # noqa: PLC0415
+
+    height = max(8, int(round(width * OPEN_ASPECT_CAP)))
+    image = Image.new("RGBA", (width + 16, height + 16), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse(
+        (8, 8, 8 + width - 2, 8 + height - 2),
+        fill=(18, 10, 12, 255),
+        outline=(40, 24, 26, 255),
+        width=max(2, width // 40),
+    )
+    return image
 
 
 def _open_happy(width: int) -> Image.Image:

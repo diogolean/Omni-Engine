@@ -651,7 +651,7 @@ def _eyebrows(base: Image.Image, eyes: list[Box]) -> tuple[Image.Image, Image.Im
     for x0, y0, x1, y1 in eyes:
         w, h = max(1, x1 - x0), max(1, y1 - y0)
         rx0, rx1 = max(0, x0 - w // 5), min(base.width, x1 + w // 5)
-        ry0, ry1 = max(0, y0 - int(h * 0.9)), min(base.height, y0 + max(1, int(h * 0.05)))
+        ry0, ry1 = max(0, y0 - int(h * 0.55)), max(0, y0 - 2)
         crop = rgba[ry0:ry1, rx0:rx1]
         if crop.size == 0:
             continue
@@ -806,12 +806,13 @@ def _eye_parts(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int], i
         ow, oh = ox1 - ox0, oy1 - oy0
         lid = Image.new("RGBA", (w, h), tone + (255,))
         lm = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(lm).ellipse((ox0, oy0, ox1, oy1), fill=255)
-        ImageDraw.Draw(lm).ellipse((ox0 - ow * 0.02, oy0 + oh * 0.45, ox1 + ow * 0.02, oy1 + oh * 0.8), fill=0)
-        lid.putalpha(lm.filter(ImageFilter.GaussianBlur(0.8)))
+        # A thin upper crescent. Covering the top 45% reads as a thick bar in close-up.
+        ImageDraw.Draw(lm).ellipse((ox0, oy0 - oh * 0.15, ox1, oy0 + oh * 0.55), fill=255)
+        ImageDraw.Draw(lm).rectangle((0, int(oy0 + oh * 0.22), w, h), fill=0)
+        lid.putalpha(lm.filter(ImageFilter.GaussianBlur(0.6)))
         lash = tuple(int(0.6 * i + 0.4 * t * 0.55) for i, t in zip(ink, tone))
-        ImageDraw.Draw(lid).arc((ox0 + ow * 0.04, oy0 + oh * 0.45, ox1 - ow * 0.04, oy1 + oh * 0.8), 200, 340,
-                                fill=lash + (255,), width=max(1, round(oh / 22)))
+        ImageDraw.Draw(lid).arc((ox0 + ow * 0.08, oy0 + oh * 0.02, ox1 - ow * 0.08, oy0 + oh * 0.42), 200, 340,
+                                fill=lash + (255,), width=1)
         soft = Image.new("L", (w, h), 0)
         ImageDraw.Draw(soft).ellipse((ox0 + 1.5, oy0 + 1.5, ox1 - 1.5, oy1 - 1.5), fill=255)
         soft = np.asarray(soft.filter(ImageFilter.GaussianBlur(1.5)))
@@ -1189,9 +1190,9 @@ def _half_from_closed(closed: Image.Image, boxes, ink) -> Image.Image:
     dl = ImageDraw.Draw(lash)
     for x0, y0, x1, y1 in boxes:
         w, h = x1 - x0, y1 - y0
-        cut = y0 + 0.58 * h
-        d.rectangle((x0 - w * .2, y0 - h * .6, x1 + w * .2, cut), fill=255)
-        dl.arc((x0 + w * .05, cut - h * .25, x1 - w * .05, cut + h * .12), 195, 345, fill=tuple(ink[:3]) + (235,), width=max(2, round(h / 16)))
+        cut = y0 + 0.28 * h
+        d.rectangle((x0, y0, x1, cut), fill=255)
+        dl.arc((x0 + w * .08, cut - h * .12, x1 - w * .08, cut + h * .08), 200, 340, fill=tuple(ink[:3]) + (220,), width=1)
     m = m.filter(ImageFilter.GaussianBlur(max(1, (boxes[0][3] - boxes[0][1]) // 14)))
     half = closed.copy()
     half.putalpha(Image.fromarray(np.minimum(np.asarray(closed.getchannel("A")), np.asarray(m))))

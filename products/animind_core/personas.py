@@ -232,8 +232,30 @@ def _page(site: str, title: str) -> tuple[str, str] | None:
     return data["parse"]["title"], data["parse"]["wikitext"]
 
 
+def title_matches(query: str, title: str) -> bool:
+    """A real person was named on purpose.
+
+    A single short name (``Ben``, ``Ada``) matches only a page whose title is
+    that exact word. It must not attach ``Ben`` to Benjamin Franklin. A longer
+    single name may match a title that ends on that surname. Two or more words
+    must all appear in the title.
+    """
+    want = [part for part in fold(query).split() if part]
+    got = [part for part in fold(title).split() if part]
+    if not want or not got:
+        return False
+    if fold(query) == fold(title):
+        return True
+    if len(want) >= 2:
+        return all(part in got for part in want)
+    word = want[0]
+    if len(word) < 6:
+        return False
+    return got[-1] == word
+
+
 def find_page(name: str, lang: str) -> tuple[str, str] | None:
-    """(title, wikitext) of the person's Wikiquote page, or None. Only accepts close name matches."""
+    """(title, wikitext) of the person's Wikiquote page, or None."""
     site = f"{SITES.get(lang, 'pt')}.wikiquote.org"
     want = fold(name)
     if len(want) < 3:
@@ -245,11 +267,10 @@ def find_page(name: str, lang: str) -> tuple[str, str] | None:
     except Exception:  # noqa: BLE001 — offline: try the exact title only
         pass
     for title in candidates:
-        got = fold(title)
-        if not (got == want or (want in got.split() or f" {want}" in f" {got}") or got in want.split() or want.endswith(got) or got.endswith(want)):
+        if not title_matches(name, title):
             continue
         page = _page(site, title)
-        if page and PERSON_PAGE.search(page[1]) and not DISAMBIG.search(page[1]):
+        if page and title_matches(name, page[0]) and PERSON_PAGE.search(page[1]) and not DISAMBIG.search(page[1]):
             return page
     return None
 

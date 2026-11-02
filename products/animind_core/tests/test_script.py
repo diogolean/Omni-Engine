@@ -46,6 +46,21 @@ def test_parser_keeps_quotes_with_sources_and_skips_attributed():
     assert "Nota" not in by["Nenhum homem se torna sábio por acaso."]["source"]
 
 
+def test_short_names_do_not_attach_to_a_different_person():
+    assert personas.title_matches("Ben", "Benjamin Franklin") is False
+    assert personas.title_matches("Ben", "Ben Franklin") is False
+    assert personas.title_matches("Ada", "Ada Lovelace") is False
+    assert personas.title_matches("Benjamin Franklin", "Benjamin Franklin") is True
+    assert personas.title_matches("Nietzsche", "Friedrich Nietzsche") is True
+    assert personas.title_matches("Sócrates", "Sócrates") is True
+
+
+def test_stray_verdict_line_fails_script_qa():
+    line = {"speaker": 0, "kind": "paraphrase", "text": "Child reaches one final verdict, Ada: test it in practice", "beat": "fechamento"}
+    problems = script.check([line], [{"quotes": []}], "Why students should verify claims made by AI", ["Ada", "Ben"])
+    assert any("incoherent" in problem for problem in problems)
+
+
 def test_persona_name_cuts_descriptions():
     assert personas.persona_name("Sócrates, filósofo grego de toga") == "Sócrates"
     assert personas.persona_name("Nietzsche (bigode)") == "Nietzsche"

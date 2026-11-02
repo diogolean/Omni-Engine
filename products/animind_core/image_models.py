@@ -80,6 +80,8 @@ DEFAULTS: dict[str, ImageModel] = {
 }
 
 DEFAULT_IMAGE_MODEL = "together-qwen-image"
+# Qwen-Image-Edit is not on Together (404). Side views are an edit of the front master.
+DEFAULT_EDIT_MODEL = "black-forest-labs/FLUX.1-kontext-pro"
 
 
 class PaidImageGenerationDisabled(RuntimeError):
@@ -336,8 +338,8 @@ def _together_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResul
     if reference:
         raw = Path(reference).read_bytes()
         body["image_url"] = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
-        if "qwen" in model.lower() and "edit" not in model.lower():
-            model = (os.getenv("TOGETHER_QWEN_EDIT_MODEL") or "Qwen/Qwen-Image-Edit").strip()
+        if "kontext" not in model.lower():
+            model = (os.getenv("TOGETHER_EDIT_MODEL") or DEFAULT_EDIT_MODEL).strip()
             body["model"] = model
     started = time.perf_counter()
     response = httpx.post(

@@ -185,6 +185,87 @@ def test_side_skin_is_pulled_toward_the_front_and_a_high_mouth_drops():
     assert (mouth[1] + mouth[3]) / 2 >= face[1] + (face[3] - face[1]) * 0.62
 
 
+def _bearded_bust() -> Image.Image:
+    image = _realistic_bust()
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((285, 250, 355, 300), fill=(244, 214, 186, 255))
+    draw.polygon(
+        [(230, 250), (410, 248), (400, 360), (240, 362)],
+        fill=(55, 42, 36, 255),
+    )
+    draw.ellipse((300, 300, 345, 322), fill=(30, 22, 20, 255))
+    return image
+
+
+def test_beard_does_not_pull_the_mouth_up_to_the_nose():
+    boxes = avatar.bust_boxes(_bearded_bust())
+    face, mouth = boxes["face"], boxes["mouth"]
+    eyes = boxes["left_eye"][3], boxes["right_eye"][3]
+    nose = max(eyes) + 0.22 * (face[3] - max(eyes))
+    center = (mouth[1] + mouth[3]) / 2
+    assert mouth[1] >= nose - 4
+    assert center > nose
+    assert center > (boxes["left_eye"][1] + boxes["right_eye"][1]) / 2 + 30
+
+
+def test_side_edit_failure_does_not_reuse_the_front(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+
+    def generate(self, prompt, **options):  # noqa: ARG001
+        if options.get("reference_path"):
+            raise RuntimeError("404")
+        dest = options["destination"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _realistic_bust().save(dest)
+        return image_models.ImageResult(dest, "together", "Qwen/Qwen-Image", 0.01)
+
+    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    with pytest.raises(avatar.SideViewMissing):
+        avatar.create_avatar(
+            "a teacher", "southpark", skin=tmp_path / "skin",
+            url=lambda path: path.as_uri(), model_id="together-qwen-image",
+        )
+
+
+def test_reuse_false_ignores_the_avatar_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
+    calls = {"n": 0}
+
+    def generate(self, prompt, **options):  # noqa: ARG001
+        calls["n"] += 1
+        dest = options["destination"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _realistic_bust().save(dest)
+        return image_models.ImageResult(dest, "together", self.spec.model, self.spec.usdPerImage)
+
+    monkeypatch.setattr(image_models.TogetherImageProvider, "generate", generate)
+    kwargs = dict(skin=tmp_path / "skin", url=lambda path: path.as_uri(), model_id="together-qwen-image")
+    avatar.create_avatar("a teacher", "southpark", **kwargs)
+    first = calls["n"]
+    avatar.create_avatar("a teacher", "southpark", reuse=False, **kwargs)
+    assert calls["n"] == first * 2
+
+
+def test_visemes_stay_open_on_front_and_left():
+    from products.animind_core import frameqa, mouthset, qa
+    colours = {
+        "outline": (40, 30, 30, 255), "cavity": (20, 12, 14, 255),
+        "teeth": (247, 244, 236, 255), "tongue": (190, 86, 92, 255), "lip": (142, 72, 78, 255),
+    }
+    cap = {code: 0.95 * share * 480 for code, share in qa.OPEN_DRAWN.items()}
+    for squeeze in (1.0, 0.85):
+        mouths = mouthset.draw_set(110, colours, squeeze=squeeze, open_cap=cap)
+        for code, sprite in mouths.items():
+            cavity = frameqa.happy_cavity(sprite)
+            assert cavity + 1e-6 >= frameqa.VISEME_CAV_MIN[code], (squeeze, code, cavity)
+            ceiling = frameqa.VISEME_CAV_MAX.get(code)
+            if ceiling is not None:
+                assert cavity <= ceiling
+        assert abs(frameqa.happy_cavity(mouths["E"]) - 0.36) < 0.08
+
+
 def test_happy_rest_is_open_enough_for_frame_qa():
     from products.animind_core import frameqa, mouthset
     colours = {
