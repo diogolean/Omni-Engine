@@ -850,6 +850,11 @@ def plan_for(template: str, n_chars: int, duration: int | float | None = None) -
         ]
     plan = list(PLANS.get(template, PLANS["solo"]))
     if template == "debate" and duration is not None:
+        if float(duration) <= 35.0:
+            # Keep the complete four-act arc but drop one confrontation
+            # exchange. Film cards add about six seconds, so seven voiced
+            # beats land a requested 30-second debate near its target.
+            del plan[2:4]
         # A 60-second debate needs more than the compact nine-beat default.
         # Insert complete A/B exchanges so strict alternation and the central
         # quote turn remain intact. Short requests keep the original plan.
