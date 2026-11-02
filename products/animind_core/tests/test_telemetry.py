@@ -29,6 +29,16 @@ def test_jsonl_record_and_comparative_summary_stay_outside_git(tmp_path, monkeyp
     assert "api_key" not in source.read_text().lower()
 
 
+def test_deepseek_script_cost_is_computed_from_tokens(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    row = telemetry.record(
+        "script", provider="deepseek", model="deepseek-flash",
+        input_tokens=1000, output_tokens=500, cost_usd=0.0,
+    )
+    assert row["costUsd"] == 0.0009
+    assert row["inputTokens"] == 1000
+
+
 def test_script_test_writes_qa_telemetry(tmp_path, monkeypatch):
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ANIMIND_FORCE_MOCK", "1")

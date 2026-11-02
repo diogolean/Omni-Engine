@@ -7,12 +7,14 @@ from products.animind_core import image_models as im
 
 def test_default_is_together_qwen_image(monkeypatch):
     monkeypatch.delenv("ANIMIND_IMAGE_MODEL", raising=False)
-    monkeypatch.delenv("TOGETHER_IMAGE_MODEL", raising=False)
+    monkeypatch.setenv("TOGETHER_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
     monkeypatch.delenv("TOGETHER_QWEN_IMAGE_MODEL", raising=False)
     selected = im.selected()
     assert selected.id == "together-qwen-image"
     assert selected.model == "Qwen/Qwen-Image"
     assert selected.usdPerImage == 0.01
+    monkeypatch.setenv("TOGETHER_QWEN_IMAGE_MODEL", "Qwen/Qwen-Image-Edit")
+    assert im.selected("together-qwen-image").model == "Qwen/Qwen-Image-Edit"
 
 
 def test_flux_listed_but_unavailable_and_no_key_names(monkeypatch):

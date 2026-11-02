@@ -138,6 +138,19 @@ def test_short_open_cues_are_softened():
     assert [c["v"] for c in out] == ["X", "C", "B", "D", "C", "X"]
 
 
+def test_blink_lid_stays_warm_when_grey_hair_sits_above_the_eye():
+    from PIL import Image, ImageDraw
+
+    from products.animind_core.rig import _lid_skin
+    base = Image.new("RGBA", (180, 140), (232, 186, 156, 255))
+    draw = ImageDraw.Draw(base)
+    draw.rectangle((20, 10, 160, 48), fill=(150, 150, 150, 255))
+    draw.ellipse((50, 55, 120, 100), fill=(248, 248, 246, 255))
+    tone = _lid_skin(base, (50, 55, 120, 100), (232, 186, 156))
+    assert tone[0] - tone[2] > 12
+    assert abs(tone[0] - 150) > 25
+
+
 def test_closed_lids_are_sharp():
     from PIL import Image
 

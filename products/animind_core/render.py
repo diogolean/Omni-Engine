@@ -325,6 +325,16 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                          topic=written["topic"])
         video = work / "preview.mp4"
         _set(job_id, progress=0.55)
+        mouth_problems = [
+            problem
+            for character in cast
+            for view_name in ("front", "left", "right")
+            if (problem := frameqa.preflight_happy(
+                characters.puppets_dir() / str(character.get("id") or "") / "views" / view_name
+            ))
+        ]
+        if mouth_problems:
+            raise RuntimeError("frame mouth QA failed before encode: " + "; ".join(mouth_problems[:3]))
         with _RENDER_LOCK:
             AnimationRenderer(width=sc.OW, height=sc.OH, fps=scene.FPS).render(
                 frame_iter=sc.frames(), audio_path=audio, output_path=video, duration_s=duration,

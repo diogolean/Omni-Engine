@@ -101,7 +101,9 @@ def draw_expressions(
     colours = {k: v for k, v in colours.items() if k != "lip"}
     source = {
         "neutral": ("X", "neutral", 0.0, 1.0, 1.0),
-        "happy": ("X", "smug_smile", -2.5, 1.0, 0.72),
+        # Tall enough that the left-view rest measures about 0.38 open. A
+        # squashed smug reads as a closed line and fails frame QA.
+        "happy": ("X", "smug_smile", -2.0, 1.0, 1.15),
         "angry": ("X", "stressed_grimace", 1.5, 0.9, 0.7),
         "sad": ("X", "neutral", 7.0, 0.8, 1.0),
         "surprised": ("E", "neutral", -1.0, 0.62, 0.78),
@@ -135,7 +137,29 @@ def draw_expressions(
         canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
         scaled[emotion] = canvas
+    # The squashed smug smile measures closed (~0.20). Frame QA on the left
+    # view expects the happy rest to be an open smile, about 0.38.
+    smile = _open_happy(max(8, int(round(lip_width * squeeze))))
+    seated = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    seated.paste(smile, ((width - smile.width) // 2, (height - smile.height) // 2))
+    scaled["happy"] = seated
     return scaled
+
+
+def _open_happy(width: int) -> Image.Image:
+    """Open South Park smile. Aspect stays at the mouthset cap so the cavity can reach ~0.34-0.38."""
+    from PIL import ImageDraw  # noqa: PLC0415
+
+    height = max(8, int(round(width * OPEN_ASPECT_CAP)))
+    image = Image.new("RGBA", (width + 8, height + 8), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse(
+        (4, 4, 4 + width - 2, 4 + height - 2),
+        fill=(18, 10, 12, 255),
+        outline=(40, 24, 26, 255),
+        width=max(2, width // 48),
+    )
+    return image
 
 
 def _limit_opening(

@@ -161,38 +161,41 @@ def _acquire(
         return image, image.copy(), "mock", "placeholder", 0.0, True, "mock placeholder"
     spec = image_models.selected(model_id)
     client = image_models.provider(model_id)
-    left_path = skin / "_gen_left.png"
-    left_prompt = _prompt(description, style_id, stick_figure, "left", spec.model)
     if not budget.allow(spec.usdPerImage):
         raise image_models.BudgetExceeded(f"{spec.id} exceeds the run cap")
-    left_result = client.generate(
-        left_prompt, destination=left_path, aspect_ratio="4:5", budget=budget,
+    # Front is the colour and beard reference. The side is an edit of that
+    # picture, then matched to its skin so a drifted edit cannot change race.
+    front_path = skin / "_gen_front.png"
+    front_result = client.generate(
+        _prompt(description, style_id, stick_figure, "front", spec.model),
+        destination=front_path, aspect_ratio="4:5", budget=budget,
     )
-    left = _seat(Image.open(left_path).convert("RGBA"))
-    left.save(left_path)
-    cost = float(left_result.cost_usd)
+    front = _seat(Image.open(front_path).convert("RGBA"))
+    front.save(front_path)
+    cost = float(front_result.cost_usd)
     front_status = "image-model front"
-    front = left
+    left = front
     if budget.allow(spec.usdPerImage):
-        front_path = skin / "_gen_front.png"
+        left_path = skin / "_gen_left.png"
         try:
-            front_result = client.generate(
-                _prompt(description, style_id, stick_figure, "front", spec.model),
-                destination=front_path, aspect_ratio="4:5", budget=budget,
-                reference_path=left_path if spec.provider == "gemini" else None,
+            side_result = client.generate(
+                _prompt(description, style_id, stick_figure, "left", spec.model, edit=True),
+                destination=left_path, aspect_ratio="4:5", budget=budget,
+                reference_path=front_path,
             )
-            front = _seat(Image.open(front_path).convert("RGBA"))
-            cost += float(front_result.cost_usd)
+            left = match_skin(_seat(Image.open(left_path).convert("RGBA")), front)
+            left.save(left_path)
+            cost += float(side_result.cost_usd)
         except image_models.BudgetExceeded:
-            front_status = "left art; budget cap"
+            front_status = "front art on the side; budget cap"
         except Exception:
-            front_status = "left art; front generation failed"
+            front_status = "front art on the side; side edit failed"
     else:
-        front_status = "left art; budget cap"
-    return left, front, spec.provider, left_result.model, cost, False, front_status
+        front_status = "front art on the side; budget cap"
+    return left, front, spec.provider, front_result.model, cost, False, front_status
 
 
-def _prompt(description: str, style_id: str, stick_figure: bool, view: str, model: str) -> str:
+def _prompt(description: str, style_id: str, stick_figure: bool, view: str, model: str, *, edit: bool = False) -> str:
     if stick_figure:
         subject = (
             f"A single stick-figure character: {description}. "
@@ -201,7 +204,14 @@ def _prompt(description: str, style_id: str, stick_figure: bool, view: str, mode
         )
     else:
         subject = description
-    if view == "front":
+    if edit:
+        text = (
+            f"{subject}. Edit the reference. Keep the same person, skin colour, beard, "
+            "moustache, hair, glasses, clothes and line weight. Turn the head and shoulders "
+            "to a three-quarter view facing left, mouth closed. Do not invent a new face. "
+            "Solid flat pure magenta #FF00FF background. No text."
+        )
+    elif view == "front":
         text = f"{subject}. {rig.FRONT_PROMPT}"
     else:
         text = rig.STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style_id))
@@ -229,6 +239,57 @@ def _mock_bust() -> Image.Image:
     draw.rectangle((170, 30, 284, 370), fill=(40, 40, 220, 255))
     draw.ellipse((100, 60, 220, 200), fill=(240, 210, 180, 255))
     return image
+
+
+def skin_sample(image: Image.Image) -> np.ndarray:
+    """Median warm skin in the upper half. Grey and pure white are not skin."""
+    arr = np.asarray(image.convert("RGBA"))
+    band = arr[: max(1, arr.shape[0] // 2)]
+    rgb = band[:, :, :3].astype(np.int16)
+    opaque = band[:, :, 3] > 40
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    warm = opaque & (rgb[:, :, 0] > rgb[:, :, 2] + 12) & (chroma > 14) & (rgb.mean(axis=2) > 70)
+    if int(warm.sum()) < 20:
+        warm = opaque
+    if int(warm.sum()) < 8:
+        return np.array([220.0, 180.0, 150.0])
+    return np.median(rgb[warm], axis=0).astype(np.float64)
+
+
+def skin_distance(front: Image.Image, side: Image.Image) -> float:
+    """Euclidean distance between the two skin medians, in 0-255 RGB units."""
+    return float(np.linalg.norm(skin_sample(front) - skin_sample(side)))
+
+
+def match_skin(side: Image.Image, front: Image.Image) -> Image.Image:
+    """Shift the side's warm skin onto the front portrait's skin. Beard and clothes stay."""
+    delta = skin_sample(front) - skin_sample(side)
+    if float(np.linalg.norm(delta)) < 8:
+        return side
+    arr = np.asarray(side.convert("RGBA")).astype(np.int16)
+    rgb = arr[:, :, :3]
+    chroma = rgb.max(axis=2) - rgb.min(axis=2)
+    warm = (arr[:, :, 3] > 40) & (rgb[:, :, 0] > rgb[:, :, 2] + 8) & (chroma > 12)
+    rgb[warm] = np.clip(rgb[warm] + delta, 0, 255)
+    arr[:, :, :3] = rgb
+    return Image.fromarray(arr.astype(np.uint8), "RGBA")
+
+
+def _drop_high_mouth(
+    face: tuple[int, int, int, int],
+    mouth: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """A detected mouth above the lower face is the nose. Seat it on the chin."""
+    fx0, fy0, fx1, fy1 = face
+    height = max(1, fy1 - fy0)
+    cy = (mouth[1] + mouth[3]) / 2
+    if cy >= fy0 + height * 0.62:
+        return mouth
+    shift = int(round(fy0 + height * 0.70 - cy))
+    moved = (mouth[0], mouth[1] + shift, mouth[2], mouth[3] + shift)
+    if moved[3] > fy1 - 2:
+        moved = (moved[0], moved[1] - (moved[3] - (fy1 - 2)), moved[2], fy1 - 2)
+    return moved
 
 
 def _matte(image: Image.Image) -> Image.Image:
@@ -273,6 +334,7 @@ def bust_boxes(image: Image.Image) -> dict[str, tuple[int, int, int, int]]:
         except Exception:
             boxes = None
         if boxes and _mouth_inside_face(boxes) and _face_sits_on_head(image, boxes):
+            boxes["mouth"] = _drop_high_mouth(boxes["face"], boxes["mouth"])
             return boxes
     raise RuntimeError("could not place the mouth inside the face")
 

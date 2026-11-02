@@ -574,15 +574,21 @@ def _skin_and_ink(base: Image.Image, face: Box) -> tuple[tuple[int, int, int], t
 
 
 def _lid_skin(base: Image.Image, box: Box, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Skin tone of the upper lid: median of the band just above the eye opening."""
+    """Warm skin beside the eye. Grey hair and the white sclera must not tint the blink."""
     x0, y0, x1, y1 = box
-    h = y1 - y0
-    arr = np.asarray(base.crop((x0, max(0, y0 - h // 6), x1, y0 + h // 6)))
-    px = arr[arr[..., 3] > 200][..., :3]
-    if len(px) < 10:
-        return fallback
-    lum = px.mean(axis=1)
-    return tuple(int(v) for v in np.median(px[lum >= np.percentile(lum, 50)], axis=0))  # type: ignore[return-value]
+    w, h = max(1, x1 - x0), max(1, y1 - y0)
+    # Cheek beside the eye, not the lid band that often includes grey hair or sclera.
+    arr = np.asarray(base.crop((
+        max(0, x0 - w // 2), min(base.height, y1),
+        min(base.width, x1 + w // 2), min(base.height, y1 + h),
+    )))
+    px = arr[arr[..., 3] > 180][..., :3].astype(np.int16)
+    if len(px) >= 8:
+        chroma = px.max(axis=1) - px.min(axis=1)
+        warm = px[(px[:, 0] > px[:, 2] + 10) & (chroma > 14) & (px.mean(axis=1) < 235) & (px.mean(axis=1) > 70)]
+        if len(warm) >= 8:
+            return tuple(int(v) for v in np.median(warm, axis=0))
+    return fallback
 
 
 def _eye_opening(base: Image.Image, box: Box) -> tuple[float, float, float, float]:

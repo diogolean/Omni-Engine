@@ -24,6 +24,10 @@ import numpy as np
 from PIL import Image
 
 CAV_ABS = 0.50  # cavity height / mouth width, any viseme or emotional mouth
+# Left-view happy rest is an open smile. A closed seam measures ~0 and then
+# the encoded frame, which still shows the open shape, fails against it.
+HAPPY_REST_CAV = 0.38
+HAPPY_REST_FLOOR = 0.30
 CAV_GROW = 1.3  # x the drawn sprite's own cavity, plus CAV_SLACK, before a frame counts as over-open
 CAV_SLACK = 0.08
 NORM_W = 64  # mouth crops are measured at this width
@@ -163,6 +167,53 @@ def facial_check(trace: dict[str, Any]) -> tuple[list[tuple[int, str]], dict[str
         "browPoseCounts": {char: len(values) for char, values in brow_states.items()},
     }
     return bad, report
+
+
+def happy_cavity(sprite: Image.Image) -> float:
+    """Cavity ratio of one resting mouth on a skin plate, measured like a frame.
+
+    The plate is larger than the sprite so the QA padding is skin, the same
+    way the stage surrounds the mouth. A sprite that fills its own canvas
+    would otherwise look closed because the cavity touches the crop edge.
+    """
+    ink = sprite.getchannel("A").point(lambda value: 255 if value > 128 else 0).getbbox()
+    if ink is None:
+        return 0.0
+    x0, y0, x1, y1 = ink
+    width, height = x1 - x0, y1 - y0
+    pad_x, pad_y = max(3, round(width * 0.2)), max(3, round(height * 0.35))
+    margin = max(pad_x, pad_y) + 4
+    plate = Image.new("RGBA", (sprite.width + 2 * margin, sprite.height + 2 * margin), (236, 200, 170, 255))
+    plate.alpha_composite(sprite, (margin, margin))
+    box = (margin + x0 - pad_x, margin + y0 - pad_y, margin + x1 + pad_x, margin + y1 + pad_y)
+    measured = measure(np.asarray(plate.convert("RGB")), box)
+    return float(measured["cav"]) if measured else 0.0
+
+
+def preflight_happy(view_dir: Path) -> str | None:
+    """Fail before encode when the saved happy rest is still a closed line."""
+    path = view_dir / "expressions" / "expression_happy.png"
+    if not path.is_file():
+        data_path = view_dir / "view.json"
+        if not data_path.is_file():
+            return None
+        try:
+            rel = (json.loads(data_path.read_text(encoding="utf-8")).get("expressions") or {}).get("happy", {}).get("url")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            return None
+        if not rel:
+            return None
+        path = view_dir / rel
+    if not path.is_file():
+        return None
+    with Image.open(path) as opened:
+        cavity = happy_cavity(opened.convert("RGBA"))
+    if cavity < HAPPY_REST_FLOOR:
+        return (
+            f"{view_dir.name} happy rest cavity {cavity:.2f} is closed; "
+            f"frame QA expects about {HAPPY_REST_CAV:.2f}"
+        )
+    return None
 
 
 def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:

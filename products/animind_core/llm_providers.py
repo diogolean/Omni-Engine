@@ -257,6 +257,18 @@ def provider_order(
     return order
 
 
+def token_cost_usd(provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
+    """List price from token counts. DeepSeek peak rates, verified 2026-11-02."""
+    provider = (provider or "").lower()
+    if provider == "deepseek":
+        return max(0, input_tokens) * 0.30e-6 + max(0, output_tokens) * 1.20e-6
+    if provider == "openrouter":
+        from production.providers.llm import cheap_llm  # noqa: PLC0415
+
+        return cheap_llm.estimate_usd(provider, model, input_tokens, output_tokens)
+    return 0.0
+
+
 def _cache_path(root: Path, provider: LLMProvider, prompt: str) -> Path:
     digest = hashlib.sha256(f"{provider.id}\n{provider.model}\n{prompt}".encode()).hexdigest()[:24]
     return root / f"{digest}.json"
@@ -286,7 +298,13 @@ def generate(
         cached = _cache_path(cache_dir, provider, prompt)
         if cache_enabled and cached.is_file():
             raw = json.loads(cached.read_text(encoding="utf-8"))
-            return LLMResult(**(raw | {"cached": True, "cost_usd": 0.0})), failures
+            priced = token_cost_usd(
+                str(raw.get("provider") or provider.id),
+                str(raw.get("model") or provider.model),
+                int(raw.get("input_tokens") or 0),
+                int(raw.get("output_tokens") or 0),
+            )
+            return LLMResult(**(raw | {"cached": True, "cost_usd": priced or float(raw.get("cost_usd") or 0.0)})), failures
         try:
             result = provider.complete(prompt)
         except Exception as exc:  # noqa: BLE001 - fallback is the contract
@@ -341,7 +359,13 @@ def generate_text(
         cached = _cache_path(cache_dir, item, prompt)
         if cache_enabled and cached.is_file():
             raw = json.loads(cached.read_text(encoding="utf-8"))
-            return TextResult(**(raw | {"cached": True, "cost_usd": 0.0})), failures
+            priced = token_cost_usd(
+                str(raw.get("provider") or item.id),
+                str(raw.get("model") or item.model),
+                int(raw.get("input_tokens") or 0),
+                int(raw.get("output_tokens") or 0),
+            )
+            return TextResult(**(raw | {"cached": True, "cost_usd": priced or float(raw.get("cost_usd") or 0.0)})), failures
         try:
             result = item.complete_text(prompt)
         except Exception as exc:  # noqa: BLE001 - fallback is the contract

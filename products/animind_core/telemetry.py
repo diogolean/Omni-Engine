@@ -52,6 +52,11 @@ def record(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Append one secret-free event and return the normalized row."""
+    priced = float(cost_usd or 0.0)
+    if priced <= 0 and (input_tokens or output_tokens):
+        from .llm_providers import token_cost_usd  # noqa: PLC0415
+
+        priced = token_cost_usd(provider or "", model or "", int(input_tokens or 0), int(output_tokens or 0)) or priced
     row = {
         "schema": 1,
         "at": datetime.now(timezone.utc).isoformat(),
@@ -61,7 +66,7 @@ def record(
         "inputTokens": max(0, int(input_tokens or 0)),
         "outputTokens": max(0, int(output_tokens or 0)),
         "images": max(0, int(images or 0)),
-        "costUsd": round(max(0.0, float(cost_usd or 0.0)), 8),
+        "costUsd": round(max(0.0, priced), 8),
         "latencyMs": round(max(0.0, float(latency_ms or 0.0)), 2),
         "status": str(status),
         "scriptQA": script_qa or None,

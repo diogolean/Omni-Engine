@@ -146,7 +146,7 @@ class GeminiImageProvider(ImageProvider):
 
 
 class TogetherImageProvider(ImageProvider):
-    """Together ``TOGETHER_IMAGE_MODEL`` (default FLUX.1-schnell)."""
+    """Together images. Qwen uses ``TOGETHER_QWEN_IMAGE_MODEL`` only."""
 
     def generate(self, prompt: str, **options: Any) -> ImageResult:
         return _together_image(self.spec, prompt, **options)
@@ -180,7 +180,9 @@ def models() -> dict[str, ImageModel]:
 def _with_env_model(spec: ImageModel) -> ImageModel:
     """Model ids named by env, read at call time. Empty env keeps the registry default."""
     if spec.id == "together-qwen-image":
-        override = (os.getenv("TOGETHER_QWEN_IMAGE_MODEL") or os.getenv("TOGETHER_IMAGE_MODEL") or "").strip()
+        # TOGETHER_IMAGE_MODEL is the old FLUX.1-schnell switch. It must not
+        # replace Qwen: that id 400s on the shared images endpoint.
+        override = (os.getenv("TOGETHER_QWEN_IMAGE_MODEL") or "").strip()
     elif spec.id == "together-flux-kontext":
         override = (os.getenv("TOGETHER_FLUX_KONTEXT_MODEL") or "").strip()
     else:
@@ -321,18 +323,27 @@ def _together_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResul
     _preflight(spec, budget)
     destination = _destination(options)
     width, height = _pixel_size(str(options.get("aspect_ratio") or "4:5"))
+    model = spec.model
+    body: dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "width": width,
+        "height": height,
+        "n": 1,
+        "response_format": "b64_json",
+    }
+    reference = options.get("reference_path")
+    if reference:
+        raw = Path(reference).read_bytes()
+        body["image_url"] = "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+        if "qwen" in model.lower() and "edit" not in model.lower():
+            model = (os.getenv("TOGETHER_QWEN_EDIT_MODEL") or "Qwen/Qwen-Image-Edit").strip()
+            body["model"] = model
     started = time.perf_counter()
     response = httpx.post(
         "https://api.together.xyz/v1/images/generations",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={
-            "model": spec.model,
-            "prompt": prompt,
-            "width": width,
-            "height": height,
-            "n": 1,
-            "response_format": "b64_json",
-        },
+        json=body,
         timeout=120.0,
     )
     try:
@@ -348,7 +359,7 @@ def _together_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResul
     cost = spec.usdPerImage
     budget.charge(cost)
     _record_image(spec, cost=cost, status="ok", path=destination, latency_ms=(time.perf_counter() - started) * 1000)
-    return ImageResult(destination, spec.provider, spec.model, cost)
+    return ImageResult(destination, spec.provider, model, cost)
 
 
 def _openrouter_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResult:

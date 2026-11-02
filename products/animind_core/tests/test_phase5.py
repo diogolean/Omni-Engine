@@ -67,9 +67,11 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
     monkeypatch.setenv("TOGETHER_API_KEY", "not-a-real-key")
     monkeypatch.delenv("ANIMIND_FORCE_MOCK", raising=False)
     prompts = []
+    refs = []
 
     def generate(self, prompt, **options):  # noqa: ARG001
         prompts.append(prompt)
+        refs.append(options.get("reference_path"))
         dest = options["destination"]
         dest.parent.mkdir(parents=True, exist_ok=True)
         avatar._mock_bust().save(dest)
@@ -83,7 +85,9 @@ def test_create_avatar_uses_the_image_model_once_and_mirrors_left(tmp_path, monk
         skin=skin, url=lambda path: path.as_uri(), model_id="together-qwen-image",
     )
     assert len(prompts) == 2
+    assert refs[0] is None and refs[1] is not None
     assert "South Park" in prompts[0] and "stick-figure" in prompts[0]
+    assert "facing left" in prompts[1].lower()
     assert built["generator"] == "together" and built["realImage"] is True
     assert set(built["views"]) == {"front", "left", "right"}
     assert set(built["views"]["left"]["visemes"]) == set("XABCDEFGH")
@@ -158,6 +162,39 @@ def test_realistic_bust_keeps_the_mouth_on_the_face(tmp_path, monkeypatch):
     width = built["views"]["left"]["canvas"]["w"]
     left = built["views"]["left"]["visemes"]["D"]
     assert right["x"] == width - left["x"] - left["w"]
+
+
+def test_side_skin_is_pulled_toward_the_front_and_a_high_mouth_drops():
+    front = _realistic_bust()
+    pink = front.copy()
+    px = pink.load()
+    for y in range(pink.height // 2):
+        for x in range(pink.width):
+            r, g, b, a = px[x, y]
+            if a > 40 and r > b + 12:
+                px[x, y] = (255, 190, 210, a)
+    assert avatar.skin_distance(front, pink) > 30
+    matched = avatar.match_skin(pink, front)
+    assert avatar.skin_distance(front, matched) < 12
+    high = _realistic_bust()
+    draw = ImageDraw.Draw(high)
+    draw.rectangle((285, 255, 355, 295), fill=(244, 214, 186, 255))
+    draw.ellipse((300, 188, 340, 206), fill=(20, 16, 16, 255))
+    boxes = avatar.bust_boxes(high)
+    face, mouth = boxes["face"], boxes["mouth"]
+    assert (mouth[1] + mouth[3]) / 2 >= face[1] + (face[3] - face[1]) * 0.62
+
+
+def test_happy_rest_is_open_enough_for_frame_qa():
+    from products.animind_core import frameqa, mouthset
+    colours = {
+        "outline": (40, 30, 30, 255), "cavity": (20, 12, 14, 255),
+        "teeth": (247, 244, 236, 255), "tongue": (190, 86, 92, 255), "lip": (142, 72, 78, 255),
+    }
+    happy = mouthset.draw_expressions(120, colours, open_cap=90, squeeze=0.85)["happy"]
+    cavity = frameqa.happy_cavity(happy)
+    assert cavity >= frameqa.HAPPY_REST_FLOOR
+    assert abs(cavity - frameqa.HAPPY_REST_CAV) < 0.08
 
 
 def test_southpark_is_not_ghibli_and_sheet_survives_a_rig_without_boxes(tmp_path):
