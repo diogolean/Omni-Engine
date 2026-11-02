@@ -122,8 +122,9 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   the topic and cast; no mold, and no picked-up word, repeats inside one script.
 - `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
   `quote {id, text, source, label, url, site, wikisource?}` (`label` is the short on-screen source: no
-  page numbers, translators or publishers, <= 48 chars; `source` stays complete). Gemini
-  (`gemini-2.5-flash-lite`, one text call with thinking disabled) only picks
+  page numbers, translators or publishers, <= 48 chars; `source` stays complete). The pluggable
+  script writer uses DeepSeek `deepseek-flash` by default and Gemini
+  (`gemini-2.5-flash-lite`) as fallback; either provider only picks
   quote ids and writes the other lines. Only `primary` quotes can be a "Citação real". Quote beats prefer
   quotes sharing words with the topic (stemmed): an unknown/reused id, or an off-topic id while an on-topic
   quote fits, becomes the best topic match (then the shortest), never model text.
@@ -151,14 +152,20 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   writes short replies that pick up a noun from the previous line and name the other speaker
   (hook -> exchange -> climax -> close); no line repeats. Gemini answers are cached on disk by
   model + prompt (`ANIMIND_DATA_DIR/cache/script/`), so re-rendering the same script costs nothing.
-- Result adds `writer` (`gemini`|`template`), `scriptCost` (model, tokens, cache hit and USD for this
+- Result adds `writer` (`deepseek`|`gemini`|`template`), `scriptCost` (provider, model, tokens, cache hit and USD for this
   script), `quoteLines`, `topic` and `personas` (sheet link, quote count, CC BY-SA 4.0).
   The character name is cut before a comma or parenthesis to find the person ("Sócrates, de toga" -> "Sócrates").
 
 ## Env
 
 - `CORE_API_KEY` (required; `Authorization: Bearer ...`).
-- `GEMINI_API_KEY` (absent -> mock art). `ANIMIND_DATA_DIR` (default `~/.animind-core`, outside git). `CORE_PUBLIC_URL`.
+- `DEEPSEEK_API_KEY`: default script writer. `ANIMIND_SCRIPT_PROVIDER=gemini` reverses the
+  DeepSeek/Gemini fallback order; `DEEPSEEK_BASE_URL` and `DEEPSEEK_MODEL` are optional.
+  DeepSeek cost uses the official peak tariff (the conservative upper bound): cache miss
+  `$0.30/M` input, cache hit `$0.006/M`, output `$1.20/M`, checked 2026-11-02 at
+  [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/).
+- `GEMINI_API_KEY` (script fallback; absent -> mock art). `ANIMIND_DATA_DIR` (default
+  `~/.animind-core`, outside git). `CORE_PUBLIC_URL`.
 - `ANIMIND_PERSONAS_OFFLINE=1`: never fetch Wikiquote (tests); only cached sheets are used.
 - `RHUBARB_PATH`: Rhubarb Lip Sync binary (Linux has no auto-download; absent -> envelope visemes:
   `render.envelope_visemes` picks one mouth per ~90 ms syllable window by loudness and rotates shapes, so
@@ -258,7 +265,25 @@ never squashed into a second copy (the old "tear" in close-ups).
 **Cost:** $0.039/image. No retries = 3 images = ~$0.12. Test-phase cap 0.30 allows up to ~7 images;
 production should use a lower cap (see `.env.example`).
 
-**Image models:** `image_models.py` holds the model registry (nano-banana default; Flux listed as a
-pluggable, not-yet-wired provider), config via `ANIMIND_IMAGE_MODEL` / `ANIMIND_IMAGE_MODELS`, and a
-per-user/per-model monthly credit ledger (`ANIMIND_FREE_CREDITS`). Nothing is charged; keys are read
-from env by name only.
+**Image models:** `image_models.py` defines one provider boundary and config-only adapters for
+Gemini, Qwen Image through DashScope, and Flux through fal.ai. Phase 4 never invokes those adapters:
+their `generate()` method fails closed with `PaidImageGenerationDisabled`; the existing rig path is
+unchanged. Selection uses `ANIMIND_IMAGE_MODEL` / `ANIMIND_IMAGE_MODELS`, and the monthly ledger
+(`ANIMIND_FREE_CREDITS`) only estimates usage. Keys are read from env by name and never returned.
+
+List prices checked 2026-11-02 (USD; promotions and input-image charges excluded):
+
+| Registry id | Gateway/model | Price represented by `usdPerImage` | Official source |
+| --- | --- | --- | --- |
+| `nano-banana` | Google `gemini-2.5-flash-image` | $0.039 / image up to 1024² | [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) |
+| `qwen-image` | DashScope `qwen-image-3.0`, Singapore | $0.030 / successful 1K or 2K output | [Alibaba Model Studio pricing](https://www.alibabacloud.com/help/en/model-studio/model-pricing) |
+| `flux-pro` | fal.ai `fal-ai/flux-pro/v1.1` | $0.040 / output MP, rounded up | [fal.ai model pricing](https://fal.ai/models/fal-ai/flux-pro/v1.1) |
+| `flux-kontext` | fal.ai `fal-ai/flux-2/edit` | $0.012 / processed MP | [fal.ai pricing](https://fal.ai/pricing) |
+
+The three Phase-4 hero stick presets (`teacher`, `sage`, `rebel`) use a short neck behind the jaw,
+separate head/torso layers, broad grounded shoulders and medium-bust framing adapted from
+`products/aiwake/animator/factory/create_puppet.py` and
+`products/aiwake/tests/test_side_by_side_parity.py`. Their tapered, variable-thickness brow sprites
+adapt the shape vocabulary in `products/aiwake/animator/render/facial_rig.py`
+(`_tapered_arch_brow`, `_straight_blade_brow`, expression lift/rotation), while Animind's renderer
+continues to animate each brow independently. `explorer` remains as a compatibility preset.
