@@ -15,6 +15,7 @@ from . import (
     knowledge,
     languages,
     personas,
+    preview,
     render,
     scene,
     settings,
@@ -87,6 +88,24 @@ def post_characters(body: dict, request: Request) -> dict:
 @app.post("/v1/render", dependencies=[Depends(require_key)])
 def post_render(body: dict, request: Request) -> dict:
     return render.submit(body, _base(request))
+
+
+@app.post("/v1/preview", dependencies=[Depends(require_key)])
+def post_preview(body: dict, request: Request) -> dict:
+    """PNG preview the app requests before the full character rig exists."""
+    try:
+        return preview.build_preview(body, _base(request))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/v1/scenarios", dependencies=[Depends(require_key)])
+def post_scenarios(body: dict) -> dict:
+    """Map a cast or a scenery prompt onto a built-in plate id."""
+    try:
+        return preview.resolve_scenario(body)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_key)])

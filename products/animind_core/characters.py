@@ -66,33 +66,87 @@ def load(character_id: str) -> dict[str, Any] | None:
 
 
 REUSE_MIN_SCORE = 80
+CHARACTER_SET_CAP_USD = 0.30
 
 
-def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
-    """A saved, QA-approved Gemini rig of the same persona and art style, or None.
+def _identity_key(name: str, art_style: str) -> str:
+    return f"{_slug(name)}_{art_style}"
 
-    Asking for "Sócrates" again must not pay for a new image: the best-scored ready rig with the same
-    name (accent/case-insensitive) and style is returned, file URLs rebased on this server. Ties go to
-    the newest. ``reuse: false`` in the request (or a ``rawPrompt``) always generates.
-    """
-    best: tuple[int, str, dict[str, Any]] | None = None
+
+def _spend_path(name: str, art_style: str) -> Path:
+    return settings.data_dir() / "character_cache" / f"{_identity_key(name, art_style)}.json"
+
+
+def image_spend(name: str, art_style: str) -> float:
+    """USD already spent on images for this name and art style, across requests."""
+    path = _spend_path(name, art_style)
+    if not path.is_file():
+        return 0.0
+    try:
+        return max(0.0, float(json.loads(path.read_text(encoding="utf-8")).get("spentUsd") or 0))
+    except (OSError, ValueError, TypeError):
+        return 0.0
+
+
+def record_image_spend(name: str, art_style: str, cost_usd: float, character_id: str, score: int) -> None:
+    path = _spend_path(name, art_style)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = {}
+    if path.is_file():
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = {}
+    spent = max(0.0, float(current.get("spentUsd") or 0)) + max(0.0, float(cost_usd))
+    best_score = int(current.get("bestScore") or -1)
+    best_id = current.get("bestId")
+    if score >= best_score:
+        best_score, best_id = score, character_id
+    path.write_text(json.dumps({
+        "spentUsd": round(spent, 4),
+        "bestId": best_id,
+        "bestScore": best_score,
+        "capUsd": CHARACTER_SET_CAP_USD,
+    }), encoding="utf-8")
+
+
+def image_cap_blocks(name: str, art_style: str, estimate_usd: float = 0.12) -> bool:
+    """Another image set would pass the US$0.30 cap for this character."""
+    return image_spend(name, art_style) + max(0.0, estimate_usd) > CHARACTER_SET_CAP_USD + 1e-9
+
+
+def _saved_rigs(name: str, art_style: str) -> list[tuple[int, str, dict[str, Any]]]:
+    found: list[tuple[int, str, dict[str, Any]]] = []
     root = puppets_dir()
     for path in root.glob("*/character.json") if root.is_dir() else []:
         try:
-            c = json.loads(path.read_text(encoding="utf-8"))
+            character = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        score = int((c.get("qa") or {}).get("score") or 0)
-        if (c.get("status") != "ready" or c.get("generator") != "gemini" or score < REUSE_MIN_SCORE
-                or c.get("artStyle") != art_style or _slug(str(c.get("name") or "")) != _slug(name)
-                or c.get("id") != path.parent.name or not (path.parent / "rig.json").is_file()):
+        score = int((character.get("qa") or {}).get("score") or 0)
+        if (character.get("status") != "ready" or character.get("generator") != "gemini"
+                or character.get("artStyle") != art_style or _slug(str(character.get("name") or "")) != _slug(name)
+                or character.get("id") != path.parent.name or not (path.parent / "rig.json").is_file()):
             continue
-        key = (score, str(c.get("createdAt") or ""), c)
-        if best is None or key[:2] > best[:2]:
-            best = key
-    if best is None:
+        found.append((score, str(character.get("createdAt") or ""), character))
+    return found
+
+
+def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
+    """A saved Gemini rig of the same persona and art style, or None.
+
+    Asking for "Sócrates" again must not pay for a new image. A rig that passed
+    image QA (score >= 80) wins. If the only saved rig failed QA once, that rig
+    is still returned: regenerating it costs about US$0.12 and the US$0.30 cap
+    is per character set. ``reuse: false`` (or a ``rawPrompt``) skips this.
+    """
+    saved = _saved_rigs(name, art_style)
+    if not saved:
         return None
-    text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(best[2]))
+    passing = [item for item in saved if item[0] >= REUSE_MIN_SCORE]
+    pool = passing or saved
+    _score, _created, character = max(pool, key=lambda item: item[:2])
+    text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(character))
     reused = json.loads(text)
     reused.setdefault("gender", casting.public_gender(reused))
     skin = puppets_dir() / reused["id"]
@@ -100,7 +154,10 @@ def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
         sheet.build_views(skin, reused.get("name", ""))
     reused["viewsContactSheetUrl"] = f"{base_url}/v1/files/puppets/{reused['id']}/views_contact_sheet.png"
     reused.setdefault("avatarPipeline", avatar_pipeline())
-    return reused | {"reused": True}
+    warning = None
+    if _score < REUSE_MIN_SCORE:
+        warning = "reused the best saved rig; image QA stayed under 80, so it was not redrawn"
+    return reused | {"reused": True, **({"qaWarning": warning} if warning else {})}
 
 
 def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
@@ -184,12 +241,19 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             status="cached", metadata={"views": sorted((reused.get("views") or {}).keys())},
         )
         return reused
-    if character_type == "rig" and req.get("reuse", True) is not False and not req.get("rawPrompt"):
+    if character_type == "rig" and not req.get("rawPrompt") and (
+        req.get("reuse", True) is not False or image_cap_blocks(name, art_style)
+    ):
         found = reusable(name, art_style, base_url)
         if found:
             found["gender"] = casting.public_gender({**found, **req, "name": name, "prompt": subject})
             if req.get("voiceId"):
                 found["voiceId"] = str(req["voiceId"])
+            if image_cap_blocks(name, art_style):
+                found["qaWarning"] = (
+                    found.get("qaWarning")
+                    or f"image cost cap US${CHARACTER_SET_CAP_USD:.2f} reached for this character; reused the saved rig"
+                )
             _LOG.info("character %s reused for %r (no image generated)", found["id"], name)
             telemetry.record(
                 "avatar", provider=str(found.get("generator") or "unknown"),
@@ -285,6 +349,11 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     }
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     qa_report = character.get("qa") or {}
+    if character_type == "rig" and mode not in {"procedural", "mock"}:
+        record_image_spend(
+            name, art_style, float(qa_report.get("costUsd") or 0),
+            character_id, int(qa_report.get("score") or 0),
+        )
     attempts = qa_report.get("attempts") or {}
     images = (
         sum(

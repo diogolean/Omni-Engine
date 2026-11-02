@@ -25,6 +25,9 @@ from . import image_models, mouthset, rig, settings, stick, styles
 
 CANVAS = stick.CANVAS
 VISEMES = mouthset.VISEMES
+CHARACTER_SET_CAP_USD = 0.30
+# One Gemini character set (master + mouths + front) bills about US$0.12.
+_SET_ESTIMATE_USD = 0.12
 SOURCES = (
     "products/aiwake/animator/factory/create_puppet.py",
     "products/aiwake/animator/factory/one_shot_factory.py",
@@ -68,6 +71,49 @@ def configured_model(model_id: str | None = None) -> str | None:
     return None
 
 
+def _ledger(cache: Path) -> dict[str, Any]:
+    path = cache / "ledger.json"
+    if not path.is_file():
+        return {"spentUsd": 0.0, "passed": False}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"spentUsd": 0.0, "passed": False}
+    data.setdefault("spentUsd", 0.0)
+    data.setdefault("passed", False)
+    return data
+
+
+def _write_ledger(cache: Path, data: dict[str, Any]) -> None:
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "ledger.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def _load_pair(folder: Path) -> tuple[Image.Image, Image.Image] | None:
+    left_path = folder / "source_left.png"
+    if not left_path.is_file():
+        return None
+    left = Image.open(left_path).convert("RGBA")
+    front_path = folder / "source_front.png"
+    front = Image.open(front_path).convert("RGBA") if front_path.is_file() else left.copy()
+    return left, front
+
+
+def _store_passing(cache: Path, left: Image.Image, front: Image.Image) -> None:
+    dest = cache / "passing"
+    dest.mkdir(parents=True, exist_ok=True)
+    left.save(dest / "source_left.png")
+    front.save(dest / "source_front.png")
+
+
+def _image_ok(image: Image.Image) -> bool:
+    """A bust with pixels, not an empty or flat plate that failed image QA."""
+    if image.getchannel("A").getbbox() is None:
+        return False
+    sample = np.asarray(image.convert("RGB").resize((32, 40)), dtype=np.float32)
+    return float(sample.std()) > 8.0
+
+
 def create_avatar(
     description: str,
     style: str = "cartoon",
@@ -89,21 +135,45 @@ def create_avatar(
     fingerprint = _fingerprint(description, style_id, kind, model_id or "mock", stick_figure)
     cache = settings.data_dir() / "avatar_cache" / fingerprint
     skin.mkdir(parents=True, exist_ok=True)
-    cached = reuse and (cache / "source_left.png").is_file() and (cache / "meta.json").is_file()
-    if cached:
-        meta = json.loads((cache / "meta.json").read_text(encoding="utf-8"))
-        left = Image.open(cache / "source_left.png").convert("RGBA")
-        front_path = cache / "source_front.png"
-        front = Image.open(front_path).convert("RGBA") if front_path.is_file() else left.copy()
-        spec_provider = meta.get("provider") or "mock"
+    ledger = _ledger(cache)
+    passing = _load_pair(cache / "passing")
+    latest = _load_pair(cache) if (cache / "meta.json").is_file() else None
+    # A later image-QA failure must not hide a bust that already passed, and must
+    # not be paid for again. The US$0.30 cap is per character set, across calls.
+    over_cap = ledger["spentUsd"] + _SET_ESTIMATE_USD > CHARACTER_SET_CAP_USD + 1e-9
+    cached_pair = passing if (reuse or over_cap) and passing else None
+    if cached_pair is None and reuse and latest is not None:
+        cached_pair = latest
+    if cached_pair is None and over_cap and latest is not None:
+        cached_pair = latest
+    if cached_pair is not None:
+        left, front = cached_pair
+        meta_path = cache / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+        spec_provider = meta.get("provider") or "cached"
         spec_model = meta.get("model") or "cached"
         cost = 0.0
         mock = bool(meta.get("mock"))
         front_status = str(meta.get("frontStatus") or "cached")
+        cached = True
+    elif over_cap:
+        raise image_models.BudgetExceeded(
+            f"character image cap US${CHARACTER_SET_CAP_USD:.2f} reached "
+            f"(spent US${ledger['spentUsd']:.2f}) and no saved bust can be reused"
+        )
     else:
         left, front, spec_provider, spec_model, cost, mock, front_status = _acquire(
             description, style_id, stick_figure, skin, model_id, budget, allow_mock,
         )
+        passed = _image_ok(left) and _image_ok(front)
+        ledger["spentUsd"] = round(float(ledger["spentUsd"]) + float(cost), 4)
+        ledger["passed"] = bool(ledger.get("passed") or passed)
+        if passed:
+            _store_passing(cache, left, front)
+        elif passing is not None:
+            left, front = passing
+            front_status = "cached passing bust"
+            passed = True
         cache.mkdir(parents=True, exist_ok=True)
         left.save(cache / "source_left.png")
         front.save(cache / "source_front.png")
@@ -111,8 +181,11 @@ def create_avatar(
             "provider": spec_provider, "model": spec_model, "mock": mock,
             "frontStatus": front_status, "fingerprint": fingerprint,
             "description": description, "style": style_id, "kind": kind,
+            "passed": passed,
         }
         (cache / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        _write_ledger(cache, ledger)
+        cached = False
     views = _rig_views(left, front, skin, url)
     rig_path = skin / "rig.json"
     saved = json.loads(rig_path.read_text(encoding="utf-8")) if rig_path.is_file() else {}

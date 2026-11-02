@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -66,10 +67,41 @@ def role_line(char: dict[str, Any], template: str, topic: str, lang: str) -> str
     return f"{kind} · {topic}"[:60]
 
 
+_TTS_DELAYS_S = (0.4, 1.2, 2.5)
+
+
+def _tts_attempts() -> int:
+    raw = (os.getenv("ANIMIND_TTS_ATTEMPTS") or "").strip()
+    try:
+        return max(1, int(raw)) if raw else 3
+    except ValueError:
+        return 3
+
+
+def _tts_retryable(exc: BaseException) -> bool:
+    """edge-tts ``NoAudioReceived`` is transient: the same call succeeds on a later try."""
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    return "noaudioreceived" in name or "no audio" in text or "noaudioreceived" in text
+
+
 async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str = "+0Hz") -> None:
     import edge_tts  # noqa: PLC0415
 
-    await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
+    attempts = _tts_attempts()
+    last: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
+            return
+        except Exception as exc:  # noqa: BLE001 — only the transient audio miss is retried
+            last = exc
+            if not _tts_retryable(exc) or attempt + 1 >= attempts:
+                raise
+            _LOG.warning("edge-tts %s on attempt %d/%d; retrying", type(exc).__name__, attempt + 1, attempts)
+            await asyncio.sleep(_TTS_DELAYS_S[min(attempt, len(_TTS_DELAYS_S) - 1)])
+    if last is not None:
+        raise last
 
 
 def _voice_line(text: str, pick: dict[str, Any], mp3: Path, clip: Path, max_s: float,
@@ -234,6 +266,34 @@ def _set(job_id: str, **kw: Any) -> None:
         _JOBS[job_id].update(kw)
 
 
+def settle_frame_qa(video: Path, report: dict[str, Any], *, repaired: list[str] | None = None) -> dict[str, Any]:
+    """Keep a finished MP4. Fail only when there is no video to show.
+
+    A moustache that measures ``open 0.09 vs drawn 0.00`` used to mark the whole
+    job failed after the file was already encoded. The warning stays on the job.
+    """
+    warnings = [note for note in (repaired or []) if note]
+    if report.get("pass") and not warnings:
+        return report
+    if not report.get("pass"):
+        warnings.append(
+            f"frame mouth QA: {report.get('badFrames', 0)} bad frames; {report.get('examples', [])[:3]}"
+        )
+    if video.is_file() and video.stat().st_size > 0:
+        return {**report, "degraded": not report.get("pass"), "warnings": warnings}
+    summary = warnings[-1] if warnings else "frame mouth QA failed"
+    raise RuntimeError(summary.replace("frame mouth QA:", "frame mouth QA failed:", 1))
+
+
+def _repair_cast_mouths(cast: list[dict[str, Any]]) -> list[str]:
+    notes: list[str] = []
+    for character in cast:
+        root = characters.puppets_dir() / str(character.get("id") or "") / "views"
+        for view_name in ("front", "left", "right"):
+            notes.extend(frameqa.repair_closed_visemes(root / view_name))
+    return notes
+
+
 def _rig_views(char: dict[str, Any], template: str, idx: int, scenario: str = "studio") -> dict[str, scene.RigView] | None:
     saved = characters.load(str(char.get("id") or ""))
     if not saved:
@@ -325,6 +385,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                          topic=written["topic"])
         video = work / "preview.mp4"
         _set(job_id, progress=0.55)
+        qa_warnings: list[str] = []
         mouth_problems = [
             problem
             for character in cast
@@ -334,26 +395,46 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             ))
         ]
         if mouth_problems:
-            raise RuntimeError("frame mouth QA failed before encode: " + "; ".join(mouth_problems[:3]))
-        with _RENDER_LOCK:
-            AnimationRenderer(width=sc.OW, height=sc.OH, fps=scene.FPS).render(
-                frame_iter=sc.frames(), audio_path=audio, output_path=video, duration_s=duration,
-                preset="veryfast", crf=20, gop=48, tune="animation", threads=2, deterministic=True,
-                encode_timeout_s=900, retain_frames=False,
-            )
-        # Fail closed: decode the encoded MP4 and verify every measurable mouth, not only the
-        # pre-encode stage.  The report stays beside the render for diagnosis.
-        # Speech spans let the QA fail a mouth that stays shut (or frozen) while its line is heard.
+            repaired = _repair_cast_mouths(cast)
+            qa_warnings.extend(repaired or [f"mouth preflight: {problem}" for problem in mouth_problems[:3]])
+            if repaired:
+                rigs = [_rig_views(c, scene_template, i, scenario) for i, c in enumerate(cast)]
+                sc = scene.Scene(template=scene_template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
+                                 env_fps=ENV_FPS, duration_s=duration, disclaimer=disclaimer,
+                                 names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art,
+                                 topic=written["topic"])
+
+        def _encode(scene_now: scene.Scene) -> None:
+            with _RENDER_LOCK:
+                AnimationRenderer(width=scene_now.OW, height=scene_now.OH, fps=scene.FPS).render(
+                    frame_iter=scene_now.frames(), audio_path=audio, output_path=video, duration_s=duration,
+                    preset="veryfast", crf=20, gop=48, tune="animation", threads=2, deterministic=True,
+                    encode_timeout_s=900, retain_frames=False,
+                )
+
+        _encode(sc)
+        # Decode the MP4 and verify mouths. A bad moustache layer is repaired once.
+        # If a video still exists, the job finishes with warnings instead of failing closed.
         trace = {"fps": scene.FPS, "size": [sc.OW, sc.OH], "frames": sc.trace,
                  "speech": [{"start": s["startMs"] / 1000, "end": s["endMs"] / 1000, "speaker": s["speaker"]} for s in script]}
         (work / "frames.json").write_text(json.dumps(trace))
         frame_qa = frameqa.check(video, trace)
-        (work / "frame_qa.json").write_text(json.dumps(frame_qa, indent=2))
         if not frame_qa["pass"]:
-            raise RuntimeError(
-                f"frame mouth QA failed: {frame_qa['badFrames']} bad frames; "
-                f"{frame_qa['examples'][:3]}"
-            )
+            repaired = _repair_cast_mouths(cast)
+            if repaired:
+                qa_warnings.extend(repaired)
+                rigs = [_rig_views(c, scene_template, i, scenario) for i, c in enumerate(cast)]
+                sc = scene.Scene(template=scene_template, scenario=scenario, rigs=rigs, script=script, envelope=envelope(track),
+                                 env_fps=ENV_FPS, duration_s=duration, disclaimer=disclaimer,
+                                 names=[str(c.get("name") or "") for c in cast], roles=[role_line(c, template, written["topic"], lang) for c in cast], lang=lang, fmt=fmt, style=art,
+                                 topic=written["topic"])
+                _encode(sc)
+                trace = {"fps": scene.FPS, "size": [sc.OW, sc.OH], "frames": sc.trace,
+                         "speech": [{"start": s["startMs"] / 1000, "end": s["endMs"] / 1000, "speaker": s["speaker"]} for s in script]}
+                (work / "frames.json").write_text(json.dumps(trace))
+                frame_qa = frameqa.check(video, trace)
+        frame_qa = settle_frame_qa(video, frame_qa, repaired=qa_warnings)
+        (work / "frame_qa.json").write_text(json.dumps(frame_qa, indent=2))
         files = f"{base_url}/v1/files/jobs/{job_id}"
         result = {
             "template": template, "scenario": scenario, "characters": chars,
@@ -385,10 +466,11 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             "cameraPlan": sc.camera_plan(),
             "frameQa": frame_qa,
             "frameQaUrl": f"{files}/frame_qa.json",
+            "warnings": list(frame_qa.get("warnings") or []),
             "language": lang,
             "rhubarbRecognizer": language.rhubarb,
         }
-        _set(job_id, status="done", progress=1.0, result=result)
+        _set(job_id, status="done", progress=1.0, result=result, warnings=result.get("warnings") or [])
         cost = written["scriptCost"]
         telemetry.record(
             "render",

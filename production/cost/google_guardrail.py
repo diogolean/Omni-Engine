@@ -17,9 +17,11 @@ Thinking tokens are billed as output and are now counted:
 * ``gemini-2.5-pro``: $1.25 in, $10 out
 * Nano Banana images: ``modules.reel_artefact.pricing``
 
-Every text call gets ``thinking_budget=0`` on the 2.5 Flash family and a
+Every text call gets a model-aware thinking config and a
 ``max_output_tokens`` cap (``GEMINI_MAX_OUTPUT_TOKENS``, default 4096)
-unless the caller set them.
+unless the caller set them. 2.5 Flash accepts ``thinking_budget=0``.
+Gemini 3.x Flash-Lite rejects that with HTTP 400; it gets
+``thinking_level`` (or budget 128 on an older SDK) instead.
 
 Environment
 -----------
@@ -34,6 +36,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import re
 import threading
 import traceback
 from dataclasses import dataclass, field
@@ -150,36 +153,77 @@ def _text_rates(model_id: str | None) -> tuple[float, float]:
     return FLASH_INPUT_USD_PER_1M, FLASH_OUTPUT_USD_PER_1M
 
 
+# "gemini-3.5-flash-lite" and "3.1-flash-lite", not "2.5-flash" or "23-flash".
+_GEMINI3 = re.compile(r"(?:^|[^0-9])3(?:\.\d+)?-")
+
+
+def _is_gemini3(model_id: str) -> bool:
+    return bool(_GEMINI3.search(model_id))
+
+
 def _wants_zero_thinking(model_id: str | None) -> bool:
-    """2.5 Flash and Flash-Lite accept a budget of 0. Pro and 3.x do not."""
+    """2.5 Flash accepts a budget of 0. Pro, image, and 3.x models do not.
+
+    ``gemini-3.5-flash-lite`` answers ``thinking_budget=0`` with
+    ``400 INVALID_ARGUMENT``. A thinking level, or a positive budget, is valid.
+    """
     low = (model_id or "").lower()
-    if "image" in low or "pro" in low:
+    if "image" in low or "pro" in low or _is_gemini3(low):
         return False
     return "2.5-flash" in low or "flash-lite" in low
 
 
+def _thinking_spec(model_id: str | None) -> dict[str, Any] | None:
+    """Thinking fields for one text call, or None to leave the model default."""
+    low = (model_id or "").lower()
+    if not low or "image" in low or "pro" in low:
+        return None
+    if _wants_zero_thinking(low):
+        return {"thinking_budget": _env_int("GEMINI_THINKING_BUDGET", 0)}
+    if _is_gemini3(low) and "flash" in low:
+        level = (os.getenv("GEMINI_THINKING_LEVEL") or "minimal").strip() or "minimal"
+        return {"thinking_level": level}
+    return None
+
+
+def _thinking_value(thinking_cls: Any, spec: dict[str, Any]) -> Any:
+    """Build a ThinkingConfig. Older SDKs have no ``thinking_level``; 128 is accepted, 0 is not."""
+    fields = set(getattr(thinking_cls, "model_fields", {}) or {})
+    kwargs = {key: value for key, value in spec.items() if not fields or key in fields}
+    if not kwargs and "thinking_level" in spec:
+        kwargs = {"thinking_budget": _env_int("GEMINI_3_THINKING_BUDGET", 128)}
+    if not kwargs:
+        return None
+    try:
+        return thinking_cls(**kwargs)
+    except TypeError:
+        if "thinking_budget" in kwargs:
+            return None
+        return thinking_cls(thinking_budget=_env_int("GEMINI_3_THINKING_BUDGET", 128))
+
+
 def cheap_text_config(config: Any, model_id: str | None) -> Any:
-    """Add ``thinking_budget=0`` and an output cap unless the caller set them."""
+    """Add a model-aware thinking config and an output cap unless the caller set them."""
     if is_image_model(model_id):
         return config
     cap = max(64, _env_int("GEMINI_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS))
-    budget = _env_int("GEMINI_THINKING_BUDGET", 0)
-    zero = _wants_zero_thinking(model_id)
+    spec = _thinking_spec(model_id)
     if isinstance(config, dict):
         out = dict(config)
         out.setdefault("max_output_tokens", cap)
-        if zero and out.get("thinking_config") is None:
-            out["thinking_config"] = {"thinking_budget": budget}
+        if spec and out.get("thinking_config") is None:
+            out["thinking_config"] = dict(spec)
         return out
     try:
         from google.genai import types
     except Exception:  # noqa: BLE001
         return config
     thinking_cls = getattr(types, "ThinkingConfig", None)
+    thinking = _thinking_value(thinking_cls, spec) if spec and thinking_cls is not None else None
     if config is None:
         kwargs: dict[str, Any] = {"max_output_tokens": cap}
-        if zero and thinking_cls is not None:
-            kwargs["thinking_config"] = thinking_cls(thinking_budget=budget)
+        if thinking is not None:
+            kwargs["thinking_config"] = thinking
         try:
             return types.GenerateContentConfig(**kwargs)
         except Exception:  # noqa: BLE001
@@ -187,8 +231,8 @@ def cheap_text_config(config: Any, model_id: str | None) -> Any:
     update: dict[str, Any] = {}
     if getattr(config, "max_output_tokens", None) is None:
         update["max_output_tokens"] = cap
-    if zero and thinking_cls is not None and getattr(config, "thinking_config", None) is None:
-        update["thinking_config"] = thinking_cls(thinking_budget=budget)
+    if thinking is not None and getattr(config, "thinking_config", None) is None:
+        update["thinking_config"] = thinking
     if not update:
         return config
     copier = getattr(config, "model_copy", None)

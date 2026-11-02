@@ -224,6 +224,47 @@ def preflight_happy(view_dir: Path) -> str | None:
     return None
 
 
+_SAFE_COLOURS = {
+    "outline": (40, 30, 30, 255),
+    "cavity": (20, 12, 14, 255),
+    "teeth": (247, 244, 236, 255),
+    "tongue": (190, 86, 92, 255),
+    "lip": (142, 72, 78, 255),
+}
+
+
+def repair_closed_visemes(view_dir: Path) -> list[str]:
+    """Replace open visemes that drew shut (a moustache often measures as 0) with the safe mouth set.
+
+    Viseme B is the usual failure: the sprite's own cavity is 0.00 and the encoded
+    frame, which still shows a little dark hair, measures about 0.09.
+    """
+    mouths = view_dir / "mouths"
+    if not mouths.is_dir():
+        return []
+    from . import mouthset  # noqa: PLC0415
+
+    notes: list[str] = []
+    safe: dict[str, Image.Image] | None = None
+    for path in sorted(mouths.glob("*.png")):
+        code = path.stem
+        floor = VISEME_CAV_MIN.get(code)
+        if floor is None or floor <= 0:
+            continue
+        with Image.open(path) as image:
+            cavity = happy_cavity(image.convert("RGBA"))
+        if cavity + 1e-6 >= floor:
+            continue
+        if safe is None:
+            safe = mouthset.draw_set(96, _SAFE_COLOURS)
+        sprite = safe.get(code)
+        if sprite is None:
+            continue
+        sprite.save(path)
+        notes.append(f"{view_dir.name} {code}: cavity {cavity:.2f} replaced with a safe mouth")
+    return notes
+
+
 def check(mp4: Path, trace: dict[str, Any]) -> dict[str, Any]:
     w, h = trace["size"]
     bad: list[tuple[int, str]] = []

@@ -43,11 +43,38 @@ def test_same_persona_reuses_the_approved_rig(client, tmp_path):
 def test_reuse_needs_qa_style_and_consent(client, tmp_path):
     first = _post(client)
     _approve(tmp_path, first["id"], score=60)
-    assert _post(client)["id"] != first["id"]  # below the QA bar: generate
-    _approve(tmp_path, first["id"])
+    # A single failed QA used to pay for a new rig. Keep the saved one.
+    again = _post(client)
+    assert again["id"] == first["id"] and again["reused"] is True
+    assert "qaWarning" in again
     assert _post(client, artStyle="aquarela")["id"] != first["id"]  # other art style
     assert _post(client, reuse=False)["id"] != first["id"]  # explicit opt-out
+    _approve(tmp_path, first["id"])
     assert _post(client)["id"] == first["id"]
+
+
+def test_a_later_qa_failure_does_not_hide_the_passing_rig(client, tmp_path):
+    passed = _post(client)
+    _approve(tmp_path, passed["id"], score=92)
+    failed = _post(client, reuse=False)
+    _approve(tmp_path, failed["id"], score=40)
+    again = _post(client)
+    assert again["id"] == passed["id"] and again["qa"]["score"] == 92
+
+
+def test_image_cap_reuses_instead_of_paying_past_thirty_cents(client, tmp_path):
+    import json
+
+    from products.animind_core import characters
+
+    first = _post(client)
+    _approve(tmp_path, first["id"], score=88)
+    ledger = characters._spend_path("Sócrates", "anime")
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps({"spentUsd": 0.30, "bestId": first["id"], "bestScore": 88}))
+    again = _post(client, reuse=False)
+    assert again["id"] == first["id"] and again["reused"] is True
+    assert "0.30" in again["qaWarning"]
 
 
 def test_mock_rigs_are_never_reused(client):

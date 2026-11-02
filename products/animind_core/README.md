@@ -8,7 +8,9 @@ Rhubarb visemes).
 | Endpoint | What runs |
 | --- | --- |
 | `POST /v1/characters` | `type: "rig"` uses `rig.py` when Gemini is configured: Gemini master via Aiwake `create_puppet.generate_character_image` -> generated mouthless head + 4x3 parts sheet (nine Rhubarb mouths and three lid states) -> BiRefNet matte -> registered layers. Together or OpenRouter rigs, and every stick figure with a key, use `avatar.create_avatar`. `type: "stick"` with no image key uses `stick.py` as the offline mock. |
-| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame and fails the job if more than one mouth layer, a stacked second mouth, or an excessive opening is found. Successful results include `frameQa` and `frameQaUrl`. |
+| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line (retried on `NoAudioReceived`) -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame. A bad mouth layer is replaced with the safe drawn set and the shot is encoded once more. If a video file exists, the job is `done` and the QA note is in `warnings` (and `frameQa.warnings`); the job fails only when there is no video. Results include `frameQa` and `frameQaUrl`. |
+| `POST /v1/preview` | Lightweight PNG before the full rig. Body: `{character: {name, prompt}, characterType: "stick"\|"illustrated", artStyle, language, index}`. Response: `{id, index, name, kind, source: "core", accent, imageUrl, note}`. This is not the final cut-out; that is still `POST /v1/characters`. |
+| `POST /v1/scenarios` | `{mode: "auto", characterNames}` or `{mode: "prompt", prompt, characterNames}` -> `{scenario, source: "core", prompt?, note?}`. `scenario` is one of `studio`, `classroom`, `arena`, `space`, `agora` (classical names map to `agora`). A free-text prompt is mapped to the nearest built-in plate; the core does not paint a new set. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
 ### Telemetry and provider comparison
@@ -172,9 +174,11 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   the topic and cast; no mold, and no picked-up word, repeats inside one script.
 - `kind: "quote"`: the text is copied by code from the sheet, byte for byte, with
   `quote {id, text, source, label, url, site, wikisource?}` (`label` is the short on-screen source: no
-  page numbers, translators or publishers, <= 48 chars; `source` stays complete). The pluggable
+  page numbers, translators or publishers, <= 48 chars; `source` stays complete).   The pluggable
   script writer uses DeepSeek `deepseek-flash` by default and Gemini
-  (`gemini-3.5-flash-lite`) as fallback; either provider only picks
+  (`gemini-3.5-flash-lite`) as fallback. Gemini 3.5 Flash-Lite is called with
+  `thinking_level=minimal` (budget 0 is a 400 on that model). Answers may be
+  `{"lines":[...]}` or a bare JSON array. Either provider only picks
   quote ids and writes the other lines. Only `primary` quotes can be a "Citação real". Quote beats prefer
   quotes sharing words with the topic (stemmed): an unknown/reused id, or an off-topic id while an on-topic
   quote fits, becomes the best topic match (then the shortest), never model text.
@@ -216,6 +220,9 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/).
 - `GEMINI_API_KEY` (script fallback; absent -> mock art). `ANIMIND_DATA_DIR` (default
   `~/.animind-core`, outside git). `CORE_PUBLIC_URL`.
+- `OUTPUT_PATH` / `OUTPUTS_DIR`: shared cost ledgers. When unset, those files go to
+  `~/.cache/omni-engine/outputs` (`XDG_CACHE_HOME` overrides the cache root), not
+  `<repo>/outputs`. The repo `outputs/` directory stays gitignored.
 - `ANIMIND_PERSONAS_OFFLINE=1`: never fetch Wikiquote (tests); only cached sheets are used.
 - `RHUBARB_PATH`: Rhubarb Lip Sync binary (Linux has no auto-download; absent -> envelope visemes:
   `render.envelope_visemes` picks one mouth per ~90 ms syllable window by loudness and rotates shapes, so
@@ -302,8 +309,10 @@ never squashed into a second copy (the old "tear" in close-ups).
 5. **QA** (`qa.py`): skin deltaE, residual/double mouth, mouth opening, front symmetry, landmarks,
    alpha edges and resolution -> score 0–100. `qa.json` + `qa_sheet.png` are stored with the character; a failed
    skin/edge gate on sheet mouths rebuilds with deterministic mouths (free).
-6. **Render QA** (`frameqa.py`): the encoded MP4 is decoded frame by frame; the render fails closed
-   unless every frame has exactly one mouth and stays within the natural opening cap. The trace also carries
+6. **Render QA** (`frameqa.py`): the encoded MP4 is decoded frame by frame. A viseme that drew shut
+   (the usual moustache miss: `open 0.09 vs drawn 0.00`) is replaced with the safe mouth set and the
+   shot is encoded once more. The job fails only when no video file exists; otherwise `warnings` on
+   the job carries the QA note. The trace also carries
    one `speech` span per voiced line: a speaker whose drawn mouth never changes shape during a line
    (>= 0.4 s), whose measured opening never reaches `OPEN_MIN`, or a video with speech and `maxOpen` 0
    fails too (a frozen mouth is not a pass).

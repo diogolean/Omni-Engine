@@ -366,12 +366,34 @@ def keyword(text: str, topic: str = "", *, related_only: bool = False, avoid: st
     return best
 
 
+_TOPIC_SKIP = {
+    "why", "how", "what", "when", "where", "who", "whom", "whose", "which", "does", "did",
+    "get", "gets", "got", "that", "this", "with", "from", "into", "about", "your", "have",
+    "been", "porque", "como", "quando", "onde", "para",
+}
+
+
+def _topic_noun(topic: str) -> str:
+    """One noun from a topic. Participles such as ``explained`` are not the subject."""
+    raw_words = re.findall(r"[A-Za-zÀ-ÿ]+", (topic or "").lower())
+    kept: list[str] = []
+    for word in raw_words:
+        if word in _TOPIC_SKIP or word in _STOP_KW or len(word) < 4:
+            continue
+        if word.endswith(("ed", "ing")) and not word.endswith(_NOUN_END):
+            continue
+        kept.append(singular(word) or word)
+    if kept:
+        return kept[0]
+    return keyword(topic, topic) or (raw_words[-1] if raw_words else "topic")
+
+
 def topic_parts(topic: str) -> tuple[str, str, bool]:
     """``(question/headline, key noun, is_question)`` for "a verdade existe?" -> ("A verdade existe?", "verdade", True)."""
     t = " ".join((topic or "").split()).strip(" .")
     is_q = t.endswith("?")
     head = tidy(t)
-    noun = t.rstrip("?").lower() if not is_q and len(t.split()) <= 4 else (keyword(t, t) or t.rstrip("?").lower())
+    noun = t.rstrip("?").lower() if not is_q and len(t.split()) <= 2 else _topic_noun(t)
     if re.match(r"(?i)^(?:should|can|could|do|does|is|are|will|would)\b", t):
         # Modal English questions end on the proposition's object.  Keeping
         # that noun ("claims"), rather than a longer verb ("verify"), makes
@@ -439,7 +461,11 @@ def _bank(lang: str) -> dict[str, list[str]]:
             "fechamento0": ["{Kw}, {b}? Then let the audience decide. I only asked questions.",
                             "{Kw}? The question stays, {b}. And it is stronger than both of us."],
             "fechamento": ["Think about it before you trust the next certainty about {the}."],
-            "argumento": ["Look at {kw}: without it, {the} is only an opinion."],
+            "argumento": [
+                "Look at {kw}: without it, {the} is only an opinion.",
+                "{Kw} answers the line before. The rest of {the} follows from it.",
+                "If {kw} is the claim, {the} still needs one concrete test.",
+            ],
             "pergunta": ["Start with the right question: how do you know something is {bare}?",
                          "Before the answer, a better question: who vouches for what you call {bare}?"],
             "citação": ["The ancients already suspected it: nobody gets {the} as a gift. You look for it."],
@@ -488,7 +514,11 @@ def _bank(lang: str) -> dict[str, list[str]]:
         "fechamento0": ["{Kw}, {b}? Então que o público decida. Eu só fiz perguntas.",
                         "{Kw}? A pergunta fica, {b}. E ela é mais forte que nós dois."],
         "fechamento": ["Pense nisso antes de acreditar na próxima certeza sobre {the}."],
-        "argumento": ["Repare em {kw}: sem isso, {the} vira só opinião."],
+            "argumento": [
+                "Repare em {kw}: sem isso, {the} vira só opinião.",
+                "{Kw} responde a linha anterior. O resto de {the} segue daí.",
+                "Se {kw} é a tese, {the} precisa de um teste concreto.",
+            ],
         "pergunta": ["Comece pela pergunta certa: como você sabe que algo é {bare}?",
                      "Antes da resposta, uma pergunta melhor: quem garante o que você chama de {bare}?"],
         "citação": ["Os antigos já desconfiavam: ninguém recebe {the} de presente. Se procura."],
@@ -681,7 +711,12 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
             if f"{k}:{m}" in molds or personas.fold(text) in taken or words(text) > beat.max_words + 1:
                 continue
             candidates.append((f"{k}:{m}", text))
-    if n > 1 and prev:
+    if prev and n <= 1 and beat.name in {"argumento", "fechamento"}:
+        # A monologue reply has to pick up the previous line. A mold that does
+        # not is dropped so the safe line, which names that word, is used.
+        # Lesson beats (síntese, exemplo, virada) keep their own molds.
+        candidates = [c for c in candidates if link(prev, c[1], names=names)]
+    elif n > 1 and prev:
         linked = [c for c in candidates if link(prev, c[1], names=names)]
         set_up = [c for c in linked if any(link(c[1], q, quote=True, names=names) for q in upcoming or [])]
         candidates = set_up or linked or candidates
@@ -692,17 +727,21 @@ def _template_text(beat: Beat, lang: str, topic: str, names: list[str], before: 
     # format string that requires an unavailable quote word (the old result
     # was "you were the one who said,"). Keep the exchange connected instead.
     other_name = b if sp == 0 else a
+    anchor = kw
+    if prev and not link(prev, kw, names=names):
+        # The topic noun was already used. Name a word that is actually in the previous line.
+        anchor = keyword(prev, "", nouny=False) or kw
     safe = (
         [
-            f"{kw} still needs evidence, {other_name}",
-            f"{kw} has consequences, {other_name}; name one",
-            f"{kw} is the claim, {other_name}; what is the test",
+            f"{anchor} still needs evidence, {other_name}",
+            f"{anchor} has consequences, {other_name}; name one",
+            f"{anchor} is the point, {other_name}; what is the test",
         ]
         if lang == "en-US"
         else [
-            f"{kw} ainda precisa de evidência, {other_name}",
-            f"{kw} tem consequências, {other_name}; diga uma",
-            f"{kw} é a tese, {other_name}; qual é o teste",
+            f"{anchor} ainda precisa de evidência, {other_name}",
+            f"{anchor} tem consequências, {other_name}; diga uma",
+            f"{anchor} é o ponto, {other_name}; qual é o teste",
         ]
     )
     return tidy(safe[index % len(safe)])
@@ -813,10 +852,44 @@ def _gemini(prompt: str) -> list[dict[str, Any]]:
     return lines
 
 
+def _writer_config() -> Any:
+    """JSON mode plus a response schema. A bare array is still parsed if the model ignores the schema."""
+    from google.genai import types  # noqa: PLC0415
+
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "lines": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "i": {"type": "INTEGER"},
+                        "quoteId": {"type": "STRING", "nullable": True},
+                        "basisId": {"type": "STRING", "nullable": True},
+                        "text": {"type": "STRING"},
+                        "emotion": {"type": "STRING"},
+                    },
+                    "required": ["i"],
+                },
+            }
+        },
+        "required": ["lines"],
+    }
+    kwargs: dict[str, Any] = {
+        "response_mime_type": "application/json",
+        "temperature": 0.8,
+        "response_schema": schema,
+    }
+    try:
+        return types.GenerateContentConfig(**kwargs)
+    except Exception:  # noqa: BLE001 — older SDKs reject response_schema
+        kwargs.pop("response_schema", None)
+        return types.GenerateContentConfig(**kwargs)
+
+
 def _gemini_call(prompt: str) -> list[dict[str, Any]]:
     import os  # noqa: PLC0415
-
-    from google.genai import types  # noqa: PLC0415
 
     from production.cost.google_guardrail import (  # noqa: PLC0415
         guarded_generate_content,
@@ -826,15 +899,48 @@ def _gemini_call(prompt: str) -> list[dict[str, Any]]:
     client = make_guarded_gemini_client((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
     response = guarded_generate_content(
         client, model=WRITER_MODEL, contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.8),
+        config=_writer_config(),
         kind="text", source="animind_core.script.write",
     )
-    raw = response.text or ""
-    data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
-    return list(data.get("lines") or [])
+    return llm_providers._json_lines(response.text or "")
 
 
 # ---------------------------------------------------------------- assembly
+
+
+# Offline molds plus the title cards: 4 solo beats land near 20s, short of a 30s request.
+_BEAT_S = 3.95
+_CARD_S = 4.2
+DURATION_TOLERANCE_S = 4.5
+
+
+def duration_tolerance(target: float) -> float:
+    """Seconds of slack around a requested duration. 30s allows 25.5–34.5."""
+    return max(DURATION_TOLERANCE_S, 0.15 * float(target))
+
+
+def runtime_seconds(lines: list[dict[str, Any]]) -> float:
+    """Timeline the renderer will build: title card, speech, pauses, act gaps, end card."""
+    from . import titles  # noqa: PLC0415
+
+    speech = sum(max(0.8, words(str(line.get("text") or "")) / WORDS_PER_S) for line in lines)
+    pauses = sum(float(line.get("pauseAfterS") or 0) for line in lines)
+    gaps = 0.0
+    for index in range(1, len(lines)):
+        act = lines[index].get("act")
+        if act and act != lines[index - 1].get("act"):
+            gaps += titles.ACT_GAP_S
+    return titles.TITLE_S + speech + pauses + gaps + titles.END_S
+
+
+def _solo_count(duration: float) -> int:
+    target = max(10.0, min(180.0, float(duration)))
+    best_n, best_err = 4, abs(_CARD_S + 4 * _BEAT_S - target)
+    for count in range(4, 17):
+        err = abs(_CARD_S + count * _BEAT_S - target)
+        if err < best_err:
+            best_n, best_err = count, err
+    return best_n
 
 
 def plan_for(template: str, n_chars: int, duration: int | float | None = None) -> list[Beat]:
@@ -850,6 +956,10 @@ def plan_for(template: str, n_chars: int, duration: int | float | None = None) -
             for i in range(count)
         ]
     plan = list(PLANS.get(template, PLANS["solo"]))
+    if template == "solo" and duration is not None:
+        extra = _solo_count(float(duration)) - len(plan)
+        if extra > 0:
+            plan = [*plan[:-1], *[Beat("argumento", 0, "paraphrase", 16, 0.28, 2) for _ in range(extra)], plan[-1]]
     if template == "debate" and duration is not None:
         if float(duration) <= 35.0:
             # Keep the complete four-act arc but drop two confrontation
@@ -1036,6 +1146,16 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             # a written line that *is* one of the speaker's real quotes is shown as that quote, with its source
             pool = [q for q in _quotable(sheet) if (sp, q["id"]) not in used]
             quote = matching_quote(draft.get("text") or "", pool, beat.max_words + 6)
+        mismatched: dict[str, Any] | None = None
+        if quote is not None and lines and template in {"solo", "dialogue"}:
+            fits_line = bool(link(previous, quote["text"], quote=True, names=names))
+            fits_topic = topic_score(quote, topic) > 0 or focus(quote, topic) >= 0.3
+            # A real quote that answers neither the previous line nor the question
+            # becomes a paraphrase. The sheet source stays on ``basis``.
+            # Lessons and debates keep their quote beats; those shapes are checked apart.
+            if not fits_line and not fits_topic:
+                mismatched = quote
+                quote = None
         if quote is not None:
             used.add((sp, quote["id"]))
             line.update(kind="quote", text=quote["text"], quote=cite(quote))
@@ -1062,9 +1182,22 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             if beat.name == "citação":  # a written line is never labelled as a quote
                 line["beat"] = "ideia"
             basis = by_id.get(draft.get("basisId") or "") if drafted_text else None  # a replaced draft keeps no basis
+            if mismatched is not None:
+                basis = mismatched
             if basis is not None:
                 line["basis"] = {"id": basis["id"], "source": basis.get("source", ""),
                                  "label": source_label(basis.get("source", "")), "url": basis.get("url", "")}
+            if lines and not link(previous, line["text"], names=names):
+                taken = {personas.fold(ln["text"]) for ln in lines}
+                nxt = plan[i + 1] if i + 1 < len(plan) else None
+                nsp = min(nxt.speaker, n - 1) if nxt else 0
+                upcoming = ([q["text"] for q in _rank([q for q in _eligible(sheets[nsp], nxt.max_words)
+                                                       if (nsp, q["id"]) not in used], topic, "")]
+                            if debate and nxt and nxt.kind == "quote" else None)
+                repaired = _template_text(beat, lang, topic, names, lines, n, taken, molds, seed, i, upcoming,
+                                          objective, tone)
+                if link(previous, repaired, names=names):
+                    line["text"] = repaired
         if lines:
             idea = link(previous, line["text"], quote=line["kind"] == "quote", names=names)
             line["replyTo"] = {"line": len(lines) - 1, "idea": idea}
@@ -1085,7 +1218,20 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
     elif template == "lesson":
         problems += check_lesson(lines, sheets, topic)
     # notes: weaknesses worth a look that do not fail the script (an idea carried three lines in a row)
-    out["scriptQA"] = {"pass": not problems, "problems": problems, "notes": _repeated_idea(lines)}
+    notes = _repeated_idea(lines)
+    if duration is not None:
+        estimated = runtime_seconds(lines)
+        out_duration = round(estimated, 2)
+        tolerance = duration_tolerance(float(duration))
+        if abs(estimated - float(duration)) > tolerance:
+            notes.append(
+                f"duration {estimated:.1f}s is outside {float(duration):.0f}s ± {tolerance:.1f}s"
+            )
+    else:
+        out_duration = None
+    out["scriptQA"] = {"pass": not problems, "problems": problems, "notes": notes}
+    if out_duration is not None:
+        out["estimatedDurationS"] = out_duration
     if problems:
         _LOG.warning("%s script QA: %s", template, "; ".join(problems))
     cost = out["scriptCost"]

@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -75,12 +76,44 @@ class LLMProvider(ABC):
         )
 
 
+def parse_json_value(text: str) -> Any:
+    """One JSON value: an object or a bare array, with or without a fence.
+
+    A greedy ``\\{.*\\}`` match on a bare array captures from the first object
+    to the last and ``json.loads`` then raises ``Extra data``. ``raw_decode``
+    reads exactly one value and ignores a trailing note.
+    """
+    raw = (text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw)
+    decoder = json.JSONDecoder()
+    try:
+        value, _end = decoder.raw_decode(raw)
+        return value
+    except json.JSONDecodeError:
+        pass
+    for index, char in enumerate(raw):
+        if char not in "[{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(raw[index:])
+            return value
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("writer returned no JSON")
+
+
 def _json_lines(text: str) -> list[dict[str, Any]]:
-    match = __import__("re").search(r"\{.*\}", text or "", __import__("re").S)
-    if not match:
-        raise ValueError("writer returned no JSON object")
-    data = json.loads(match.group(0))
-    return list(data.get("lines") or [])
+    data = parse_json_value(text)
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        lines = data.get("lines")
+        if isinstance(lines, list):
+            return [item for item in lines if isinstance(item, dict)]
+        if any(key in data for key in ("i", "text", "quoteId")):
+            return [data]
+    raise ValueError("writer JSON had no lines")
 
 
 class DeepSeekProvider(LLMProvider):
@@ -319,13 +352,12 @@ def generate(
 
 
 def _json_object(text: str) -> dict[str, Any]:
-    match = __import__("re").search(r"\{.*\}", text or "", __import__("re").S)
-    if not match:
-        raise ValueError("writer returned no JSON object")
-    data = json.loads(match.group(0))
-    if not isinstance(data, dict):
-        raise ValueError("writer JSON was not an object")
-    return data
+    data = parse_json_value(text)
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list):
+        return {"lines": [item for item in data if isinstance(item, dict)]}
+    raise ValueError("writer JSON was not an object")
 
 
 def generate_text(
