@@ -16,6 +16,7 @@ import json
 import os
 import threading
 import time
+from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,16 +31,74 @@ class ImageModel:
     credits: int = 1  # credits charged per image
     keyEnv: str = ""  # env var holding the provider key (name only)
     implemented: bool = False
+    gateway: str = ""
+    billingUnit: str = "image"
+    priceSource: str = ""
+    priceDate: str = "2026-11-02"
 
     def available(self) -> bool:
         return self.implemented and bool(self.keyEnv and os.environ.get(self.keyEnv))
 
 
 DEFAULTS: dict[str, ImageModel] = {
-    "nano-banana": ImageModel("nano-banana", "gemini", "gemini-2.5-flash-image", 0.039, 1, "GEMINI_API_KEY", True),
-    "flux-pro": ImageModel("flux-pro", "flux", "flux-pro-1.1", 0.04, 1, "BFL_API_KEY", False),
-    "flux-kontext": ImageModel("flux-kontext", "flux", "flux-kontext-pro", 0.04, 1, "BFL_API_KEY", False),
+    "nano-banana": ImageModel(
+        "nano-banana", "gemini", "gemini-2.5-flash-image", 0.039, 1,
+        "GEMINI_API_KEY", True, "google", "image",
+        "https://ai.google.dev/gemini-api/docs/pricing",
+    ),
+    "qwen-image": ImageModel(
+        "qwen-image", "qwen-image", "qwen-image-3.0", 0.03, 1,
+        "DASHSCOPE_API_KEY", False, "dashscope", "image",
+        "https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+    ),
+    "flux-pro": ImageModel(
+        "flux-pro", "flux", "fal-ai/flux-pro/v1.1", 0.04, 1,
+        "FAL_KEY", False, "fal.ai", "megapixel",
+        "https://fal.ai/models/fal-ai/flux-pro/v1.1",
+    ),
+    "flux-kontext": ImageModel(
+        "flux-kontext", "flux", "fal-ai/flux-2/edit", 0.012, 1,
+        "FAL_KEY", False, "fal.ai", "processed megapixel",
+        "https://fal.ai/pricing",
+    ),
 }
+
+
+class PaidImageGenerationDisabled(RuntimeError):
+    """Raised when a config-only provider is asked to spend money."""
+
+
+class ImageProvider(ABC):
+    """Provider boundary. Phase 4 exposes selection without making paid calls."""
+
+    def __init__(self, spec: ImageModel) -> None:
+        self.spec = spec
+
+    def configured(self) -> bool:
+        return bool(self.spec.keyEnv and os.environ.get(self.spec.keyEnv))
+
+    @abstractmethod
+    def generate(self, prompt: str, **options: Any) -> Any:
+        raise NotImplementedError
+
+
+class ConfigOnlyImageProvider(ImageProvider):
+    def generate(self, prompt: str, **options: Any) -> Any:
+        raise PaidImageGenerationDisabled(
+            f"{self.spec.provider} is registered but paid generation is disabled in phase 4"
+        )
+
+
+class GeminiImageProvider(ConfigOnlyImageProvider):
+    """Selection adapter for the existing Gemini rig pipeline."""
+
+
+class QwenImageProvider(ConfigOnlyImageProvider):
+    """DashScope Qwen Image adapter boundary; no paid request in phase 4."""
+
+
+class FluxImageProvider(ConfigOnlyImageProvider):
+    """fal.ai Flux adapter boundary; no paid request in phase 4."""
 
 
 def models() -> dict[str, ImageModel]:
@@ -60,10 +119,30 @@ def selected(model_id: str | None = None) -> ImageModel:
     return table[mid]
 
 
+def provider(model_id: str | None = None) -> ImageProvider:
+    spec = selected(model_id)
+    adapter = {
+        "gemini": GeminiImageProvider,
+        "qwen-image": QwenImageProvider,
+        "flux": FluxImageProvider,
+    }.get(spec.provider, ConfigOnlyImageProvider)
+    return adapter(spec)
+
+
 def public_list() -> list[dict[str, Any]]:
     """For the UI picker: no key names, only whether the model can be used now."""
-    return [{"id": m.id, "provider": m.provider, "usdPerImage": m.usdPerImage, "credits": m.credits,
-             "available": m.available()} for m in models().values()]
+    return [
+        {
+            "id": m.id,
+            "provider": m.provider,
+            "gateway": m.gateway,
+            "usdPerImage": m.usdPerImage,
+            "billingUnit": m.billingUnit,
+            "credits": m.credits,
+            "available": m.available(),
+        }
+        for m in models().values()
+    ]
 
 
 @dataclass
