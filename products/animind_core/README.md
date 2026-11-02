@@ -11,6 +11,31 @@ Rhubarb visemes).
 | `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame and fails the job if more than one mouth layer, a stacked second mouth, or an excessive opening is found. Successful results include `frameQa` and `frameQaUrl`. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
+### Telemetry and provider comparison
+
+Every script, avatar build and render appends one secret-free JSON object to
+`ANIMIND_DATA_DIR/telemetry/events.jsonl`. Rows include provider/model, text
+tokens, image count, USD, wall latency, script/image/frame QA summaries and
+the local artifact path. Prompts, generated text and key values are never
+written to telemetry. Unit/integration runs set `ANIMIND_DATA_DIR` to their
+temporary test folder, so test telemetry also stays outside git.
+
+```bash
+# Aggregate all rows by operation/provider/model as a Markdown table.
+python -m products.animind_core.telemetry summary
+
+# Run only configured providers; missing keys become explicit dry-run rows.
+# Paid image work has an absolute USD 0.30 ceiling.
+python -m products.animind_core.benchmark \
+  --output ~/.animind-core/benchmarks/latest --image-budget-usd 0.30
+```
+
+The benchmark compares direct DeepSeek, Gemini Flash-Lite, and configured
+DeepInfra/OpenRouter cheap models. For image models it records every registry
+entry; unconfigured or not-yet-enabled Qwen/Flux adapters are dry runs with
+the missing key/adapter named. `--dry-run-images` disables paid image calls
+even when a key exists.
+
 **Rig reuse:** a prompt character whose name (accent/case-insensitive) and art style match a saved,
 QA-approved (score >= 80) Gemini rig returns that rig (`"reused": true`, URLs rebased) instead of
 generating a new image. Send `"reuse": false` (or a `rawPrompt`) to force a new one.
@@ -287,3 +312,22 @@ separate head/torso layers, broad grounded shoulders and medium-bust framing ada
 adapt the shape vocabulary in `products/aiwake/animator/render/facial_rig.py`
 (`_tapered_arch_brow`, `_straight_blade_brow`, expression lift/rotation), while Animind's renderer
 continues to animate each brow independently. `explorer` remains as a compatibility preset.
+
+The complete avatar path is inherited from Aiwake rather than duplicated:
+
+- `products/aiwake/animator/factory/create_puppet.py`: source portrait and
+  numeric bust framing;
+- `products/aiwake/animator/factory/one_shot_factory.py`: canonical avatar
+  contract and reusable factory decisions;
+- `animation/parametric/factory/layer_slicer.py`: overlapping torso, neck and
+  head split;
+- `products/aiwake/animator/render/facial_rig.py`: eyes, lids, delicate brow
+  shapes and emotion transforms;
+- `products/aiwake/animator/asset_generator.py`: South-Park-style X/A–H and
+  emotional mouth family, consumed through `mouthset.py`.
+
+Each character response now identifies those sources in `avatarPipeline` and
+includes `viewsContactSheetUrl`. The sheet is composed from the actual layered
+`front`, `left` and `right` views. Right is produced by mirroring every left
+sprite and anchor—including eyes, lids, brows, all nine visemes, emotional
+mouths, `mouthQA` boxes and iris centres—not by mirroring only the torso.
