@@ -64,6 +64,24 @@ def test_realista_and_aquarela_have_their_own_look():
         assert styles.tint_plate(plate, st).size == (64, 64)
 
 
+def test_cached_black_bar_mouth_is_redrawn(tmp_path):
+    from PIL import Image, ImageDraw
+
+    from products.animind_core import frameqa, mouthset
+
+    view = tmp_path / "front" / "mouths"
+    view.mkdir(parents=True)
+    bar = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
+    ImageDraw.Draw(bar).rectangle((4, 14, 76, 26), fill=(8, 4, 4, 255))
+    bar.save(view / "C.png")
+    notes = frameqa.repair_black_bar_visemes(view.parent)
+    assert notes and "C" in notes[0]
+    fixed = Image.open(view / "C.png")
+    assert fixed.size == (80, 40)
+    assert not mouthset._is_black_bar(fixed)
+    assert frameqa.happy_cavity(fixed) + 1e-6 >= frameqa.VISEME_CAV_MIN["C"]
+
+
 def test_tight_front_cap_does_not_draw_a_black_rectangle():
     from products.animind_core import frameqa, mouthset, qa
 

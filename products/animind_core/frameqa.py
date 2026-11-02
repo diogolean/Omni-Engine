@@ -233,6 +233,37 @@ _SAFE_COLOURS = {
 }
 
 
+def repair_black_bar_visemes(view_dir: Path) -> list[str]:
+    """Replace a flat black mouth sticker with an open lipped shape.
+
+    Cached front views (Einstein) can already have the bar baked into the PNG.
+    The canvas size stays the same so the rig anchor does not move. Frame QA
+    thresholds are unchanged.
+    """
+    mouths = view_dir / "mouths"
+    if not mouths.is_dir():
+        return []
+    from . import mouthset  # noqa: PLC0415
+
+    notes: list[str] = []
+    for path in sorted(mouths.glob("*.png")):
+        code = path.stem
+        if code in "XA":
+            continue
+        with Image.open(path) as image:
+            sprite = image.convert("RGBA")
+            if not mouthset._is_black_bar(sprite):
+                continue
+            box = sprite.getchannel("A").getbbox() or (0, 0, sprite.width, sprite.height)
+            width = max(12, box[2] - box[0])
+            drawn = mouthset._lipped_open(width, _SAFE_COLOURS)
+            canvas = Image.new("RGBA", sprite.size, (0, 0, 0, 0))
+            canvas.paste(drawn, ((sprite.width - drawn.width) // 2, (sprite.height - drawn.height) // 2))
+        canvas.save(path)
+        notes.append(f"{view_dir.name} {code}: flat black mouth redrawn")
+    return notes
+
+
 def repair_closed_visemes(view_dir: Path) -> list[str]:
     """Replace open visemes that drew shut (a moustache often measures as 0) with the safe mouth set.
 

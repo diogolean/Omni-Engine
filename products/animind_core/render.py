@@ -363,6 +363,7 @@ def _repair_cast_mouths(cast: list[dict[str, Any]]) -> list[str]:
     for character in cast:
         root = characters.puppets_dir() / str(character.get("id") or "") / "views"
         for view_name in ("front", "left", "right"):
+            notes.extend(frameqa.repair_black_bar_visemes(root / view_name))
             notes.extend(frameqa.repair_closed_visemes(root / view_name))
     return notes
 
