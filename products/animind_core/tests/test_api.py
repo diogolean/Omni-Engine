@@ -1,7 +1,9 @@
+import io
 import time
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image, ImageChops, ImageOps
 
 
 @pytest.fixture()
@@ -56,6 +58,17 @@ def test_right_view_mirrors_left(client):
     left = {layer["name"]: layer for layer in c["views"]["left"]["layers"]}
     for layer in c["views"]["right"]["layers"]:
         assert layer["x"] == w - left[layer["name"]]["x"] - left[layer["name"]]["w"]
+        a = Image.open(io.BytesIO(client.get("/v1/files/" + left[layer["name"]]["url"].split("/v1/files/")[1]).content)).convert("RGBA")
+        b = Image.open(io.BytesIO(client.get("/v1/files/" + layer["url"].split("/v1/files/")[1]).content)).convert("RGBA")
+        assert ImageChops.difference(ImageOps.mirror(a), b).getbbox() is None, layer["name"]
+    for family in ("visemes", "expressions"):
+        for name, right in c["views"]["right"][family].items():
+            own = c["views"]["left"][family][name]
+            assert right["x"] == w - own["x"] - own["w"]
+            a = Image.open(io.BytesIO(client.get("/v1/files/" + own["url"].split("/v1/files/")[1]).content)).convert("RGBA")
+            b = Image.open(io.BytesIO(client.get("/v1/files/" + right["url"].split("/v1/files/")[1]).content)).convert("RGBA")
+            assert ImageChops.difference(ImageOps.mirror(a), b).getbbox() is None, f"{family}:{name}"
+    assert client.get("/v1/files/" + c["viewsContactSheetUrl"].split("/v1/files/")[1]).status_code == 200
 
 
 def test_render_job_has_visemes_and_video(client, monkeypatch):

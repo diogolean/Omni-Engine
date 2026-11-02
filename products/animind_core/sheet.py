@@ -140,3 +140,38 @@ def build(skin: Path, name: str = "", style: str = "") -> Path:
     out = skin / "review_sheet.png"
     sheet.save(out, format="PNG", optimize=True)
     return out
+
+
+def build_views(skin: Path, name: str = "") -> Path:
+    """Write a full-character front/left/right layered contact sheet."""
+    view_names = ("front", "left", "right")
+    views = {view_name: rig.load_view(skin, view_name) for view_name in view_names}
+    cell_w, cell_h, header = 430, 620, 72
+    out = Image.new("RGB", (cell_w * 3, cell_h + header), (15, 17, 21))
+    draw = ImageDraw.Draw(out)
+    draw.text(
+        (18, 16), f"Three-view layered avatar · {name}".rstrip(" ·"),
+        font=_font("Bold", 28), fill=(255, 255, 255),
+    )
+    for index, view_name in enumerate(view_names):
+        image = compose(
+            views[view_name],
+            vis="X",
+            gaze=eyes.camera_target(view_name, {"left": -1, "right": 1}.get(view_name, 0)),
+        )
+        image.thumbnail((cell_w - 40, cell_h - 54), Image.Resampling.LANCZOS)
+        x = index * cell_w + (cell_w - image.width) // 2
+        y = header + 40 + (cell_h - 74 - image.height) // 2
+        out.paste(image.convert("RGB"), (x, y), image)
+        label = {
+            "front": "FACING FRONT",
+            "left": "FACING LEFT",
+            "right": "FACING RIGHT · MIRRORED",
+        }[view_name]
+        draw.text(
+            (index * cell_w + 18, header + 10), label,
+            font=_font("SemiBold", 17), fill=(245, 176, 66),
+        )
+    target = skin / "views_contact_sheet.png"
+    out.save(target, "PNG", optimize=True)
+    return target

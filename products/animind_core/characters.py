@@ -16,16 +16,32 @@ import logging
 import re
 import shutil
 import threading
+import time
 import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import casting, rig, settings, sheet, stick, styles
+from . import casting, rig, settings, sheet, stick, styles, telemetry
 
 _LOG = logging.getLogger("animind_core")
 _BUILD_LOCK = threading.Lock()  # one character at a time: BiRefNet needs ~8 GB on CPU
+AIWAKE_AVATAR_SOURCES = (
+    "products/aiwake/animator/factory/create_puppet.py",
+    "products/aiwake/animator/factory/one_shot_factory.py",
+    "animation/parametric/factory/layer_slicer.py",
+    "products/aiwake/animator/render/facial_rig.py",
+    "products/aiwake/animator/asset_generator.py",
+)
+
+
+def avatar_pipeline() -> dict[str, Any]:
+    return {
+        "sources": list(AIWAKE_AVATAR_SOURCES),
+        "views": {"front": "layered", "left": "layered", "right": "mirror:left"},
+        "parts": ["torso", "neck", "head", "eyes", "lids", "brows", "mouths:X,A-H", "emotions"],
+    }
 
 
 def _slug(text: str) -> str:
@@ -75,10 +91,16 @@ def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
     text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(best[2]))
     reused = json.loads(text)
     reused.setdefault("gender", casting.public_gender(reused))
+    skin = puppets_dir() / reused["id"]
+    if not (skin / "views_contact_sheet.png").exists():
+        sheet.build_views(skin, reused.get("name", ""))
+    reused["viewsContactSheetUrl"] = f"{base_url}/v1/files/puppets/{reused['id']}/views_contact_sheet.png"
+    reused.setdefault("avatarPipeline", avatar_pipeline())
     return reused | {"reused": True}
 
 
 def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
+    started = time.perf_counter()
     source = req.get("source") or {}
     kind = source.get("kind")
     character_type = str(req.get("type") or "rig").strip().lower()
@@ -140,8 +162,19 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         saved["gender"] = casting.public_gender({**saved, **req, "name": name, "prompt": subject})
         if req.get("voiceId"):
             saved["voiceId"] = str(req["voiceId"])
+        if not (skin / "views_contact_sheet.png").exists():
+            sheet.build_views(skin, saved.get("name", name))
+        saved["viewsContactSheetUrl"] = url(skin / "views_contact_sheet.png")
+        saved.setdefault("avatarPipeline", avatar_pipeline())
         text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(saved))
-        return json.loads(text) | {"reused": True}
+        reused = json.loads(text) | {"reused": True}
+        telemetry.record(
+            "avatar", provider="procedural", model=f"stick:{preset}",
+            latency_ms=(time.perf_counter() - started) * 1000,
+            image_qa=reused.get("qa"), artifact=skin / "character.png",
+            status="cached", metadata={"views": sorted((reused.get("views") or {}).keys())},
+        )
+        return reused
     if character_type == "rig" and req.get("reuse", True) is not False and not req.get("rawPrompt"):
         found = reusable(name, art_style, base_url)
         if found:
@@ -149,6 +182,12 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             if req.get("voiceId"):
                 found["voiceId"] = str(req["voiceId"])
             _LOG.info("character %s reused for %r (no image generated)", found["id"], name)
+            telemetry.record(
+                "avatar", provider=str(found.get("generator") or "unknown"),
+                model="cached-rig", latency_ms=(time.perf_counter() - started) * 1000,
+                image_qa=found.get("qa"), status="cached",
+                metadata={"views": sorted((found.get("views") or {}).keys())},
+            )
             return found
     mode = "procedural" if character_type == "stick" else ("gemini" if settings.gemini_available() else "mock")
     note = None if mode == "gemini" else _mock_note()
@@ -196,8 +235,33 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "imageUrl": url(skin / "character.png"),
         # Review sheet: every viseme and eye state per view, for a human check.
         "reviewSheetUrl": url(sheet.build(skin, name, art_style)),
+        "viewsContactSheetUrl": url(sheet.build_views(skin, name)),
+        "avatarPipeline": avatar_pipeline(),
     }
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
+    qa_report = character.get("qa") or {}
+    attempts = qa_report.get("attempts") or {}
+    images = (
+        sum(
+            int(value)
+            for key, value in attempts.items()
+            if isinstance(value, int) and "fallback" not in str(key).lower() and key != "rerig"
+        )
+        if mode == "gemini" else 0
+    )
+    telemetry.record(
+        "avatar",
+        provider="google" if mode == "gemini" else mode,
+        model="gemini-2.5-flash-image" if mode == "gemini" else (
+            f"stick:{character.get('preset')}" if mode == "procedural" else "mock-rig"
+        ),
+        images=images,
+        cost_usd=float(qa_report.get("costUsd") or 0.0),
+        latency_ms=(time.perf_counter() - started) * 1000,
+        image_qa=qa_report,
+        artifact=skin / "character.png",
+        metadata={"views": sorted(character["views"]), "type": character_type},
+    )
     return character
 
 
@@ -228,6 +292,7 @@ def regenerate_front(character_id: str, base_url: str) -> dict[str, Any] | None:
         saved["viewStatus"]["front"] = "ready (gemini front view, regenerated)"
         saved["frontImageUrl"] = url(skin / "character_front.png")
         saved["reviewSheetUrl"] = url(sheet.build(skin, saved["name"], saved.get("artStyle", "cartoon")))
+        saved["viewsContactSheetUrl"] = url(sheet.build_views(skin, saved["name"]))
     (skin / "character.json").write_text(json.dumps(saved, indent=2), encoding="utf-8")
     return saved
 
@@ -251,5 +316,6 @@ def rerig(character_id: str, base_url: str) -> dict[str, Any] | None:
     if (skin / "qa_sheet.png").exists():
         saved["qaSheetUrl"] = url(skin / "qa_sheet.png")
     saved["reviewSheetUrl"] = url(sheet.build(skin, saved.get("name", character_id), saved.get("artStyle", "cartoon")))
+    saved["viewsContactSheetUrl"] = url(sheet.build_views(skin, saved.get("name", character_id)))
     (skin / "character.json").write_text(json.dumps(saved, indent=2), encoding="utf-8")
     return saved
