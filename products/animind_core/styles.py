@@ -20,6 +20,10 @@ STYLES: dict[str, dict[str, Any]] = {
     "cartoon": {"label": "Cartoon",
                 "prompt": "Expressive 2D cartoon character design, clean flat cel shading, bold dark outlines",
                 "grade": None, "tint": None, "grain": 0.0, "lines": 0.0},
+    "stick": {"label": "Stick figure",
+              "prompt": "South Park construction-paper cutout stick figure, flat unshaded colors, thick black contour, "
+                        "simple oval eyes, no photorealism",
+              "grade": None, "tint": None, "grain": 0.0, "lines": 0.0},
     "anime": {"label": "Anime",
               "prompt": "Japanese anime character design, crisp thin lineart, large expressive eyes, soft two-tone cel shading, vivid colors",
               "grade": ((0.02, 0.02, 0.04), (1.04, 1.03, 1.08), 0.25, 1.22), "tint": ((255, 214, 236), 0.10), "grain": 0.0, "lines": 0.0},

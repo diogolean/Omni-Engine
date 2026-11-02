@@ -5,6 +5,17 @@ import os
 from pathlib import Path
 
 
+def run_budget_usd() -> float:
+    """Hard cap for one avatar build or one benchmark run. Default US$0.10."""
+    raw = (os.getenv("ANIMIND_RUN_BUDGET_USD") or "").strip()
+    if not raw:
+        return 0.10
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.10
+
+
 def data_dir() -> Path:
     root = Path(os.getenv("ANIMIND_DATA_DIR") or Path.home() / ".animind-core")
     root.mkdir(parents=True, exist_ok=True)

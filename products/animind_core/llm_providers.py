@@ -23,6 +23,17 @@ GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 
 @dataclass(frozen=True)
+class TextResult:
+    text: str
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    cached: bool = False
+
+
+@dataclass(frozen=True)
 class LLMResult:
     lines: list[dict[str, Any]]
     provider: str
@@ -56,6 +67,13 @@ class LLMProvider(ABC):
     def complete(self, prompt: str) -> LLMResult:
         raise NotImplementedError
 
+    def complete_text(self, prompt: str) -> TextResult:
+        result = self.complete(prompt)
+        return TextResult(
+            json.dumps({"lines": result.lines}, ensure_ascii=False),
+            result.provider, result.model, result.input_tokens, result.output_tokens, result.cost_usd,
+        )
+
 
 def _json_lines(text: str) -> list[dict[str, Any]]:
     match = __import__("re").search(r"\{.*\}", text or "", __import__("re").S)
@@ -74,7 +92,7 @@ class DeepSeekProvider(LLMProvider):
     def available(self) -> bool:
         return bool((os.getenv("DEEPSEEK_API_KEY") or "").strip())
 
-    def complete(self, prompt: str) -> LLMResult:
+    def complete_text(self, prompt: str) -> TextResult:
         key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
         if not key:
             raise RuntimeError("DEEPSEEK_API_KEY is not configured")
@@ -103,8 +121,12 @@ class DeepSeekProvider(LLMProvider):
         # Conservative peak rates, verified in the official price table on
         # 2026-11-02. Off-peak charges are one half of these values.
         cost = cache_miss * 0.30e-6 + cache_hit * 0.006e-6 + output_tokens * 1.20e-6
+        return TextResult(text, self.id, self.model, input_tokens, output_tokens, cost)
+
+    def complete(self, prompt: str) -> LLMResult:
+        raw = self.complete_text(prompt)
         return LLMResult(
-            _json_lines(text), self.id, self.model, input_tokens, output_tokens, cost,
+            _json_lines(raw.text), self.id, self.model, raw.input_tokens, raw.output_tokens, raw.cost_usd,
         )
 
 
@@ -112,8 +134,15 @@ class GeminiProvider(LLMProvider):
     id = "google"
     model = GEMINI_MODEL
 
-    def __init__(self, generate: Callable[[str], list[dict[str, Any]]], *, allow_unavailable: bool = False) -> None:
+    def __init__(
+        self,
+        generate: Callable[[str], list[dict[str, Any]]],
+        *,
+        allow_unavailable: bool = False,
+        text_generate: Callable[[str], str] | None = None,
+    ) -> None:
         self._generate = generate
+        self._text_generate = text_generate
         self._allow_unavailable = allow_unavailable
 
     def available(self) -> bool:
@@ -121,21 +150,81 @@ class GeminiProvider(LLMProvider):
 
         return self._allow_unavailable or settings.gemini_available()
 
+    def _usage(self, before: dict[str, Any], after: dict[str, Any]) -> tuple[int, int, float]:
+        entries = after["entries"][len(before["entries"]):]
+        return (
+            sum(int(e.get("input_tokens", 0)) for e in entries),
+            sum(int(e.get("output_tokens", 0)) for e in entries),
+            sum(float(e.get("cost_usd", 0.0)) for e in entries),
+        )
+
+    def complete_text(self, prompt: str) -> TextResult:
+        from production.cost.google_guardrail import get_google_cost_tracker
+
+        tracker = get_google_cost_tracker()
+        before = tracker.snapshot()
+        if self._text_generate is not None:
+            text = self._text_generate(prompt)
+        else:
+            text = json.dumps({"lines": self._generate(prompt)}, ensure_ascii=False)
+        input_tokens, output_tokens, cost = self._usage(before, tracker.snapshot())
+        return TextResult(text, self.id, self.model, input_tokens, output_tokens, cost)
+
     def complete(self, prompt: str) -> LLMResult:
         from production.cost.google_guardrail import get_google_cost_tracker
 
         tracker = get_google_cost_tracker()
         before = tracker.snapshot()
         lines = self._generate(prompt)
-        after = tracker.snapshot()
-        entries = after["entries"][len(before["entries"]):]
+        input_tokens, output_tokens, cost = self._usage(before, tracker.snapshot())
+        return LLMResult(lines, self.id, self.model, input_tokens, output_tokens, cost)
+
+
+class OpenRouterProvider(LLMProvider):
+    """Optional cheap text model. Used only when ``OPENROUTER_API_KEY`` is set."""
+
+    id = "openrouter"
+
+    def __init__(self) -> None:
+        self.model = (os.getenv("OPENROUTER_TEXT_MODEL") or "deepseek/deepseek-v4.1-flash").strip()
+
+    def available(self) -> bool:
+        return bool((os.getenv("OPENROUTER_API_KEY") or "").strip())
+
+    def complete_text(self, prompt: str) -> TextResult:
+        from production.providers.llm import cheap_llm  # noqa: PLC0415
+
+        key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+        if not key:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.4,
+                "reasoning": {"enabled": False, "exclude": True},
+                "usage": {"include": True},
+            },
+            timeout=90.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        text = payload["choices"][0]["message"]["content"] or ""
+        usage = payload.get("usage") or {}
+        input_tokens = int(usage.get("prompt_tokens") or 0)
+        output_tokens = int(usage.get("completion_tokens") or 0)
+        if usage.get("cost") is not None:
+            cost = float(usage["cost"])
+        else:
+            cost = cheap_llm.estimate_usd(self.id, self.model, input_tokens, output_tokens)
+        return TextResult(text, self.id, self.model, input_tokens, output_tokens, cost)
+
+    def complete(self, prompt: str) -> LLMResult:
+        raw = self.complete_text(prompt)
         return LLMResult(
-            lines,
-            self.id,
-            self.model,
-            sum(int(e.get("input_tokens", 0)) for e in entries),
-            sum(int(e.get("output_tokens", 0)) for e in entries),
-            sum(float(e.get("cost_usd", 0.0)) for e in entries),
+            _json_lines(raw.text), self.id, self.model, raw.input_tokens, raw.output_tokens, raw.cost_usd,
         )
 
 
@@ -143,17 +232,29 @@ def provider_order(
     gemini_generate: Callable[[str], list[dict[str, Any]]],
     *,
     allow_unavailable_gemini: bool = False,
+    gemini_text: Callable[[str], str] | None = None,
 ) -> list[LLMProvider]:
-    """Configured first choice followed by the other provider as fallback."""
+    """DeepSeek, then Gemini Flash-Lite, then OpenRouter when that key is set."""
+    gemini = GeminiProvider(
+        gemini_generate, allow_unavailable=allow_unavailable_gemini, text_generate=gemini_text,
+    )
     providers: dict[str, LLMProvider] = {
         "deepseek": DeepSeekProvider(),
-        "gemini": GeminiProvider(gemini_generate, allow_unavailable=allow_unavailable_gemini),
-        "google": GeminiProvider(gemini_generate, allow_unavailable=allow_unavailable_gemini),
+        "gemini": gemini,
+        "google": gemini,
+        "openrouter": OpenRouterProvider(),
     }
     first = (os.getenv("ANIMIND_SCRIPT_PROVIDER") or "deepseek").strip().lower()
     first = first if first in providers else "deepseek"
-    second = "gemini" if first == "deepseek" else "deepseek"
-    return [providers[first], providers[second]]
+    order = [providers[first]]
+    for name in ("deepseek", "gemini", "openrouter"):
+        if name == first or name == "google":
+            continue
+        item = providers[name]
+        if name == "openrouter" and not item.available():
+            continue
+        order.append(item)
+    return order
 
 
 def _cache_path(root: Path, provider: LLMProvider, prompt: str) -> Path:
@@ -191,6 +292,61 @@ def generate(
         except Exception as exc:  # noqa: BLE001 - fallback is the contract
             failures.append(f"{provider.id}: {exc}")
             _LOG.warning("%s script provider failed; trying fallback: %s", provider.id, exc)
+            continue
+        if cache_enabled:
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.write_text(json.dumps(asdict(result), ensure_ascii=False), encoding="utf-8")
+        return result, failures
+    return None, failures
+
+
+def _json_object(text: str) -> dict[str, Any]:
+    match = __import__("re").search(r"\{.*\}", text or "", __import__("re").S)
+    if not match:
+        raise ValueError("writer returned no JSON object")
+    data = json.loads(match.group(0))
+    if not isinstance(data, dict):
+        raise ValueError("writer JSON was not an object")
+    return data
+
+
+def generate_text(
+    prompt: str,
+    cache_dir: Path,
+    gemini_text: Callable[[str], str],
+    *,
+    allow_unavailable_gemini: bool = False,
+    only: str | None = None,
+) -> tuple[TextResult | None, list[str]]:
+    """Same provider order as :func:`generate`, returning the raw JSON text."""
+    failures: list[str] = []
+    order = provider_order(
+        lambda _prompt: [],
+        allow_unavailable_gemini=allow_unavailable_gemini,
+        gemini_text=gemini_text,
+    )
+    if only:
+        wanted = "google" if only in {"gemini", "google"} else only
+        order = [item for item in order if item.id == wanted]
+    for item in order:
+        if not item.available():
+            continue
+        from . import settings  # noqa: PLC0415
+
+        cache_enabled = not (
+            item.id == "google"
+            and allow_unavailable_gemini
+            and not settings.gemini_available()
+        )
+        cached = _cache_path(cache_dir, item, prompt)
+        if cache_enabled and cached.is_file():
+            raw = json.loads(cached.read_text(encoding="utf-8"))
+            return TextResult(**(raw | {"cached": True, "cost_usd": 0.0})), failures
+        try:
+            result = item.complete_text(prompt)
+        except Exception as exc:  # noqa: BLE001 - fallback is the contract
+            failures.append(f"{item.id}: {exc}")
+            _LOG.warning("%s script provider failed; trying fallback: %s", item.id, exc)
             continue
         if cache_enabled:
             cached.parent.mkdir(parents=True, exist_ok=True)

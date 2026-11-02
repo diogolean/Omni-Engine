@@ -7,7 +7,7 @@ Rhubarb visemes).
 
 | Endpoint | What runs |
 | --- | --- |
-| `POST /v1/characters` | `type: "rig"` uses `rig.py`: Gemini master via Aiwake `create_puppet.generate_character_image` -> generated mouthless head + 4x3 parts sheet (nine Rhubarb mouths and three lid states) -> BiRefNet matte -> registered layers. `type: "stick"` uses `stick.py` only: an anti-aliased procedural head/body, separate gesture arms, movable pupils, soft lids, delicate brows and clean `X A B C D E F G H` sprites, with no Gemini call. |
+| `POST /v1/characters` | `type: "rig"` uses `rig.py` when Gemini is configured: Gemini master via Aiwake `create_puppet.generate_character_image` -> generated mouthless head + 4x3 parts sheet (nine Rhubarb mouths and three lid states) -> BiRefNet matte -> registered layers. Together or OpenRouter rigs, and every stick figure with a key, use `avatar.create_avatar`. `type: "stick"` with no image key uses `stick.py` as the offline mock. |
 | `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame and fails the job if more than one mouth layer, a stacked second mouth, or an excessive opening is found. Successful results include `frameQa` and `frameQaUrl`. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 
@@ -36,6 +36,24 @@ entry; unconfigured or not-yet-enabled Qwen/Flux adapters are dry runs with
 the missing key/adapter named. `--dry-run-images` disables paid image calls
 even when a key exists.
 
+Phase 5 runs the same English monologue, the same English debate, and the same
+stick-figure character through every named provider. Images and the Markdown
+table go to `ANIMIND_DATA_DIR` (never the git checkout). The default run cap
+is US$0.10 (`ANIMIND_RUN_BUDGET_USD`). Without keys the report says real
+results were not produced.
+
+```bash
+python -m products.animind_core.bench \
+  --providers deepseek,gemini,openrouter,together-flux-schnell,openrouter-qwen-image,openrouter-flux-kontext
+```
+
+`create_avatar(description, style)` in `avatar.py` is the one-call sheet.
+Gemini draws through Aiwake `create_puppet.generate_character_image`. Together
+FLUX.1-schnell and OpenRouter Qwen-Image / FLUX Kontext use the same prompt.
+What is reused is mapped in `docs/aiwake-reuse.md`. A stick figure is an image
+from that path, cached under `ANIMIND_DATA_DIR/avatar_cache/` and reused for
+every scene. `stick.py` draws only when no image provider is configured.
+
 **Rig reuse:** a prompt character whose name (accent/case-insensitive) and art style match a saved,
 QA-approved (score >= 80) Gemini rig returns that rig (`"reused": true`, URLs rebased) instead of
 generating a new image. Send `"reuse": false` (or a `rawPrompt`) to force a new one.
@@ -47,8 +65,9 @@ with mock art and `generatorNote` ("Gemini indisponível: ..."), and from then o
 calling Gemini (`/v1/health` reports `generator: mock` plus the same `generatorNote`). Other build
 errors still fail.
 
-Stick characters are always `"generator": "procedural"` and cost zero, regardless of Gemini
-configuration. The render endpoint accepts `solo`/`monologue`, the existing `debate`, and
+Stick characters are `"generator": "procedural"` only when no image provider is configured,
+and then they cost zero. With a Gemini, Together, or OpenRouter key they are
+`create_avatar` image sheets. The render endpoint accepts `solo`/`monologue`, the existing `debate`, and
 `dialogue`/`dialogo` with every character in the supplied array participating. App controls
 `tone` (`humor`, `terror`, `educacional`, `sabio`, `serio`, plus the legacy ids), `objective`
 (`ensinar`, `debater`, `entreter`, `convencer`) and `duration` (10–180 seconds target) are passed to

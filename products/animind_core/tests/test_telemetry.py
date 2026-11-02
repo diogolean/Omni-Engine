@@ -1,6 +1,6 @@
 import json
 
-from products.animind_core import benchmark, script, telemetry
+from products.animind_core import benchmark, image_models, script, telemetry
 
 
 def test_jsonl_record_and_comparative_summary_stay_outside_git(tmp_path, monkeypatch):
@@ -49,10 +49,11 @@ def test_benchmark_dry_run_reports_every_missing_provider(tmp_path, monkeypatch)
     for env in (
         "DEEPSEEK_API_KEY", "DEEPINFRA_API_KEY", "OPENROUTER_API_KEY",
         "GEMINI_API_KEY", "GOOGLE_API_KEY", "DASHSCOPE_API_KEY", "FAL_KEY",
+        "TOGETHER_API_KEY",
     ):
         monkeypatch.delenv(env, raising=False)
     report = benchmark.run(tmp_path / "report", allow_paid_images=False)
-    assert len(report["rows"]) == 8  # four LLMs and four image model entries
+    assert len(report["rows"]) == 4 + len(image_models.models())
     assert all(row["status"].startswith("dry-run:") for row in report["rows"])
     assert (tmp_path / "report" / "report.json").is_file()
     assert (tmp_path / "report" / "telemetry.md").is_file()

@@ -1,6 +1,9 @@
-"""Procedural stick-character rig.
+"""Offline stick rig used only when no image provider is configured.
 
-The stick type is deliberately independent of image generation.  It writes a
+Production stick figures are drawn by the image model through
+:func:`products.animind_core.avatar.create_avatar` (the Aiwake path). This
+module remains the no-key mock so tests and a machine without credentials
+still return a contract-v2 rig. It writes a
 contract-v2 rig made from anti-aliased vector primitives: separate body,
 arms, mouthless head, movable pupils, soft lids, delicate brows, and the nine
 canonical Rhubarb mouth shapes.  The regular scene compositor then supplies

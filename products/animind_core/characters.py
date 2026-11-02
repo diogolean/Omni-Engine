@@ -23,7 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import casting, rig, settings, sheet, stick, styles, telemetry
+from . import avatar, casting, rig, settings, sheet, stick, styles, telemetry
+from .image_models import BudgetExceeded
 
 _LOG = logging.getLogger("animind_core")
 _BUILD_LOCK = threading.Lock()  # one character at a time: BiRefNet needs ~8 GB on CPU
@@ -33,6 +34,9 @@ AIWAKE_AVATAR_SOURCES = (
     "animation/parametric/factory/layer_slicer.py",
     "products/aiwake/animator/render/facial_rig.py",
     "products/aiwake/animator/asset_generator.py",
+    "products/aiwake/animator/factory/generate_concepts.py",
+    "products/aiwake/animator/vision/head_analyzer.py",
+    "animation/parametric/factory/landmark_detector.py",
 )
 
 
@@ -123,6 +127,8 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
 
     name = (str(req.get("name") or "").strip() or subject)[:40]
     assets = settings.data_dir() / "assets"
+    art_style = styles.pick(req.get("artStyle"))
+    image_model = avatar.configured_model()
     stick_options: dict[str, Any] = {}
     if character_type == "stick":
         palette = req.get("palette") if isinstance(req.get("palette"), dict) else {}
@@ -144,8 +150,11 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             "outfit": rgb(palette.get("outfit") or clothing.get("color"), spec["outfit"]),
             "accessory": str(req.get("accessory", spec["accessory"])).strip().lower(),
         }
+        identity = {"name": name, **stick_options}
+        if image_model:
+            identity = {**identity, "description": subject, "style": art_style, "model": image_model}
         fingerprint = hashlib.sha256(
-            json.dumps({"name": name, **stick_options}, sort_keys=True, default=list).encode()
+            json.dumps(identity, sort_keys=True, default=list).encode()
         ).hexdigest()[:12]
         character_id = f"stick_{preset}_{fingerprint}"
     else:
@@ -156,7 +165,6 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     def url(path: Path) -> str:
         return f"{files_base}/{path.relative_to(assets).as_posix()}"
 
-    art_style = styles.pick(req.get("artStyle"))
     if character_type == "stick" and (skin / "character.json").is_file():
         saved = json.loads((skin / "character.json").read_text(encoding="utf-8"))
         saved["gender"] = casting.public_gender({**saved, **req, "name": name, "prompt": subject})
@@ -189,13 +197,43 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
                 metadata={"views": sorted((found.get("views") or {}).keys())},
             )
             return found
-    mode = "procedural" if character_type == "stick" else ("gemini" if settings.gemini_available() else "mock")
-    note = None if mode == "gemini" else _mock_note()
+    if character_type == "stick" and image_model:
+        mode = "image"
+    elif character_type == "stick":
+        mode = "procedural"
+    elif settings.gemini_available():
+        mode = "gemini"
+    elif image_model:
+        mode = "image"
+    else:
+        mode = "mock"
+    note = None if mode in {"gemini", "image"} else _mock_note()
     with _BUILD_LOCK:
         built = None
         if mode == "procedural":
             built = stick.build(skin, url, **stick_options)
-            note = "vetorial/procedural; nenhum modelo de imagem usado"
+            note = "no image provider configured; mock stick for tests and offline use"
+        elif mode == "image":
+            try:
+                built = avatar.create_avatar(
+                    subject, "stick" if character_type == "stick" else art_style,
+                    kind=character_type, skin=skin, url=url, model_id=image_model,
+                )
+                if character_type == "stick":
+                    built.setdefault("preset", stick_options.get("preset"))
+                    built.setdefault("customization", {
+                        "skin": stick_options.get("colour"),
+                        "outfit": stick_options.get("outfit"),
+                        "accessory": stick_options.get("accessory"),
+                    })
+                mode = str(built.get("generator") or image_model)
+            except (BudgetExceeded, Exception) as exc:  # noqa: BLE001
+                if not isinstance(exc, BudgetExceeded) and not settings.is_billing_error(exc):
+                    raise
+                _LOG.warning("character %s: image provider unavailable (%s); mock art instead", character_id, str(exc)[:160])
+                shutil.rmtree(skin, ignore_errors=True)
+                skin.mkdir(parents=True, exist_ok=True)
+                mode, note = "mock", f"image provider unavailable: {str(exc)[:200]}"
         elif mode == "gemini":
             try:
                 built = rig.build_rig(subject, skin, url, raw_prompt=req.get("rawPrompt"), style=art_style)
@@ -207,7 +245,11 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
                 shutil.rmtree(skin, ignore_errors=True)
                 mode, note = "mock", f"Gemini indisponível: {str(exc)[:200]}"
         if built is None:
-            built = rig.build_mock_rig(name, skin, url)
+            built = (
+                stick.build(skin, url, **stick_options)
+                if character_type == "stick"
+                else rig.build_mock_rig(name, skin, url)
+            )
 
     character = {
         "id": character_id,
@@ -221,6 +263,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "createdAt": datetime.now(timezone.utc).isoformat(),
         # Additive fields beyond lib/contract.ts v2:
         "generator": mode,
+        **({"model": built.get("model")} if built.get("model") else {}),
         # Why the art is mock (no key, ANIMIND_FORCE_MOCK, or Gemini 402/depleted credit); None when Gemini drew it.
         "generatorNote": note,
         "viewStatus": built["viewStatus"],
@@ -247,13 +290,15 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             for key, value in attempts.items()
             if isinstance(value, int) and "fallback" not in str(key).lower() and key != "rerig"
         )
-        if mode == "gemini" else 0
+        if mode not in {"procedural", "mock"} else 0
     )
     telemetry.record(
         "avatar",
         provider="google" if mode == "gemini" else mode,
-        model="gemini-2.5-flash-image" if mode == "gemini" else (
-            f"stick:{character.get('preset')}" if mode == "procedural" else "mock-rig"
+        model=(character.get("model") or "gemini-2.5-flash-image") if mode == "gemini" else (
+            character.get("model") or (
+                f"stick:{character.get('preset')}" if mode == "procedural" else "mock-rig"
+            )
         ),
         images=images,
         cost_usd=float(qa_report.get("costUsd") or 0.0),
