@@ -15,8 +15,10 @@ from PIL import Image, ImageDraw
 IMAGE_USD = 0.039
 LIMITS = {"skinDeltaE": 6.0, "residualMouth": 0.04, "frontOffset": 0.05, "landmarkDrift": 0.08,
           "hardEdge": 0.0, "mouthRange": 10.0, "faceWidthPx": 200}
-WEIGHTS = {"skin": 15, "mouthless": 10, "doubleMouth": 20, "mouthOpen": 10, "mouths": 10, "front": 10, "landmarks": 10,
-           "edges": 10, "resolution": 5}
+WEIGHTS = {"skin": 10, "mouthless": 10, "doubleMouth": 15, "mouthOpen": 10, "mouths": 10, "front": 10, "landmarks": 10,
+           "edges": 10, "resolution": 5, "mouthAnchor": 10}
+# A character is not approved while any of these fail. mouthAnchor is the nose–chin / gaze check.
+APPROVAL = ("mouthAnchor", "landmarks", "mouthOpen")
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -362,6 +364,45 @@ def mouth_open(view: Path, face: list[int]) -> dict[str, Any]:
             "faceShare": face_share, "bad": bad}
 
 
+def mouth_anchor(skin: Path) -> dict[str, Any]:
+    """Every view: the X mouth (and the other mouths) sit between the nose and the chin, on the gaze side."""
+    from . import mouth_anchor as anchor_mod  # noqa: PLC0415
+
+    details: dict[str, Any] = {}
+    for name in ("left", "front", "right"):
+        folder = skin / "views" / name
+        if not (folder / "view.json").is_file():
+            continue
+        details[name] = anchor_mod.judge_view(folder, name, skin=skin)
+    if not details:
+        return {"pass": False, "value": None, "limit": "0-1 nose-chin", "note": "no views"}
+    failed = [name for name, item in details.items() if not item["pass"]]
+    worst = max(details.values(), key=lambda item: abs((item["along"] if item["along"] is not None else 2) - anchor_mod.ALONG))
+    note = "; ".join(details[name]["note"] for name in failed) if failed else worst["note"]
+    return {
+        "pass": not failed,
+        "value": worst["along"],
+        "limit": "0-1 nose-chin",
+        "views": {name: {"pass": item["pass"], "along": item["along"], "offset": item["offset"], "view": item["view"]}
+                  for name, item in details.items()},
+        "note": note,
+    }
+
+
+def approval_failures(skin: Path) -> list[str]:
+    """mouthAnchor, landmarks, and mouthOpen that still fail on ``skin``."""
+    try:
+        gates = run(skin)
+    except (OSError, ValueError, KeyError, StopIteration):
+        return ["mouthAnchor"]
+    return [key for key in APPROVAL if not (gates.get(key) or {}).get("pass")]
+
+
+def status_for(failed: list[str] | tuple[str, ...]) -> str:
+    """``ready`` only when the approval gates are clear."""
+    return "rejected" if any(key in failed for key in APPROVAL) else "ready"
+
+
 def run(skin: Path) -> dict[str, Any]:
     rig = json.loads((skin / "rig.json").read_text())
     front = json.loads((skin / "rig_front.json").read_text()) if (skin / "rig_front.json").exists() else None
@@ -378,6 +419,7 @@ def run(skin: Path) -> dict[str, Any]:
         "doubleMouth": double_mouth(left),
         "mouthOpen": mouth_open(left, rig["boxes"]["face"]),
         "resolution": resolution(rig["boxes"]),
+        "mouthAnchor": mouth_anchor(skin),
     }
     if front and (skin / "views" / "front" / "view.json").exists():
         fs = skin_delta_e(skin / "views" / "front")

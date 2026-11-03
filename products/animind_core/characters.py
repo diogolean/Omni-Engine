@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import avatar, casting, rig, settings, sheet, stick, styles, telemetry
+from . import avatar, casting, qa, rig, settings, sheet, stick, styles, telemetry
 from .image_models import BudgetExceeded
 
 _LOG = logging.getLogger("animind_core")
@@ -323,7 +323,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "gender": casting.public_gender({**req, "name": name, "prompt": subject}),
         **({"voiceId": str(req["voiceId"])} if req.get("voiceId") else {}),
         "type": character_type,
-        "status": "ready",
+        "status": qa.status_for((built.get("qa") or {}).get("failed") or []),
         "style": "rig",
         "views": built["views"],
         "createdAt": datetime.now(timezone.utc).isoformat(),

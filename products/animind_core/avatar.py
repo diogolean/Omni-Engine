@@ -219,6 +219,7 @@ def create_avatar(
     })
     rig_path.write_text(json.dumps(saved), encoding="utf-8")
     failed = [] if _opaque(left) else ["empty bust"]
+    failed = _with_approval(skin, failed)
     return {
         "views": views,
         "viewStatus": {
@@ -233,7 +234,7 @@ def create_avatar(
         },
         "frontShot": front_status,
         "qa": {
-            "score": 100 if not failed else 0,
+            "score": 100 if not any(key in failed for key in qa.APPROVAL) and "empty bust" not in failed else 0,
             "costUsd": round(cost, 8),
             "attempts": {"left": 0 if cached or mock else 1, "front": 0 if cached or front_status.startswith("left") else 1},
             "failed": failed,
@@ -749,14 +750,28 @@ def _character_identity(name: str) -> tuple[str, str, str]:
     return name, folder, name
 
 
+def _with_approval(skin: Path, failed: list[str]) -> list[str]:
+    """Add mouthAnchor / landmarks / mouthOpen when those gates fail. Other gates stay out of this list."""
+    try:
+        extra = qa.approval_failures(skin)
+    except (OSError, ValueError, KeyError):
+        extra = ["mouthAnchor"]
+    return list(dict.fromkeys([*failed, *extra]))
+
+
 def write_character_json(skin: Path, built: dict[str, Any], *, character_id: str, name: str, url: Callable[[Path], str]) -> Path:
     """The file ``characters.load`` reads. The CLI used to stop at the rig."""
     from datetime import datetime, timezone  # noqa: PLC0415
 
+    qa_body = dict(built.get("qa") or {})
+    failed = _with_approval(skin, list(qa_body.get("failed") or []))
+    qa_body["failed"] = failed
+    if any(key in failed for key in qa.APPROVAL):
+        qa_body["score"] = 0
     document = {
         "id": character_id,
         "name": name,
-        "status": "ready",
+        "status": qa.status_for(failed),
         "type": "rig",
         "style": "rig",
         "artStyle": "cartoon",
@@ -766,7 +781,7 @@ def write_character_json(skin: Path, built: dict[str, Any], *, character_id: str
         "viewStatus": built.get("viewStatus") or {},
         "mouthShots": built.get("mouthShots") or {},
         "frontShot": built.get("frontShot"),
-        "qa": built.get("qa") or {},
+        "qa": qa_body,
         "imageUrl": url(skin / "character.png") if (skin / "character.png").is_file() else None,
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "pipeline": "aiwake-v3",

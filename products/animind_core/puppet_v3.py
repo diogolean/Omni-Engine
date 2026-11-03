@@ -267,7 +267,13 @@ def clean_border_white(image: Image.Image) -> Image.Image:
     return Image.fromarray(arr, "RGBA")
 
 
-def human_mouths(mouth_at: tuple[int, int], width: int) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
+def human_mouths(
+    mouth_at: tuple[int, int],
+    width: int,
+    *,
+    open_cap: float | dict[str, float] | None = None,
+    squeeze: float = 0.92,
+) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
     """One human mouth set, every viseme on the same canvas and the same anchor.
 
     The Aiwake rigger draws robot bars. Those stay on mecha puppets. A person
@@ -282,13 +288,20 @@ def human_mouths(mouth_at: tuple[int, int], width: int) -> dict[str, tuple[Image
         "tongue": (186, 86, 90, 255),
         "lip": (154, 78, 76, 255),
     }
-    drawn = mouthset.draw_set(max(18, int(width)), colours, squeeze=0.92)
+    drawn = mouthset.draw_set(max(18, int(width)), colours, squeeze=squeeze, open_cap=open_cap)
     sample = next(iter(drawn.values()))
     anchor = (int(round(mouth_at[0] - sample.width / 2)), int(round(mouth_at[1] - sample.height / 2)))
     return {code: (sprite, anchor) for code, sprite in drawn.items()}
 
 
-def human_expressions(anchor: tuple[int, int], size: tuple[int, int], width: int) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
+def human_expressions(
+    anchor: tuple[int, int],
+    size: tuple[int, int],
+    width: int,
+    *,
+    open_cap: float | None = None,
+    squeeze: float = 0.92,
+) -> dict[str, tuple[Image.Image, tuple[int, int]]]:
     """Emotion rests on the same canvas and anchor as the visemes."""
     from . import mouthset  # noqa: PLC0415
 
@@ -299,7 +312,7 @@ def human_expressions(anchor: tuple[int, int], size: tuple[int, int], width: int
         "tongue": (186, 86, 90, 255),
         "lip": (154, 78, 76, 255),
     }
-    drawn = mouthset.draw_expressions(max(18, int(width)), colours, squeeze=0.92)
+    drawn = mouthset.draw_expressions(max(18, int(width)), colours, squeeze=squeeze, open_cap=open_cap)
     seated: dict[str, tuple[Image.Image, tuple[int, int]]] = {}
     for name, sprite in drawn.items():
         canvas = Image.new("RGBA", size, (0, 0, 0, 0))
@@ -334,7 +347,6 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     radius = max(4, int(round(float(anchors.get("eye_radius") or 8) * scale)))
     left_eye = _point(float(anchors["left_eye"][0]), float(anchors["left_eye"][1]), scale, offset)
     right_eye = _point(float(anchors["right_eye"][0]), float(anchors["right_eye"][1]), scale, offset)
-    mouth_at = _point(float(anchors["mouth"][0]), float(anchors["mouth"][1]), scale, offset)
     human_dir = skin / "human_eyes"
     human_meta = None
     brow_left = brow_right = None
@@ -378,8 +390,6 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         _point(head_box[2], head_box[3], scale, offset)[1],
     )
     eye_boxes = (_around(left_eye, radius, radius), _around(right_eye, radius, radius))
-    mouth_w = max(12, int(radius * 2))
-    mouth = _around(mouth_at, mouth_w // 2, max(6, radius // 2))
     pad = 12
     face = (
         min(face[0], eye_boxes[0][0], eye_boxes[1][0]) - pad,
@@ -387,10 +397,25 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         max(face[2], eye_boxes[0][2], eye_boxes[1][2]) + pad,
         face[3] + pad,
     )
+    from . import mouth_anchor, qa  # noqa: PLC0415
+
+    face_h = max(1, face[3] - face[1])
+    viseme_cap = {code: 0.95 * share * face_h for code, share in qa.OPEN_DRAWN.items()}
+    expression_cap = 0.95 * qa.EXPRESSION_OPEN_ABS * face_h
     mouth_width = max(18, int(radius * 3))
-    visemes = human_mouths(mouth_at, mouth_width)
-    sample = next(iter(visemes.values()))
-    expressions = human_expressions(sample[1], sample[0].size, mouth_width)
+
+    def _pack(view_name: str) -> tuple[Any, dict, dict, list[int]]:
+        anchor = mouth_anchor.place(head, face, eye_boxes[0], eye_boxes[1], view=view_name)
+        visemes = human_mouths((anchor.x, anchor.y), mouth_width, open_cap=viseme_cap)
+        sample = next(iter(visemes.values()))
+        expressions = human_expressions(
+            sample[1], sample[0].size, mouth_width, open_cap=expression_cap,
+        )
+        box = list(anchor.as_box(face, mouth_width))
+        return anchor, visemes, expressions, box
+
+    left_anchor, visemes, expressions, mouth = _pack("left")
+    front_anchor, front_visemes, front_expressions, front_mouth = _pack("front")
     parts = {
         "size": canvas,
         "torso": _place(torso),
@@ -415,9 +440,11 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
             "mouths": "human",
             "mouthBox": list(mouth),
             "mouth": list(mouth),
+            "face": list(face),
             "eyes": [list(eye_boxes[0]), list(eye_boxes[1])],
             "irises": [[left_eye[0], left_eye[1]], [right_eye[0], right_eye[1]]],
             "mouthless": True,
+            "anchor": left_anchor.to_dict(),
         },
         **({"humanEyes": human_meta} if human_meta else {}),
     }
@@ -436,8 +463,16 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         "pipeline": "aiwake-v3",
     }
     (skin / "rig.json").write_text(json.dumps(rig_doc, indent=2), encoding="utf-8")
-    (skin / "rig_front.json").write_text(json.dumps(rig_doc, indent=2), encoding="utf-8")
+    front_doc = json.loads(json.dumps(rig_doc))
+    front_doc["boxes"]["mouth"] = list(front_mouth)
+    front_doc["mouthBox"] = list(front_mouth)
+    (skin / "rig_front.json").write_text(json.dumps(front_doc, indent=2), encoding="utf-8")
     left = rig._write_view(parts, skin / "views" / "left", url, mirror=False)
     right = rig._write_view(parts, skin / "views" / "right", url, mirror=True)
+    parts["visemes"] = front_visemes
+    parts["expressions"] = front_expressions
+    parts["mouthQA"]["mouth"] = list(front_mouth)
+    parts["mouthQA"]["mouthBox"] = list(front_mouth)
+    parts["mouthQA"]["anchor"] = front_anchor.to_dict()
     front = rig._write_view(parts, skin / "views" / "front", url, mirror=False)
     return {"left": left, "right": right, "front": front}

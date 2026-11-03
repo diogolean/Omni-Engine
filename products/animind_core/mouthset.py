@@ -150,6 +150,14 @@ def draw_expressions(
     # The squashed smug smile measures closed (~0.20). Frame QA on the left
     # view expects the happy rest to be an open smile, about 0.38.
     smile = _open_happy(max(8, int(round(lip_width * squeeze))))
+    # The face-height cap applies to the smile too. Replacing the limited rest
+    # with an uncapped oval is what pushed happy to ~0.18 of the face.
+    if open_cap and smile.height > float(open_cap):
+        scale = float(open_cap) / smile.height
+        smile = smile.resize(
+            (max(1, int(round(smile.width * scale))), max(1, int(round(float(open_cap))))),
+            Image.LANCZOS,
+        )
     seated = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     seated.paste(smile, ((width - smile.width) // 2, (height - smile.height) // 2))
     scaled["happy"] = seated

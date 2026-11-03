@@ -1029,6 +1029,9 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
             for k in ("mouthBox", "mouth"):
                 b = mq[k]
                 mq[k] = [W - b[2], b[1], W - b[0], b[3]]
+            if mq.get("face"):
+                b = mq["face"]
+                mq["face"] = [W - b[2], b[1], W - b[0], b[3]]
             if mq.get("eyes"):
                 mq["eyes"] = [[W - b[2], b[1], W - b[0], b[3]] for b in mq["eyes"]]
             if mq.get("irises"):
@@ -1391,6 +1394,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
     expressions: dict[str, tuple[Image.Image, tuple[int, int]]] = {}
     mouth_src = "cut"
     mustache = None
+    anchor = None
     if drawn_mouths:  # Aiwake Rhubarb set over the mouthless head
         from . import mouthset, qa  # noqa: PLC0415
         xb = x_sprite.getchannel("A").point(lambda q: 255 if q > 128 else 0).getbbox()
@@ -1400,15 +1404,20 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         lw = blank_w if mouthless else min(max(blank_w, 0.28 * fw), 0.42 * fw) * (1.0 if front else 0.9)
         cols = mouthset.tones(np.asarray(x_sprite), skin_rgb)
         drawn = mouthset.draw_set(lw, cols, squeeze=1.0 if front else 0.85, open_cap={k: 0.95 * c * (face[3] - face[1]) for k, c in qa.OPEN_DRAWN.items()})
-        placed = mouthset.place(rest, drawn, top=rest[1] if mouthless else None)
-        expressions = mouthset.place(
-            rest,
+        from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
+
+        anchor = mouth_anchor_mod.place(
+            clean, face, boxes["left_eye"], boxes["right_eye"], view="front" if front else "left",
+        )
+        placed = mouth_anchor_mod.seat(drawn, anchor)
+        expressions = mouth_anchor_mod.seat(
             mouthset.draw_expressions(
                 lw, cols, squeeze=1.0 if front else 0.85,
                 open_cap=0.95 * qa.EXPRESSION_OPEN_ABS * (face[3] - face[1]),
             ),
-            top=rest[1] if mouthless else None,
+            anchor,
         )
+        boxes["mouth"] = anchor.as_box(face, max(12, int(lw)))
         mouth_src = "aiwake drawn set"
         hair = _facial_hair(np.asarray(clean), mbox)
         import cv2  # noqa: PLC0415
@@ -1456,10 +1465,12 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "visemes": placed,
         "expressions": expressions,
         **({"mustache": _crop_layer(mustache)} if mustache is not None else {}),
-        "mouthQA": {"head": head_src, "mouths": mouth_src, "cellGhost": ghost, "mouthBox": list(mbox), "mouth": list(mouth),
+        "mouthQA": {"head": head_src, "mouths": mouth_src, "cellGhost": ghost, "mouthBox": list(mbox),
+                    "mouth": list(boxes["mouth"]), "face": list(face),
                     "eyes": [list(b) for b in raw_eye_boxes],
                     "irises": [[p[0], p[1]] for p in seated] if seated else [],
-                    "mouthless": mouthless},
+                    "mouthless": mouthless,
+                    **({"anchor": anchor.to_dict()} if anchor is not None else {})},
     }
     (skin / ("sheet_front.json" if front else "sheet.json")).write_text(json.dumps(
         {"used": sorted(good), "ncc": parts_from_sheet.get("cellNcc") if parts_from_sheet else None}), encoding="utf-8")
@@ -1521,6 +1532,21 @@ def reset_budget() -> None:
     reset_google_cost_tracker()
 
 
+def _settle_mouths(skin: Path, views: dict[str, Any], report: dict[str, Any], attempts: dict[str, int]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """One free reposition when mouthAnchor, landmarks, or mouthOpen fail. No image call."""
+    from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
+    from . import qa  # noqa: PLC0415
+
+    if not any(not (report["gates"].get(key) or {}).get("pass", True) for key in qa.APPROVAL):
+        return views, report
+    attempts["mouthReposition"] = attempts.get("mouthReposition", 0) + 1
+    shifts = mouth_anchor_mod.reposition_skin(skin)
+    for name, (dx, dy) in shifts.items():
+        if name in views and (dx or dy):
+            mouth_anchor_mod.shift_view(views[name], dx, dy)
+    return views, qa.finalize(skin, spent_usd(), attempts)
+
+
 def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_prompt: str | None = None,
               style: str = "cartoon") -> dict[str, Any]:
     """One call, generate-then-verify: Gemini master + parts sheet + front, each gated and re-drawn within
@@ -1556,6 +1582,25 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
                 views |= assemble(skin, fshots, gen.get("frontBoxes") or detect_features(fr), url, matte=matte, front=True)
             gen["notes"]["sheet"] = gen["notes"].get("sheet", "") + " | QA fallback to warped mouths"
             report = qa.finalize(skin, spent_usd(), attempts)
+        views, report = _settle_mouths(skin, views, report, attempts)
+        if any(not (report["gates"].get(key) or {}).get("pass") for key in qa.APPROVAL) and _budget_left() >= qa.IMAGE_USD:
+            from . import settings  # noqa: PLC0415
+
+            # A redraw is a new plate. It runs only while the image budget and a key remain.
+            if settings.gemini_available():
+                attempts["mouthRedraw"] = attempts.get("mouthRedraw", 0) + 1
+                closed = gen["shots"].get("closed")
+                if closed is not None:
+                    _mouthless_shot(closed, skin, boxes, "mouthless_anchor", attempts, gen["notes"], tries=1)
+                    views = assemble(skin, gen["shots"], boxes, url, matte=matte, sheet=sheet)
+                    fr = gen["shots"].get("front")
+                    if fr:
+                        views |= assemble(
+                            skin, fshots, gen.get("frontBoxes") or detect_features(fr), url,
+                            matte=matte, front=True, sheet=gen["shots"].get("sheet_front") or sheet,
+                        )
+                    report = qa.finalize(skin, spent_usd(), attempts)
+                    views, report = _settle_mouths(skin, views, report, attempts)
     finally:
         matte.close()
     views.setdefault("front", views["left"])
@@ -1592,6 +1637,7 @@ def build_mock_rig(name: str, skin: Path, url: Callable[[Path], str]) -> dict[st
     views |= assemble(skin, {"closed": shots_dir / "closed.png"}, boxes, url, matte=lambda im: im.convert("RGBA"), front=True)
     status = {"left": "mock", "right": "mock (mirror)", "front": "mock (front rig)"}
     report = qa.finalize(skin, 0.0, {})
+    views, report = _settle_mouths(skin, views, report, {})
     return {
         "views": views,
         "viewStatus": status,
