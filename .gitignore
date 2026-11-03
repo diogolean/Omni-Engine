@@ -102,6 +102,9 @@ quality/VisualQA_Agent/.channel_cache
 production/qa/judges/visual_critic/chroma_db/
 production/qa/judges/visual_critic/.channel_cache
 *.tmp
+# Scratch directory for each project, at the root and anywhere under it.
+.tmp/
+**/.tmp/
 *TEMP_MPY_wvf_snd*
 .cache/
 .pytest_cache/
