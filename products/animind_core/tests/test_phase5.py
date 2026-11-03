@@ -301,6 +301,44 @@ def test_happy_rest_is_open_enough_for_frame_qa():
     assert abs(cavity - frameqa.HAPPY_REST_CAV) < 0.08
 
 
+def _ink_widths(image: Image.Image) -> dict[float, int]:
+    import numpy as np
+    alpha = np.asarray(image.getchannel("A")) > 128
+    ys, xs = np.nonzero(alpha)
+    y0, y1 = int(ys.min()), int(ys.max())
+
+    def width_at(frac: float) -> int:
+        y = min(y1, y0 + int((y1 - y0) * frac))
+        row = np.nonzero(alpha[y])[0]
+        return 0 if row.size == 0 else int(row.max() - row.min() + 1)
+
+    return {frac: width_at(frac) for frac in (0.15, 0.50, 0.80)}
+
+
+def test_south_park_smile_stays_under_the_happy_face_share():
+    """A wide smile on a short face used to reach ~0.18 of the face height."""
+    import numpy as np
+    from products.animind_core import frameqa, mouthset, qa
+    colours = {
+        "outline": (40, 30, 30, 255), "cavity": (20, 12, 14, 255),
+        "teeth": (247, 244, 236, 255), "tongue": (190, 86, 92, 255), "lip": (142, 72, 78, 255),
+    }
+    face_h = 180
+    cap = 0.95 * qa.EXPRESSION_OPEN_ABS * face_h
+    happy = mouthset.draw_expressions(int(0.42 * 240), colours, squeeze=1.0, open_cap=cap)["happy"]
+    sprite = np.asarray(happy.convert("RGBA"))
+    under = np.zeros_like(sprite)
+    under[..., :3] = (232, 186, 156)
+    under[..., 3] = 255
+    share = qa.open_height(sprite, under) / face_h
+    assert share <= qa.EXPRESSION_OPEN_ABS + qa.OPEN_SLACK, share
+    cavity = frameqa.happy_cavity(happy)
+    assert cavity >= frameqa.HAPPY_REST_FLOOR
+    assert abs(cavity - frameqa.HAPPY_REST_CAV) < 0.08
+    widths = _ink_widths(happy)
+    assert widths[0.15] > widths[0.50] > widths[0.80]
+
+
 def test_southpark_is_not_ghibli_and_sheet_survives_a_rig_without_boxes(tmp_path):
     assert styles.pick("southpark") == "southpark"
     assert styles.pick("South Park") == "southpark"

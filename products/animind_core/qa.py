@@ -329,6 +329,20 @@ def _mouth_blob(m: np.ndarray) -> tuple[int, int, int, int]:
     return int(x0), int(y0), int(x1 - x0), int(y1 - y0)
 
 
+def _expression_face_share(view: Path, spec: dict[str, Any], canvas: Image.Image, face_h: int) -> dict[str, float]:
+    """Each rest mouth's open height as a share of the face. Missing files are skipped."""
+    shares: dict[str, float] = {}
+    for name, mouth in (spec.get("expressions") or {}).items():
+        path = view / mouth["url"]
+        if not path.is_file():
+            continue
+        sprite = np.asarray(Image.open(path).convert("RGBA"))
+        height, width = sprite.shape[:2]
+        under = np.asarray(canvas.crop((mouth["x"], mouth["y"], mouth["x"] + width, mouth["y"] + height)))
+        shares[name] = round(open_height(sprite, under) / face_h, 3)
+    return shares
+
+
 def mouth_open(view: Path, face: list[int]) -> dict[str, Any]:
     """No viseme opens past its natural share of the face height (OPEN_CAP)."""
     v = json.loads((view / "view.json").read_text())
@@ -344,25 +358,22 @@ def mouth_open(view: Path, face: list[int]) -> dict[str, Any]:
     rest = max(1, hs.get("X", 0))
     ratios = {k: round(h / rest, 2) for k, h in hs.items()}
     face_share = {k: round(h / fh, 3) for k, h in hs.items()}
+    expression_share = _expression_face_share(view, v, canvas, fh)
+    expression_bad = {
+        f"expression:{name}": share
+        for name, share in expression_share.items()
+        if share > EXPRESSION_OPEN_ABS + OPEN_SLACK
+    }
     if (v.get("mouthQA") or {}).get("mouths") == "aiwake drawn set":
         bad = {k: face_share[k] for k in hs if face_share[k] > OPEN_DRAWN.get(k, 0.115) + OPEN_SLACK}
-        expression_share: dict[str, float] = {}
-        for name, mouth in (v.get("expressions") or {}).items():
-            sprite = np.asarray(Image.open(view / mouth["url"]).convert("RGBA"))
-            h, w = sprite.shape[:2]
-            under = np.asarray(canvas.crop((mouth["x"], mouth["y"], mouth["x"] + w, mouth["y"] + h)))
-            expression_share[name] = round(open_height(sprite, under) / fh, 3)
-        bad.update({
-            f"expression:{name}": share
-            for name, share in expression_share.items()
-            if share > EXPRESSION_OPEN_ABS + OPEN_SLACK
-        })
+        bad.update(expression_bad)
         return {"pass": not bad, "value": max([*face_share.values(), *expression_share.values()], default=0),
                 "limit": OPEN_DRAWN, "ratios": ratios, "faceShare": face_share,
                 "expressionFaceShare": expression_share, "bad": bad, "mode": "drawn"}
     bad = {k: ratios[k] for k in hs if (ratios[k] > OPEN_REL.get(k, 1.7) + 0.05 and face_share[k] > OPEN_FLOOR) or face_share[k] > OPEN_ABS + OPEN_SLACK}
+    bad.update(expression_bad)
     return {"pass": not bad, "value": max(ratios.values(), default=0), "limit": OPEN_REL, "ratios": ratios,
-            "faceShare": face_share, "bad": bad}
+            "faceShare": face_share, "expressionFaceShare": expression_share, "bad": bad}
 
 
 def mouth_anchor(skin: Path) -> dict[str, Any]:

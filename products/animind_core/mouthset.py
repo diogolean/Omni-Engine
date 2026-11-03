@@ -214,19 +214,10 @@ def draw_expressions(
         canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
         scaled[emotion] = canvas
-    # The squashed smug smile measures closed (~0.20). Frame QA on the left
-    # view expects the happy rest to be an open smile, about 0.38.
+    # Organic wedge, not the closed smug line and not a geometric oval.
+    # The face-height cap is applied to the ink after the seal, so a wide
+    # smile on a short face cannot reach ~0.18 of the face.
     smile = _open_happy(max(8, int(round(lip_width * squeeze))))
-    # The face-height cap applies to the smile too. Replacing the limited rest
-    # with an uncapped oval is what pushed happy to ~0.18 of the face.
-    if open_cap and smile.height > float(open_cap):
-        scale = float(open_cap) / smile.height
-        smile = smile.resize(
-            (max(1, int(round(smile.width * scale))), max(1, int(round(float(open_cap))))),
-            Image.LANCZOS,
-        )
-    # The South Park smile is wider than the rest mouths. Grow the canvas
-    # instead of clipping the stroke off the PNG.
     width, height = max(width, smile.width), max(height, smile.height)
     seated: dict[str, Image.Image] = {}
     for emotion, im in scaled.items():
@@ -236,7 +227,10 @@ def draw_expressions(
     happy = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     happy.paste(smile, ((width - smile.width) // 2, (height - smile.height) // 2))
     seated["happy"] = happy
-    return _same_canvas({name: _seal(im) for name, im in seated.items()})
+    sealed = {name: _seal(im) for name, im in seated.items()}
+    if open_cap:
+        sealed["happy"] = _fit_ink_height(sealed["happy"], float(open_cap))
+    return _same_canvas(sealed)
 
 
 def flat_dark_blob(image: Image.Image) -> bool:
@@ -337,21 +331,133 @@ def _round_open(width: int) -> Image.Image:
 
 
 def _open_happy(width: int) -> Image.Image:
-    """Open South Park smile. Aspect stays at the mouthset cap so the cavity can reach ~0.34-0.38."""
-    from PIL import ImageDraw  # noqa: PLC0415
+    """Open South Park smile: a wide uneven wedge with a teeth band.
 
-    height = max(8, int(round(width * OPEN_ASPECT_CAP)))
-    stroke = max(2, width // 48)
+    The top is the wide edge and the bottom stays blunt, so it does not read as
+    an ellipse. Dark side walls run from the top edge to the bottom so the
+    cavity measurement still sees one opening after a 64px resize. Height stays
+    under the mouthset aspect cap; the face-height cap is applied later.
+    """
+    import cv2  # noqa: PLC0415
+
+    width = max(8, int(width))
+    # Tall enough that a 3/4 smile still measures open after the 64px cavity
+    # resize. Above ~0.48 the contain ring crosses the seal and the squash
+    # fills the hole.
+    height = max(8, int(round(width * 0.48)))
+    stroke = max(2, width // 16)
     pad = stroke + 4
-    image = Image.new("RGBA", (width + 2 * pad, height + 2 * pad), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.ellipse(
-        (pad, pad, pad + width - 2, pad + height - 2),
-        fill=(18, 10, 12, 255),
-        outline=(40, 24, 26, 255),
-        width=stroke,
-    )
-    return image
+    canvas_w, canvas_h = width + 2 * pad, height + 2 * pad
+    scale = 4
+    canvas = np.zeros((canvas_h * scale, canvas_w * scale, 4), np.uint8)
+
+    def pt(x: float, y: float) -> list[int]:
+        return [int(round(x * scale)), int(round(y * scale))]
+
+    x0, x1 = float(pad + 1), float(pad + width - 1)
+    y0, y1 = float(pad + 2), float(pad + height - 2)
+    span = max(1.0, x1 - x0)
+    # A few percent of lift. Steeper than this and the 15% row is only one corner.
+    lift = height * 0.03
+    top_l = (x0, y0 + lift * 0.2)
+    top_r = (x1, y0 + lift)
+    bot_w = span * 0.36
+    mid = (x0 + x1) / 2 + span * 0.03
+    bot_l = (mid - bot_w / 2, y1)
+    bot_r = (mid + bot_w / 2 + span * 0.02, y1 - height * 0.015)
+    poly: list[list[int]] = []
+    for step in range(9):
+        u = step / 8
+        poly.append(pt(
+            top_l[0] + (top_r[0] - top_l[0]) * u,
+            top_l[1] + (top_r[1] - top_l[1]) * u + np.sin(u * np.pi) * height * 0.018,
+        ))
+    for step in range(1, 6):
+        u = step / 5
+        inward = np.sin(u * np.pi) * span * 0.015
+        poly.append(pt(
+            top_r[0] + (bot_r[0] - top_r[0]) * u - inward,
+            top_r[1] + (bot_r[1] - top_r[1]) * u,
+        ))
+    poly.append(pt(*bot_r))
+    poly.append(pt(*bot_l))
+    for step in range(1, 6):
+        u = step / 5
+        inward = np.sin(u * np.pi) * span * 0.012
+        poly.append(pt(
+            bot_l[0] + (top_l[0] - bot_l[0]) * u + inward,
+            bot_l[1] + (top_l[1] - bot_l[1]) * u,
+        ))
+    shape = np.array(poly, np.int32)
+    dark = (22, 12, 14, 255)
+    outline = (48, 32, 30, 255)
+    cv2.fillPoly(canvas, [shape], dark)
+    # Teeth sit in the upper middle. The side walls stay dark so the opening
+    # is one component from the top lip to the blunt bottom.
+    wall = span * 0.18
+    band_top = y0 + height * 0.10
+    band_bot = y0 + height * 0.42
+    teeth: list[list[int]] = []
+    for step in range(8):
+        u = step / 7
+        teeth.append(pt(x0 + wall + (span - 2 * wall) * u, band_top + np.sin(u * np.pi) * height * 0.02))
+    for step in range(7, -1, -1):
+        u = step / 7
+        inset = wall * 0.25
+        teeth.append(pt(
+            x0 + wall + inset + (span - 2 * wall - 2 * inset) * u,
+            band_bot - np.sin(u * np.pi) * height * 0.02,
+        ))
+    cv2.fillPoly(canvas, [np.array(teeth, np.int32)], (246, 242, 236, 255))
+    for frac in (0.36, 0.50, 0.66):
+        x = x0 + wall + (span - 2 * wall) * frac
+        cv2.line(
+            canvas,
+            pt(x, band_top + height * 0.04),
+            pt(x, band_bot - height * 0.03),
+            outline,
+            max(1, scale // 2),
+        )
+    cv2.polylines(canvas, [shape], True, outline, max(1, stroke * scale))
+    alpha = canvas[..., 3]
+    canvas[..., 3] = np.where(alpha >= _SPRITE_ALPHA, np.maximum(alpha, _SPRITE_ALPHA), 0)
+    image = Image.fromarray(canvas, "RGBA").resize((canvas_w, canvas_h), Image.Resampling.NEAREST)
+    arr = np.array(image)
+    arr[..., 3] = np.where(arr[..., 3] >= _SPRITE_ALPHA, np.maximum(arr[..., 3], _SPRITE_ALPHA), 0)
+    return Image.fromarray(arr, "RGBA")
+
+
+def _ink_box(image: Image.Image) -> tuple[int, int, int, int] | None:
+    return image.getchannel("A").point(lambda alpha: 255 if alpha > 128 else 0).getbbox()
+
+
+def _fit_ink_height(image: Image.Image, limit: float) -> Image.Image:
+    """Scale the finished wedge so the opaque ink stays inside ``limit``.
+
+    Drawing the polygon again at a few dozen pixels pinches the dark walls
+    and the cavity check reads a closed mouth. Nearest-neighbour from the
+    open wedge keeps the same opening and the same top-wide profile.
+    """
+    box = _ink_box(image)
+    if not box:
+        return image
+    ink_h = box[3] - box[1]
+    if ink_h <= limit + 0.5:
+        return image
+    crop = image.crop(box)
+    height = max(8, int(limit))
+    fitted = image
+    for _ in range(4):
+        width = max(8, int(round(crop.width * (height / max(1, crop.height)))))
+        small = crop.resize((width, max(8, height)), Image.Resampling.NEAREST)
+        arr = np.array(small)
+        arr[..., 3] = np.where(arr[..., 3] >= _SPRITE_ALPHA, np.maximum(arr[..., 3], _SPRITE_ALPHA), 0)
+        fitted = _contain_ink(Image.fromarray(arr, "RGBA"))
+        again = _ink_box(fitted)
+        if not again or again[3] - again[1] <= limit + 0.5:
+            return fitted
+        height = max(8, height - 2)
+    return fitted
 
 
 def _limit_opening(
