@@ -1541,6 +1541,8 @@ def _settle_mouths(skin: Path, views: dict[str, Any], report: dict[str, Any], at
         return views, report
     attempts["mouthReposition"] = attempts.get("mouthReposition", 0) + 1
     shifts = mouth_anchor_mod.reposition_skin(skin)
+    if not (skin / "views" / "front" / "view.json").is_file():
+        views.pop("front", None)
     for name, (dx, dy) in shifts.items():
         if name in views and (dx or dy):
             mouth_anchor_mod.shift_view(views[name], dx, dy)

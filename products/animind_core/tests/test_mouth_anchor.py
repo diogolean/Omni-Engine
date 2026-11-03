@@ -62,7 +62,10 @@ def test_front_anchor_sits_between_nose_and_chin_and_three_quarter_follows_the_g
     image, face, left, right = _portrait("front")
     front = mouth_anchor.place(image, face, left, right, view="front")
     assert mouth_anchor.ALONG_LO <= _along(front) <= mouth_anchor.ALONG_HI
-    assert abs(front.x - (face[0] + face[2]) / 2) <= 4
+    assert front.view == "front"
+    centre = (face[0] + face[2]) / 2
+    assert abs(front.x - centre) <= 4
+    assert abs((front.x - centre) / (face[2] - face[0])) == 0
     assert front.y > front.moustache_bottom
     turned, turned_face, turned_left, turned_right = _portrait("left")
     left_anchor = mouth_anchor.place(turned, turned_face, turned_left, turned_right, view="left")
@@ -143,6 +146,70 @@ def _write_view(skin, name: str, image: Image.Image, face, left, right, mouth_at
         "mouthQA": {"face": list(face), "eyes": [list(left), list(right)], "mouth": list(face), "mouthBox": list(face)},
     }
     (folder / "view.json").write_text(json.dumps(view), encoding="utf-8")
+
+
+def _puppet(root, *, shift: int) -> "Path":
+    from pathlib import Path
+
+    skin = Path(root) / "hero"
+    skin.mkdir(parents=True)
+    head = Image.new("RGBA", (240, 320), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(head)
+    draw.ellipse((40, 20, 200, 250), fill=(232, 186, 156, 255))
+    for cx in (90 + shift, 150 + shift):
+        draw.ellipse((cx - 14, 80, cx + 14, 108), fill=(248, 248, 246, 255))
+        draw.ellipse((cx - 5, 88, cx + 5, 100), fill=(24, 16, 14, 255))
+    body = Image.new("RGBA", (240, 320), (0, 0, 0, 0))
+    ImageDraw.Draw(body).rectangle((50, 30, 190, 300), fill=(32, 48, 96, 255))
+    head.save(skin / "head.png")
+    body.save(skin / "body.png")
+    manifest = {
+        "anchors": {
+            "left_eye": [90 + shift, 94],
+            "right_eye": [150 + shift, 94],
+            "neck_pivot": [120, 240],
+            "eye_radius": 14,
+        },
+        "calibration": {"head_bbox": [40, 20, 200, 250]},
+        "framing": {"target_eye_y": 220, "body_anchor_y": 520},
+        "canvas_size": [240, 320],
+    }
+    (skin / "puppet.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (skin / "views" / "front").mkdir(parents=True)
+    (skin / "views" / "front" / "stale.txt").write_text("old", encoding="utf-8")
+    (skin / "rig_front.json").write_text("{}", encoding="utf-8")
+    return skin
+
+
+def test_a_frontal_plate_is_stored_as_front_and_a_three_quarter_is_not(tmp_path):
+    from products.animind_core import puppet_v3
+
+    front_skin = _puppet(tmp_path / "front", shift=0)
+    views = puppet_v3.adapt(front_skin, lambda path: path.name)
+    saved = json.loads((front_skin / "views" / "front" / "view.json").read_text(encoding="utf-8"))
+    anchor = saved["mouthQA"]["anchor"]
+    face = saved["mouthQA"]["face"]
+    assert "front" in views
+    assert anchor["view"] == "front"
+    assert abs((anchor["x"] - (face[0] + face[2]) / 2) / (face[2] - face[0])) <= mouth_anchor.FRONT_MAX
+
+    turned = _puppet(tmp_path / "turned", shift=-36)
+    turned_views = puppet_v3.adapt(turned, lambda path: path.name)
+    assert "front" not in turned_views
+    assert not (turned / "views" / "front").exists()
+    assert not (turned / "rig_front.json").is_file()
+    left = json.loads((turned / "views" / "left" / "view.json").read_text(encoding="utf-8"))
+    assert left["mouthQA"]["anchor"]["view"] == "left"
+
+
+def test_reposition_drops_a_three_quarter_plate_filed_as_front(tmp_path):
+    image, face, left, right = _portrait("left")
+    skin = tmp_path / "hero"
+    _write_view(skin, "front", image, face, left, right, (160, 240))
+    (skin / "rig_front.json").write_text("{}", encoding="utf-8")
+    mouth_anchor.reposition_skin(skin)
+    assert not (skin / "views" / "front").exists()
+    assert not (skin / "rig_front.json").is_file()
 
 
 def test_gate_fails_a_nose_mouth_and_reposition_fixes_it_without_an_image_call(tmp_path):

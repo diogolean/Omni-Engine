@@ -220,6 +220,8 @@ def create_avatar(
     rig_path.write_text(json.dumps(saved), encoding="utf-8")
     failed = [] if _opaque(left) else ["empty bust"]
     failed = _with_approval(skin, failed)
+    if "front" not in views:
+        front_status = "missing (three-quarter plate)"
     return {
         "views": views,
         "viewStatus": {
@@ -760,14 +762,34 @@ def _with_approval(skin: Path, failed: list[str]) -> list[str]:
 
 
 def write_character_json(skin: Path, built: dict[str, Any], *, character_id: str, name: str, url: Callable[[Path], str]) -> Path:
-    """The file ``characters.load`` reads. The CLI used to stop at the rig."""
+    """The file ``characters.load`` reads. The CLI used to stop at the rig.
+
+    ``qa.finalize`` rewrites ``qa.json`` from this rig. A stale score from an
+    older run was what the Einstein re-rig left behind.
+    """
     from datetime import datetime, timezone  # noqa: PLC0415
 
     qa_body = dict(built.get("qa") or {})
-    failed = _with_approval(skin, list(qa_body.get("failed") or []))
+    try:
+        report = qa.finalize(skin, float(qa_body.get("costUsd") or 0.0), dict(qa_body.get("attempts") or {}))
+    except (OSError, ValueError, KeyError, StopIteration):
+        report = None
+    if report is not None:
+        gate_failed = [key for key, gate in report["gates"].items() if not gate.get("pass")]
+        kept = [item for item in list(qa_body.get("failed") or []) if item not in report["gates"]]
+        qa_body["score"] = report["score"]
+        qa_body["gates"] = report["gates"]
+        qa_body["costUsd"] = report["costUsd"]
+        qa_body["attempts"] = report.get("attempts") or qa_body.get("attempts") or {}
+        qa_body["failed"] = list(dict.fromkeys([*kept, *gate_failed]))
+    failed = _with_approval(skin, list(qa_body.get("failed") or [])) if report is None else list(qa_body["failed"])
+    if report is not None:
+        extra = [key for key in qa.APPROVAL if not (report["gates"].get(key) or {}).get("pass")]
+        failed = list(dict.fromkeys([*failed, *extra]))
     qa_body["failed"] = failed
     if any(key in failed for key in qa.APPROVAL):
         qa_body["score"] = 0
+    built["qa"] = qa_body
     document = {
         "id": character_id,
         "name": name,
@@ -792,8 +814,19 @@ def write_character_json(skin: Path, built: dict[str, Any], *, character_id: str
 
 
 def cached_plate(skin: Path) -> Path | None:
-    """A plate already paid for. Re-rigging must not call the image model."""
-    for name in ("_gemini.png", "source_original.png", "_plate.png"):
+    """A plate already paid for. Re-rigging must not call the image model.
+
+    Older caches keep the mouthless plate as ``source_mouthless.png`` and never
+    copied it to ``source_original.png``. Prefer that mouthless file.
+    """
+    for name in (
+        "source_mouthless.png",
+        "source_closed.png",
+        "source_front.png",
+        "_gemini.png",
+        "source_original.png",
+        "_plate.png",
+    ):
         path = skin / name
         if path.is_file() and path.stat().st_size > 0:
             return path
@@ -889,11 +922,12 @@ def rerig_from_plate(
     if not placed["pass"]:
         raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
     _reject_avatar_faults(skin, views)
+    front_status = "facing_front" if "front" in views else "missing (three-quarter plate)"
     built = {
         "views": views,
-        "viewStatus": {"left": "image-model", "right": "mirror of left", "front": "aiwake v3 mouthless"},
+        "viewStatus": {"left": "image-model", "right": "mirror of left", "front": front_status},
         "mouthShots": {"visemes": list(VISEMES)},
-        "frontShot": "aiwake v3 mouthless",
+        "frontShot": front_status,
         "qa": {"score": 100, "costUsd": round(cost, 4), "failed": []},
         "generator": "gemini",
         "model": "cached-plate",

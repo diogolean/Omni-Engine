@@ -314,10 +314,19 @@ def human_expressions(
     }
     drawn = mouthset.draw_expressions(max(18, int(width)), colours, squeeze=squeeze, open_cap=open_cap)
     seated: dict[str, tuple[Image.Image, tuple[int, int]]] = {}
+    ax, ay = int(anchor[0]), int(anchor[1])
     for name, sprite in drawn.items():
-        canvas = Image.new("RGBA", size, (0, 0, 0, 0))
-        canvas.paste(sprite, ((size[0] - sprite.width) // 2, (size[1] - sprite.height) // 2), sprite)
-        seated[name] = (canvas, anchor)
+        if sprite.width <= size[0] and sprite.height <= size[1]:
+            canvas = Image.new("RGBA", size, (0, 0, 0, 0))
+            canvas.paste(sprite, ((size[0] - sprite.width) // 2, (size[1] - sprite.height) // 2), sprite)
+            seated[name] = (canvas, anchor)
+            continue
+        # Wider than the viseme canvas (the South Park smile). Seat the ink
+        # on the same point and keep the stroke; a paste would clip it.
+        seated[name] = (
+            sprite,
+            (ax + (size[0] - sprite.width) // 2, ay + (size[1] - sprite.height) // 2),
+        )
     return seated
 
 
@@ -414,8 +423,8 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         box = list(anchor.as_box(face, mouth_width))
         return anchor, visemes, expressions, box
 
+    facing = mouth_anchor.infer_view(face, eye_boxes[0], eye_boxes[1])
     left_anchor, visemes, expressions, mouth = _pack("left")
-    front_anchor, front_visemes, front_expressions, front_mouth = _pack("front")
     parts = {
         "size": canvas,
         "torso": _place(torso),
@@ -463,16 +472,28 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         "pipeline": "aiwake-v3",
     }
     (skin / "rig.json").write_text(json.dumps(rig_doc, indent=2), encoding="utf-8")
-    front_doc = json.loads(json.dumps(rig_doc))
-    front_doc["boxes"]["mouth"] = list(front_mouth)
-    front_doc["mouthBox"] = list(front_mouth)
-    (skin / "rig_front.json").write_text(json.dumps(front_doc, indent=2), encoding="utf-8")
     left = rig._write_view(parts, skin / "views" / "left", url, mirror=False)
     right = rig._write_view(parts, skin / "views" / "right", url, mirror=True)
-    parts["visemes"] = front_visemes
-    parts["expressions"] = front_expressions
-    parts["mouthQA"]["mouth"] = list(front_mouth)
-    parts["mouthQA"]["mouthBox"] = list(front_mouth)
-    parts["mouthQA"]["anchor"] = front_anchor.to_dict()
-    front = rig._write_view(parts, skin / "views" / "front", url, mirror=False)
-    return {"left": left, "right": right, "front": front}
+    views: dict[str, Any] = {"left": left, "right": right}
+    front_dir = skin / "views" / "front"
+    rig_front = skin / "rig_front.json"
+    # A front slot is the midline. A three-quarter plate stays under left/right.
+    # Writing it as views/front and tagging the anchor "left" is a lie.
+    if facing == "front":
+        front_anchor, front_visemes, front_expressions, front_mouth = _pack("front")
+        front_doc = json.loads(json.dumps(rig_doc))
+        front_doc["boxes"]["mouth"] = list(front_mouth)
+        front_doc["mouthBox"] = list(front_mouth)
+        rig_front.write_text(json.dumps(front_doc, indent=2), encoding="utf-8")
+        parts["visemes"] = front_visemes
+        parts["expressions"] = front_expressions
+        parts["mouthQA"]["mouth"] = list(front_mouth)
+        parts["mouthQA"]["mouthBox"] = list(front_mouth)
+        parts["mouthQA"]["anchor"] = front_anchor.to_dict()
+        views["front"] = rig._write_view(parts, front_dir, url, mirror=False)
+    else:
+        if front_dir.exists():
+            shutil.rmtree(front_dir)
+        if rig_front.is_file():
+            rig_front.unlink()
+    return views

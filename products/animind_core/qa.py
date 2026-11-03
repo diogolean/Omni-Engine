@@ -33,7 +33,8 @@ def skin_delta_e(view: Path) -> dict[str, Any]:
     canvas = Image.new("RGBA", (v["canvas"]["w"], v["canvas"]["h"]), (0, 0, 0, 0))
     for layer in sorted(v["layers"], key=lambda l: l["z"]):
         canvas.alpha_composite(Image.open(view / layer["url"]).convert("RGBA"), (layer["x"], layer["y"]))
-    if (v.get("mouthQA") or {}).get("mouths") == "aiwake drawn set":  # inked lips, not a cut skin patch
+    # Inked lips (Aiwake set and the human mouth library) have no skin rim to match.
+    if (v.get("mouthQA") or {}).get("mouths") in {"aiwake drawn set", "human"}:
         return {"pass": True, "value": 0.0, "limit": LIMITS["skinDeltaE"], "note": "drawn mouths: no skin rim"}
     worst = 0.0
     for name, m in v["visemes"].items():

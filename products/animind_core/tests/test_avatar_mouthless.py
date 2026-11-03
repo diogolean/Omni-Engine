@@ -327,6 +327,32 @@ def test_rerig_reuses_the_cached_plate_and_writes_character_json(tmp_path, monke
         url=lambda path: path.name, character_id="albert_einstein", name="Albert Einstein",
     )
     saved = __import__("json").loads((skin / "character.json").read_text(encoding="utf-8"))
+    report = __import__("json").loads((skin / "qa.json").read_text(encoding="utf-8"))
     assert saved["id"] == "albert_einstein" and saved["name"] == "Albert Einstein"
     assert saved["status"] == "ready" and (skin / "puppet.json").is_file()
+    assert (skin / "qa.json").is_file() and report["gates"]
+    assert saved["qa"]["score"] == report["score"] == built["qa"]["score"]
+    assert saved["qa"]["gates"]["mouthAnchor"]["pass"] is True
     assert built["qa"]["costUsd"] == 0.0
+
+
+def test_cached_plate_prefers_mouthless_then_closed_then_front(tmp_path):
+    skin = tmp_path / "cache"
+    skin.mkdir()
+
+    def png(name: str) -> None:
+        Image.new("RGBA", (4, 4), (8, 8, 8, 255)).save(skin / name)
+
+    png("source_mouthless.png")
+    png("source_closed.png")
+    png("source_front.png")
+    png("_gemini.png")
+    png("source_original.png")
+    png("_plate.png")
+    assert avatar.cached_plate(skin).name == "source_mouthless.png"
+    (skin / "source_mouthless.png").unlink()
+    assert avatar.cached_plate(skin).name == "source_closed.png"
+    (skin / "source_closed.png").unlink()
+    assert avatar.cached_plate(skin).name == "source_front.png"
+    (skin / "source_front.png").write_bytes(b"")
+    assert avatar.cached_plate(skin).name == "_gemini.png"

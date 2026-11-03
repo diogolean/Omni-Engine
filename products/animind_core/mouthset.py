@@ -15,6 +15,79 @@ VISEMES = "XABCDEFGH"
 EMOTIONS = ("neutral", "happy", "angry", "sad", "surprised", "thoughtful", "ironic")
 _REF_PLATE = (400, 300)  # library units: patch 264 x 150, widest shape ~0.73 x patch width
 OPEN_ASPECT_CAP = 0.48  # drawn height / width; speech never becomes a scream
+# double_mouth treats sprite alpha below this as "outside" on a human mouth.
+_SPRITE_ALPHA = 40
+
+
+def _contain_ink(image: Image.Image) -> Image.Image:
+    """Pull every painted pixel inside the PNG.
+
+    A soft lip fringe (alpha 20–39) blends into mouth ink once it sits on a
+    moustache. The double-mouth gate then opens that mask by one pixel, so
+    the fringe counts as ink outside the sprite. Grow the opaque core by one
+    pixel, copy a neighbour colour onto that ring, drop the softer fringe,
+    and leave a clear margin so the stroke is not on the PNG border.
+    """
+    import cv2  # noqa: PLC0415
+
+    arr = np.array(image.convert("RGBA"))
+    alpha = arr[..., 3]
+    opaque = (alpha >= _SPRITE_ALPHA).astype(np.uint8)
+    if int(opaque.sum()) == 0:
+        return image
+    kernel = np.ones((3, 3), np.uint8)
+    grown = cv2.dilate(opaque, kernel)
+    colour = arr[..., :3].copy()
+    colour[alpha < _SPRITE_ALPHA] = 0
+    filled = cv2.dilate(colour, kernel)
+    ring = (grown > 0) & (alpha < _SPRITE_ALPHA)
+    arr[ring, :3] = filled[ring]
+    arr[..., 3] = np.where(grown > 0, np.maximum(alpha, np.uint8(_SPRITE_ALPHA)), np.uint8(0))
+    ys, xs = np.nonzero(arr[..., 3] > 0)
+    if xs.size == 0:
+        return Image.fromarray(arr, "RGBA")
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+    margin = 2
+    top, left = max(0, margin - y0), max(0, margin - x0)
+    bottom = max(0, margin - (arr.shape[0] - y1))
+    right = max(0, margin - (arr.shape[1] - x1))
+    if top or left or bottom or right:
+        out = np.zeros((arr.shape[0] + top + bottom, arr.shape[1] + left + right, 4), np.uint8)
+        out[top:top + arr.shape[0], left:left + arr.shape[1]] = arr
+        arr = out
+    return Image.fromarray(arr, "RGBA")
+
+
+def _seal(image: Image.Image) -> Image.Image:
+    """Contain the ink, then squash a shape the ring made taller than the opening cap.
+
+    The ring is one pixel. A second contain puts that pixel back without a new fringe.
+    """
+    image = _contain_ink(image)
+    box = image.getchannel("A").getbbox()
+    if not box:
+        return image
+    width, height = box[2] - box[0], box[3] - box[1]
+    if width <= 0 or height / width <= OPEN_ASPECT_CAP + 0.02:
+        return image
+    room = max(1, int(width * OPEN_ASPECT_CAP) - 2)
+    return _contain_ink(_limit_opening(image, max_height=room, max_aspect=OPEN_ASPECT_CAP))
+
+
+def _same_canvas(sprites: dict[str, Image.Image]) -> dict[str, Image.Image]:
+    """One size for the set, each sprite centred, so the shared anchor holds."""
+    width = max(im.width for im in sprites.values())
+    height = max(im.height for im in sprites.values())
+    shared: dict[str, Image.Image] = {}
+    for name, im in sprites.items():
+        if im.size == (width, height):
+            shared[name] = im
+            continue
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
+        shared[name] = canvas
+    return shared
 
 
 def tones(lips_rgba: np.ndarray, skin: tuple[int, int, int]) -> dict[str, tuple[int, int, int, int]]:
@@ -84,13 +157,7 @@ def draw_set(lip_width: float, colours: dict[str, tuple[int, int, int, int]], *,
                 width = max(12, int((bb[2] - bb[0]) if bb else lip_width))
                 im = _lipped_open(width, {**colours, "lip": lip} if lip else colours)
         out[v] = im
-    W = max(i.width for i in out.values())
-    H = max(i.height for i in out.values())
-    for v, im in out.items():  # one shared canvas size again, centred: same anchor, comparable sprites
-        c = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        c.paste(im, ((W - im.width) // 2, (H - im.height) // 2))
-        out[v] = c
-    return out
+    return _same_canvas({code: _seal(im) for code, im in out.items()})
 
 
 def draw_expressions(
@@ -158,10 +225,18 @@ def draw_expressions(
             (max(1, int(round(smile.width * scale))), max(1, int(round(float(open_cap))))),
             Image.LANCZOS,
         )
-    seated = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    seated.paste(smile, ((width - smile.width) // 2, (height - smile.height) // 2))
-    scaled["happy"] = seated
-    return scaled
+    # The South Park smile is wider than the rest mouths. Grow the canvas
+    # instead of clipping the stroke off the PNG.
+    width, height = max(width, smile.width), max(height, smile.height)
+    seated: dict[str, Image.Image] = {}
+    for emotion, im in scaled.items():
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
+        seated[emotion] = canvas
+    happy = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    happy.paste(smile, ((width - smile.width) // 2, (height - smile.height) // 2))
+    seated["happy"] = happy
+    return _same_canvas({name: _seal(im) for name, im in seated.items()})
 
 
 def flat_dark_blob(image: Image.Image) -> bool:
@@ -266,13 +341,15 @@ def _open_happy(width: int) -> Image.Image:
     from PIL import ImageDraw  # noqa: PLC0415
 
     height = max(8, int(round(width * OPEN_ASPECT_CAP)))
-    image = Image.new("RGBA", (width + 8, height + 8), (0, 0, 0, 0))
+    stroke = max(2, width // 48)
+    pad = stroke + 4
+    image = Image.new("RGBA", (width + 2 * pad, height + 2 * pad), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     draw.ellipse(
-        (4, 4, 4 + width - 2, 4 + height - 2),
+        (pad, pad, pad + width - 2, pad + height - 2),
         fill=(18, 10, 12, 255),
         outline=(40, 24, 26, 255),
-        width=max(2, width // 48),
+        width=stroke,
     )
     return image
 

@@ -8,6 +8,7 @@ the head box; right is that placement mirrored.
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -434,6 +435,14 @@ def reposition_skin(skin: Path) -> dict[str, tuple[int, int]]:
             continue
         face, left_eye, right_eye = boxes
         anchor = place(_paste_head(folder, view), face, left_eye, right_eye, view=name)
+        if name == "front" and anchor.view != "front":
+            # The folder is named front, but the plate is three-quarter.
+            # Drop it instead of recording anchor.view "left" under views/front.
+            shutil.rmtree(folder)
+            rig_front = skin / "rig_front.json"
+            if rig_front.is_file():
+                rig_front.unlink()
+            continue
         dx, dy = int(round(anchor.x - center[0])), int(round(anchor.y - center[1]))
         applied = _move_layers(view, dx, dy) if dx or dy else (0, 0)
         qa = view.setdefault("mouthQA", {})
