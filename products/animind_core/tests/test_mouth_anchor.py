@@ -2,6 +2,7 @@
 import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 from PIL import Image, ImageDraw
@@ -148,9 +149,7 @@ def _write_view(skin, name: str, image: Image.Image, face, left, right, mouth_at
     (folder / "view.json").write_text(json.dumps(view), encoding="utf-8")
 
 
-def _puppet(root, *, shift: int) -> "Path":
-    from pathlib import Path
-
+def _puppet(root, *, shift: int) -> Path:
     skin = Path(root) / "hero"
     skin.mkdir(parents=True)
     head = Image.new("RGBA", (240, 320), (0, 0, 0, 0))
@@ -181,6 +180,24 @@ def _puppet(root, *, shift: int) -> "Path":
     return skin
 
 
+def _front_view(face: list[int], *, view: str, mouth_x: float, url: str = "head.png") -> dict:
+    return {
+        "canvas": {"w": 240, "h": 320},
+        "layers": [{
+            "name": "head", "url": url, "x": 0, "y": 0, "w": 240, "h": 320, "z": 2,
+        }],
+        "visemes": {},
+        "expressions": {},
+        "mouthQA": {
+            "face": face,
+            "anchor": {
+                "x": mouth_x, "y": 180, "view": view, "along": 0.647,
+                "nose": [120, 140], "chin": [120, 240],
+            },
+        },
+    }
+
+
 def test_a_frontal_plate_is_stored_as_front_and_a_three_quarter_is_not(tmp_path):
     from products.animind_core import puppet_v3
 
@@ -200,6 +217,87 @@ def test_a_frontal_plate_is_stored_as_front_and_a_three_quarter_is_not(tmp_path)
     assert not (turned / "rig_front.json").is_file()
     left = json.loads((turned / "views" / "left" / "view.json").read_text(encoding="utf-8"))
     assert left["mouthQA"]["anchor"]["view"] == "left"
+
+
+def test_adapt_keeps_a_valid_front_when_the_master_is_three_quarter(tmp_path):
+    """A midline front already on disk survives adapt of a 3/4 plate."""
+    from products.animind_core import puppet_v3
+
+    skin = _puppet(tmp_path / "kept", shift=-36)
+    front = skin / "views" / "front"
+    face = [40, 20, 200, 250]
+    centre = (face[0] + face[2]) / 2
+    Image.new("RGBA", (8, 8), (20, 220, 40, 255)).save(front / "head.png")
+    (front / "stale.txt").write_text("stay", encoding="utf-8")
+    stage_url = "/v1/files/hero/_front_stage/front/views/front/head.png"
+    (front / "view.json").write_text(
+        json.dumps(_front_view(face, view="front", mouth_x=centre, url=stage_url)),
+        encoding="utf-8",
+    )
+    (skin / "rig_front.json").write_text(json.dumps({
+        "boxes": {"face": face, "mouth": [100, 170, 140, 190]},
+    }), encoding="utf-8")
+
+    def url(path: Path) -> str:
+        return "/v1/files/" + path.as_posix()
+
+    views = puppet_v3.adapt(skin, url)
+    assert "front" in views
+    assert (front / "stale.txt").read_text(encoding="utf-8") == "stay"
+    assert (skin / "rig_front.json").is_file()
+    saved = json.loads((front / "view.json").read_text(encoding="utf-8"))
+    anchor = saved["mouthQA"]["anchor"]
+    assert anchor["view"] == "front"
+    assert abs((anchor["x"] - centre) / (face[2] - face[0])) <= 0.01
+    assert saved["layers"][0]["url"] == "head.png"
+    assert "_front_stage" not in (front / "view.json").read_text(encoding="utf-8")
+    public = views["front"]["layers"][0]["url"]
+    assert public.endswith("views/front/head.png")
+    assert "_front_stage" not in public
+    assert "_front_stage" not in json.dumps(views["front"])
+
+
+def test_adapt_keeps_a_front_recorded_only_on_rig_front(tmp_path):
+    from products.animind_core import puppet_v3
+
+    skin = _puppet(tmp_path / "rigonly", shift=-36)
+    front = skin / "views" / "front"
+    face = [40, 20, 200, 250]
+    Image.new("RGBA", (4, 4), (0, 0, 0, 255)).save(front / "head.png")
+    (front / "view.json").write_text(json.dumps({
+        "canvas": {"w": 240, "h": 320},
+        "layers": [{"name": "head", "url": "head.png", "x": 0, "y": 0, "w": 4, "h": 4, "z": 2}],
+        "visemes": {},
+        "expressions": {},
+    }), encoding="utf-8")
+    (skin / "rig_front.json").write_text(json.dumps({
+        "mouthQA": {"face": face, "anchor": {"view": "front", "x": 120, "y": 180}},
+    }), encoding="utf-8")
+    views = puppet_v3.adapt(skin, lambda path: "/v1/files/" + path.as_posix())
+    assert (front / "view.json").is_file()
+    assert (skin / "rig_front.json").is_file()
+    assert "front" in views
+    assert views["front"]["layers"][0]["url"].endswith("views/front/head.png")
+    assert "_front_stage" not in views["front"]["layers"][0]["url"]
+
+
+def test_adapt_drops_a_three_quarter_plate_tagged_as_front(tmp_path):
+    from products.animind_core import puppet_v3
+
+    skin = _puppet(tmp_path / "lie", shift=-36)
+    front = skin / "views" / "front"
+    face = [40, 20, 200, 250]
+    (front / "view.json").write_text(
+        json.dumps(_front_view(face, view="left", mouth_x=face[0] + 8)),
+        encoding="utf-8",
+    )
+    (skin / "rig_front.json").write_text(json.dumps({
+        "mouthQA": {"face": face, "anchor": {"view": "front", "x": 120, "y": 180}},
+    }), encoding="utf-8")
+    views = puppet_v3.adapt(skin, lambda path: path.name)
+    assert "front" not in views
+    assert not front.exists()
+    assert not (skin / "rig_front.json").is_file()
 
 
 def test_reposition_drops_a_three_quarter_plate_filed_as_front(tmp_path):

@@ -349,6 +349,138 @@ def _mouth_part(skin: Path, code: str, scale: float, offset: tuple[int, int], ca
     return _place(_bake(_open(path), scale, offset, canvas))
 
 
+_FRONT_OFFSET = 0.01
+
+
+def frontal_anchor(doc: dict[str, Any] | None) -> bool:
+    """True when ``mouthQA.anchor`` is a frontal mouth on the midline.
+
+    The offset is the mouth's distance from the face centre as a share of the
+    face width. ``avatar._front_anchor_ok`` uses this same 0.01 cut.
+    """
+    if not isinstance(doc, dict):
+        return False
+    anchor = (doc.get("mouthQA") or {}).get("anchor") or {}
+    face = (doc.get("mouthQA") or {}).get("face")
+    if not isinstance(anchor, dict) or anchor.get("view") != "front":
+        return False
+    if not isinstance(face, (list, tuple)) or len(face) < 4:
+        return False
+    try:
+        width = max(1, int(face[2]) - int(face[0]))
+        centre = (int(face[0]) + int(face[2])) / 2
+        mouth_x = float(anchor.get("x", centre + width))
+    except (TypeError, ValueError):
+        return False
+    return abs((mouth_x - centre) / width) <= _FRONT_OFFSET
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _tagged_anchor(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not doc:
+        return None
+    anchor = (doc.get("mouthQA") or {}).get("anchor")
+    if isinstance(anchor, dict) and anchor.get("view"):
+        return anchor
+    return None
+
+
+def saved_front_ok(skin: Path) -> bool:
+    """The front slot is already a midline, in view.json or rig_front.json.
+
+    A three-quarter anchor stored under ``views/front`` is a lie and is not
+    kept. A stale directory with no anchor is not kept either.
+    """
+    view_doc = _read_json(skin / "views" / "front" / "view.json")
+    if frontal_anchor(view_doc):
+        return True
+    if _tagged_anchor(view_doc) is not None:
+        return False
+    return frontal_anchor(_read_json(skin / "rig_front.json"))
+
+
+def _front_relative(raw: str) -> str | None:
+    """File name under ``views/front``, stripped of a dead ``_front_stage`` prefix."""
+    text = str(raw or "").replace("\\", "/").strip()
+    if not text:
+        return None
+    if "/views/front/" in text:
+        text = text.split("/views/front/", 1)[1]
+    elif text.startswith("views/front/"):
+        text = text[len("views/front/"):]
+    text = text.split("?", 1)[0].split("#", 1)[0].lstrip("./")
+    if not text or text.startswith("/"):
+        return None
+    parts = [part for part in text.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        return None
+    return "/".join(parts)
+
+
+def _each_layer(doc: dict[str, Any]):
+    for layer in doc.get("layers") or []:
+        if isinstance(layer, dict):
+            yield layer
+    for family in ("visemes", "expressions"):
+        group = doc.get(family) or {}
+        if isinstance(group, dict):
+            for layer in group.values():
+                if isinstance(layer, dict):
+                    yield layer
+
+
+def _retarget_front_urls(doc: dict[str, Any], folder: Path, url: Callable[[Path], str] | None) -> bool:
+    """Point layer URLs at files that live in ``folder``.
+
+    On disk (``url is None``) they stay relative, which is what the renderer
+    joins onto ``views/front``. The returned view uses ``url(file)``.
+    """
+    changed = False
+    for layer in _each_layer(doc):
+        raw = layer.get("url")
+        if not isinstance(raw, str):
+            continue
+        rel = _front_relative(raw)
+        if rel is None and "_front_stage" in raw:
+            rel = Path(raw.replace("\\", "/")).name
+        if rel is None:
+            continue
+        if url is None:
+            if raw != rel:
+                layer["url"] = rel
+                changed = True
+            continue
+        layer["url"] = url(folder / rel)
+        changed = True
+    return changed
+
+
+def publish_front(folder: Path, url: Callable[[Path], str]) -> dict[str, Any] | None:
+    """``view.json`` with ``url`` applied to the files now in ``folder``.
+
+    The file on disk keeps relative names (``head.png``). The returned view
+    points those files through ``url``, so a copied stage path becomes
+    ``views/front`` and ``_front_stage`` is gone.
+    """
+    doc = _read_json(folder / "view.json")
+    if doc is None:
+        return None
+    if _retarget_front_urls(doc, folder, None):
+        (folder / "view.json").write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    published = json.loads(json.dumps(doc))
+    _retarget_front_urls(published, folder, url)
+    return published
+
+
 def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     """Build left, right, and front views from the v3 layers and their anchors."""
     manifest = json.loads((skin / "puppet.json").read_text(encoding="utf-8"))
@@ -487,8 +619,10 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     views: dict[str, Any] = {"left": left, "right": right}
     front_dir = skin / "views" / "front"
     rig_front = skin / "rig_front.json"
-    # A front slot is the midline. A three-quarter plate stays under left/right.
-    # Writing it as views/front and tagging the anchor "left" is a lie.
+    # A front slot is the midline. A three-quarter master stays under left/right.
+    # _ensure_front decides when to install or replace that slot. adapt must
+    # not delete a front that is already frontal just because this plate is 3/4.
+    # A three-quarter plate tagged as front is still a lie and is removed.
     if facing == "front":
         front_anchor, front_visemes, front_expressions, front_mouth = _pack("front")
         front_doc = json.loads(json.dumps(rig_doc))
@@ -501,6 +635,10 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         parts["mouthQA"]["mouthBox"] = list(front_mouth)
         parts["mouthQA"]["anchor"] = front_anchor.to_dict()
         views["front"] = rig._write_view(parts, front_dir, url, mirror=False)
+    elif saved_front_ok(skin):
+        published = publish_front(front_dir, url)
+        if published is not None:
+            views["front"] = published
     else:
         if front_dir.exists():
             shutil.rmtree(front_dir)

@@ -851,13 +851,7 @@ def _front_anchor_ok(skin: Path) -> bool:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    anchor = (doc.get("mouthQA") or {}).get("anchor") or {}
-    face = (doc.get("mouthQA") or {}).get("face") or None
-    if anchor.get("view") != "front" or not face or len(face) < 4:
-        return False
-    width = max(1, int(face[2]) - int(face[0]))
-    centre = (int(face[0]) + int(face[2])) / 2
-    return abs((float(anchor.get("x", centre + width)) - centre) / width) <= 0.01
+    return puppet_v3.frontal_anchor(doc)
 
 
 def install_cached_front(
@@ -870,7 +864,8 @@ def install_cached_front(
 
     The side puppet stays where it is. A plate whose eyes are still
     three-quarter is not copied over, and a failed cut does not raise:
-    the side rig has already succeeded.
+    the side rig has already succeeded. The stage directory is removed
+    afterwards, so the returned URLs are read from ``views/front``.
     """
     import shutil  # noqa: PLC0415
 
@@ -907,7 +902,9 @@ def install_cached_front(
         rig_front = staged / "rig_front.json"
         if rig_front.is_file():
             shutil.copy2(rig_front, skin / "rig_front.json")
-        return front
+        # adapt() above named files inside _front_stage. That directory is
+        # deleted in finally, so the caller must see views/front instead.
+        return puppet_v3.publish_front(skin / "views" / "front", url)
     except (OSError, RuntimeError, ValueError, TypeError):
         return None
     finally:

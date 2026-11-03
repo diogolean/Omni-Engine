@@ -457,15 +457,24 @@ def test_rerig_fills_front_from_source_front_and_leaves_the_three_quarter_on_the
         "products.aiwake.animator.factory.create_puppet.generate_character_image",
         generate,
     )
+    for key in (
+        "GEMINI_API_KEY", "GOOGLE_API_KEY", "TOGETHER_API_KEY",
+        "OPENROUTER_API_KEY", "ANIMIND_IMAGE_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
     skin = tmp_path / "albert_einstein"
     skin.mkdir()
     blue = (20, 40, 240)
     green = (20, 220, 40)
     _marked_plate(eyes=((78, 92), (118, 92)), marker=blue).save(skin / "source_mouthless.png")
     _marked_plate(eyes=((104, 92), (156, 92)), marker=green).save(skin / "source_front.png")
+
+    def url(path: Path) -> str:
+        return "/v1/files/" + path.as_posix()
+
     built = avatar.rerig_from_plate(
         skin, description="Albert Einstein, bushy white moustache",
-        url=lambda path: path.name, character_id="albert_einstein", name="Albert Einstein",
+        url=url, character_id="albert_einstein", name="Albert Einstein",
         edit=False,
     )
     assert built["qa"]["costUsd"] == 0.0
@@ -485,6 +494,20 @@ def test_rerig_fills_front_from_source_front_and_leaves_the_three_quarter_on_the
     assert abs(anchor["x"] - centre) / width <= 0.01
     left = json.loads((skin / "views" / "left" / "view.json").read_text(encoding="utf-8"))
     assert left["mouthQA"]["anchor"]["view"] == "left"
+    for layer in built["views"]["front"]["layers"]:
+        assert layer["url"].endswith(f"views/front/{layer['name']}.png")
+        assert "_front_stage" not in layer["url"]
+    for code, layer in built["views"]["front"]["visemes"].items():
+        assert layer["url"].endswith(f"views/front/mouths/{code}.png")
+        assert "_front_stage" not in layer["url"]
+    for name, layer in built["views"]["front"].get("expressions", {}).items():
+        assert layer["url"].endswith(f"views/front/expressions/{name}.png")
+        assert "_front_stage" not in layer["url"]
+    on_disk = json.loads((skin / "views" / "front" / "view.json").read_text(encoding="utf-8"))
+    assert on_disk["layers"][0]["url"] == f"{on_disk['layers'][0]['name']}.png"
+    assert "_front_stage" not in (skin / "views" / "front" / "view.json").read_text(encoding="utf-8")
+    assert "_front_stage" not in (skin / "character.json").read_text(encoding="utf-8")
+    assert "_front_stage" not in json.dumps(built)
 
 
 def test_assemble_refuses_a_three_quarter_plate_in_the_front_slot(tmp_path):
