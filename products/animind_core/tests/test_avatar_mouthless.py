@@ -600,7 +600,6 @@ def test_ensure_front_keeps_a_valid_front_and_does_not_create_puppet(tmp_path, m
 
 
 def _seat_side(skin: Path, name: str, *, anchor_view: str) -> Path:
-    """A side view with its layer files. The mirror keeps ``anchor.view`` of left."""
     folder = skin / "views" / name
     (folder / "mouths").mkdir(parents=True)
     Image.new("RGBA", (8, 8), (20, 40, 240, 255)).save(folder / "head.png")
@@ -629,7 +628,6 @@ def _seat_side(skin: Path, name: str, *, anchor_view: str) -> Path:
 
 
 def _seat_cached_sides(root: Path) -> Path:
-    """Lateral plate older than left and right, plus a different frontal slot."""
     skin = root / "albert_einstein"
     skin.mkdir(parents=True)
     _head(mouth=False).save(skin / "source_mouthless.png")
@@ -666,7 +664,6 @@ def _drop_image_keys(monkeypatch) -> None:
 
 
 def test_rerig_no_edit_keeps_current_side_views_and_does_not_create_puppet(tmp_path, monkeypatch):
-    """A plate that is not newer than left and right is republished, not cut again."""
     calls = {"n": 0}
 
     def create_puppet(*_args, **_kwargs):
@@ -720,7 +717,6 @@ def test_rerig_no_edit_keeps_current_side_views_and_does_not_create_puppet(tmp_p
 
 
 def test_rerig_no_edit_cuts_the_side_once_when_the_plate_is_newer(tmp_path, monkeypatch):
-    """A plate newer than views/left is cut once. The frontal slot stays seated."""
     patch_human_landmarks(monkeypatch)
     _drop_image_keys(monkeypatch)
     skin = _seat_cached_sides(tmp_path)
@@ -774,7 +770,6 @@ def test_rerig_no_edit_cuts_the_side_once_when_the_plate_is_newer(tmp_path, monk
 
 
 def test_rerig_no_edit_still_cuts_when_a_side_view_is_missing_or_incomplete(tmp_path, monkeypatch):
-    """No left view, or a right view with no layer file, still cuts the plate once."""
     patch_human_landmarks(monkeypatch)
     _drop_image_keys(monkeypatch)
 

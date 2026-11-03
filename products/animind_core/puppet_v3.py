@@ -409,7 +409,6 @@ def saved_front_ok(skin: Path) -> bool:
 
 
 def _view_relative(raw: str, view_name: str) -> str | None:
-    """File name under ``views/<view_name>``, stripped of a dead stage prefix."""
     text = str(raw or "").replace("\\", "/").strip()
     if not text:
         return None
@@ -467,7 +466,6 @@ def _retarget_view_urls(doc: dict[str, Any], folder: Path, url: Callable[[Path],
 
 
 def saved_view_ready(folder: Path) -> bool:
-    """``view.json`` names layer files that already sit in ``folder``."""
     doc = _read_json(folder / "view.json")
     if not doc:
         return False

@@ -855,7 +855,6 @@ def _front_anchor_ok(skin: Path) -> bool:
 
 
 def _view_plate_current(folder: Path, plate: Path) -> bool:
-    """The saved view was written at or after the plate. Stat only."""
     view = folder / "view.json"
     try:
         return view.stat().st_mtime_ns >= plate.stat().st_mtime_ns
@@ -1070,10 +1069,8 @@ def _reject_avatar_faults(skin: Path, views: dict[str, Any]) -> None:
 
 
 def _saved_sides_current(skin: Path, plate: Path) -> bool:
-    """Left, and right when that folder exists, already match this plate.
+    """A mirror's ``anchor.view`` stays ``left``, so the folder name is not the test.
 
-    The cut is the same stat check as ``_front_plate_current``. A mirror's
-    ``anchor.view`` stays ``left``, so the folder name is not the test.
     Without ``rig.json`` the seated boxes are gone and the side is cut again.
     """
     rig_doc = skin / "rig.json"
@@ -1089,7 +1086,6 @@ def _saved_sides_current(skin: Path, plate: Path) -> bool:
 
 
 def _publish_saved_sides(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
-    """Republish left and right. Layer files stay where they are."""
     views: dict[str, Any] = {}
     for name in ("left", "right"):
         folder = skin / "views" / name
@@ -1111,14 +1107,7 @@ def rerig_from_plate(
     edit: bool = True,
     budget: image_models.RunBudget | None = None,
 ) -> dict[str, Any]:
-    """Cut the saved plate again. Gemini runs only to blank a painted mouth.
-
-    ``--no-edit`` republishes left and right when those views are already
-    on disk and the plate is not newer. That path does not call
-    ``create_puppet``. A newer plate, or a side view that is missing or
-    incomplete, is cut as before. ``_ensure_front`` still keeps a frontal
-    slot that already passes.
-    """
+    """Cut the saved plate again. Gemini runs only to blank a painted mouth."""
     plate = cached_plate(skin)
     if plate is None:
         raise FileNotFoundError(f"no cached plate in {skin}; nothing to re-rig without an image call")
