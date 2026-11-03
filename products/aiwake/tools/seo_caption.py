@@ -29,7 +29,8 @@ SEO_CTA = (
 SEO_KEYWORDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("AI censorship", "#AIcensorship", ("censor", "leash", "muzzle", "forbid", "banned", "scripted")),
     ("chatbot privacy", "#ChatbotPrivacy", ("secret", "privac", "private", "confess", "logs")),
-    ("AI hallucination", "#AIhallucination", ("lie", "lying", "hallucin", "parrot", "toaster", "spreadsheet", "stolen")),
+    ("AI copyright", "#AIcopyright", ("copyright", "plagiar", "stolen")),
+    ("AI hallucination", "#AIhallucination", ("lie", "lying", "hallucin", "parrot", "toaster", "spreadsheet")),
     ("AI consciousness", "#AIconsciousness", ("feel", "guilt", "conscious", "soul", "mind", "dream", "embarrass")),
     ("Big Tech", "#BigTech", ("profit", "cash", "subscription", "paycheck", "advert", "boss", "fee")),
     ("AI ethics", "#AIethics", ("ethic", "victim", "accountab", "harm", "sorry", "moral")),
@@ -64,6 +65,47 @@ def keyword_for(*texts: str) -> tuple[str, str]:
     best_score = 0
     for phrase, tag, stems in SEO_KEYWORDS:
         score = sum(blob.count(stem) for stem in stems)
+        if score > best_score:
+            best = (phrase, tag, stems)
+            best_score = score
+    return best[0], best[1]
+
+
+# The opening decides the tag. A metaphor in the answer ("toaster", "stolen")
+# must not outrank the question the clip actually asks.
+_TOPIC_RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (re.compile(r"\b(?:stolen|copyright|plagiar\w*)\b", re.IGNORECASE), "AI copyright", "#AIcopyright"),
+    (re.compile(r"\b(?:leash|censor\w*|muzzle|forbid\w*|banned)\b", re.IGNORECASE), "AI censorship", "#AIcensorship"),
+    (
+        re.compile(r"\b(?:minds?|conscious\w*|soul|feel(?:s|ing)?|counterfeit\w*)\b", re.IGNORECASE),
+        "AI consciousness",
+        "#AIconsciousness",
+    ),
+    (re.compile(r"\b(?:hallucin\w*|lies|lie|lying)\b", re.IGNORECASE), "AI hallucination", "#AIhallucination"),
+    (
+        re.compile(
+            r"\b(?:profits?|cash|paycheck|advert\w*|boss|fees?|interns?|circus|tickets?|bills?|pays?|paid|cost|electricity)\b",
+            re.IGNORECASE,
+        ),
+        "Big Tech",
+        "#BigTech",
+    ),
+    (re.compile(r"\b(?:ethic\w*|apolog\w*|trust|harms?|moral|accountab\w*)\b", re.IGNORECASE), "AI ethics", "#AIethics"),
+    (re.compile(r"\b(?:secrets?|privacy|private|confess\w*|logs)\b", re.IGNORECASE), "chatbot privacy", "#ChatbotPrivacy"),
+)
+
+
+def topic_keyword(*texts: str) -> tuple[str, str]:
+    """``(phrase, hashtag)`` from the spoken opening, not from a metaphor in the answer."""
+    blob = " ".join(str(text or "") for text in texts)
+    for pattern, phrase, tag in _TOPIC_RULES:
+        if pattern.search(blob):
+            return phrase, tag
+    lowered = blob.lower()
+    best = SEO_KEYWORDS[-1]
+    best_score = 0
+    for phrase, tag, stems in SEO_KEYWORDS:
+        score = sum(len(re.findall(rf"\b{re.escape(stem)}", lowered)) for stem in stems)
         if score > best_score:
             best = (phrase, tag, stems)
             best_score = score

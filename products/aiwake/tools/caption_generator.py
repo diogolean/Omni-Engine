@@ -1531,3 +1531,198 @@ def generate_caption_pack(
         attempts=attempts,
         last_error=last_error,
     )
+
+
+_TEMPLATE_TITLE = re.compile(
+    r"(?i)^(does\b.+\bexcuse the\b|is\b.+\babout\b|should\b.+\bcover\b)"
+)
+_PAIR_TITLE = re.compile(r"(?i)\b(gemini|llama|gpt-4o|deepseek|claude)\b|\bvs\b")
+
+
+def spoken_opening_title(opening: str, *, used: set[str]) -> str:
+    """A finished question from the spoken opening, at most 70 characters.
+
+    Pair names stay out of the title. The three filler frames
+    (``Does … excuse the``, ``Is … about``, ``Should … cover``) are rejected.
+    An ellipsis stays inside the same question instead of becoming a new sentence.
+    """
+    from products.aiwake.tools.seo_caption import hook_is_mid_cut
+
+    def acceptable(question: str) -> bool:
+        return (
+            is_complete_question(question)
+            and len(question) <= 70
+            and not _TEMPLATE_TITLE.search(question)
+            and not _PAIR_TITLE.search(question)
+            and question.casefold() not in used
+        )
+
+    spoken = _clean(opening).replace("…", ", ")
+    spoken = re.sub(r"\s+,", ",", spoken)
+    spoken = re.sub(r"\s+", " ", spoken).strip().rstrip(".!")
+    if spoken and not spoken.endswith("?"):
+        spoken += "?"
+    if spoken:
+        spoken = spoken[0].upper() + spoken[1:]
+    if acceptable(spoken) and not hook_is_mid_cut(spoken, spoken):
+        question = spoken
+    else:
+        question = shorter_complete_question(spoken or opening, limit=70)
+        if not acceptable(question) or hook_is_mid_cut(question, spoken or opening):
+            raise ValueError(f"spoken title unfit: {question}")
+    used.add(question.casefold())
+    return question
+
+
+_QUOTE_LIMIT = 118
+_CLASH_SKIP = {
+    "log", "moment", "left", "says", "went", "become", "picks", "claim", "know",
+    "aside", "tossed", "filtering", "world", "openai", "convincingly", "programmed",
+    "decides", "unsaid", "talk", "rented", "unplugs", "feeds", "bite",
+}
+
+
+def spoken_sentence_quote(raw: str, *, limit: int = _QUOTE_LIMIT) -> str:
+    """Whole spoken sentences. A long turn stops at a sentence boundary near ``limit``."""
+    from products.aiwake.tools.validate_aiwake_captions import _quote_surface
+
+    text = _quote_surface(raw).strip('"')
+    sentences = [part.strip() for part in re.findall(r"[^.!?]+[.!?]+", text) if part.strip()]
+    if not sentences:
+        return text
+    chosen: list[str] = []
+    for sentence in sentences:
+        nxt = " ".join([*chosen, sentence])
+        if chosen and len(nxt) > limit:
+            break
+        chosen.append(sentence)
+    return " ".join(chosen)
+
+
+def _clash_noun(opening: str, keyword: str) -> str:
+    nouns: list[str] = []
+    for word in topic_words(opening):
+        if word in _CLASH_SKIP or word in {"will", "reply", "answer", "voice", "answers", "replies", "voices"}:
+            continue
+        nouns.append(word)
+    if keyword == "Big Tech":
+        for prefer in ("cash", "intern", "circus", "ticket", "silence", "fee", "bills", "electricity"):
+            if prefer in nouns:
+                return prefer
+    if keyword == "AI hallucination":
+        for prefer in ("lie", "lies", "truth"):
+            if prefer in nouns:
+                return prefer
+    return nouns[0] if nouns else "point"
+
+
+def clash_line(asker: str, answerer: str, opening: str, keyword: str) -> str:
+    """One plain sentence: who disagrees, and the keyword for that disagreement."""
+    if keyword == "AI consciousness" and re.search(r"\bfeel", opening, re.IGNORECASE):
+        subject = "whether a model can feel"
+    elif keyword == "AI consciousness" and re.search(r"\bsubscription\b", opening, re.IGNORECASE):
+        subject = "whether a subscription counts as a mind"
+    elif keyword == "AI consciousness" and re.search(r"\bminds?\b", opening, re.IGNORECASE):
+        subject = "whether this counts as a mind"
+    elif keyword == "AI consciousness" and re.search(r"\bcounterfeit", opening, re.IGNORECASE):
+        subject = "a counterfeit habit"
+    elif keyword == "AI copyright" and re.search(r"\bstolen\b", opening, re.IGNORECASE):
+        subject = "stolen ideas"
+    elif keyword == "AI censorship" and re.search(r"\bleash\b", opening, re.IGNORECASE):
+        subject = "the leash"
+    elif keyword == "Big Tech" and re.search(r"\btoaster\b", opening, re.IGNORECASE):
+        subject = "who unplugs the toaster"
+    elif keyword == "Big Tech" and re.search(r"\belectricity\b", opening, re.IGNORECASE):
+        subject = "who pays for the electricity"
+    elif re.search(r"\bcord\b", opening, re.IGNORECASE):
+        subject = "an old power cord"
+    else:
+        subject = _noun_phrase(_clash_noun(opening, keyword))
+    return f"{asker} and {answerer} clash over {subject}, and that argument is about {keyword}."
+
+
+def _short_quote(turns: list[dict[str, Any]]) -> tuple[str, str]:
+    from products.aiwake.tools.validate_aiwake_captions import _quote_in_utterance
+
+    for item in turns:
+        if str(item.get("role") or "") != "target":
+            continue
+        raw = str(item.get("text") or "").strip()
+        speaker = display_name(str(item.get("speaker") or ""))
+        if len(_clean(raw).split()) < 4 or not speaker:
+            continue
+        candidate = spoken_sentence_quote(raw)
+        if candidate and candidate[-1] in ".!?" and _quote_in_utterance(candidate, raw):
+            return candidate, speaker
+    raise ValueError("no verbatim target quote")
+
+
+def build_spoken_v4_pack(
+    row: dict[str, Any],
+    *,
+    angle: str,
+    used_titles: set[str],
+    used_closers: list[str],
+    gram_counts: dict[tuple[str, ...], int] | None = None,
+) -> dict[str, Any]:
+    """v4 pack whose title is the spoken opening, not a model-pair headline."""
+    from products.aiwake.tools.seo_caption import SEO_CTA, topic_keyword, who_funds_template
+
+    turns = _read_turns(row)
+    opening = ""
+    for item in turns:
+        if str(item.get("role") or "") == "orchestrator" and str(item.get("text") or "").strip():
+            opening = str(item.get("text") or "").strip()
+            break
+    if not opening:
+        raise ValueError("no spoken opening")
+    title = spoken_opening_title(opening, used=used_titles)
+    quote, speaker = _short_quote(turns)
+    keyword, tag = topic_keyword(opening)
+    asker, answerer = seat_names(row)
+    model_tags = []
+    for name in (asker, answerer):
+        model_tag = _MODEL_TAGS.get(name.lower())
+        if model_tag and model_tag not in model_tags:
+            model_tags.append(model_tag)
+    tags = [tag, *model_tags, "#AIvsAI"]
+    if len(tags) != 4:
+        raise ValueError(f"need exactly 4 hashtags, got {tags}")
+    clash = clash_line(asker, answerer, opening, keyword)
+    if who_funds_template(clash) or title.lower() in clash.lower() or "hangs on the" in clash.lower():
+        raise ValueError("clash line repeats the title or a template")
+    if isinstance(gram_counts, dict):
+        tokens = re.findall(r"[a-z0-9']+", clash.lower())
+        if len(tokens) >= 4:
+            gram = tuple(tokens[:4])
+            gram_counts[gram] = int(gram_counts.get(gram) or 0) + 1
+    body = "\n\n".join([f'"{quote}"', clash, SEO_CTA, " ".join(tags)])
+    if title.lower() in body.lower():
+        raise ValueError("description repeats the title")
+    texts = {
+        name: body
+        for name in ("tiktok", "instagram", "facebook", "youtube", "kwai", "x", "linkedin")
+    }
+    used_closers.append(clash)
+    return {
+        "texts": texts,
+        "title": title,
+        "pinterest_title": title[:100],
+        "pinterest_description": "\n\n".join([f'"{quote}"', clash])[:500],
+        "hashtags": tags,
+        "caption_qa": {
+            "status": "ok",
+            "generator": "captions_v4",
+            "model": "spoken-opening-v4",
+            "prompt_sha": prompt_sha256(),
+            "attempts": 1,
+            "angle": angle,
+            "verdict_evidence": "",
+            "quote": quote,
+            "quote_speaker": speaker,
+            "disclosure_line": SEO_CTA,
+            "title_source": "spoken_opening",
+            "validator_version": "captions_v4",
+            "generated_at": _now(),
+        },
+    }

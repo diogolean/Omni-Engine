@@ -43,6 +43,7 @@ from products.aiwake.tools.seo_caption import (
     first_reply_line,
     hook_is_mid_cut,
     title_repeats_in_description,
+    topic_keyword,
     who_funds_template,
 )
 from products.aiwake.tools.production_status import (
@@ -187,9 +188,19 @@ def _quotes(text: str) -> list[str]:
     return [item.strip() for item in re.findall(r'"([^"]+)"', text or "") if item.strip()]
 
 
+def _quote_surface(text: str) -> str:
+    """Whitespace and dash normalization shared by the quote and the transcript."""
+    cleaned = str(text or "")
+    cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')
+    cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")
+    cleaned = cleaned.replace("\u2014", ", ").replace("\u2013", ", ")
+    cleaned = cleaned.replace("...", "…")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def _quote_in_utterance(quote: str, utterance: str) -> bool:
-    spoken = _ws(utterance)
-    raw = _ws(quote).strip('"')
+    spoken = _quote_surface(utterance)
+    raw = _quote_surface(quote).strip('"')
     core = raw
     if core.endswith("…") or core.endswith("..."):
         core = core.rstrip(".").rstrip("…").strip()
@@ -199,6 +210,22 @@ def _quote_in_utterance(quote: str, utterance: str) -> bool:
         return True
     if spoken.startswith(core) and (len(spoken) == len(core) or spoken[len(core):len(core) + 1] in {" ", ""}):
         return True
+    return False
+
+
+def quote_ends_mid_sentence(quote: str, utterance: str) -> bool:
+    """True when the quote stops inside a spoken sentence."""
+    raw = _quote_surface(quote).strip('"')
+    spoken = _quote_surface(utterance)
+    if not raw or raw[-1] not in ".!?":
+        return True
+    idx = spoken.find(raw)
+    if idx < 0:
+        return True
+    if idx > 0:
+        prev = spoken[:idx].rstrip()
+        if not prev or prev[-1] not in ".!?":
+            return True
     return False
 
 
@@ -464,6 +491,7 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     ):
         fails.append(f"title_cut_off: {name}: {topic[:90]}")
     qa = _qa(row)
+    spoken_pack = str(qa.get("title_source") or "") == "spoken_opening"
     quote = str(qa.get("quote") or "")
     speaker = display_name(str(qa.get("quote_speaker") or ""))
     spoken = [(str(item.get("speaker") or ""), str(item.get("text") or "")) for item in turns]
@@ -514,7 +542,8 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
                 break
             if line.endswith("?") and _dangling(line) and _clean(line) != _clean(orchestrator[0] if orchestrator else ""):
                 fails.append(f"truncated_sentence: {name} [{platform}]: {line[-80:]}")
-        if platform in _FEED and not any(line.endswith("?") for line in lines):
+        title_is_question = spoken_pack and is_complete_question(headline)
+        if platform in _FEED and not any(line.endswith("?") for line in lines) and not title_is_question:
             fails.append(f"{platform}_no_question: {name}")
         if platform == "tiktok" and re.search(r"\bsubscribe\b", caption.replace(SEO_CTA, ""), re.IGNORECASE):
             fails.append(f"tiktok_says_subscribe: {name}")
@@ -532,6 +561,15 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
                 fails.append(f"title_repeated: {name} [{platform}]")
             if not any(phrase.lower() in caption.lower() for phrase, _tag, _stems in SEO_KEYWORDS):
                 fails.append(f"seo_keyword: {name} [{platform}]: description missing a keyword")
+            if spoken_pack:
+                phrase, tag = topic_keyword(opening_exact or topic)
+                if phrase.lower() not in caption.lower():
+                    fails.append(f"keyword_topic: {name} [{platform}]: missing {phrase}")
+                caption_tags = _tags(caption)
+                if not caption_tags or caption_tags[0].lower() != tag.lower():
+                    fails.append(f"keyword_topic: {name} [{platform}]: {caption_tags[:1]} != {tag}")
+                if "hangs on the" in caption.lower():
+                    fails.append(f"template_context: {name} [{platform}]")
         if platform == "linkedin" and lines and len(lines[0]) > 150:
             fails.append(f"linkedin_hook_too_long: {name}")
         verdict_zone = _outside_quotes(caption)
@@ -609,9 +647,20 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         caption = str(_get(row, _PLATFORMS[platform][0]) or "")
         lines = _lines(caption)
         quote_lines = [line for line in lines if line.startswith('"') and line.endswith('"')]
+        target_texts = [
+            str(item.get("text") or "")
+            for item in turns
+            if str(item.get("role") or "") == "target" and str(item.get("text") or "").strip()
+        ]
+        quote_body = quote_lines[0].strip('"') if quote_lines else ""
+        cut_off = bool(quote_body) and bool(target_texts) and all(
+            quote_ends_mid_sentence(quote_body, text) for text in target_texts
+        )
         if not quote_lines:
             fails.append(f"quote_line: {name} [{platform}]: quote is not on its own line")
-        elif len(quote_lines[0].strip('"').split()) > 20:
+        elif spoken_pack and cut_off:
+            fails.append(f"quote_cut_off: {name} [{platform}]")
+        elif len(quote_body.split()) > 20 and not (spoken_pack and not cut_off):
             fails.append(f"quote_line: {name} [{platform}]: quote is over 20 words")
         if lines:
             follow = ""
@@ -620,7 +669,8 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
                     break
                 follow = line
                 break
-            if follow and len(follow.split()) > 12:
+            context_limit = 32 if spoken_pack else 12
+            if follow and len(follow.split()) > context_limit:
                 fails.append(f"context_line: {name} [{platform}]: {len(follow.split())} words")
         if any(tag.lower() in {item.lower() for item in BROAD_TAGS} for tag in _tags(caption)):
             fails.append(f"hashtags: {name} [{platform}]: broad tag banned")
