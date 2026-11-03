@@ -121,7 +121,7 @@ def _salt(key: str) -> int:
     return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16)
 
 
-def _hook_candidates(opening: str, keyword: str) -> list[str]:
+def _hook_candidates(opening: str, keyword: str, *, append_keyword: bool = True) -> list[str]:
     """Whole spoken clauses, then the same clause cut only at a boundary word."""
     text = re.sub(r"\s+", " ", (opening or "").replace("\u2026", " ").replace("...", " ")).strip()
     parts = re.split(r"(?<=[.!?])\s+|,\s+|;\s+", text)
@@ -153,7 +153,7 @@ def _hook_candidates(opening: str, keyword: str) -> list[str]:
             question = chunk[0].upper() + chunk[1:]
             if not question.endswith("?"):
                 question += "?"
-            if keyword.lower() in question.lower():
+            if keyword.lower() in question.lower() or not append_keyword:
                 found.append(re.sub(r"\s+", " ", question))
             else:
                 found.append(re.sub(r"\s+", " ", question[:-1] + f" under {keyword}?"))
@@ -167,7 +167,6 @@ def seo_title(asker: str, answerer: str, opening: str, quote: str, *, used: set[
     It is never chopped mid-phrase to make the keyword fit.
     """
     keyword, _tag = keyword_for(opening, quote)
-    word = _topic_word(opening, quote)
     suffix = f" | {asker} vs {answerer}"
     limit = 70 - len(suffix)
 
@@ -188,22 +187,45 @@ def seo_title(asker: str, answerer: str, opening: str, quote: str, *, used: set[
             continue
         if usable(question):
             return f"{question}{suffix}"
-    extras = [
-        item
-        for item in topic_words(opening, quote)
-        if item.lower() not in {"will", "reply", "answer", "voice", word.lower()}
-    ]
-    frames = [
-        f"Does {keyword} excuse the {word}?",
-        f"Is {keyword} about the {word}?",
-        f"Should {keyword} cover the {word}?",
-        f"Is {keyword} the issue?",
-    ]
-    frames.extend(f"Does {keyword} excuse the {extra}?" for extra in extras[:4])
-    for question in frames:
-        if usable(question):
+    # The keyword stays in the description. A title is the spoken question,
+    # including one that ends on a preposition. Stock frames are not used:
+    # "Does {keyword} excuse the …?", "Is {keyword} about …?",
+    # "Should {keyword} cover …?".
+    spoken_opening = re.sub(r"\s+", " ", (opening or "").strip())
+    if spoken_opening and not spoken_opening.endswith("?"):
+        spoken_opening += "?"
+    if (
+        spoken_opening
+        and spoken_opening not in used
+        and len(spoken_opening) <= limit
+        and spoken_opening.endswith("?")
+        and not _TEMPLATE_TITLE.match(spoken_opening)
+    ):
+        return f"{spoken_opening}{suffix}"
+    for question in _hook_candidates(opening, keyword, append_keyword=False):
+        lead = re.findall(r"[A-Za-z']+", question)
+        if not lead or lead[0].lower() not in _QUESTION_LEAD:
+            continue
+        if _TEMPLATE_TITLE.match(question):
+            continue
+        if (
+            question not in used
+            and len(question) <= limit
+            and is_complete_question(question)
+            and not hook_is_mid_cut(question, opening)
+        ):
             return f"{question}{suffix}"
-    question = f"Is {keyword} the issue?"
+    spoken = [
+        question
+        for question in _hook_candidates(opening, keyword, append_keyword=False)
+        if question not in used
+        and len(question) <= limit
+        and is_complete_question(question)
+        and not _TEMPLATE_TITLE.match(question)
+    ]
+    if spoken:
+        return f"{spoken[0]}{suffix}"
+    question = "Who answers for this?"
     return f"{question}{suffix}"
 
 
