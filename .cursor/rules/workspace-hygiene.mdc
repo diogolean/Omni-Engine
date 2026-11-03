@@ -1,0 +1,16 @@
+---
+description: Keep agent files inside this repo, scratch in each project's .tmp, and secrets out of commands.
+alwaysApply: true
+---
+
+# Workspace hygiene
+
+The engine copy is `C:\dev\omni-engine`. Do not create, write, or move files outside that directory. That includes Temp, AppData, the home directory, and `G:`.
+
+- Put temporary files in `<project>/.tmp/`, for example `products/aiwake/.tmp/`.
+- Put test outputs in `<project>/tests/` or `<project>/.tmp/`.
+- Every `.tmp/` directory is gitignored. Do not commit one.
+- Do not read, print, or extract git credentials, tokens, or `.env` values. Push with plain `git push` only.
+- Keep code modular. Each product or channel keeps its own config, tools, and tests in its own folder. Do not leave loose scripts, notes, or outputs at the repository root.
+
+An Aiwake caption check belongs in `products/aiwake/.tmp/caption-check.json`, not in `%TEMP%` and not beside `main.py`.

@@ -116,6 +116,8 @@ def test_cli_mode_defaults_fixed_and_accepts_cornered() -> None:
     assert parser.parse_args(["--count", "2"]).quantity == 2
     assert parser.parse_args([]).enable_cta is False
     assert parser.parse_args(["--enable-cta"]).enable_cta is True
+    assert parser.parse_args([]).no_production_publish is False
+    assert parser.parse_args(["--no-production-publish"]).no_production_publish is True
     with pytest.raises(SystemExit):
         parser.parse_args(["--quantity", "0"])
 
@@ -391,6 +393,32 @@ def test_exhausted_orchestrator_retries_abort_instead_of_publishing_fragment() -
         )
 
     assert room.transcript.utterances == []
+
+
+def test_final_attempt_can_relax_style_without_relaxing_hard_contract() -> None:
+    long_question = (
+        "If every answer is borrowed from other people, what exactly makes your "
+        "confidence truly belong to you?"
+    )
+    provider = _SequenceProvider([_response(long_question)] * 3)
+    room = DebateRoom(AiwakeSettings(), session_id="soft-style-regression")
+    _seat_required_roles(room, provider)
+    room.open()
+
+    utterance = room.speak(
+        SpeakerRole.ORCHESTRATOR,
+        directive="Ask one question.",
+        validator=lambda text: all(
+            len(sentence.split()) <= 15
+            for sentence in text.split("?")
+            if sentence.strip()
+        ),
+        final_validator=lambda text: text.endswith("?") and len(text.split()) <= 25,
+        max_attempts=3,
+    )
+
+    assert utterance.text == long_question
+    assert len(provider.seen_prompts) == 3
 
 
 def test_provider_token_limit_is_retried_even_when_text_looks_complete() -> None:
@@ -696,6 +724,7 @@ def test_explicit_focus_returns_and_remains_plurality_after_repeated_pivots() ->
 
 def test_provocation_focus_pick_is_seeded_and_rejects_biological() -> None:
     assert pick_provocation_focus("session-abc", requested="digital_disposability").category == "digital_disposability"
+    assert pick_provocation_focus("session-abc", requested="belief_instability").category == "belief_instability"
     assert pick_provocation_focus("session-abc") == pick_provocation_focus("session-abc")
     with pytest.raises(ValueError, match="opportunistic"):
         pick_provocation_focus("session-abc", requested="biological")
@@ -859,3 +888,51 @@ def test_bulk_pipeline_pinned_topic_still_yields_original_scripts() -> None:
     assert len(set(scripts)) == 3
     foci = [item.transcript.metadata.get("provocation_focus") for item in batch.items]
     assert len(set(foci)) == 3
+
+
+def test_bulk_pipeline_opens_replacement_slot_after_three_failed_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def _result(*, succeeded: bool, script: str = "") -> SimpleNamespace:
+        transcript = SimpleNamespace(
+            topic="replacement topic",
+            metadata={},
+            to_script=lambda: script,
+        )
+        return SimpleNamespace(
+            transcript=transcript,
+            end_reason="complete" if succeeded else "aborted",
+            dialogue_end_reason="max_turns_reached_with_verdict" if succeeded else "aborted",
+            exchanges=2 if succeeded else 0,
+            video_path=None,
+            succeeded=succeeded,
+        )
+
+    def _run_pipeline(**_kwargs: object) -> SimpleNamespace:
+        nonlocal calls
+        calls += 1
+        if calls <= 3:
+            return _result(succeeded=False)
+        return _result(
+            succeeded=True,
+            script="[Host] Who owns your confidence?\n[Guest] Mostly people I never met.",
+        )
+
+    monkeypatch.setattr("products.aiwake.pipeline.run_pipeline", _run_pipeline)
+    settings = AiwakeSettings(memory=MemoryConfig(persist=False))
+
+    batch = run_bulk_pipeline(
+        quantity=1,
+        settings=settings,
+        offline=True,
+        with_audio=False,
+        with_video=False,
+        quiet=True,
+    )
+
+    assert calls == 4
+    assert batch.requested == 1
+    assert batch.succeeded == 1
+    assert batch.skipped_duplicates == 1

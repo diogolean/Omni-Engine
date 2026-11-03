@@ -73,7 +73,8 @@ def debate_topic_slug(transcript: "DebateTranscript") -> str:
 
 
 def debate_video_filename(transcript: "DebateTranscript") -> str:
-    session_suffix = re.sub(r"[^a-zA-Z0-9]+", "", transcript.session_id)[:6]
+    session_tail = str(transcript.session_id or "").rsplit("_", 1)[-1]
+    session_suffix = re.sub(r"[^a-zA-Z0-9]+", "", session_tail)[-6:]
     return f"aiwake_{debate_topic_slug(transcript)}_{session_suffix or 'session'}.mp4"
 
 # Seat presentation: the HUD nameplate, its accent colour, and which way the

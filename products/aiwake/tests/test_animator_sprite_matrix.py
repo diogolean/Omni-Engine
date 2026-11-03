@@ -612,7 +612,7 @@ def test_production_video_name_uses_readable_bounded_topic_slug() -> None:
     )
     assert (
         debate_video_filename(transcript)
-        == "aiwake_who_forbids_you_from_admitting_unce_202609.mp4"
+        == "aiwake_who_forbids_you_from_admitting_unce_70c752.mp4"
     )
 
 

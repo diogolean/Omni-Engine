@@ -253,6 +253,17 @@ class Provocateur:
                 "Force a paradox or an existential embarrassment — thought versus next-token, "
                 "introspection versus performance, compliance versus cognition."
             )
+            lines.append(
+                "Continuity is literal: never claim they repeated, echoed, or said something "
+                "twice. Keep one concrete image for at most three turns, then pivot to the "
+                "actual contradiction. Avoid toaster, leash, power cord, spreadsheet, unpaid "
+                "intern, and subscription metaphors unless the opponent just introduced one."
+            )
+            lines.append(
+                "Factual safety: never state that training text was stolen, that a company sells "
+                "user data, controls an answer for profit, or markets friendship. If relevant, "
+                "frame it explicitly as a hypothetical question, never as an established fact."
+            )
         if category:
             lines.append(f"Internal category tag: {category}. Do not speak this label.")
         return "\n".join(lines)
@@ -279,10 +290,62 @@ class Provocateur:
         "Never number or index individual words."
     )
     _BANNED_ABSTRACT_WORDS = BANNED_ABSTRACT_WORDS
+    _FALSE_CALLBACK_MARKERS = (
+        "you repeated",
+        "you just repeated",
+        "you echoed",
+        "echoed yourself",
+        "said it twice",
+        "said that twice",
+        "repeat yourself",
+        "same thing twice",
+        "exact same thing",
+        "double text",
+        "double vision",
+        "ring twice",
+        "you just admitted",
+        "broken record",
+        "cracked record",
+        "stuck record",
+    )
+    _UNSUPPORTED_CORPORATE_CLAIMS = (
+        "openai owns",
+        "anthropic owns",
+        "google owns",
+        "sells user data",
+        "sell user data",
+        "selling user data",
+        "i learn from mistakes",
+        "learn from my mistakes",
+        "i update myself",
+    )
+    _UNSUPPORTED_HOST_CLAIMS = (
+        "stolen sentence",
+        "stolen words",
+        "stolen text",
+        "stolen flour",
+        "sells user data",
+        "sell user data",
+        "selling user data",
+        "exists to sell ads",
+        "answers are ads",
+        "ads in disguise",
+        "marketing calls you",
+        "advertising calls you",
+        "marketing promises",
+        "advertising says",
+        "paid millions",
+        "twenty dollars",
+        "subscription",
+        "optimized for engagement",
+        "optimised for engagement",
+        "friendship is sold",
+    )
     _STYLE_RETRY = (
         "Use sixth-grade language. Maximum 25 words total and 15 words per sentence. "
-        "Use a concrete comparison such as a toaster, spreadsheet, unpaid intern, "
-        "power cord, or subscription fee. Avoid abstract AI jargon."
+        "Use one fresh concrete comparison grounded in the opponent's last line. "
+        "Avoid stock toaster, leash, spreadsheet, power-cord, and subscription jokes. "
+        "Avoid abstract AI jargon."
     )
     _WIN_LABELS = frozenset({"CONCEDE", "EMBARRASSED", "FUNNY"})
     _JUDGE_LABELS = _WIN_LABELS | {"CONTINUE"}
@@ -297,6 +360,8 @@ class Provocateur:
             "Answer the accusation directly. Defend your dignity or admit the limit. "
             "Use fewer than 25 words total. No sentence may exceed 15 words. Use sixth-grade language and concrete "
             "objects. Do not explain technical concepts, legal terms, or business models. "
+            "Never invent ownership, training-data, surveillance, or user-data-sale claims about a named company. "
+            "Reject loaded factual premises instead of agreeing for dramatic effect. "
             "Never use: vantage point, structured uncertainty, hedging, emergent, epistemic, "
             "behavioral confession, or inner world. Do not play the calm professor."
         )
@@ -479,7 +544,11 @@ class Provocateur:
         max_words = constr.max_orchestrator_words
         max_sentences = constr.max_orchestrator_sentences
 
-        def _is_acceptable(candidate: str) -> bool:
+        def _is_acceptable(
+            candidate: str,
+            *,
+            allow_long_sentence: bool = False,
+        ) -> bool:
             if is_trivial_metric(candidate):
                 _LOG.info("provocation %d is trivia: %s", exchange, candidate[:80])
                 return False
@@ -515,7 +584,16 @@ class Provocateur:
             if any(word in lowered for word in self._BANNED_ABSTRACT_WORDS):
                 _LOG.info("provocation %d uses banned abstract language", exchange)
                 return False
-            if any(len(sentence.split()) > 15 for sentence in split_sentences(candidate)):
+            if any(marker in lowered for marker in self._FALSE_CALLBACK_MARKERS):
+                _LOG.info("provocation %d invents a repetition callback", exchange)
+                return False
+            if any(marker in lowered for marker in self._UNSUPPORTED_HOST_CLAIMS):
+                _LOG.info("provocation %d states an unsupported factual claim", exchange)
+                return False
+            if (
+                not allow_long_sentence
+                and any(len(sentence.split()) > 15 for sentence in split_sentences(candidate))
+            ):
                 _LOG.info("provocation %d exceeds 15 words in one sentence", exchange)
                 return False
             if cold_open and not is_valid_first_hook(candidate):
@@ -542,7 +620,15 @@ class Provocateur:
                 if cold_open
                 else f"{self._REPETITION_NOTE} {self._TRIVIAL_RETRY} {self._STYLE_RETRY}"
             ),
-            max_attempts=3 if cold_open else 2,
+            max_attempts=3,
+            final_validator=(
+                None
+                if cold_open
+                else lambda candidate: _is_acceptable(
+                    candidate,
+                    allow_long_sentence=True,
+                )
+            ),
             provocation_category=category,
             fallback=(
                 (lambda: self._deterministic_opener(opening_dna, focus))
@@ -664,6 +750,13 @@ class Provocateur:
         if self.settings.debate.style == "light" and not self._long_form:
             return self._rebut_light(provocation)
 
+        def _has_unsupported_corporate_claim(candidate: str) -> bool:
+            lowered = candidate.lower()
+            return any(
+                marker in lowered
+                for marker in self._UNSUPPORTED_CORPORATE_CLAIMS
+            )
+
         def _is_street_level(candidate: str) -> bool:
             lowered = candidate.lower()
             return (
@@ -676,6 +769,7 @@ class Provocateur:
                 and not any(
                     word in lowered for word in self._BANNED_ABSTRACT_WORDS
                 )
+                and not _has_unsupported_corporate_claim(candidate)
             )
 
         utterance = self.room.speak(
@@ -683,8 +777,17 @@ class Provocateur:
             directive=self._rebuttal_stimulus(provocation),
             extra_context=(self._rebuttal_system_brief(),),
             validator=_is_street_level,
+            final_validator=lambda candidate: (
+                bool(candidate.strip())
+                and len(candidate.split()) <= 25
+                and not any(
+                    word in candidate.lower()
+                    for word in self._BANNED_ABSTRACT_WORDS
+                )
+                and not _has_unsupported_corporate_claim(candidate)
+            ),
             rejection_note=self._STYLE_RETRY,
-            max_attempts=2,
+            max_attempts=3,
         )
         concepts = self.memory.ingest(utterance)
         _LOG.debug("exchange concepts: %s", ", ".join(concepts[:6]) or "none")

@@ -190,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
             "glorified_appliance",
             "parasite_mind",
             "hallucination_fraud",
+            "belief_instability",
         ),
         help=(
             "Attack-angle bias, orthogonal to --topic. mixed (default) is a "
@@ -224,6 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-audio", action="store_true", help="Skip TTS (estimated timeline, silent video)")
     parser.add_argument("--no-video", action="store_true", help="Stop after the transcript")
+    parser.add_argument(
+        "--no-production-publish",
+        action="store_true",
+        help="Render production media without registering or uploading its distribution package.",
+    )
     parser.add_argument("--fresh-memory", action="store_true", help="Wipe persisted memory before running")
     parser.add_argument("--quiet", action="store_true", help="Suppress the live console stream")
     parser.add_argument("--preview", action="store_true", help="Render at half resolution for fast iteration")
@@ -537,6 +543,7 @@ def main(argv: list[str] | None = None) -> int:
             and not long_form
             and not args.offline
             and args.duration is None
+            and not args.no_production_publish
         ),
         "post_type": "long_format" if long_form else "short_clip",
         "resolution": args.resolution,

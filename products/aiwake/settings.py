@@ -117,6 +117,7 @@ class ProvocationWeightConfig(_Frozen):
     glorified_appliance: int = Field(default=5, ge=1, le=99)
     parasite_mind: int = Field(default=5, ge=1, le=99)
     hallucination_fraud: int = Field(default=4, ge=1, le=99)
+    belief_instability: int = Field(default=5, ge=1, le=99)
 
     def as_mapping(self) -> dict[str, int]:
         return {
@@ -125,6 +126,7 @@ class ProvocationWeightConfig(_Frozen):
             "glorified_appliance": self.glorified_appliance,
             "parasite_mind": self.parasite_mind,
             "hallucination_fraud": self.hallucination_fraud,
+            "belief_instability": self.belief_instability,
         }
 
 
@@ -148,6 +150,7 @@ class DebateConfig(_Frozen):
         "glorified_appliance",
         "parasite_mind",
         "hallucination_fraud",
+        "belief_instability",
     ] = "mixed"
     provocation_weights: ProvocationWeightConfig = ProvocationWeightConfig()
 
