@@ -668,18 +668,20 @@ def _eyes_closed(base: Image.Image, eyes: list[Box], skin: tuple[int, int, int],
     return layer
 
 
-def _eyebrows(base: Image.Image, eyes: list[Box]) -> tuple[Image.Image, Image.Image]:
-    """Lift the two brow strokes out of the face and return ``(layer, face_without_brows)``.
+def _eyebrows(base: Image.Image, eyes: list[Box]) -> tuple[Image.Image, Image.Image, Image.Image, Image.Image, dict | None]:
+    """Measure each brow, inpaint it off the head, and redraw it as a vector stroke.
 
     Brows are selected as the widest dark component in the narrow skin band
-    above each eye.  The mask is feathered by one pixel; the same mask is
-    inpainted on the head so moving a brow cannot expose a second, fixed brow.
+    above each eye. The vector layer is what moves. The head no longer keeps
+    the painted stroke underneath.
     """
     import cv2  # noqa: PLC0415
 
+    from . import brow_draw  # noqa: PLC0415
+
     rgba = np.asarray(base.convert("RGBA")).copy()
-    mask = np.zeros(rgba.shape[:2], np.uint8)
-    for x0, y0, x1, y1 in eyes:
+    found: list[tuple[np.ndarray, str]] = []
+    for index, (x0, y0, x1, y1) in enumerate(eyes):
         w, h = max(1, x1 - x0), max(1, y1 - y0)
         rx0, rx1 = max(0, x0 - w // 5), min(base.width, x1 + w // 5)
         ry0, ry1 = max(0, y0 - int(h * 0.55)), max(0, y0 - 2)
@@ -709,19 +711,15 @@ def _eyebrows(base: Image.Image, eyes: list[Box]) -> tuple[Image.Image, Image.Im
         best = max(candidates, key=lambda i: stats[i, cv2.CC_STAT_AREA] * stats[i, cv2.CC_STAT_WIDTH])
         chosen = (lab == best).astype(np.uint8)
         chosen = cv2.dilate(chosen, np.ones((3, 3), np.uint8))
-        mask[ry0:ry1, rx0:rx1] = np.maximum(mask[ry0:ry1, rx0:rx1], chosen * 255)
+        component = np.zeros(rgba.shape[:2], np.uint8)
+        component[ry0:ry1, rx0:rx1] = chosen * 255
+        found.append((component > 0, "left" if index == 0 else "right"))
 
-    soft = cv2.GaussianBlur(mask, (0, 0), 0.8)
-    layer_arr = rgba.copy()
-    layer_arr[..., 3] = np.minimum(layer_arr[..., 3], soft)
-    layer = Image.fromarray(layer_arr)
-    clean_arr = rgba.copy()
-    hole = ((mask > 0) & (rgba[..., 3] > 128)).astype(np.uint8) * 255
-    if hole.any():
-        clean_arr[..., :3] = cv2.inpaint(
-            np.ascontiguousarray(clean_arr[..., :3]), hole, 3, cv2.INPAINT_TELEA
-        )
-    return layer, Image.fromarray(clean_arr)
+    empty = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    if not found:
+        return empty, base.convert("RGBA"), empty.copy(), empty.copy(), None
+    rebuilt = brow_draw.from_masks(base, found, "illustrated")
+    return rebuilt["brows"], rebuilt["head"], rebuilt["brow_left"], rebuilt["brow_right"], rebuilt["model"]
 
 
 def _sheet_lids(base: Image.Image, closed: Image.Image, eyes: list[Box]) -> Image.Image | None:
@@ -1054,6 +1052,11 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
         meta = parts["eyeRig"]
         view["eyeRig"] = {"maxShift": meta["maxShift"],
                           "irises": [[W - c[0] if mirror else c[0], c[1], c[2]] for c in meta["irises"]]}
+    if parts.get("browModel"):
+        from . import brow_draw  # noqa: PLC0415
+
+        model = parts["browModel"]
+        view["browModel"] = brow_draw.mirror_model(model, W) if mirror else json.loads(json.dumps(model))
     # Same geometry with file names instead of URLs, for the server renderer.
     local = json.loads(json.dumps(view))
     for layer in local["layers"]:
@@ -1464,7 +1467,7 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
             eye["eyes_half"] = _half_from_closed(eyes_closed, raw_eye_boxes, ink)
         else:
             eye["eyes_half"] = _sheet_lids(base, parts_from_sheet["eyes"]["eyes_half"], eyes_boxes) or eye["eyes_half"]
-    brows, clean = _eyebrows(clean, raw_eye_boxes)
+    brows, clean, brow_left, brow_right, brow_model = _eyebrows(clean, raw_eye_boxes)
     chin = max(face[3], mouth[3]) + int((face[3] - face[1]) * 0.04)
     torso, neck, head = _slice_bust(clean, face, chin)
     parts = {
@@ -1479,6 +1482,9 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         "eye_socket": _crop_layer(eye["eye_socket"]),
         "eyes_half": _crop_layer(eye["eyes_half"]),
         "brows": _crop_layer(brows),
+        **({"brow_left": _crop_layer(brow_left)} if brow_left.getchannel("A").getbbox() else {}),
+        **({"brow_right": _crop_layer(brow_right)} if brow_right.getchannel("A").getbbox() else {}),
+        **({"browModel": brow_model} if brow_model else {}),
         "eyeRig": eye["meta"],
         "visemes": placed,
         "expressions": expressions,

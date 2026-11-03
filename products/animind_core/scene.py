@@ -277,6 +277,8 @@ class RigView:
     seated_eyes: tuple = ()  # (lid box, iris xy) in rig pixels, for the 4px lid check
     human_eyes: dict | None = None
     human_mouth: bool = False
+    brow_model: dict | None = None
+    px_scale: float = 1.0
 
 
 def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None) -> RigView:
@@ -303,6 +305,8 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
         )
     rv.human_eyes = view.get("humanEyes")
     rv.human_mouth = (view.get("mouthQA") or {}).get("mouths") == "human"
+    rv.brow_model = view.get("browModel")
+    rv.px_scale = scale
     if view.get("eyeRig"):
         mx, my = view["eyeRig"]["maxShift"]
         rv.eye_shift = (mx * scale, my * scale)
@@ -782,7 +786,9 @@ class Scene:
         hx = round((math.sin(t * 0.63 + seed * 2.1) * 0.9 + math.sin(t * 1.37 + seed) * 0.4) * SS)
         hy = round(amp * 1.5 * SS)
         emotion, blend = self._emotion(idx, t)
-        brow_pose = tuple(v * blend for v in EMO_BROW_POSE.get(emotion, EMO_BROW_POSE["neutro"]))
+        from . import brow_draw  # noqa: PLC0415
+
+        brow_pose = tuple(v * blend for v in EMO_BROW_POSE.get(brow_draw.pose_key(emotion), EMO_BROW_POSE["neutro"]))
         arm_pose = tuple(v * blend for v in EMO_ARM_ROT.get(emotion, (0.0, 0.0)))
         brow = self._brow(idx, t) * SS  # legacy rigs keep their single combined brow layer
         face_row: dict[str, Any] = {"char": idx, "blink": lids, "emotion": emotion,
@@ -842,10 +848,13 @@ class Scene:
                                     "box": _qa_box((ox + bx[0], oy + bx[1], ox + bx[2], oy + bx[3]))})
         names = {p[0] for p in parts}
         brow_box: list[int] | None = None
+        vector_brows = brow_draw.render_state(rv.brow_model, emotion, blend) if rv.brow_model and {"brow_left", "brow_right"} & names else None
         movable = {"eye_white", "iris", "eye_socket"} <= names
         socket = next((p for p in parts if p[0] == "eye_socket"), None)
         for name, img, (lx, ly), _z in sorted(parts, key=lambda p: p[3]):
             if name == "eye_socket" or (movable and name == "eyes"):
+                continue
+            if name == "brows" and {"brow_left", "brow_right"} & names:
                 continue
             if (name == "eyes" and lids == "closed") or (name == "eyes_closed" and lids != "closed") \
                     or (name == "eyes_half" and lids != "half"):
@@ -861,13 +870,28 @@ class Scene:
             if name == "iris" and socket is not None:
                 img, (lx, ly) = self._iris(img, (lx, ly), socket, rv.eye_shift, gx, gy)
             if name in {"brow_left", "brow_right"}:
-                from . import human_eyes as human_mod  # noqa: PLC0415
-                side = 0 if name == "brow_left" else 1
-                info = rv.human_eyes or {}
-                img, (lx, ly) = human_mod.pose_brow(
-                    img, (lx, ly), brow_pose[side] * SS, brow_pose[2 + side],
-                    info.get("browHeight") or max(8, img.height), info.get("forehead"),
-                )
+                side_name = "left" if name == "brow_left" else "right"
+                drawn = vector_brows.get(side_name) if vector_brows else None
+                if drawn is not None:
+                    sprite, origin = drawn
+                    scale = rv.px_scale or 1.0
+                    img = sprite.resize(
+                        (max(1, round(sprite.width * scale)), max(1, round(sprite.height * scale))),
+                        Image.Resampling.LANCZOS,
+                    )
+                    lx, ly = round(origin[0] * scale), round(origin[1] * scale)
+                    info = rv.human_eyes or {}
+                    forehead = info.get("forehead")
+                    if forehead:
+                        lx, ly = brow_draw.clamp_origin((lx, ly), img.size, [float(v) * scale for v in forehead])
+                else:
+                    from . import human_eyes as human_mod  # noqa: PLC0415
+                    side = 0 if name == "brow_left" else 1
+                    info = rv.human_eyes or {}
+                    img, (lx, ly) = human_mod.pose_brow(
+                        img, (lx, ly), brow_pose[side] * SS, brow_pose[2 + side],
+                        info.get("browHeight") or max(8, img.height), info.get("forehead"),
+                    )
                 box = [lx, ly, lx + img.width, ly + img.height]
                 brow_box = box if brow_box is None else [
                     min(brow_box[0], box[0]), min(brow_box[1], box[1]),

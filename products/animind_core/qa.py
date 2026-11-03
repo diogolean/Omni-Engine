@@ -671,6 +671,13 @@ def visemes_share_one_scale(view: dict) -> bool:
     return all(m["x"] == first["x"] and m["y"] == first["y"] and m["w"] == first["w"] and m["h"] == first["h"] for m in mouths)
 
 
+def brow_arch(left: Image.Image | None, right: Image.Image | None = None) -> str:
+    """``v`` when the inner tips sit lower than the outer tips, ``inverse`` when they sit higher."""
+    from . import brow_draw  # noqa: PLC0415
+
+    return brow_draw.classify(left, right)
+
+
 def brow_still_in_head(head: Image.Image, brow: Image.Image, brow_xy: tuple[int, int], head_xy: tuple[int, int]) -> bool:
     """The inpainted head should not still carry the dark brow under the cut layer."""
     brow_a = np.asarray(brow.getchannel("A")) > 160

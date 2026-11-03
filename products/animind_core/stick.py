@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from PIL import Image, ImageDraw
 
-from . import mouthset
+from . import brow_draw, mouthset
 
 VISEMES = "XABCDEFGH"
 CANVAS = (640, 800)
@@ -171,20 +171,13 @@ def _parts(
                       fill=(126, 112, 104, 190), width=1*k)
         return _vector(paint)
 
-    def brow(left: bool) -> Image.Image:
-        x0, x1 = ((248, 304) if left else (336, 392))
-        def paint(d: ImageDraw.ImageDraw) -> None:
-            tone = (68, 61, 58, 220)
-            if brow_style == "blade":
-                points = ((x0*k, 176*k), (x1*k, 170*k), ((x1-2)*k, 176*k), ((x0+4)*k, 181*k))
-            elif brow_style == "soft":
-                points = ((x0*k, 178*k), ((x0+24)*k, 169*k), (x1*k, 176*k),
-                          ((x1-3)*k, 181*k), ((x0+25)*k, 175*k), ((x0+3)*k, 183*k))
-            else:
-                points = ((x0*k, 180*k), ((x0+27)*k, 166*k), (x1*k, 177*k),
-                          ((x1-2)*k, 182*k), ((x0+28)*k, 173*k), ((x0+4)*k, 185*k))
-            d.polygon(points, fill=tone)
-        return _vector(paint)
+    left_stroke, right_stroke = brow_draw.stick_strokes(brow_style, width=CANVAS[0])
+
+    def _brow_layer(stroke: brow_draw.Stroke, pose: brow_draw.Pose) -> tuple[Image.Image, tuple[int, int]]:
+        sprite, origin = brow_draw.draw(stroke, pose, "stick")
+        full = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+        brow_draw.paste(full, sprite, origin)
+        return _crop(full)
 
     def draw_accessory(d: ImageDraw.ImageDraw) -> None:
         if accessory == "glasses":
@@ -215,7 +208,12 @@ def _parts(
         "head": _crop(head),
         "eye_white": _crop(eye_white), "iris": _crop(iris), "eye_socket": _crop(socket),
         "eyes_half": _crop(lids("half")), "eyes_closed": _crop(lids("closed")),
-        "brow_left": _crop(brow(True)), "brow_right": _crop(brow(False)),
+        "brow_left": _brow_layer(left_stroke, brow_draw.poses("neutral")[0]),
+        "brow_right": _brow_layer(right_stroke, brow_draw.poses("neutral")[1]),
+        "browModel": {
+            "style": "stick",
+            "strokes": {"left": left_stroke.to_dict(), "right": right_stroke.to_dict()},
+        },
         "accessory": _crop(_vector(draw_accessory)),
         "mouths": mouths,
         "expressions": expressions,
@@ -264,6 +262,9 @@ def _write_view(
         "eyeRig": {"maxShift": [10, 6], "irises": [[278, 213, 12], [364, 213, 12]]},
         "procedural": True,
     }
+    if parts.get("browModel"):
+        model = parts["browModel"]
+        view["browModel"] = brow_draw.mirror_model(model, CANVAS[0]) if mirror else model
     local = json.loads(json.dumps(view))
     for layer in local["layers"]:
         layer["url"] = f"{layer['name']}.png"

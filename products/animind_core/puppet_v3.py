@@ -527,6 +527,7 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     human_dir = skin / "human_eyes"
     human_meta = None
     brow_left = brow_right = None
+    seated_brow = None
     if (human_dir / "geometry.json").is_file():
         def baked(name: str) -> Image.Image:
             return _bake(_open(human_dir / f"{name}.png"), scale, offset, canvas)
@@ -539,7 +540,12 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         brow_left = baked("brow_left")
         brow_right = baked("brow_right")
         head = _bake(_open(human_dir / "head.png"), scale, offset, canvas)
-        human_meta = _seat_human(json.loads((human_dir / "geometry.json").read_text(encoding="utf-8"))["qa"], scale, offset, sockets)
+        human_doc = json.loads((human_dir / "geometry.json").read_text(encoding="utf-8"))
+        human_meta = _seat_human(human_doc["qa"], scale, offset, sockets)
+        if human_doc.get("browModel"):
+            from . import brow_draw  # noqa: PLC0415
+
+            seated_brow = brow_draw.transform_model(human_doc["browModel"], scale, offset)
     else:
         whites = Image.new("RGBA", canvas, (0, 0, 0, 0))
         irises = Image.new("RGBA", canvas, (0, 0, 0, 0))
@@ -624,6 +630,7 @@ def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
             "anchor": left_anchor.to_dict(),
         },
         **({"humanEyes": human_meta} if human_meta else {}),
+        **({"browModel": seated_brow} if seated_brow else {}),
     }
     boxes = {
         "face": list(face),

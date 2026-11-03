@@ -4,8 +4,8 @@ Aiwake's puppets are robots: a slit optic and a drawn shutter. A person needs
 the eye that was actually painted. FaceLandmarker supplies the lid and brow
 contours. The blink is skin sampled from just above that lid, so it closes
 on the drawn line instead of a grey box. Gaze slides the iris inside the
-sclera mask. Brows are cut off the plate and posed with the same emotion as
-the mouth.
+sclera mask. Brows are measured, inpainted off the head, and redrawn as a
+vector stroke so an emotion can arch them.
 """
 from __future__ import annotations
 
@@ -13,11 +13,10 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from . import eyes, settings
+from . import brow_draw, eyes, settings
 
 # Script emotions and the English names used on the still sheet.
 EMOTIONS = ("neutral", "angry", "sad", "surprised", "sceptical", "thinking")
@@ -219,35 +218,6 @@ def _mask_rgba(mask: Image.Image) -> Image.Image:
     return image
 
 
-def brow_mask(size: tuple[int, int], polygon: Sequence[tuple[int, int]]) -> Image.Image:
-    """Soft alpha around the landmark brow. The hard core is what gets inpainted."""
-    mask = Image.new("L", size, 0)
-    if len(polygon) < 2:
-        return mask
-    draw = ImageDraw.Draw(mask)
-    width = max(4, int(max(p[0] for p in polygon) - min(p[0] for p in polygon)) // 8)
-    draw.line(list(polygon), fill=255, width=width)
-    if len(polygon) >= 3:
-        draw.polygon(list(polygon), fill=255)
-    blurred = mask.filter(__import__("PIL.ImageFilter", fromlist=["GaussianBlur"]).GaussianBlur(1.2))
-    return blurred
-
-
-def cut_brow(plate: Image.Image, polygon: Sequence[tuple[int, int]]) -> tuple[Image.Image, Image.Image]:
-    """Lift the brow once. The plate hole is skin, so a posed copy is not a second brow."""
-    size = plate.size
-    soft = brow_mask(size, polygon)
-    brow = plate.convert("RGBA")
-    brow.putalpha(soft)
-    hole = (np.asarray(soft) > 40).astype(np.uint8) * 255
-    hole = cv2.dilate(hole, np.ones((5, 5), np.uint8))
-    rgb = np.ascontiguousarray(np.asarray(plate.convert("RGB")))
-    painted = cv2.inpaint(rgb, hole, 5, cv2.INPAINT_TELEA) if int(hole.sum()) else rgb
-    filled = plate.convert("RGBA").copy()
-    filled.paste(Image.fromarray(painted), (0, 0))
-    return brow, filled
-
-
 def pose_brow(
     sprite: Image.Image,
     xy: tuple[int, int],
@@ -345,15 +315,10 @@ def build(plate: Image.Image, marks: Any | None = None, *, eyes_geom: list[dict[
         half.alpha_composite(one["half"])
         closed.alpha_composite(one["closed"])
     head = plate.convert("RGBA")
-    brow_layers = []
-    for poly in brows:
-        layer, head = cut_brow(head, poly)
-        brow_layers.append(layer)
-    while len(brow_layers) < 2:
-        brow_layers.append(Image.new("RGBA", size, (0, 0, 0, 0)))
-    combined = Image.new("RGBA", size, (0, 0, 0, 0))
-    for layer in brow_layers:
-        combined.alpha_composite(layer)
+    rebuilt = brow_draw.from_masks(head, brow_draw.masks_from_polygons(size, brows), "illustrated")
+    head = rebuilt["head"]
+    brow_layers = [rebuilt["brow_left"], rebuilt["brow_right"]]
+    combined = rebuilt["brows"]
     painted = {}
     for state, amount in _BLINK_AMOUNT.items():
         # Emotion squint is a separate pose; the blink states are the sheet columns.
@@ -393,6 +358,7 @@ def build(plate: Image.Image, marks: Any | None = None, *, eyes_geom: list[dict[
             name: {"brow": list(BROW_POSE[name]), "lid": LID_AMOUNT[name], "mouth": MOUTH[name], "script": SCRIPT_EMOTION[name]}
             for name in EMOTIONS
         },
+        "browModel": rebuilt["model"],
     }
 
 
@@ -417,7 +383,10 @@ def save(skin: Path, built: dict[str, Any]) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     for name in ("head", "eye_white", "iris", "eye_socket", "eyes_half", "eyes_closed", "brows", "brow_left", "brow_right"):
         built[name].save(dest / f"{name}.png")
-    (dest / "geometry.json").write_text(json.dumps({"qa": built["qa"], "emotions": built["emotions"]}, indent=2), encoding="utf-8")
+    payload = {"qa": built["qa"], "emotions": built["emotions"]}
+    if built.get("browModel"):
+        payload["browModel"] = built["browModel"]
+    (dest / "geometry.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def load(skin: Path) -> dict[str, Any] | None:
@@ -511,12 +480,20 @@ def render_still_sheet(skin: Path, dest: Path | None = None) -> Path:
             if lid is not None:
                 cell.alpha_composite(lid)
             info = built.get("qa") or {}
-            for layer, dy, angle in (
-                (layers["brow_left"], pose[0], pose[2]),
-                (layers["brow_right"], pose[1], pose[3]),
-            ):
-                turned, origin = pose_brow(layer, (0, 0), dy, angle, info.get("browHeight") or 12, info.get("forehead"))
-                cell.alpha_composite(turned, origin)
+            drawn = brow_draw.render_state(built["browModel"], name, 1.0) if built.get("browModel") else {}
+            if drawn:
+                for side in ("left", "right"):
+                    if side not in drawn:
+                        continue
+                    sprite, origin = drawn[side]
+                    cell.alpha_composite(sprite, origin)
+            else:
+                for layer, dy, angle in (
+                    (layers["brow_left"], pose[0], pose[2]),
+                    (layers["brow_right"], pose[1], pose[3]),
+                ):
+                    turned, origin = pose_brow(layer, (0, 0), dy, angle, info.get("browHeight") or 12, info.get("forehead"))
+                    cell.alpha_composite(turned, origin)
             thumb = cell.convert("RGB")
             thumb.thumbnail((cell_w - 8, cell_h - 36))
             x = col * cell_w + (cell_w - thumb.width) // 2

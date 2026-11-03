@@ -55,14 +55,22 @@ def compose(
     """Full character at canvas size (``view`` from :func:`rig.load_view`)."""
     W, H = view["canvas"]["w"], view["canvas"]["h"]
     out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    from . import brow_draw  # noqa: PLC0415
+
     layers = {l["name"]: l for l in view["layers"]}
-    movable = {"eye_white", "iris", "eye_socket"} <= set(layers)
+    names = set(layers)
+    movable = {"eye_white", "iris", "eye_socket"} <= names
+    vector_brows = None
+    if view.get("browModel") and {"brow_left", "brow_right"} & names:
+        vector_brows = brow_draw.render_state(view["browModel"], expression or "neutral", 1.0)
     mx, my = (view.get("eyeRig") or {}).get("maxShift", (0, 0))
     mouth = (view.get("expressions") or {}).get(expression or "") or view["visemes"].get(vis) or view["visemes"]["X"]
     parts = sorted(view["layers"], key=lambda l: l["z"]) + [mouth]
     for l in sorted(parts, key=lambda l: l["z"]):
         name = l["name"]
         if name == "eye_socket" or (movable and name == "eyes"):
+            continue
+        if name == "brows" and {"brow_left", "brow_right"} & names:
             continue
         if (name == "eyes" and lids == "closed") or (name == "eyes_closed" and lids != "closed") or (name == "eyes_half" and lids != "half"):
             continue
@@ -74,15 +82,20 @@ def compose(
             # The viseme file must not bring its own scale. The rig box is shared.
             img = img.resize(stored, Image.Resampling.LANCZOS)
         if name in {"brow_left", "brow_right", "brows"}:
-            from . import human_eyes as human_mod  # noqa: PLC0415
-            side = 0 if name == "brow_left" else 1
-            if name == "brows":
-                dy = (brow_pose[0] + brow_pose[1]) / 2
-                angle = (brow_pose[2] + brow_pose[3]) / 2
+            side_name = "left" if name == "brow_left" else "right"
+            drawn = vector_brows.get(side_name) if vector_brows and name != "brows" else None
+            if drawn is not None:
+                img, xy = drawn
             else:
-                dy, angle = brow_pose[side], brow_pose[2 + side]
-            info = view.get("humanEyes") or {}
-            img, xy = human_mod.pose_brow(img, xy, dy, angle, info.get("browHeight") or max(8, l["h"]), info.get("forehead"))
+                from . import human_eyes as human_mod  # noqa: PLC0415
+                side = 0 if name == "brow_left" else 1
+                if name == "brows":
+                    dy = (brow_pose[0] + brow_pose[1]) / 2
+                    angle = (brow_pose[2] + brow_pose[3]) / 2
+                else:
+                    dy, angle = brow_pose[side], brow_pose[2 + side]
+                info = view.get("humanEyes") or {}
+                img, xy = human_mod.pose_brow(img, xy, dy, angle, info.get("browHeight") or max(8, l["h"]), info.get("forehead"))
         if name == "iris" and movable:
             s = layers["eye_socket"]
             with Image.open(s["url"]) as im:
