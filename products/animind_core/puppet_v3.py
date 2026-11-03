@@ -408,15 +408,17 @@ def saved_front_ok(skin: Path) -> bool:
     return frontal_anchor(_read_json(skin / "rig_front.json"))
 
 
-def _front_relative(raw: str) -> str | None:
-    """File name under ``views/front``, stripped of a dead ``_front_stage`` prefix."""
+def _view_relative(raw: str, view_name: str) -> str | None:
+    """File name under ``views/<view_name>``, stripped of a dead stage prefix."""
     text = str(raw or "").replace("\\", "/").strip()
     if not text:
         return None
-    if "/views/front/" in text:
-        text = text.split("/views/front/", 1)[1]
-    elif text.startswith("views/front/"):
-        text = text[len("views/front/"):]
+    marker = f"/views/{view_name}/"
+    prefix = f"views/{view_name}/"
+    if marker in text:
+        text = text.split(marker, 1)[1]
+    elif text.startswith(prefix):
+        text = text[len(prefix):]
     text = text.split("?", 1)[0].split("#", 1)[0].lstrip("./")
     if not text or text.startswith("/"):
         return None
@@ -438,18 +440,18 @@ def _each_layer(doc: dict[str, Any]):
                     yield layer
 
 
-def _retarget_front_urls(doc: dict[str, Any], folder: Path, url: Callable[[Path], str] | None) -> bool:
+def _retarget_view_urls(doc: dict[str, Any], folder: Path, url: Callable[[Path], str] | None) -> bool:
     """Point layer URLs at files that live in ``folder``.
 
     On disk (``url is None``) they stay relative, which is what the renderer
-    joins onto ``views/front``. The returned view uses ``url(file)``.
+    joins onto the view directory. The returned view uses ``url(file)``.
     """
     changed = False
     for layer in _each_layer(doc):
         raw = layer.get("url")
         if not isinstance(raw, str):
             continue
-        rel = _front_relative(raw)
+        rel = _view_relative(raw, folder.name)
         if rel is None and "_front_stage" in raw:
             rel = Path(raw.replace("\\", "/")).name
         if rel is None:
@@ -464,21 +466,47 @@ def _retarget_front_urls(doc: dict[str, Any], folder: Path, url: Callable[[Path]
     return changed
 
 
-def publish_front(folder: Path, url: Callable[[Path], str]) -> dict[str, Any] | None:
+def saved_view_ready(folder: Path) -> bool:
+    """``view.json`` names layer files that already sit in ``folder``."""
+    doc = _read_json(folder / "view.json")
+    if not doc:
+        return False
+    layers = doc.get("layers")
+    if not isinstance(layers, list) or not layers:
+        return False
+    for layer in _each_layer(doc):
+        raw = layer.get("url")
+        if not isinstance(raw, str):
+            return False
+        rel = _view_relative(raw, folder.name)
+        path = folder / rel if rel else None
+        if path is None or not path.is_file() or path.stat().st_size <= 0:
+            return False
+    return True
+
+
+def publish_view(folder: Path, url: Callable[[Path], str]) -> dict[str, Any] | None:
     """``view.json`` with ``url`` applied to the files now in ``folder``.
 
     The file on disk keeps relative names (``head.png``). The returned view
-    points those files through ``url``, so a copied stage path becomes
-    ``views/front`` and ``_front_stage`` is gone.
+    points those files through ``url``, so a copied stage path becomes the
+    view directory and ``_front_stage`` is gone.
     """
     doc = _read_json(folder / "view.json")
     if doc is None:
         return None
-    if _retarget_front_urls(doc, folder, None):
+    if _retarget_view_urls(doc, folder, None):
         (folder / "view.json").write_text(json.dumps(doc, indent=2), encoding="utf-8")
     published = json.loads(json.dumps(doc))
-    _retarget_front_urls(published, folder, url)
+    _retarget_view_urls(published, folder, url)
     return published
+
+
+def publish_front(folder: Path, url: Callable[[Path], str]) -> dict[str, Any] | None:
+    """``views/front`` with ``url`` applied. Disk keeps ``head.png``; the
+    returned view points at ``views/front`` and drops ``_front_stage``.
+    """
+    return publish_view(folder, url)
 
 
 def adapt(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:

@@ -854,13 +854,18 @@ def _front_anchor_ok(skin: Path) -> bool:
     return puppet_v3.frontal_anchor(doc)
 
 
-def _front_plate_current(skin: Path, plate: Path) -> bool:
-    """The seated front was written at or after the cached plate. Stat only."""
-    view = skin / "views" / "front" / "view.json"
+def _view_plate_current(folder: Path, plate: Path) -> bool:
+    """The saved view was written at or after the plate. Stat only."""
+    view = folder / "view.json"
     try:
         return view.stat().st_mtime_ns >= plate.stat().st_mtime_ns
     except OSError:
         return False
+
+
+def _front_plate_current(skin: Path, plate: Path) -> bool:
+    """The seated front was written at or after the cached plate. Stat only."""
+    return _view_plate_current(skin / "views" / "front", plate)
 
 
 def install_cached_front(
@@ -1064,6 +1069,38 @@ def _reject_avatar_faults(skin: Path, views: dict[str, Any]) -> None:
         raise RuntimeError("human avatar failed QA: " + "; ".join(faults))
 
 
+def _saved_sides_current(skin: Path, plate: Path) -> bool:
+    """Left, and right when that folder exists, already match this plate.
+
+    The cut is the same stat check as ``_front_plate_current``. A mirror's
+    ``anchor.view`` stays ``left``, so the folder name is not the test.
+    Without ``rig.json`` the seated boxes are gone and the side is cut again.
+    """
+    rig_doc = skin / "rig.json"
+    if not rig_doc.is_file() or rig_doc.stat().st_size <= 0:
+        return False
+    left = skin / "views" / "left"
+    if not _view_plate_current(left, plate) or not puppet_v3.saved_view_ready(left):
+        return False
+    right = skin / "views" / "right"
+    if not right.exists():
+        return True
+    return _view_plate_current(right, plate) and puppet_v3.saved_view_ready(right)
+
+
+def _publish_saved_sides(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
+    """Republish left and right. Layer files stay where they are."""
+    views: dict[str, Any] = {}
+    for name in ("left", "right"):
+        folder = skin / "views" / name
+        if not (folder / "view.json").is_file():
+            continue
+        published = puppet_v3.publish_view(folder, url)
+        if published is not None:
+            views[name] = published
+    return views
+
+
 def rerig_from_plate(
     skin: Path,
     *,
@@ -1074,37 +1111,50 @@ def rerig_from_plate(
     edit: bool = True,
     budget: image_models.RunBudget | None = None,
 ) -> dict[str, Any]:
-    """Cut the saved plate again. Gemini runs only to blank a painted mouth."""
-    from animation.parametric.factory.landmark_detector import detect_landmarks  # noqa: PLC0415
-    from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
+    """Cut the saved plate again. Gemini runs only to blank a painted mouth.
 
+    ``--no-edit`` republishes left and right when those views are already
+    on disk and the plate is not newer. That path does not call
+    ``create_puppet``. A newer plate, or a side view that is missing or
+    incomplete, is cut as before. ``_ensure_front`` still keeps a frontal
+    slot that already passes.
+    """
     plate = cached_plate(skin)
     if plate is None:
         raise FileNotFoundError(f"no cached plate in {skin}; nothing to re-rig without an image call")
-    fixed = _prepare_plate(Image.open(plate).convert("RGBA"))
-    fixed_path = skin / "_plate.png"
-    fixed.save(fixed_path)
-    marks = detect_landmarks(fixed, require_human_face=True)
     cost = 0.0
-    if edit and _plate_has_lips(fixed, marks):
-        budget = budget or image_models.run_budget()
-        fixed, cost = _edit_painted_lips(fixed, fixed_path, budget, 0.0, skin)
+    views: dict[str, Any] | None = None
+    if not edit and _saved_sides_current(skin, plate):
+        views = _publish_saved_sides(skin, url)
+        if "left" not in views:
+            views = None
+    if views is None:
+        from animation.parametric.factory.landmark_detector import detect_landmarks  # noqa: PLC0415
+        from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
+
+        fixed = _prepare_plate(Image.open(plate).convert("RGBA"))
+        fixed_path = skin / "_plate.png"
+        fixed.save(fixed_path)
         marks = detect_landmarks(fixed, require_human_face=True)
-        if _plate_has_lips(fixed, marks):
-            raise RuntimeError("mouth still drawn under the moustache after one edit")
-    prompt = puppet_v3.avatar_prompt(description, stick=False, facing="left")
-    create_puppet(
-        character_id=character_id,
-        prompt=prompt,
-        facing="left",
-        image_path=fixed_path,
-        puppets_dir=skin.parent,
-        rerig=(skin / "puppet.json").is_file(),
-        require_human_face=True,
-    )
-    _clean_cutouts(skin)
-    _install_human_eyes(skin)
-    views = puppet_v3.adapt(skin, url)
+        if edit and _plate_has_lips(fixed, marks):
+            budget = budget or image_models.run_budget()
+            fixed, cost = _edit_painted_lips(fixed, fixed_path, budget, 0.0, skin)
+            marks = detect_landmarks(fixed, require_human_face=True)
+            if _plate_has_lips(fixed, marks):
+                raise RuntimeError("mouth still drawn under the moustache after one edit")
+        prompt = puppet_v3.avatar_prompt(description, stick=False, facing="left")
+        create_puppet(
+            character_id=character_id,
+            prompt=prompt,
+            facing="left",
+            image_path=fixed_path,
+            puppets_dir=skin.parent,
+            rerig=(skin / "puppet.json").is_file(),
+            require_human_face=True,
+        )
+        _clean_cutouts(skin)
+        _install_human_eyes(skin)
+        views = puppet_v3.adapt(skin, url)
     placed = _placed_features(skin)
     if not placed["pass"]:
         raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")

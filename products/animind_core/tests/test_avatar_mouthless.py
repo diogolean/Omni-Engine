@@ -599,6 +599,215 @@ def test_ensure_front_keeps_a_valid_front_and_does_not_create_puppet(tmp_path, m
     assert (front / "kept.txt").read_text(encoding="utf-8") == "stay"
 
 
+def _seat_side(skin: Path, name: str, *, anchor_view: str) -> Path:
+    """A side view with its layer files. The mirror keeps ``anchor.view`` of left."""
+    folder = skin / "views" / name
+    (folder / "mouths").mkdir(parents=True)
+    Image.new("RGBA", (8, 8), (20, 40, 240, 255)).save(folder / "head.png")
+    Image.new("RGBA", (4, 4), (180, 70, 74, 255)).save(folder / "mouths" / "X.png")
+    (folder / "kept.txt").write_text(name, encoding="utf-8")
+    face = [40, 20, 240, 260]
+    doc = {
+        "canvas": {"w": 280, "h": 360},
+        "layers": [{"name": "head", "url": "head.png", "x": 0, "y": 0, "w": 8, "h": 8, "z": 2}],
+        "visemes": {
+            "X": {"name": "mouth_X", "url": "mouths/X.png", "x": 110, "y": 160, "w": 4, "h": 4, "z": 10},
+        },
+        "expressions": {},
+        "mouthQA": {
+            "mouths": "human",
+            "face": face,
+            "mouth": [110, 160, 160, 190],
+            "anchor": {
+                "x": 130, "y": 175, "view": anchor_view, "along": 0.7,
+                "nose": [140, 120], "chin": [140, 240],
+            },
+        },
+    }
+    (folder / "view.json").write_text(json.dumps(doc), encoding="utf-8")
+    return folder
+
+
+def _seat_cached_sides(root: Path) -> Path:
+    """Lateral plate older than left and right, plus a different frontal slot."""
+    skin = root / "albert_einstein"
+    skin.mkdir(parents=True)
+    _head(mouth=False).save(skin / "source_mouthless.png")
+    front_plate = _head(mouth=False)
+    ImageDraw.Draw(front_plate).rectangle((0, 0, 12, 12), fill=(20, 220, 40, 255))
+    front_plate.save(skin / "source_front.png")
+    face = [40, 20, 200, 250]
+    _seat_front(skin, view="front", mouth_x=(face[0] + face[2]) / 2)
+    _seat_side(skin, "left", anchor_view="left")
+    _seat_side(skin, "right", anchor_view="left")
+    (skin / "rig.json").write_text(json.dumps({
+        "boxes": {
+            "face": [40, 20, 240, 260],
+            "left_eye": [70, 60, 110, 100],
+            "right_eye": [150, 60, 190, 100],
+            "mouth": [110, 160, 160, 190],
+        },
+        "irises": [[90, 80], [170, 80]],
+    }), encoding="utf-8")
+    newest = max(
+        (skin / "views" / name / "view.json").stat().st_mtime_ns
+        for name in ("left", "right")
+    )
+    os.utime(skin / "source_mouthless.png", ns=(newest - 1_000_000_000, newest - 1_000_000_000))
+    return skin
+
+
+def _drop_image_keys(monkeypatch) -> None:
+    for key in (
+        "GEMINI_API_KEY", "GOOGLE_API_KEY", "TOGETHER_API_KEY",
+        "OPENROUTER_API_KEY", "ANIMIND_IMAGE_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_rerig_no_edit_keeps_current_side_views_and_does_not_create_puppet(tmp_path, monkeypatch):
+    """A plate that is not newer than left and right is republished, not cut again."""
+    calls = {"n": 0}
+
+    def create_puppet(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("create_puppet must not run when the side views are current")
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.create_puppet",
+        create_puppet,
+    )
+    _drop_image_keys(monkeypatch)
+    skin = _seat_cached_sides(tmp_path)
+    left = skin / "views" / "left"
+    front = skin / "views" / "front"
+    left_head = (left / "head.png").read_bytes()
+    right_head = (skin / "views" / "right" / "head.png").read_bytes()
+    front_plate = (skin / "source_front.png").read_bytes()
+    left_view = (left / "view.json").read_text(encoding="utf-8")
+
+    def url(path: Path) -> str:
+        return "/v1/files/" + path.as_posix()
+
+    built = avatar.rerig_from_plate(
+        skin, description="Albert Einstein, bushy white moustache",
+        url=url, character_id="albert_einstein", name="Albert Einstein",
+        edit=False,
+    )
+    assert calls["n"] == 0
+    assert built["frontShot"] == "facing_front"
+    assert built["qa"]["costUsd"] == 0.0
+    assert (left / "kept.txt").read_text(encoding="utf-8") == "left"
+    assert (skin / "views" / "right" / "kept.txt").read_text(encoding="utf-8") == "right"
+    assert (front / "kept.txt").read_text(encoding="utf-8") == "stay"
+    assert (left / "head.png").read_bytes() == left_head
+    assert (skin / "views" / "right" / "head.png").read_bytes() == right_head
+    assert (skin / "source_front.png").read_bytes() == front_plate
+    assert (left / "view.json").read_text(encoding="utf-8") == left_view
+    saved_left = json.loads(left_view)
+    assert saved_left["mouthQA"]["anchor"]["view"] == "left"
+    saved_front = json.loads((front / "view.json").read_text(encoding="utf-8"))
+    anchor = saved_front["mouthQA"]["anchor"]
+    face = saved_front["mouthQA"]["face"]
+    width = max(1, face[2] - face[0])
+    centre = (face[0] + face[2]) / 2
+    assert anchor["view"] == "front"
+    assert abs((anchor["x"] - centre) / width) <= 0.01
+    assert "_front_stage" not in (front / "view.json").read_text(encoding="utf-8")
+    assert (skin / "character.json").is_file()
+    assert not (skin / "_front_stage").exists()
+    assert not (skin / "_plate.png").exists()
+
+
+def test_rerig_no_edit_cuts_the_side_once_when_the_plate_is_newer(tmp_path, monkeypatch):
+    """A plate newer than views/left is cut once. The frontal slot stays seated."""
+    patch_human_landmarks(monkeypatch)
+    _drop_image_keys(monkeypatch)
+    skin = _seat_cached_sides(tmp_path)
+    plate = skin / "source_mouthless.png"
+    newest = max(
+        (skin / "views" / name / "view.json").stat().st_mtime_ns
+        for name in ("left", "right", "front")
+    )
+    os.utime(plate, ns=(newest + 5_000_000_000, newest + 5_000_000_000))
+    calls = {"n": 0}
+    factory = __import__(
+        "products.aiwake.animator.factory.create_puppet",
+        fromlist=["create_puppet"],
+    )
+    real = factory.create_puppet
+
+    def create_puppet(**kwargs):
+        calls["n"] += 1
+        return real(**kwargs)
+
+    monkeypatch.setattr(factory, "create_puppet", create_puppet)
+
+    def generate(*_args, **_kwargs):
+        raise AssertionError("re-rig must not call the image model")
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
+
+    def url(path: Path) -> str:
+        return "/v1/files/" + path.as_posix()
+
+    built = avatar.rerig_from_plate(
+        skin, description="Albert Einstein, bushy white moustache",
+        url=url, character_id="albert_einstein", name="Albert Einstein",
+        edit=False,
+    )
+    assert calls["n"] == 1
+    assert built["qa"]["costUsd"] == 0.0
+    assert (skin / "views" / "front" / "kept.txt").read_text(encoding="utf-8") == "stay"
+    saved_front = json.loads((skin / "views" / "front" / "view.json").read_text(encoding="utf-8"))
+    anchor = saved_front["mouthQA"]["anchor"]
+    face = saved_front["mouthQA"]["face"]
+    width = max(1, face[2] - face[0])
+    centre = (face[0] + face[2]) / 2
+    assert anchor["view"] == "front"
+    assert abs((anchor["x"] - centre) / width) <= 0.01
+    left = json.loads((skin / "views" / "left" / "view.json").read_text(encoding="utf-8"))
+    assert left["mouthQA"]["anchor"]["view"] == "left"
+
+
+def test_rerig_no_edit_still_cuts_when_a_side_view_is_missing_or_incomplete(tmp_path, monkeypatch):
+    """No left view, or a right view with no layer file, still cuts the plate once."""
+    patch_human_landmarks(monkeypatch)
+    _drop_image_keys(monkeypatch)
+
+    def run(root: Path) -> int:
+        calls = {"n": 0}
+
+        def create_puppet(*_args, **_kwargs):
+            calls["n"] += 1
+            raise RuntimeError("side cut")
+
+        monkeypatch.setattr(
+            "products.aiwake.animator.factory.create_puppet.create_puppet",
+            create_puppet,
+        )
+        with pytest.raises(RuntimeError, match="side cut"):
+            avatar.rerig_from_plate(
+                root, description="Albert Einstein", url=lambda path: path.name,
+                character_id="albert_einstein", name="Albert Einstein", edit=False,
+            )
+        return calls["n"]
+
+    missing = tmp_path / "missing"
+    skin = missing / "albert_einstein"
+    skin.mkdir(parents=True)
+    _head(mouth=False).save(skin / "source_mouthless.png")
+    assert run(skin) == 1
+
+    broken = tmp_path / "broken"
+    skin = _seat_cached_sides(broken)
+    (skin / "views" / "right" / "head.png").unlink()
+    assert run(skin) == 1
+
+
 def test_ensure_front_still_rebuilds_a_three_quarter_plate_tagged_as_front(tmp_path, monkeypatch):
     calls = {"n": 0}
 
