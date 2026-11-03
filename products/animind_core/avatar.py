@@ -854,6 +854,15 @@ def _front_anchor_ok(skin: Path) -> bool:
     return puppet_v3.frontal_anchor(doc)
 
 
+def _front_plate_current(skin: Path, plate: Path) -> bool:
+    """The seated front was written at or after the cached plate. Stat only."""
+    view = skin / "views" / "front" / "view.json"
+    try:
+        return view.stat().st_mtime_ns >= plate.stat().st_mtime_ns
+    except OSError:
+        return False
+
+
 def install_cached_front(
     skin: Path,
     url: Callable[[Path], str],
@@ -866,14 +875,22 @@ def install_cached_front(
     three-quarter is not copied over, and a failed cut does not raise:
     the side rig has already succeeded. The stage directory is removed
     afterwards, so the returned URLs are read from ``views/front``.
+
+    A front that already passes the anchor check, and whose plate has
+    not been replaced since that view was written, is published as-is.
+    That path does not call ``create_puppet``.
     """
     import shutil  # noqa: PLC0415
-
-    from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
 
     plate = cached_front_plate(skin)
     if plate is None:
         return None
+    if _front_anchor_ok(skin) and _front_plate_current(skin, plate):
+        published = puppet_v3.publish_front(skin / "views" / "front", url)
+        if published is not None:
+            return published
+    from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
+
     stage_root = skin / "_front_stage"
     if stage_root.exists():
         shutil.rmtree(stage_root)
@@ -948,20 +965,27 @@ def _ensure_front(
 ) -> str:
     """Fill ``views/front`` from a cached frontal plate, or draw one on create.
 
-    Returns ``side`` when the three-quarter master was itself frontal,
+    A slot that already has a midline frontal anchor is published and
+    kept. That path does not call ``create_puppet``, even when
+    ``source_front.png`` is a different file from the side plate.
+    A three-quarter plate tagged as front does not pass the anchor
+    check and is still rebuilt or removed.
+
+    Returns ``kept`` when the frontal slot was already seated,
     ``cached`` or ``generated`` when a dedicated front plate was seated,
     and ``missing`` when the slot stays empty.
     """
+    if _front_anchor_ok(skin):
+        published = puppet_v3.publish_front(skin / "views" / "front", url)
+        if published is not None:
+            views["front"] = published
+        return "kept"
     plate = cached_front_plate(skin)
-    side = cached_plate(skin)
-    same = plate is not None and side is not None and plate.resolve() == side.resolve()
-    if plate is not None and not (same and _front_anchor_ok(skin)):
+    if plate is not None:
         installed = install_cached_front(skin, url, description=description)
         if installed is not None:
             views["front"] = installed
             return "cached"
-    if _front_anchor_ok(skin):
-        return "side"
     if generate and cached_front_plate(skin) is None:
         if _draw_facing_front(skin, description, budget, spent):
             installed = install_cached_front(skin, url, description=description)
@@ -1085,7 +1109,8 @@ def rerig_from_plate(
     if not placed["pass"]:
         raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
     _reject_avatar_faults(skin, views)
-    # Re-rig never draws a new plate. A source_front.png already in the skin is seated as-is.
+    # Re-rig never draws a new plate. A frontal views/front is kept.
+    # source_front.png is rigged only when that slot is missing or not frontal.
     origin = _ensure_front(
         skin, views, url, description=description,
         budget=budget or image_models.run_budget(), spent=cost, generate=False,

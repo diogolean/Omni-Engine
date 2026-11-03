@@ -510,6 +510,125 @@ def test_rerig_fills_front_from_source_front_and_leaves_the_three_quarter_on_the
     assert "_front_stage" not in json.dumps(built)
 
 
+def _three_quarter_master(root: Path) -> Path:
+    """Side plate and a different ``source_front.png``. That split used to force a second puppet."""
+    skin = root / "albert_einstein"
+    skin.mkdir()
+    Image.new("RGBA", (8, 8), (20, 40, 240, 255)).save(skin / "source_mouthless.png")
+    Image.new("RGBA", (8, 8), (20, 220, 40, 255)).save(skin / "source_front.png")
+    return skin
+
+
+def _seat_front(skin: Path, *, view: str, mouth_x: float, url: str = "head.png") -> Path:
+    front = skin / "views" / "front"
+    (front / "mouths").mkdir(parents=True)
+    Image.new("RGBA", (4, 4), (20, 220, 40, 255)).save(front / "head.png")
+    Image.new("RGBA", (2, 2), (150, 60, 64, 255)).save(front / "mouths" / "X.png")
+    (front / "kept.txt").write_text("stay", encoding="utf-8")
+    face = [40, 20, 200, 250]
+    doc = {
+        "canvas": {"w": 240, "h": 320},
+        "layers": [{"name": "head", "url": url, "x": 0, "y": 0, "w": 4, "h": 4, "z": 2}],
+        "visemes": {
+            "X": {"name": "mouth_X", "url": "mouths/X.png", "x": 90, "y": 170, "w": 2, "h": 2, "z": 10},
+        },
+        "expressions": {},
+        "mouthQA": {
+            "face": face,
+            "anchor": {
+                "x": mouth_x, "y": 180, "view": view, "along": 0.647,
+                "nose": [120, 140], "chin": [120, 240],
+            },
+        },
+    }
+    (front / "view.json").write_text(json.dumps(doc), encoding="utf-8")
+    return front
+
+
+def test_ensure_front_keeps_a_valid_front_and_does_not_create_puppet(tmp_path, monkeypatch):
+    """``--rerig --no-edit`` must not rig ``source_front.png`` again when the slot is already frontal."""
+    calls = {"n": 0}
+
+    def create_puppet(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("create_puppet must not run when views/front is already frontal")
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.create_puppet",
+        create_puppet,
+    )
+    for key in (
+        "GEMINI_API_KEY", "GOOGLE_API_KEY", "TOGETHER_API_KEY",
+        "OPENROUTER_API_KEY", "ANIMIND_IMAGE_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    skin = _three_quarter_master(tmp_path)
+    face = [40, 20, 200, 250]
+    centre = (face[0] + face[2]) / 2
+    front = _seat_front(
+        skin, view="front", mouth_x=centre,
+        url="/v1/files/albert_einstein/_front_stage/front/views/front/head.png",
+    )
+    views: dict = {}
+
+    def url(path: Path) -> str:
+        return "/v1/files/" + path.as_posix()
+
+    origin = avatar._ensure_front(
+        skin, views, url, description="Albert Einstein, bushy white moustache",
+        budget=image_models.RunBudget(0.0), spent=0.0, generate=False,
+    )
+    assert calls["n"] == 0
+    assert origin == "kept"
+    assert (front / "kept.txt").read_text(encoding="utf-8") == "stay"
+    saved = json.loads((front / "view.json").read_text(encoding="utf-8"))
+    anchor = saved["mouthQA"]["anchor"]
+    width = max(1, face[2] - face[0])
+    assert anchor["view"] == "front"
+    assert abs((anchor["x"] - centre) / width) <= 0.01
+    assert saved["layers"][0]["url"] == "head.png"
+    assert "_front_stage" not in (front / "view.json").read_text(encoding="utf-8")
+    assert views["front"]["layers"][0]["url"].endswith("views/front/head.png")
+    assert views["front"]["visemes"]["X"]["url"].endswith("views/front/mouths/X.png")
+    assert "_front_stage" not in json.dumps(views["front"])
+    assert not (skin / "_front_stage").exists()
+    again = avatar.install_cached_front(skin, url, description="Albert Einstein")
+    assert calls["n"] == 0
+    assert again is not None
+    assert again["layers"][0]["url"].endswith("views/front/head.png")
+    assert (front / "kept.txt").read_text(encoding="utf-8") == "stay"
+
+
+def test_ensure_front_still_rebuilds_a_three_quarter_plate_tagged_as_front(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def create_puppet(*_args, **_kwargs):
+        calls["n"] += 1
+        raise RuntimeError("staged front refused")
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.create_puppet",
+        create_puppet,
+    )
+    skin = _three_quarter_master(tmp_path)
+    face = [40, 20, 200, 250]
+    front = _seat_front(skin, view="left", mouth_x=face[0] + 8)
+    views = {"front": {"stale": True}}
+
+    def url(path: Path) -> str:
+        return "/v1/files/" + path.as_posix()
+
+    origin = avatar._ensure_front(
+        skin, views, url, description="Albert Einstein",
+        budget=image_models.RunBudget(0.0), spent=0.0, generate=False,
+    )
+    assert calls["n"] == 1
+    assert origin == "missing"
+    assert "front" not in views
+    assert not front.exists()
+    assert not (skin / "_front_stage").exists()
+
+
 def test_assemble_refuses_a_three_quarter_plate_in_the_front_slot(tmp_path):
     image = Image.new("RGBA", (200, 240), (0, 0, 0, 0))
     ImageDraw.Draw(image).ellipse((40, 20, 160, 180), fill=(232, 186, 156, 255))
