@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 try:
-    from .contracts import DebateTranscript, PostType, Utterance
+    from .contracts import DebateTranscript, PostType, SpeakerRole, Utterance
     from .media.audio import (
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -52,7 +52,7 @@ try:
         emit,
     )
 except ImportError:  # pragma: no cover — standalone extraction
-    from contracts import DebateTranscript, PostType, Utterance  # type: ignore[no-redef]
+    from contracts import DebateTranscript, PostType, SpeakerRole, Utterance  # type: ignore[no-redef]
     from media.audio import (  # type: ignore[no-redef]
         CLAUDE_CANONICAL_VOICE,
         DEEPSEEK_CANONICAL_VOICE,
@@ -241,10 +241,37 @@ class PipelineResult:
     qa_warnings: tuple[str, ...] = ()
     cost_estimate_usd: float | None = None
     cost_actual_usd: float | None = None
+    #: Why the run produced nothing publishable (abort cause, silent audio).
+    failure: str | None = None
 
     @property
     def succeeded(self) -> bool:
-        return self.end_reason == "complete" and self.exchanges > 0
+        return self.end_reason == "complete" and self.exchanges > 0 and not self.failure
+
+
+def render_blocker(
+    *,
+    end_reason: str,
+    exchanges: int,
+    spoken_lines: int,
+    voiced_lines: int | None,
+) -> str | None:
+    """Return why a debate must not be rendered, or ``None`` when it may.
+
+    An aborted or empty debate would publish a title card with no dialogue,
+    and a run where TTS failed on every line would publish a silent video.
+    ``voiced_lines`` is ``None`` when audio was not requested.
+    """
+    if end_reason == "aborted":
+        return "debate aborted; refusing to render a partial episode"
+    if exchanges <= 0:
+        return "debate produced 0 exchanges; nothing to render"
+    if voiced_lines is not None and spoken_lines > 0 and voiced_lines == 0:
+        return (
+            f"TTS failed for all {spoken_lines} spoken line(s); refusing to publish a "
+            "silent video (try: pip install -U \"edge-tts>=7.3.1\")"
+        )
+    return None
 
 
 @dataclass(slots=True)
@@ -262,6 +289,7 @@ class BulkPipelineResult:
 
 
 _BULK_SCRIPT_RETRIES = 3
+_BULK_REPLACEMENT_SLOTS = 2
 _PROTOTYPE_NAMES = {
     "aiwake_full_battle_v2.mp4",
 }
@@ -327,6 +355,81 @@ def _require_production_memory(topic: str | None) -> object:
     )
 
 
+_MIN_LIBRARY_SECONDS = 15.0
+
+
+def session_is_library_eligible(
+    *,
+    session_id: str,
+    video_name: str,
+    duration_s: float | None,
+    has_audio: bool,
+) -> bool:
+    """Real shorts go in the library. Tests, silence, and clips under 15s do not."""
+    if not has_audio or duration_s is None or duration_s < _MIN_LIBRARY_SECONDS:
+        return False
+    if session_id.lower().startswith("test") or video_name.lower().startswith("test"):
+        return False
+    return True
+
+
+def persist_record(
+    *,
+    transcript: DebateTranscript,
+    video_path: Path,
+    with_audio: bool,
+) -> bool:
+    """Upsert one finished short into ``content_library.json``.
+
+    Returns False when the clip is a test, has no audio, or is shorter than
+    15 seconds. Those files stay on disk and are not registered.
+    """
+    from .settings import resolve_store_dir
+    from .tools.backfill_metadata import (
+        build_record,
+        load_transcript_file,
+        persist_record as write_library_row,
+        probe_clip,
+    )
+    from shared.contracts import content_library_path
+
+    video = Path(video_path)
+    duration_s, file_has_audio = probe_clip(video) if with_audio else (None, False)
+    if not session_is_library_eligible(
+        session_id=transcript.session_id,
+        video_name=video.name,
+        duration_s=duration_s,
+        has_audio=with_audio and file_has_audio,
+    ):
+        _LOG.info(
+            "library skip %s duration=%s audio=%s file=%s",
+            transcript.session_id,
+            duration_s,
+            with_audio and file_has_audio,
+            video.name,
+        )
+        return False
+    transcript_dir = resolve_store_dir() / "transcripts"
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = transcript_dir / f"{transcript.session_id}.json"
+    transcript_path.write_text(transcript.model_dump_json(indent=2), encoding="utf-8")
+    doc = load_transcript_file(transcript_path)
+    if doc is None:
+        raise RuntimeError(f"could not reload production transcript {transcript_path}")
+    record = build_record(video, doc)
+    write_library_row(
+        record,
+        library_path=content_library_path("aiwake"),
+        duration_s=duration_s,
+    )
+    _LOG.info(
+        "content_library registered %s duration=%s",
+        transcript.session_id,
+        duration_s,
+    )
+    return True
+
+
 def _persist_production_package(
     *,
     transcript: DebateTranscript,
@@ -337,8 +440,8 @@ def _persist_production_package(
     from .tools.backfill_metadata import (
         build_record,
         load_transcript_file,
-        persist_record,
-        probe_duration_s,
+        persist_record as write_library_row,
+        probe_clip,
     )
     from .tools.post_planner import run_planner
     from .tools.supermemory_bridge import remember_approved_session
@@ -351,12 +454,20 @@ def _persist_production_package(
     doc = load_transcript_file(transcript_path)
     if doc is None:
         raise RuntimeError(f"could not reload production transcript {transcript_path}")
-    record = build_record(Path(video_path), doc)
-    persist_record(
-        record,
-        library_path=content_library_path("aiwake"),
-        duration_s=probe_duration_s(Path(video_path)),
-    )
+    video = Path(video_path)
+    duration_s, file_has_audio = probe_clip(video)
+    if session_is_library_eligible(
+        session_id=transcript.session_id,
+        video_name=video.name,
+        duration_s=duration_s,
+        has_audio=file_has_audio,
+    ):
+        record = build_record(video, doc)
+        write_library_row(
+            record,
+            library_path=content_library_path("aiwake"),
+            duration_s=duration_s,
+        )
     utterances = list(transcript.utterances)
     hook = utterances[0].text if utterances else ""
     quote = utterances[-1].text if utterances else ""
@@ -651,6 +762,7 @@ def run_pipeline(
     audio_seconds = 0.0
     end_reason = "interrupted"
     exchanges = 0
+    failure: str | None = None
     try:
         result = provocateur.run(
             topic=topic,
@@ -685,7 +797,19 @@ def run_pipeline(
                 typewriter_core_only=True,
             )
 
-        if with_video and result.transcript.utterances:
+        render_block = render_blocker(
+            end_reason=result.end_reason,
+            exchanges=result.exchanges,
+            spoken_lines=sum(
+                1 for item in result.transcript.utterances
+                if item.role is not SpeakerRole.SYSTEM and item.text.strip()
+            ),
+            voiced_lines=len(voice_observer.assets) if voice_observer is not None else None,
+        )
+        if render_block:
+            failure = render_block
+            _LOG.error("not rendering: %s", render_block)
+        if with_video and result.transcript.utterances and not render_block:
             if dynamic_animation:
                 # New parametric avatar battle path. Imported lazily so the
                 # classic pipeline never needs numpy/soundfile/ffmpeg-pipe
@@ -784,12 +908,30 @@ def run_pipeline(
                 reply_gap_s=cfg.render.reply_gap_s,
                 send_flash_s=cfg.render.send_flash_s,
             )
+            if not long_form:
+                try:
+                    persist_record(
+                        transcript=result.transcript,
+                        video_path=video_path,
+                        with_audio=with_audio,
+                    )
+                except (Exception, SystemExit) as exc:  # noqa: BLE001
+                    _LOG.error(
+                        "content_library register failed after a successful render; video kept: %s",
+                        exc,
+                    )
             if production_publish and not long_form:
-                _persist_production_package(
-                    transcript=result.transcript,
-                    video_path=video_path,
-                    media_dir=media_dir,
-                )
+                try:
+                    _persist_production_package(
+                        transcript=result.transcript,
+                        video_path=video_path,
+                        media_dir=media_dir,
+                    )
+                except (Exception, SystemExit) as exc:  # noqa: BLE001
+                    _LOG.error(
+                        "production package failed after a successful render; video kept: %s",
+                        exc,
+                    )
             elif long_form and result.end_reason == "complete" and not offline:
                 from .tools.supermemory_bridge import remember_approved_session
 
@@ -815,6 +957,7 @@ def run_pipeline(
             end_reason=result.end_reason,
             audio_seconds=audio_seconds,
             dialogue_end_reason=result.dialogue_end_reason,
+            failure=failure or result.transcript.metadata.get("abort_detail"),
             thumbnail_path=thumbnail_path if thumbnail_path and thumbnail_path.is_file() else None,
             metadata_path=metadata_path if metadata_path and metadata_path.is_file() else None,
         )
@@ -921,18 +1064,19 @@ def run_bulk_pipeline(
     # Offline episodes replay the same stub lines, so they are neither checked
     # against nor added to the produced-script history.
     stub_episodes = offline and bulk_post is PostType.LONG_FORMAT
+    slot_limit = qty * _BULK_REPLACEMENT_SLOTS
     if not random_matchups:
         matchup_schedule: tuple[tuple[str, str], ...] = ()
     elif bulk_post is PostType.LONG_FORMAT:
         from .longform.seats import longform_roster
 
         matchup_schedule = random_matchup_schedule(
-            qty,
+            slot_limit,
             seed=matchup_seed,
             roster=longform_roster(cfg.long_format),
         )
     else:
-        matchup_schedule = random_matchup_schedule(qty, seed=matchup_seed)
+        matchup_schedule = random_matchup_schedule(slot_limit, seed=matchup_seed)
     topics_by_target: dict[str, list[str]] = {}
 
     def _used_topics_for(model_alias: str | None) -> list[str]:
@@ -977,13 +1121,15 @@ def run_bulk_pipeline(
         "shorts_count": shorts_count,
     }
 
-    for index in range(qty):
+    slot_index = 0
+    while len(items) < qty and slot_index < slot_limit:
+        item_number = len(items) + 1
         accepted: PipelineResult | None = None
         item_topic = topic
         item_shared = dict(shared)
         item_target_model = target_model
         if matchup_schedule:
-            item_orchestrator, item_target_model = matchup_schedule[index]
+            item_orchestrator, item_target_model = matchup_schedule[slot_index]
             item_shared.update(
                 {
                     "orchestrator_model": item_orchestrator,
@@ -993,8 +1139,9 @@ def run_bulk_pipeline(
                 }
             )
             _LOG.info(
-                "bulk matchup %d/%d: %s vs %s",
-                index + 1,
+                "bulk matchup candidate %d for item %d/%d: %s vs %s",
+                slot_index + 1,
+                item_number,
                 qty,
                 item_orchestrator,
                 item_target_model,
@@ -1003,7 +1150,7 @@ def run_bulk_pipeline(
         for attempt in range(1, _BULK_SCRIPT_RETRIES + 1):
             _LOG.info(
                 "bulk item %d/%d attempt %d topic=%s",
-                index + 1,
+                item_number,
                 qty,
                 attempt,
                 item_topic or "(randomised)",
@@ -1017,7 +1164,7 @@ def run_bulk_pipeline(
                 **item_shared,
             )
             if result.end_reason == "interrupted":
-                _LOG.warning("bulk run interrupted at item %d/%d", index + 1, qty)
+                _LOG.warning("bulk run interrupted at item %d/%d", item_number, qty)
                 if result.exchanges > 0:
                     items.append(result)
                 return BulkPipelineResult(
@@ -1031,7 +1178,7 @@ def run_bulk_pipeline(
             if script and not stub_episodes and _script_conflicts(script, seen_scripts, seen_fps):
                 _LOG.warning(
                     "bulk item %d/%d produced a repeated script (attempt %d); regenerating",
-                    index + 1,
+                    item_number,
                     qty,
                     attempt,
                 )
@@ -1041,7 +1188,7 @@ def run_bulk_pipeline(
             if with_video and result.video_path is None:
                 _LOG.error(
                     "bulk item %d/%d rendered no video (attempt %d); regenerating",
-                    index + 1,
+                    item_number,
                     qty,
                     attempt,
                 )
@@ -1050,7 +1197,7 @@ def run_bulk_pipeline(
             if not result.succeeded:
                 _LOG.error(
                     "bulk item %d/%d failed (%s / %s) on attempt %d; regenerating",
-                    index + 1,
+                    item_number,
                     qty,
                     result.end_reason,
                     result.dialogue_end_reason,
@@ -1075,12 +1222,14 @@ def run_bulk_pipeline(
         if accepted is None:
             skipped += 1
             _LOG.error(
-                "bulk item %d/%d skipped: could not produce an original script",
-                index + 1,
+                "bulk candidate %d for item %d/%d failed; opening a replacement slot",
+                slot_index + 1,
+                item_number,
                 qty,
             )
-            continue
-        items.append(accepted)
+        else:
+            items.append(accepted)
+        slot_index += 1
 
     succeeded = sum(1 for item in items if item.succeeded)
     _LOG.info(

@@ -33,6 +33,7 @@ from products.aiwake.tools.caption_generator import (
     closer_has_topic_word,
     closer_repeats_source,
     display_name,
+    identify_clash_template,
     is_complete_question,
     seat_names,
 )
@@ -43,6 +44,7 @@ from products.aiwake.tools.seo_caption import (
     first_reply_line,
     hook_is_mid_cut,
     title_repeats_in_description,
+    topic_keyword,
     who_funds_template,
 )
 from products.aiwake.tools.production_status import (
@@ -56,6 +58,10 @@ _HEADLINE_RE = re.compile(
     r"^(?P<question>.+\?) \| "
     r"(?P<asker>Gemini|Llama|GPT-4o|DeepSeek|Claude) vs "
     r"(?P<answerer>Gemini|Llama|GPT-4o|DeepSeek|Claude)$"
+)
+_PAIR_IN_TITLE = re.compile(r"(?i)\b(gemini|llama|gpt-4o|deepseek|claude)\b|\bvs\b")
+_TEMPLATE_FRAMES = re.compile(
+    r"(?i)^(does\b.+\bexcuse the\b|is\b.+\babout\b|should\b.+\bcover\b)"
 )
 _SEO_TAGS = {tag.lower() for _phrase, tag, _stems in SEO_KEYWORDS}
 _MODEL_RE = re.compile(
@@ -183,9 +189,68 @@ def _quotes(text: str) -> list[str]:
     return [item.strip() for item in re.findall(r'"([^"]+)"', text or "") if item.strip()]
 
 
+_QUESTION_LEAD = re.compile(
+    r"^(?:who|whose|what|why|where|how|when|which|do|does|did|is|are|am|can|could|"
+    r"would|will|should|have|has|had|don't|doesn't|isn't|aren't|won't|can't|"
+    r"wouldn't|couldn't|shouldn't)\b",
+    re.IGNORECASE,
+)
+_TAG_QUESTION = re.compile(
+    r",\s*(?:do|does|did|is|are|am|was|were|isn't|aren't|don't|doesn't|won't|can't|"
+    r"wouldn't|couldn't|shouldn't|haven't|hasn't)\s+(?:i|you|we|they|he|she|it)\?$",
+    re.IGNORECASE,
+)
+_YOU_QUESTION = re.compile(r"^you\b", re.IGNORECASE)
+_EMBEDDED_QUESTION = re.compile(
+    r"\b(?:so|and|but|or)\s+(?:who|whose|what|why|where|how|when|which|do|does|did|"
+    r"is|are|can|could|would|will|should)\b",
+    re.IGNORECASE,
+)
+
+
+def sentence_is_question(sentence: str) -> bool:
+    """A real question, not a statement that picked up a stray question mark."""
+    text = sentence.strip()
+    if not text.endswith("?"):
+        return False
+    if (
+        _QUESTION_LEAD.match(text)
+        or _TAG_QUESTION.search(text)
+        or _YOU_QUESTION.match(text)
+        or _EMBEDDED_QUESTION.search(text)
+    ):
+        return True
+    return False
+
+
+def straighten_stray_question(text: str) -> str:
+    """Turn ``I'm a tool, not a truth-teller?`` into a statement. Keep real questions."""
+    parts = re.findall(r"[^.!?]*[.!?]+|[^.!?]+$", str(text or "").strip())
+    fixed: list[str] = []
+    for part in parts:
+        chunk = part.strip()
+        if not chunk:
+            continue
+        if chunk.endswith("?") and not sentence_is_question(chunk):
+            chunk = chunk[:-1].rstrip() + "."
+        fixed.append(chunk)
+    return " ".join(fixed)
+
+
+def _quote_surface(text: str) -> str:
+    """Whitespace and dash normalization shared by the quote and the transcript."""
+    cleaned = str(text or "")
+    cleaned = cleaned.replace("\u201c", '"').replace("\u201d", '"')
+    cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")
+    cleaned = cleaned.replace("\u2014", ", ").replace("\u2013", ", ")
+    cleaned = cleaned.replace("...", "…")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return straighten_stray_question(cleaned)
+
+
 def _quote_in_utterance(quote: str, utterance: str) -> bool:
-    spoken = _ws(utterance)
-    raw = _ws(quote).strip('"')
+    spoken = _quote_surface(utterance)
+    raw = _quote_surface(quote).strip('"')
     core = raw
     if core.endswith("…") or core.endswith("..."):
         core = core.rstrip(".").rstrip("…").strip()
@@ -195,6 +260,22 @@ def _quote_in_utterance(quote: str, utterance: str) -> bool:
         return True
     if spoken.startswith(core) and (len(spoken) == len(core) or spoken[len(core):len(core) + 1] in {" ", ""}):
         return True
+    return False
+
+
+def quote_ends_mid_sentence(quote: str, utterance: str) -> bool:
+    """True when the quote stops inside a spoken sentence."""
+    raw = _quote_surface(quote).strip('"')
+    spoken = _quote_surface(utterance)
+    if not raw or raw[-1] not in ".!?":
+        return True
+    idx = spoken.find(raw)
+    if idx < 0:
+        return True
+    if idx > 0:
+        prev = spoken[:idx].rstrip()
+        if not prev or prev[-1] not in ".!?":
+            return True
     return False
 
 
@@ -395,9 +476,8 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     asker, answerer = seat_names(row)
     headline = str(_get(row, "platform_overrides.youtube.title") or (row.get("base_metadata") or {}).get("title") or "")
     match = _HEADLINE_RE.match(headline.strip())
-    if not match:
-        fails.append(f"title_format: {name}: {headline[:90]}")
-    else:
+    spoken_only = False
+    if match:
         if match.group("asker") != asker or match.group("answerer") != answerer or match.group("asker") == match.group("answerer"):
             fails.append(
                 f"title_format: {name}: names {match.group('asker')} vs {match.group('answerer')} "
@@ -405,13 +485,25 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
             )
         if len(headline) > 70:
             fails.append(f"seo_title_length: {name}: {len(headline)} chars")
-        if not any(phrase in match.group("question") for phrase in (item[0] for item in SEO_KEYWORDS)):
-            fails.append(f"seo_keyword: {name}: title missing a keyword")
+        # The SEO keyword lives in the description and hashtags. A title is a spoken question.
+    elif (
+        is_complete_question(headline)
+        and len(headline.strip()) <= 70
+        and not _PAIR_IN_TITLE.search(headline)
+    ):
+        spoken_only = True
+    else:
+        fails.append(f"title_format: {name}: {headline[:90]}")
+    question = match.group("question") if match else headline.strip()
+    if _TEMPLATE_FRAMES.search(question):
+        fails.append(f"template_title: {name}")
     turns = _read_turns(row)
     orchestrator = [str(item.get("text") or "") for item in turns if item.get("role") == "orchestrator"]
     topic = ""
     if match:
         topic = match.group("question")
+    elif spoken_only:
+        topic = headline.strip()
     elif " | " in headline:
         topic = headline.split(" | ", 1)[0]
     elif " - " in headline:
@@ -436,11 +528,20 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         fails.append(f"question_words_dropped: {name}: {topic[:90]}")
     if _dangling(topic) and not topic_complete and _clean(topic) != _clean(opening_exact):
         fails.append(f"truncated_sentence: {name}: {topic[:90]}")
-    if topic and not topic_complete:
+    if topic and not topic_complete and _clean(topic) != _clean(opening_exact):
         fails.append(f"title_cut_off: {name}: {topic[:90]}")
-    elif topic and opening_exact and hook_is_mid_cut(topic, opening_exact):
+    elif (
+        topic
+        and opening_exact
+        and str(_qa(row).get("title_source") or "") != "editorial"
+        and hook_is_mid_cut(
+            topic,
+            re.sub(r"\s+", " ", re.sub(r"\s+,", ",", _clean(opening_exact).replace("\u2026", ", "))),
+        )
+    ):
         fails.append(f"title_cut_off: {name}: {topic[:90]}")
     qa = _qa(row)
+    spoken_pack = str(qa.get("title_source") or "") == "spoken_opening"
     quote = str(qa.get("quote") or "")
     speaker = display_name(str(qa.get("quote_speaker") or ""))
     spoken = [(str(item.get("speaker") or ""), str(item.get("text") or "")) for item in turns]
@@ -491,7 +592,8 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
                 break
             if line.endswith("?") and _dangling(line) and _clean(line) != _clean(orchestrator[0] if orchestrator else ""):
                 fails.append(f"truncated_sentence: {name} [{platform}]: {line[-80:]}")
-        if platform in _FEED and not any(line.endswith("?") for line in lines):
+        title_is_question = spoken_pack and is_complete_question(headline)
+        if platform in _FEED and not any(line.endswith("?") for line in lines) and not title_is_question:
             fails.append(f"{platform}_no_question: {name}")
         if platform == "tiktok" and re.search(r"\bsubscribe\b", caption.replace(SEO_CTA, ""), re.IGNORECASE):
             fails.append(f"tiktok_says_subscribe: {name}")
@@ -509,6 +611,15 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
                 fails.append(f"title_repeated: {name} [{platform}]")
             if not any(phrase.lower() in caption.lower() for phrase, _tag, _stems in SEO_KEYWORDS):
                 fails.append(f"seo_keyword: {name} [{platform}]: description missing a keyword")
+            if spoken_pack:
+                phrase, tag = topic_keyword(opening_exact or topic)
+                if phrase.lower() not in caption.lower():
+                    fails.append(f"keyword_topic: {name} [{platform}]: missing {phrase}")
+                caption_tags = _tags(caption)
+                if not caption_tags or caption_tags[0].lower() != tag.lower():
+                    fails.append(f"keyword_topic: {name} [{platform}]: {caption_tags[:1]} != {tag}")
+                if "hangs on the" in caption.lower():
+                    fails.append(f"template_context: {name} [{platform}]")
         if platform == "linkedin" and lines and len(lines[0]) > 150:
             fails.append(f"linkedin_hook_too_long: {name}")
         verdict_zone = _outside_quotes(caption)
@@ -586,9 +697,20 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         caption = str(_get(row, _PLATFORMS[platform][0]) or "")
         lines = _lines(caption)
         quote_lines = [line for line in lines if line.startswith('"') and line.endswith('"')]
+        target_texts = [
+            str(item.get("text") or "")
+            for item in turns
+            if str(item.get("role") or "") == "target" and str(item.get("text") or "").strip()
+        ]
+        quote_body = quote_lines[0].strip('"') if quote_lines else ""
+        cut_off = bool(quote_body) and bool(target_texts) and all(
+            quote_ends_mid_sentence(quote_body, text) for text in target_texts
+        )
         if not quote_lines:
             fails.append(f"quote_line: {name} [{platform}]: quote is not on its own line")
-        elif len(quote_lines[0].strip('"').split()) > 20:
+        elif spoken_pack and cut_off:
+            fails.append(f"quote_cut_off: {name} [{platform}]")
+        elif len(quote_body.split()) > 20 and not (spoken_pack and not cut_off):
             fails.append(f"quote_line: {name} [{platform}]: quote is over 20 words")
         if lines:
             follow = ""
@@ -597,7 +719,8 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
                     break
                 follow = line
                 break
-            if follow and len(follow.split()) > 12:
+            context_limit = 32 if spoken_pack else 12
+            if follow and len(follow.split()) > context_limit:
                 fails.append(f"context_line: {name} [{platform}]: {len(follow.split())} words")
         if any(tag.lower() in {item.lower() for item in BROAD_TAGS} for tag in _tags(caption)):
             fails.append(f"hashtags: {name} [{platform}]: broad tag banned")
@@ -608,6 +731,49 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
 
 def _active(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return posting_order([row for row in rows if _ready_ok(row)])
+
+
+def _spoken_clash_line(row: dict[str, Any]) -> str:
+    caption = str(_get(row, _PLATFORMS["tiktok"][0]) or "")
+    for line in _lines(caption):
+        if line.startswith('"') or line.startswith("\u201c"):
+            continue
+        if _is_unscripted_line(line):
+            continue
+        return line
+    return ""
+
+
+def consecutive_clash_template_failures(rows: list[dict[str, Any]]) -> list[str]:
+    """Spoken rows that sit next to each other must not reuse one clash template."""
+    fails: list[str] = []
+    previous: int | None = None
+    previous_sid = ""
+    for row in rows:
+        qa = _qa(row)
+        sid = str(row.get("session_id") or "?")
+        if str(qa.get("title_source") or "") != "spoken_opening":
+            previous = None
+            previous_sid = ""
+            continue
+        asker, answerer = seat_names(row)
+        opening = ""
+        for item in _read_turns(row):
+            if str(item.get("role") or "") == "orchestrator" and str(item.get("text") or "").strip():
+                opening = str(item.get("text") or "").strip()
+                break
+        keyword = topic_keyword(opening)[0] if opening else ""
+        found = identify_clash_template(
+            _spoken_clash_line(row),
+            asker=asker,
+            answerer=answerer,
+            keyword=keyword,
+        )
+        if found is not None and found == previous:
+            fails.append(f"clash_template_repeat: {previous_sid} and {sid} both use template {found}")
+        previous = found
+        previous_sid = sid
+    return fails
 
 
 def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) -> list[str]:
@@ -623,6 +789,7 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
         expected = ready_count or len(active)
     expected = max(int(expected), 1)
     fails: list[str] = []
+    fails.extend(consecutive_clash_template_failures(active))
     angles = [str(_qa(row).get("angle") or "") for row in active]
     for index in range(1, len(angles)):
         if angles[index] and angles[index] == angles[index - 1]:

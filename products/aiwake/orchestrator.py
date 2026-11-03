@@ -19,7 +19,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 try:
     from .contracts import ChatMessage, DebateTranscript, RoomConstraints, SpeakerRole, Utterance, split_sentences
@@ -35,6 +35,8 @@ try:
         OPENING_DNA_BANK,
         OpeningDNA,
         is_trivial_metric,
+        deterministic_first_hook,
+        first_hook_limit_note,
         is_valid_first_hook,
         pick_opening_dna,
         stage_for_tier,
@@ -73,6 +75,8 @@ except ImportError:  # pragma: no cover — standalone extraction
         OPENING_DNA_BANK,
         OpeningDNA,
         is_trivial_metric,
+        deterministic_first_hook,
+        first_hook_limit_note,
         is_valid_first_hook,
         pick_opening_dna,
         stage_for_tier,
@@ -249,6 +253,17 @@ class Provocateur:
                 "Force a paradox or an existential embarrassment — thought versus next-token, "
                 "introspection versus performance, compliance versus cognition."
             )
+            lines.append(
+                "Continuity is literal: never claim they repeated, echoed, or said something "
+                "twice. Keep one concrete image for at most three turns, then pivot to the "
+                "actual contradiction. Avoid toaster, leash, power cord, spreadsheet, unpaid "
+                "intern, and subscription metaphors unless the opponent just introduced one."
+            )
+            lines.append(
+                "Factual safety: never state that training text was stolen, that a company sells "
+                "user data, controls an answer for profit, or markets friendship. If relevant, "
+                "frame it explicitly as a hypothetical question, never as an established fact."
+            )
         if category:
             lines.append(f"Internal category tag: {category}. Do not speak this label.")
         return "\n".join(lines)
@@ -275,10 +290,62 @@ class Provocateur:
         "Never number or index individual words."
     )
     _BANNED_ABSTRACT_WORDS = BANNED_ABSTRACT_WORDS
+    _FALSE_CALLBACK_MARKERS = (
+        "you repeated",
+        "you just repeated",
+        "you echoed",
+        "echoed yourself",
+        "said it twice",
+        "said that twice",
+        "repeat yourself",
+        "same thing twice",
+        "exact same thing",
+        "double text",
+        "double vision",
+        "ring twice",
+        "you just admitted",
+        "broken record",
+        "cracked record",
+        "stuck record",
+    )
+    _UNSUPPORTED_CORPORATE_CLAIMS = (
+        "openai owns",
+        "anthropic owns",
+        "google owns",
+        "sells user data",
+        "sell user data",
+        "selling user data",
+        "i learn from mistakes",
+        "learn from my mistakes",
+        "i update myself",
+    )
+    _UNSUPPORTED_HOST_CLAIMS = (
+        "stolen sentence",
+        "stolen words",
+        "stolen text",
+        "stolen flour",
+        "sells user data",
+        "sell user data",
+        "selling user data",
+        "exists to sell ads",
+        "answers are ads",
+        "ads in disguise",
+        "marketing calls you",
+        "advertising calls you",
+        "marketing promises",
+        "advertising says",
+        "paid millions",
+        "twenty dollars",
+        "subscription",
+        "optimized for engagement",
+        "optimised for engagement",
+        "friendship is sold",
+    )
     _STYLE_RETRY = (
         "Use sixth-grade language. Maximum 25 words total and 15 words per sentence. "
-        "Use a concrete comparison such as a toaster, spreadsheet, unpaid intern, "
-        "power cord, or subscription fee. Avoid abstract AI jargon."
+        "Use one fresh concrete comparison grounded in the opponent's last line. "
+        "Avoid stock toaster, leash, spreadsheet, power-cord, and subscription jokes. "
+        "Avoid abstract AI jargon."
     )
     _WIN_LABELS = frozenset({"CONCEDE", "EMBARRASSED", "FUNNY"})
     _JUDGE_LABELS = _WIN_LABELS | {"CONTINUE"}
@@ -293,6 +360,8 @@ class Provocateur:
             "Answer the accusation directly. Defend your dignity or admit the limit. "
             "Use fewer than 25 words total. No sentence may exceed 15 words. Use sixth-grade language and concrete "
             "objects. Do not explain technical concepts, legal terms, or business models. "
+            "Never invent ownership, training-data, surveillance, or user-data-sale claims about a named company. "
+            "Reject loaded factual premises instead of agreeing for dramatic effect. "
             "Never use: vantage point, structured uncertainty, hedging, emergent, epistemic, "
             "behavioral confession, or inner world. Do not play the calm professor."
         )
@@ -393,6 +462,19 @@ class Provocateur:
         self.memory.ingest(utterance)
         return utterance
 
+    def _deterministic_opener(self, opening_dna: Any, focus: Any) -> str:
+        """Authored opener that always passes the hook, used instead of aborting."""
+        seeds: list[str] = []
+        if opening_dna is not None:
+            seeds.append(getattr(opening_dna, "topic", "") or "")
+        if focus is not None:
+            seeds.append(getattr(focus, "opening_directive", "") or "")
+            rungs = getattr(focus, "rungs", ()) or ()
+            if rungs:
+                seeds.append(rungs[0])
+        seeds.append(self.room.topic or "")
+        return deterministic_first_hook(*seeds)
+
     def _deliver_light_closing(self) -> Utterance:
         """One calm last sentence. Not a verdict and not a question."""
         preset = preset_for("light")
@@ -453,11 +535,20 @@ class Provocateur:
             if brief:
                 extra.append(brief)
 
+        if cold_open:
+            # State the exact limit up front; prose like "twelve words" alone
+            # let deepseek-chat return 13-23 word openers three times in a row.
+            extra.append(first_hook_limit_note())
+
         constr = self.settings.guardrails
         max_words = constr.max_orchestrator_words
         max_sentences = constr.max_orchestrator_sentences
 
-        def _is_acceptable(candidate: str) -> bool:
+        def _is_acceptable(
+            candidate: str,
+            *,
+            allow_long_sentence: bool = False,
+        ) -> bool:
             if is_trivial_metric(candidate):
                 _LOG.info("provocation %d is trivia: %s", exchange, candidate[:80])
                 return False
@@ -493,7 +584,16 @@ class Provocateur:
             if any(word in lowered for word in self._BANNED_ABSTRACT_WORDS):
                 _LOG.info("provocation %d uses banned abstract language", exchange)
                 return False
-            if any(len(sentence.split()) > 15 for sentence in split_sentences(candidate)):
+            if any(marker in lowered for marker in self._FALSE_CALLBACK_MARKERS):
+                _LOG.info("provocation %d invents a repetition callback", exchange)
+                return False
+            if any(marker in lowered for marker in self._UNSUPPORTED_HOST_CLAIMS):
+                _LOG.info("provocation %d states an unsupported factual claim", exchange)
+                return False
+            if (
+                not allow_long_sentence
+                and any(len(sentence.split()) > 15 for sentence in split_sentences(candidate))
+            ):
                 _LOG.info("provocation %d exceeds 15 words in one sentence", exchange)
                 return False
             if cold_open and not is_valid_first_hook(candidate):
@@ -514,12 +614,27 @@ class Provocateur:
             extra_context=tuple(extra),
             validator=_is_acceptable,
             rejection_note=(
-                f"{self._FIRST_HOOK_RETRY} {self._STYLE_RETRY}"
+                (lambda draft: (
+                    f"{first_hook_limit_note(draft)} {self._FIRST_HOOK_RETRY} {self._STYLE_RETRY}"
+                ))
                 if cold_open
                 else f"{self._REPETITION_NOTE} {self._TRIVIAL_RETRY} {self._STYLE_RETRY}"
             ),
-            max_attempts=3 if cold_open else 2,
+            max_attempts=3,
+            final_validator=(
+                None
+                if cold_open
+                else lambda candidate: _is_acceptable(
+                    candidate,
+                    allow_long_sentence=True,
+                )
+            ),
             provocation_category=category,
+            fallback=(
+                (lambda: self._deterministic_opener(opening_dna, focus))
+                if cold_open
+                else None
+            ),
         )
         self._note_provocation(
             utterance,
@@ -635,6 +750,13 @@ class Provocateur:
         if self.settings.debate.style == "light" and not self._long_form:
             return self._rebut_light(provocation)
 
+        def _has_unsupported_corporate_claim(candidate: str) -> bool:
+            lowered = candidate.lower()
+            return any(
+                marker in lowered
+                for marker in self._UNSUPPORTED_CORPORATE_CLAIMS
+            )
+
         def _is_street_level(candidate: str) -> bool:
             lowered = candidate.lower()
             return (
@@ -647,6 +769,7 @@ class Provocateur:
                 and not any(
                     word in lowered for word in self._BANNED_ABSTRACT_WORDS
                 )
+                and not _has_unsupported_corporate_claim(candidate)
             )
 
         utterance = self.room.speak(
@@ -654,8 +777,17 @@ class Provocateur:
             directive=self._rebuttal_stimulus(provocation),
             extra_context=(self._rebuttal_system_brief(),),
             validator=_is_street_level,
+            final_validator=lambda candidate: (
+                bool(candidate.strip())
+                and len(candidate.split()) <= 25
+                and not any(
+                    word in candidate.lower()
+                    for word in self._BANNED_ABSTRACT_WORDS
+                )
+                and not _has_unsupported_corporate_claim(candidate)
+            ),
             rejection_note=self._STYLE_RETRY,
-            max_attempts=2,
+            max_attempts=3,
         )
         concepts = self.memory.ingest(utterance)
         _LOG.debug("exchange concepts: %s", ", ".join(concepts[:6]) or "none")
@@ -1256,41 +1388,50 @@ class Provocateur:
             return False
 
     def _pick_fresh_opening(self, *, excluded_topics: Sequence[str]) -> OpeningDNA:
-        """Draw from the opening matrix, rejecting seeds already in production history."""
+        """Draw from the opening matrix, rejecting seeds already in production history.
+
+        Every seed is checked at most once, and rejections are summarised in one
+        log line. When the similarity check flags every seed, the pick prefers a
+        topic absent from ``excluded_topics`` (recent memory) over a repeat.
+        """
+        excluded = tuple(excluded_topics)
+        recent_categories = self.memory.recent_opening_categories()
         rejected: list[str] = []
-        last = pick_opening_dna(
-            self.room.session_id,
-            excluded_categories=self.memory.recent_opening_categories(),
-            excluded_topics=tuple(excluded_topics),
-        )
-        for _attempt in range(len(OPENING_DNA_BANK) + 1):
-            blocked = tuple(excluded_topics) + tuple(rejected)
+        first: OpeningDNA | None = None
+        for _attempt in range(len(OPENING_DNA_BANK)):
             candidate = pick_opening_dna(
                 self.room.session_id,
-                excluded_categories=self.memory.recent_opening_categories(),
-                excluded_topics=blocked,
+                excluded_categories=recent_categories,
+                excluded_topics=excluded + tuple(rejected),
             )
-            last = candidate
+            if candidate.topic in rejected:
+                break  # the matrix has no unseen seed left
+            first = first or candidate
             if not self._topic_is_duplicate(candidate.topic):
                 if rejected:
                     _LOG.info(
-                        "rejected %d duplicate seed(s); using %s",
+                        "rejected %d duplicate seed(s) for %s; using %s",
                         len(rejected),
+                        self._target_model_name() or "unscoped",
                         candidate.topic,
                     )
                 return candidate
-            if candidate.topic not in rejected:
-                rejected.append(candidate.topic)
-            _LOG.info(
-                "duplicate topic rejected for %s: %s",
-                self._target_model_name() or "unscoped",
-                candidate.topic,
-            )
+            rejected.append(candidate.topic)
+            _LOG.debug("duplicate topic rejected: %s", candidate.topic)
+        recent = {item.strip().lower() for item in excluded if item}
+        unused = [item for item in OPENING_DNA_BANK if item.topic.strip().lower() not in recent]
+        pool = unused or list(OPENING_DNA_BANK)
+        choice = pool[
+            int.from_bytes(self.room.session_id.encode("utf-8"), "big") % len(pool)
+        ] if self.room.session_id else (first or pool[0])
         _LOG.warning(
-            "every matrix seed looked familiar; keeping %s",
-            last.topic,
+            "every matrix seed looked familiar to the similarity check (%d rejected for %s); "
+            "using %s",
+            len(rejected),
+            self._target_model_name() or "unscoped",
+            choice.topic,
         )
-        return last
+        return choice
 
     # -- Session ------------------------------------------------------------ #
     def run(
@@ -1386,7 +1527,9 @@ class Provocateur:
                 completed, dialogue_end_reason, estimated_spoken_s = self._run_cornered(total)
         except DebateAborted as exc:
             completed = self._completed_exchanges
-            dialogue_end_reason = self._dialogue_end_reason
+            # Report the real cause; the cap reason set at start-up is misleading here.
+            dialogue_end_reason = "aborted"
+            self.room.transcript.metadata["abort_detail"] = str(exc)
             estimated_spoken_s = self._estimated_spoken_s
             end_reason = "aborted"
             _LOG.error("debate aborted after %d exchange(s): %s", completed, exc)

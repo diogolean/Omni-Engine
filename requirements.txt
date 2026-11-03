@@ -35,7 +35,7 @@ pyautogui>=0.9.54
 pyperclip>=1.8.2
 # PC Chrome CDP publishers (distribution/publishers/browser). Not in the arm64 image.
 playwright>=1.64,<2
-edge-tts>=6.1.9
+edge-tts>=7.3.1
 PyYAML>=6.0
 # Visual critic console. The module imports rich at import time.
 rich>=13.0.0

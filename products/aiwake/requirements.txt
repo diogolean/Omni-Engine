@@ -16,7 +16,7 @@ requests>=2.31.0         # OpenRouter HTTP transport
 python-dotenv>=1.0.0     # ../../.env secret loading
 
 # --- Media (optional; the debate loop runs headless without these) ---
-edge-tts>=7.0.0          # pilot TTS engine, no API key required
+edge-tts>=7.3.1          # pilot TTS engine; <7.3.1 gets HTTP 403 from Bing
 moviepy>=2.0.0           # video assembly (v2 API — `from moviepy import ...`)
 Pillow>=10.0.0           # terminal-UI frame composition
 numpy>=1.24.0            # frame buffers + VFX hook chain

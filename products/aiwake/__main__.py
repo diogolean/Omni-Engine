@@ -31,7 +31,7 @@ try:
         run_bulk_pipeline,
         run_pipeline,
     )
-    from .settings import load_settings
+    from .settings import load_settings_with_overlay
 except ImportError:  # pragma: no cover — standalone extraction
     from models.llm_factory import available_providers  # type: ignore[no-redef]
     from models.sync import SyncError, run_sync_cli  # type: ignore[no-redef]
@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover — standalone extraction
         run_bulk_pipeline,
         run_pipeline,
     )
-    from settings import load_settings  # type: ignore[no-redef]
+    from settings import load_settings_with_overlay  # type: ignore[no-redef]
 
 
 def _positive_quantity(value: str) -> int:
@@ -114,8 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         choices=("fixed", "cornered", "longform"),
-        default="fixed",
-        help="Debate ending, or longform as a compatibility alias for --long-format",
+        default=None,
+        help=(
+            "Debate ending, or longform as a compatibility alias for --long-format. "
+            "Defaults to debate.mode from the config (and --config overlay)."
+        ),
     )
     parser.add_argument(
         "--style",
@@ -187,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
             "glorified_appliance",
             "parasite_mind",
             "hallucination_fraud",
+            "belief_instability",
         ),
         help=(
             "Attack-angle bias, orthogonal to --topic. mixed (default) is a "
@@ -221,6 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-audio", action="store_true", help="Skip TTS (estimated timeline, silent video)")
     parser.add_argument("--no-video", action="store_true", help="Stop after the transcript")
+    parser.add_argument(
+        "--no-production-publish",
+        action="store_true",
+        help="Render production media without registering or uploading its distribution package.",
+    )
     parser.add_argument("--fresh-memory", action="store_true", help="Wipe persisted memory before running")
     parser.add_argument("--quiet", action="store_true", help="Suppress the live console stream")
     parser.add_argument("--preview", action="store_true", help="Render at half resolution for fast iteration")
@@ -357,7 +366,10 @@ def main(argv: list[str] | None = None) -> int:
         print("registered LLM providers:", ", ".join(available_providers()))
         return 0
 
-    settings = _apply_debate_flags(load_settings(args.config), args)
+    try:
+        settings = _apply_debate_flags(load_settings_with_overlay(args.config), args)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
 
     # Seat overrides are applied before --list-models so the table doubles as a
     # dry-run: `--list-models -o deepseek-r1` shows exactly what a live run would
@@ -463,12 +475,10 @@ def main(argv: list[str] | None = None) -> int:
         or args.dynamic_animation
         or args.render_mode == "dynamic_animation"
     )
-    explicit_mode = any(
-        token == "--mode" or token.startswith("--mode=")
-        for token in raw_argv
+    effective_mode = (
+        "fixed" if args.mode == "longform" else (args.mode or settings.debate.mode)
     )
-    effective_mode = "fixed" if args.mode == "longform" else args.mode
-    if dynamic_animation and not explicit_mode and not long_form:
+    if dynamic_animation and args.mode is None and not long_form:
         effective_mode = "cornered"
     if args.random_matchups and (args.orchestrator or args.target):
         parser.error("--random-matchups cannot be combined with fixed seat overrides")
@@ -533,6 +543,7 @@ def main(argv: list[str] | None = None) -> int:
             and not long_form
             and not args.offline
             and args.duration is None
+            and not args.no_production_publish
         ),
         "post_type": "long_format" if long_form else "short_clip",
         "resolution": args.resolution,
@@ -583,6 +594,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"end reason    : {result.dialogue_end_reason}")
     print(f"audio         : {result.audio_seconds:.1f}s")
     print(f"video         : {result.video_path or '(none)'}")
+    failure_reason = getattr(result, "failure", None)
+    if failure_reason:
+        print(f"failure       : {failure_reason}")
     if result.thumbnail_path:
         print(f"thumbnail     : {result.thumbnail_path}")
     if result.metadata_path:

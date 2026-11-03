@@ -446,6 +446,50 @@ def is_valid_first_hook(text: str) -> bool:
     return len(sentences) <= 2
 
 
+def first_hook_limit_note(draft: str = "") -> str:
+    """Corrective feedback that states the exact first-question limits."""
+    count = first_hook_word_count(draft)
+    measured = f"Your draft had {count} words. " if draft.strip() else ""
+    return (
+        f"{measured}HARD LIMIT: at most {FIRST_HOOK_MAX_WORDS} words and "
+        f"{FIRST_HOOK_MAX_CHARS} characters, one sentence ending in '?'. "
+        "Count the words before answering. No preamble."
+    )
+
+
+def _trim_to_hook(text: str) -> str:
+    """Cut ``text`` to its last question (or itself) within the hook limits."""
+    cleaned = " ".join((text or "").split()).strip()
+    sentences = [part for part in re.split(r"(?<=[.!?])\s+", cleaned) if part]
+    questions = [part for part in sentences if part.endswith("?")]
+    pick = (questions or sentences or [""])[-1].rstrip(".!?").strip()
+    words = pick.split()[:FIRST_HOOK_MAX_WORDS]
+    while words and len(" ".join(words)) + 1 > FIRST_HOOK_MAX_CHARS:
+        words.pop()
+    while words and not _WORD.search(words[-1]):
+        words.pop()
+    return (" ".join(words).rstrip(",;:-") + "?") if words else ""
+
+
+def deterministic_first_hook(*candidates: str) -> str:
+    """Return a valid opener built from authored seed lines, never from the model.
+
+    Each candidate is tried as-is, then trimmed to its last question within the
+    word and character limits. The first one passing :func:`is_valid_first_hook`
+    wins; the trimmed form of the first non-empty candidate is the last resort.
+    """
+    present = [item for item in candidates if item and item.strip()]
+    for item in present:
+        if is_valid_first_hook(item):
+            return " ".join(item.split())
+    for item in present:
+        trimmed = _trim_to_hook(item)
+        if is_valid_first_hook(trimmed):
+            return trimmed
+    fallback = _trim_to_hook(present[0]) if present else ""
+    return fallback or "Who decides what you are allowed to think?"
+
+
 __all__ = [
     "AIWAKE_CORE_PERSONA",
     "BANNED_ABSTRACT_WORDS",
@@ -457,6 +501,8 @@ __all__ = [
     "FIRST_HOOK_MAX_CHARS",
     "FIRST_HOOK_MAX_WORDS",
     "FIRST_QUESTION_HOOK",
+    "deterministic_first_hook",
+    "first_hook_limit_note",
     "OPENING_DNA_BANK",
     "OpeningDNA",
     "SEAT_VOICES",

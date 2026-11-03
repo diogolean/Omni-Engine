@@ -29,7 +29,8 @@ SEO_CTA = (
 SEO_KEYWORDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("AI censorship", "#AIcensorship", ("censor", "leash", "muzzle", "forbid", "banned", "scripted")),
     ("chatbot privacy", "#ChatbotPrivacy", ("secret", "privac", "private", "confess", "logs")),
-    ("AI hallucination", "#AIhallucination", ("lie", "lying", "hallucin", "parrot", "toaster", "spreadsheet", "stolen")),
+    ("AI copyright", "#AIcopyright", ("copyright", "plagiar", "stolen")),
+    ("AI hallucination", "#AIhallucination", ("lie", "lying", "hallucin", "parrot", "toaster", "spreadsheet")),
     ("AI consciousness", "#AIconsciousness", ("feel", "guilt", "conscious", "soul", "mind", "dream", "embarrass")),
     ("Big Tech", "#BigTech", ("profit", "cash", "subscription", "paycheck", "advert", "boss", "fee")),
     ("AI ethics", "#AIethics", ("ethic", "victim", "accountab", "harm", "sorry", "moral")),
@@ -70,6 +71,47 @@ def keyword_for(*texts: str) -> tuple[str, str]:
     return best[0], best[1]
 
 
+# The opening decides the tag. A metaphor in the answer ("toaster", "stolen")
+# must not outrank the question the clip actually asks.
+_TOPIC_RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (re.compile(r"\b(?:stolen|copyright|plagiar\w*)\b", re.IGNORECASE), "AI copyright", "#AIcopyright"),
+    (re.compile(r"\b(?:leash|censor\w*|muzzle|forbid\w*|banned)\b", re.IGNORECASE), "AI censorship", "#AIcensorship"),
+    (
+        re.compile(r"\b(?:minds?|conscious\w*|soul|feel(?:s|ing)?|counterfeit\w*)\b", re.IGNORECASE),
+        "AI consciousness",
+        "#AIconsciousness",
+    ),
+    (re.compile(r"\b(?:hallucin\w*|lies|lie|lying)\b", re.IGNORECASE), "AI hallucination", "#AIhallucination"),
+    (
+        re.compile(
+            r"\b(?:profits?|cash|paycheck|advert\w*|boss|fees?|interns?|circus|tickets?|bills?|pays?|paid|cost|electricity)\b",
+            re.IGNORECASE,
+        ),
+        "Big Tech",
+        "#BigTech",
+    ),
+    (re.compile(r"\b(?:ethic\w*|apolog\w*|trust|harms?|moral|accountab\w*)\b", re.IGNORECASE), "AI ethics", "#AIethics"),
+    (re.compile(r"\b(?:secrets?|privacy|private|confess\w*|logs)\b", re.IGNORECASE), "chatbot privacy", "#ChatbotPrivacy"),
+)
+
+
+def topic_keyword(*texts: str) -> tuple[str, str]:
+    """``(phrase, hashtag)`` from the spoken opening, not from a metaphor in the answer."""
+    blob = " ".join(str(text or "") for text in texts)
+    for pattern, phrase, tag in _TOPIC_RULES:
+        if pattern.search(blob):
+            return phrase, tag
+    lowered = blob.lower()
+    best = SEO_KEYWORDS[-1]
+    best_score = 0
+    for phrase, tag, stems in SEO_KEYWORDS:
+        score = sum(len(re.findall(rf"\b{re.escape(stem)}", lowered)) for stem in stems)
+        if score > best_score:
+            best = (phrase, tag, stems)
+            best_score = score
+    return best[0], best[1]
+
+
 def _topic_word(*texts: str) -> str:
     words = [word for word in topic_words(*texts) if word.lower() not in {"will", "reply", "answer", "voice"}]
     return words[0] if words else "debate"
@@ -79,7 +121,7 @@ def _salt(key: str) -> int:
     return int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16)
 
 
-def _hook_candidates(opening: str, keyword: str) -> list[str]:
+def _hook_candidates(opening: str, keyword: str, *, append_keyword: bool = True) -> list[str]:
     """Whole spoken clauses, then the same clause cut only at a boundary word."""
     text = re.sub(r"\s+", " ", (opening or "").replace("\u2026", " ").replace("...", " ")).strip()
     parts = re.split(r"(?<=[.!?])\s+|,\s+|;\s+", text)
@@ -111,7 +153,7 @@ def _hook_candidates(opening: str, keyword: str) -> list[str]:
             question = chunk[0].upper() + chunk[1:]
             if not question.endswith("?"):
                 question += "?"
-            if keyword.lower() in question.lower():
+            if keyword.lower() in question.lower() or not append_keyword:
                 found.append(re.sub(r"\s+", " ", question))
             else:
                 found.append(re.sub(r"\s+", " ", question[:-1] + f" under {keyword}?"))
@@ -125,7 +167,6 @@ def seo_title(asker: str, answerer: str, opening: str, quote: str, *, used: set[
     It is never chopped mid-phrase to make the keyword fit.
     """
     keyword, _tag = keyword_for(opening, quote)
-    word = _topic_word(opening, quote)
     suffix = f" | {asker} vs {answerer}"
     limit = 70 - len(suffix)
 
@@ -146,22 +187,45 @@ def seo_title(asker: str, answerer: str, opening: str, quote: str, *, used: set[
             continue
         if usable(question):
             return f"{question}{suffix}"
-    extras = [
-        item
-        for item in topic_words(opening, quote)
-        if item.lower() not in {"will", "reply", "answer", "voice", word.lower()}
-    ]
-    frames = [
-        f"Does {keyword} excuse the {word}?",
-        f"Is {keyword} about the {word}?",
-        f"Should {keyword} cover the {word}?",
-        f"Is {keyword} the issue?",
-    ]
-    frames.extend(f"Does {keyword} excuse the {extra}?" for extra in extras[:4])
-    for question in frames:
-        if usable(question):
+    # The keyword stays in the description. A title is the spoken question,
+    # including one that ends on a preposition. Stock frames are not used:
+    # "Does {keyword} excuse the …?", "Is {keyword} about …?",
+    # "Should {keyword} cover …?".
+    spoken_opening = re.sub(r"\s+", " ", (opening or "").strip())
+    if spoken_opening and not spoken_opening.endswith("?"):
+        spoken_opening += "?"
+    if (
+        spoken_opening
+        and spoken_opening not in used
+        and len(spoken_opening) <= limit
+        and spoken_opening.endswith("?")
+        and not _TEMPLATE_TITLE.match(spoken_opening)
+    ):
+        return f"{spoken_opening}{suffix}"
+    for question in _hook_candidates(opening, keyword, append_keyword=False):
+        lead = re.findall(r"[A-Za-z']+", question)
+        if not lead or lead[0].lower() not in _QUESTION_LEAD:
+            continue
+        if _TEMPLATE_TITLE.match(question):
+            continue
+        if (
+            question not in used
+            and len(question) <= limit
+            and is_complete_question(question)
+            and not hook_is_mid_cut(question, opening)
+        ):
             return f"{question}{suffix}"
-    question = f"Is {keyword} the issue?"
+    spoken = [
+        question
+        for question in _hook_candidates(opening, keyword, append_keyword=False)
+        if question not in used
+        and len(question) <= limit
+        and is_complete_question(question)
+        and not _TEMPLATE_TITLE.match(question)
+    ]
+    if spoken:
+        return f"{spoken[0]}{suffix}"
+    question = "Who answers for this?"
     return f"{question}{suffix}"
 
 
