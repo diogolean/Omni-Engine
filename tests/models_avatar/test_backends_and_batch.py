@@ -9,28 +9,19 @@ from pathlib import Path
 
 import pytest
 
-from models_avatar.avatar_config import load_avatar
-from models_avatar.backends import get_backend
-from models_avatar.backends.base import GenerationJob, GenerationResult
-from models_avatar.backends.runpod_pod import RunPodPodBackend
-from models_avatar.backends.runpod_serverless import (
-    RunPodServerlessBackend,
-    build_run_payload,
-    image_requirements,
-)
-from models_avatar.backends.stubs import CivitaiOnsiteBackend, GeminiImageBackend
-from models_avatar.batch import run_batch
-from models_avatar.civitai.client import CivitaiClient
-from models_avatar.civitai.training import build_training_payload, submit_training_job
-from models_avatar.errors import (
-    BackendNotImplemented,
-    CivitaiError,
-    GenerationError,
-    RetryableGenerationError,
-)
-from models_avatar.http_client import BROWSER_USER_AGENT
-from models_avatar.prompts import compose_positive
-from models_avatar.service import prepare_job, render
+from production.providers.avatar.avatar_config import load_avatar
+from production.providers.avatar.backends import get_backend
+from production.providers.avatar.backends.base import GenerationJob, GenerationResult
+from production.providers.avatar.backends.runpod_pod import RunPodPodBackend
+from production.providers.avatar.backends.runpod_serverless import RunPodServerlessBackend, build_run_payload, image_requirements
+from production.providers.avatar.backends.stubs import CivitaiOnsiteBackend, GeminiImageBackend
+from production.providers.avatar.batch import run_batch
+from production.providers.avatar.civitai.client import CivitaiClient
+from production.providers.avatar.civitai.training import build_training_payload, submit_training_job
+from production.providers.avatar.errors import BackendNotImplemented, CivitaiError, GenerationError, RetryableGenerationError
+from production.providers.avatar.http_client import BROWSER_USER_AGENT
+from production.providers.avatar.prompts import compose_positive
+from production.providers.avatar.service import prepare_job, render
 
 _SCENE = (
     "relaxed closed-mouth smile, standing with shoulders square to the camera, "

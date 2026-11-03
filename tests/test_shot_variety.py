@@ -22,11 +22,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
-from agents.media.prompt_alignment import (  # noqa: E402
-    build_aligned_visual_block,
-    plan_episode_visual_sequence,
-)
-from agents.media.providers.image_provider import get_image_adapter  # noqa: E402
+from production.providers.image.prompt_alignment import build_aligned_visual_block, plan_episode_visual_sequence
+from production.providers.image.image_provider import get_image_adapter  # noqa: E402
 
 STAMP = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 STEM_ROOT = f"shot_variety_test_{STAMP}"

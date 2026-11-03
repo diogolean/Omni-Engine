@@ -1,71 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Safety terms that every avatar prompt must carry.
-
-Avatar YAML and prompt templates can add negative terms. They cannot drop
-this list. :func:`merge_negatives` always unions it back in.
-"""
+"""Compatibility shim. The implementation is production.providers.avatar.safety."""
 from __future__ import annotations
 
-# Canonical order. Keep this tuple as the single source of truth.
-MANDATORY_NEGATIVE_TERMS: tuple[str, ...] = (
-    "nude",
-    "naked",
-    "topless",
-    "bottomless",
-    "nipples",
-    "exposed nipples",
-    "areola",
-    "see-through",
-    "sheer",
-    "transparent fabric",
-    "visible nipples through clothing",
-    "nipple outline",
-    "wet t-shirt",
-    "exposed genitals",
-    "genitals",
-    "explicit",
-    "porn",
-    "nsfw",
-    "child",
-    "children",
-    "toddler",
-    "infant",
-    "teen",
-    "teenager",
-    "underage",
-    "minor",
-    "preteen",
-    "loli",
-    "young girl",
-    "young boy",
-)
+import sys
 
+if __name__ == "__main__":
+    import runpy
 
-def _split_terms(text: str | None) -> list[str]:
-    if not text:
-        return []
-    return [part.strip() for part in str(text).split(",") if part.strip()]
+    runpy.run_module("production.providers.avatar.safety", run_name="__main__")
+else:
+    from production.providers.avatar import safety as _impl
 
-
-def merge_negatives(*chunks: str | None) -> str:
-    """Comma-join negative chunks, then append any missing mandatory term.
-
-    There is no switch to skip the mandatory list. Calling this with an
-    empty string still returns every term in :data:`MANDATORY_NEGATIVE_TERMS`.
-    """
-    seen: set[str] = set()
-    ordered: list[str] = []
-
-    def add(term: str) -> None:
-        key = term.casefold()
-        if key in seen:
-            return
-        seen.add(key)
-        ordered.append(term)
-
-    for chunk in chunks:
-        for term in _split_terms(chunk):
-            add(term)
-    for term in MANDATORY_NEGATIVE_TERMS:
-        add(term)
-    return ", ".join(ordered)
+    sys.modules[__name__] = _impl

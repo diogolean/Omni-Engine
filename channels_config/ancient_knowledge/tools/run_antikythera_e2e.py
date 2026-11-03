@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Lock the prior Antikythera 129-word voiceover and run ECONOMIC_REEL once."""
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import os
 import sys
@@ -39,7 +40,7 @@ TOPIC = (
 
 
 def _patch_locked_script() -> None:
-    from agents.writer.caption_engine import CaptionEngine
+    CaptionEngine = Symbol('production.writers.caption_engine', 'CaptionEngine')
 
     def _locked(self, *args, **kwargs):  # noqa: ANN001
         print(
@@ -51,7 +52,7 @@ def _patch_locked_script() -> None:
     CaptionEngine.generate_sequence_voiceover = _locked  # type: ignore[method-assign]
 
     try:
-        from agents.media.batch_planner import UniquenessGuard
+        UniquenessGuard = Symbol('production.media.batch_planner', 'UniquenessGuard')
 
         UniquenessGuard.try_claim = lambda self, *a, **k: (True, None, 0.0)  # type: ignore
     except Exception:

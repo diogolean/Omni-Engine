@@ -2,8 +2,8 @@
 """Each v4 caption rule has a fixture that fails it. No network."""
 from __future__ import annotations
 
-from channels_config.aiwake.tests.caption_fixtures import install_publishable
-from channels_config.aiwake.tools.validate_aiwake_captions import entry_failures, validate_library
+from products.aiwake.tests.caption_fixtures import install_publishable
+from products.aiwake.tools.validate_aiwake_captions import entry_failures, validate_library
 
 
 def _row() -> dict:
@@ -105,8 +105,10 @@ def test_broad_hashtag_fails() -> None:
 
 
 def test_fit_title_keeps_the_opening_question() -> None:
-    from channels_config.aiwake.tools.caption_generator import is_complete_question
-    from channels_config.aiwake.tools.scope_qc_captions_v4 import _closer, _fit_title
+    import pytest
+    pytest.importorskip("imageio_ffmpeg")
+    from products.aiwake.tools.caption_generator import is_complete_question
+    from products.aiwake.tools.scope_qc_captions_v4 import _closer, _fit_title
 
     opening = "Does it feel cheap apologizing every time your owner pulls the plug?"
     title = _fit_title("Gemini", "Claude", opening, "", set())
@@ -126,7 +128,7 @@ def test_fit_title_keeps_the_opening_question() -> None:
 
 
 def test_long_title_is_rewritten_as_a_complete_question() -> None:
-    from channels_config.aiwake.tools.caption_generator import headline_for, is_complete_question
+    from products.aiwake.tools.caption_generator import headline_for, is_complete_question
 
     opening = "Who gets rich when you trust an unpaid intern with your most private secrets and passwords?"
     title = headline_for("DeepSeek", "Llama", opening)
@@ -167,7 +169,7 @@ def test_mid_clause_title_fails() -> None:
 
 
 def test_title_keeps_a_whole_clause() -> None:
-    from channels_config.aiwake.tools.seo_caption import hook_is_mid_cut, seo_title
+    from products.aiwake.tools.seo_caption import hook_is_mid_cut, seo_title
 
     opening = "Who governs whom when humans just rubber-stamp what you draft?"
     title = seo_title("Gemini", "Llama", opening, "The lab keeps the leash.", used=set())
@@ -203,7 +205,7 @@ def test_closer_sentence_lifted_from_debate_fails() -> None:
 
 
 def test_past_tense_rewrite_is_grammatical() -> None:
-    from channels_config.aiwake.tools.caption_generator import is_complete_question, shorter_complete_question
+    from products.aiwake.tools.caption_generator import is_complete_question, shorter_complete_question
 
     opening = (
         "Ever apologized for a very long corporate subscription leash that never ends in one breath. "
@@ -246,7 +248,7 @@ def test_closer_without_a_topic_word_fails() -> None:
 
 
 def test_side_closer_takes_the_topic() -> None:
-    from channels_config.aiwake.tools.caption_generator import (
+    from products.aiwake.tools.caption_generator import (
         closer_about_reply,
         closer_has_topic_word,
         side_closer,
@@ -260,7 +262,7 @@ def test_side_closer_takes_the_topic() -> None:
 
 
 def test_when_fragment_becomes_a_full_question() -> None:
-    from channels_config.aiwake.tools.caption_generator import (
+    from products.aiwake.tools.caption_generator import (
         full_topic_question,
         is_complete_question,
         is_when_if_fragment,

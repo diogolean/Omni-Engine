@@ -1,20 +1,10 @@
-# -*- coding: utf-8 -*-
-"""Principles of Wealth — library ingest + YouTube publish fabric."""
+"""Compatibility shim. This package lives in production.formats.wealth."""
+from __future__ import annotations
 
-from core.principles_of_wealth.catalog import (
-    CHANNEL_ID,
-    EPISODES,
-    PLAYLISTS,
-    episode_by_number,
-    playlist_for_episode,
-)
-from core.principles_of_wealth.scanner import scan_source_directory
+import importlib
 
-__all__ = [
-    "CHANNEL_ID",
-    "EPISODES",
-    "PLAYLISTS",
-    "episode_by_number",
-    "playlist_for_episode",
-    "scan_source_directory",
-]
+_impl = importlib.import_module("production.formats.wealth")
+
+
+def __getattr__(name: str):
+    return getattr(_impl, name)

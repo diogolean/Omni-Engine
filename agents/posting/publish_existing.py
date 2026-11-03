@@ -84,22 +84,8 @@ try:
 except ImportError:
     pass
 
-from agents.posting.youtube_publisher import (  # noqa: E402
-    build_credentials,
-    build_youtube_client,
-    get_or_create_playlist,
-    add_video_to_playlist,
-    get_next_publish_slot,
-    advance_slot,
-    upload_short,
-    update_video_metadata,
-    POST_INTERVAL_HOURS,
-    MAX_DAILY_UPLOADS,
-    DailyUploadSafetyGate,
-    YouTubeQuotaExceededError,
-    queue_pending_upload,
-    resume_pending_youtube_uploads,
-)
+from shared.logging import setup_cli_logging  # noqa: E402
+from distribution.publishers.api.youtube_upload import build_credentials, build_youtube_client, get_or_create_playlist, add_video_to_playlist, get_next_publish_slot, advance_slot, upload_short, update_video_metadata, POST_INTERVAL_HOURS, MAX_DAILY_UPLOADS, DailyUploadSafetyGate, YouTubeQuotaExceededError, queue_pending_upload, resume_pending_youtube_uploads
 
 
 # ---------------------------------------------------------------------------
@@ -107,15 +93,7 @@ from agents.posting.youtube_publisher import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 def _setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    if not verbose:
-        for _noisy in ("googleapiclient.discovery", "google.auth", "urllib3"):
-            logging.getLogger(_noisy).setLevel(logging.WARNING)
+    setup_cli_logging(verbose)
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +106,8 @@ def _extract_hashtags(text: str) -> list[str]:
 
 
 def _library_path(page: str) -> Path:
-    from modules.distribution_contract import content_library_path
-    from modules.durable_store import restore_channel_state
+    from shared.contracts import content_library_path
+    from shared.store import restore_channel_state
 
     restore_channel_state(page)
     return content_library_path(page)
@@ -150,58 +128,55 @@ def lookup_metadata_from_library(
     Returns a dict with keys ``caption``, ``tags``, ``topic``, ``title``
     (all empty strings when the entry is not found).
     """
+    from shared.contracts import load_content_items
+
     lib_path = _library_path(page)
     if not lib_path.is_file():
         return {}
-
-    try:
-        rows: list[dict] = json.loads(lib_path.read_text(encoding="utf-8"))
-        if not isinstance(rows, list) or not rows:
-            return {}
-    except (json.JSONDecodeError, OSError):
+    items = load_content_items(lib_path, channel_id=page)
+    if not items:
         return {}
 
-    stem  = video_path.stem.lower()
-    match: dict | None = None
-
-    for row in rows:
-        stored = str(row.get("video_path", "")).lower()
-        if stored and (stored == str(video_path).lower() or stem in stored):
-            match = row
+    stem = video_path.stem.lower()
+    wanted = str(video_path).replace("\\", "/").rstrip("/").lower()
+    match = None
+    for item in items:
+        stored = str(item.video_path or "").replace("\\", "/").rstrip("/").lower()
+        if stored and (stored == wanted or stem in stored):
+            match = item
             break
-
-    if match is None and len(rows) == 1:
-        match = rows[0]
-
+    if match is None and len(items) == 1:
+        match = items[0]
     if match is None:
         return {}
 
-    raw_caption: str = match.get("final_caption") or match.get("caption") or ""
-    topic: str = match.get("topic") or ""
+    raw_caption = match.final_caption or match.base_metadata.caption
+    topic = match.topic or ""
+    title = match.base_metadata.title or (topic[:100] if topic else "")
     return {
         "caption": raw_caption,
-        "tags":    _extract_hashtags(raw_caption),
-        "topic":   topic,
-        "title":   topic[:100] if topic else "",
+        "tags": _extract_hashtags(raw_caption),
+        "topic": topic,
+        "title": title,
     }
 
 
 def lookup_metadata_by_video_id(page: str, video_id: str) -> dict[str, Any]:
     """Search ``content_library.json`` for an entry matching a YouTube video ID."""
+    from shared.contracts import load_content_items
+
     lib_path = _library_path(page)
     if not lib_path.is_file():
         return {}
-    try:
-        rows = json.loads(lib_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    for row in (rows if isinstance(rows, list) else []):
-        if str(row.get("youtube_video_id", "")) == video_id:
-            raw_cap = row.get("final_caption") or row.get("caption") or ""
+    for item in load_content_items(lib_path, channel_id=page):
+        extra = item.model_extra or {}
+        stored = str(extra.get("youtube_video_id") or item.platform_overrides.youtube.video_id or "")
+        if stored == video_id:
+            raw_cap = item.final_caption or item.base_metadata.caption
             return {
                 "caption": raw_cap,
-                "tags":    _extract_hashtags(raw_cap),
-                "topic":   row.get("topic") or "",
+                "tags": _extract_hashtags(raw_cap),
+                "topic": item.topic or "",
             }
     return {}
 
@@ -211,7 +186,7 @@ def lookup_metadata_by_video_id(page: str, video_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def resolve_video_paths(raw_paths: list[str]) -> list[Path]:
-    from utils.pipeline_paths import coerce_outputs_path
+    from shared.paths import coerce_outputs_path
 
     resolved: list[Path] = []
     for raw in raw_paths:
@@ -227,19 +202,19 @@ def resolve_video_paths(raw_paths: list[str]) -> list[Path]:
     return resolved
 
 
+def _page_default_tags(page: str) -> list[str]:
+    """``YOUTUBE_DEFAULT_TAGS`` from the channel folder. Missing list → shorts."""
+    from shared.channel_flags import value
+
+    configured = value((page or "").strip().lower(), "YOUTUBE_DEFAULT_TAGS", None)
+    if isinstance(configured, (list, tuple)) and configured:
+        return [str(tag) for tag in configured]
+    return ["shorts"]
+
+
 def build_tags(tags_raw: list[str], page: str, extra: list[str] | None = None) -> list[str]:
-    """Merge CLI tags with page-level defaults and library-extracted hashtags."""
-    defaults = {
-        "ancient_knowledge": ["ancient knowledge", "ancient mysteries", "shorts", "history", "conspiracy"],
-        "master_mei":        [
-            "master mei", "mind control", "stoicism", "financial freedom",
-            "wealth mindset", "business strategy", "self discipline", "shorts",
-        ],
-        "wonder_feed":       ["wonder feed", "amazing facts", "shorts", "mindblowing"],
-        "anna_protocol":     ["relationship advice", "self-growth", "shorts"],
-    }
-    base = defaults.get(page.lower(), ["shorts"])
-    all_tags: list[str] = list(base)
+    """Merge CLI tags with the page's YOUTUBE_DEFAULT_TAGS and library hashtags."""
+    all_tags: list[str] = list(_page_default_tags(page))
     for t in (extra or []) + tags_raw:
         if t and t not in all_tags:
             all_tags.append(t)

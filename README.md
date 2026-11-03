@@ -1,453 +1,216 @@
-# Unified Multi-Page Content Factory
+# Omni-Engine
 
-> **A multi-persona, AI-powered social-media production engine** that generates brand-aligned images, kinetic video reels, and scheduled postplanner sheets across multiple independent page identities — from a single CLI command.
+Omni-Engine is the content factory behind a set of public pages. One command drafts a still or a short video for a channel. A worker on a small cloud VM publishes on a schedule. Generation, publishing, and the animation engine live in separate packages so each can change on its own.
 
----
+The repository is public. API keys and tokens live only in `.env` (gitignored). [`.env.example`](.env.example) lists the names and stays empty of secrets. No license has been chosen yet.
 
-## Table of Contents
+Diagrams: [docs/architecture/diagrams.md](docs/architecture/diagrams.md).
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-  - [Page / Persona Orchestration](#page--persona-orchestration)
-  - [Central Data Structures](#central-data-structures)
-  - [Post Types and Formats](#post-types-and-formats)
-  - [Video Pipeline](#video-pipeline)
-- [Integrated APIs](#integrated-apis)
-- [Cost-Optimization and Rate-Limit Strategy](#cost-optimization-and-rate-limit-strategy)
-- [Concurrency Model](#concurrency-model)
-- [Directory Structure](#directory-structure)
-- [Setup](#setup)
-- [Usage](#usage)
-- [Page Configuration](#page-configuration)
-- [Pinterest Engine](#pinterest-engine)
-- [License](#license)
-
----
-
-## Overview
-
-The Unified Multi-Page Factory is a production-grade Python automation pipeline built for high-volume social media content creation. It orchestrates:
-
-- **Multi-page persona switching** — each page (e.g. `wonder_feed`, `anna_protocol`, `master_mei`) has isolated DNA, assets, and output directories.
-- **Dual AI brain** — economic (DeepSeek + Gemini Flash) or premium (Claude + Gemini Pro) text generation chains selected per run.
-- **Gemini image generation** — atmospheric graphite sketches, full-bleed hyper-literal backgrounds, or avatar-composited portraits.
-- **ECONOMIC_REEL pipeline** — vertical 1080x1920 MP4 with ElevenLabs TTS voiceover, word-level subtitle burn, ambient soundscape, dual-stage Ken Burns zoom, and cinematic film grain.
-- **Automatic postplanner export** — XLSX sheets compatible with bulk scheduling tools, populated with B2/ImgBB CDN URLs.
-- **Pinterest publishing engine** — OAuth-authenticated pin creation with human-mimicking drip scheduling.
-
----
-
-## Architecture
-
-### Page / Persona Orchestration
-
-Page selection is a **bootstrap-time binding**, not a runtime swap.
-
-```
-main.py --page wonder_feed --post-type ECONOMIC_REEL --qty 3
-         │
-         ├─► _preparse_active_page() sets ACTIVE_PAGE env var
-         ├─► config.py resolves all page-scoped paths
-         └─► channel_loader.load_page_context() builds PageContext
-                  │
-                  └─► imports channels_config/{page_id}/page_config.py
-                       └─► master_dna.json  (persona voice, environments, CTAs)
+```mermaid
+flowchart LR
+  subgraph PROD[production]
+    PL[pipeline stages] --> PV[providers]
+    PL --> MD[media]
+    PL --> QA[qa]
+    PL --> CO[cost]
+    FM[formats] --> PL
+  end
+  subgraph ANIM[animation]
+    API[animation.api] --> RIG[parametric renderer]
+  end
+  subgraph DIST[distribution]
+    WK[workers] --> SC[scheduling]
+    SC --> PB[publishers]
+  end
+  ACC[accounts] --> DIST
+  CH[channels_config] -. data .-> PROD
+  CH -. data .-> DIST
+  AW[products/aiwake] --> API
+  AW --> PB
+  PROD -- ContentItem --> LIB[(library)]
+  LIB --> SC
+  PROD --> SH[shared]
+  DIST --> SH
+  ANIM --> SH
+  AW --> SH
 ```
 
-Each persona lives under `channels_config/{page_id}/`:
+## Layout
 
-| Asset | Purpose |
+| Path | What lives there |
 |---|---|
-| `master_dna.json` | Persona voice, metaphors, environments, CTAs |
-| `persona_dna.py` | Python accessors over the DNA JSON |
-| `page_config.py` | Runtime overrides: typography, ElevenLabs voice, `TOPIC_POOL`, sketch/horror flags, reel dimensions |
-| `avatar_reference/` | Likeness PNG (when `--avatar ON`) |
-| `logo/` | Brand watermark PNG |
-| `style_reference/` | Aesthetic reference screenshots for image-to-image guidance |
+| `production/` | Pipeline, writers, providers, media, QA, cost, and formats (reels, pins, lofi, quotes) |
+| `distribution/` | Publishers, the Pinterest drip and ledger, and the worker process |
+| `accounts/` | Brandings, tokens, and the Pinterest account map |
+| `animation/parametric/` | Product-agnostic puppet renderer. Public entry is `animation/api.py` |
+| `products/aiwake/` | The Aiwake show: pipeline, personas, tools, tests |
+| `channels_config/` | Per-channel data: `master_dna.json`, prompts, store. Aiwake's store stays here |
+| `shared/` | Env, paths, logging, ffmpeg, storage, the `ContentItem` contract |
+| `deploy/` | Dockerfile, compose, VM scripts, RunPod workflows |
+| `tools/` | Operator CLIs. One-offs are `tools/oneoff/`. Lofi experiments are `tools/lofi/` |
 
-Valid built-in pages: `anna_protocol`, `master_mei`, `wonder_feed`, `down_dirty`, `ancient_knowledge`, `momma_circle`, `principles_of_wealth_finance_economics`.
+`main.py` is the factory CLI. `config.py` loads settings. `config/` is YAML only. Tests live in `tests/` and `channels_config/<channel>/tests/`. The root allowlist is [docs/architecture/REPO_LAYOUT.md](docs/architecture/REPO_LAYOUT.md).
 
-All outputs are namespaced under `outputs/{page_id}/` — pages never share output directories.
+`ContentItem` v1 in `shared.contracts` is the only record production hands to distribution. Production does not import distribution. Distribution does not import production. `animation` does not import `products` or `production`.
 
----
+Paths that moved (`engine/`, `agents/`, `core/`, `modules/`, `scripts/`, `quality/VisualQA_Agent/`, `utils/`) still import until M14. Those names are deprecated.
 
-### Central Data Structures
+## Layers
 
-No database. Durable state is flat-file JSON + XLSX.
+**Production** turns a topic into a still or an MP4 and writes a library row. Stages live in `production/pipeline/stages/`. Formats (economic reel, lofi, pins, quotes, wealth, reference footage, Master Mei) live in `production/formats/`.
 
-| Store | Path | Purpose |
+**Distribution** publishes that row. `python -m distribution.workers --role engine` stays idle so an operator can `docker compose exec` a factory run. `--role scheduler` runs the Pinterest drip. Publishers are `distribution/publishers/api/` (YouTube, Pinterest), `distribution/publishers/browser/facebook_scheduler/` (Playwright), and `distribution/publishers/export/post_planner.py` (the xlsx the WordPress bot reads).
+
+**Animation** is the parametric puppet engine. A show calls `animation.api`. It does not reach into the renderer.
+
+**products/aiwake** is one show on that engine. It publishes through the publisher protocol. Its runtime store stays in `channels_config/aiwake/store/`.
+
+**channels_config** is data. `channel_profile_rows()` and `discover_channel_ids()` read the folders. [Adding a channel](#adding-a-channel) is that folder plus account files. The engine source stays as it is.
+
+**shared** is the small base: env getters, paths, ffmpeg, B2 and Drive, retry, and `ContentItem`.
+
+**deploy** is how the Oracle VM gets an image. Compose services stay named `engine` and `scheduler`. The scheduler is profile `scheduler`. Supermemory is profile `memory`.
+
+**accounts** resolves brandings and Pinterest tokens. It is a top-level package.
+
+| Layer | May import | Must not import |
 |---|---|---|
-| `content_library.json` | `outputs/{page}/content_library.json` | Append-only index of published-ready rows for the scheduler |
-| Per-post durable JSON | `outputs/{page}/library/post_*.json` | Full per-variant checkpoint (topic, caption, URLs, B2 link) |
-| `automated_bulk_posts_import.xlsx` | `outputs/{page}/automated_bulk_posts_import.xlsx` | PostPlanner 3-column bulk import (DATE/TIME, CAPTION, MEDIA URL) |
-| `session_hooks_cache.json` | `outputs/{page}/session_hooks_cache.json` | Short-term LLM memory — used hooks appended each run to prevent repetition |
-| `master_inventory.json` | `outputs/{page}/master_inventory.json` | Multi-platform canonical inventory built by Pinterest sync |
+| `shared` | stdlib, third party | every other package |
+| `animation` | `shared` | `production`, `distribution`, `products`, `channels_config` |
+| `production` | `shared` | `distribution`, animation internals, `products`. Puppets go through `animation.api` |
+| `distribution` | `shared` | `production`, `animation`, `products` |
+| `products.aiwake` | `animation.api`, publisher protocols, `shared` | `production`, other products |
+| `channels_config/<id>` | data; a profile module may read `shared` | other packages |
 
-**Durable JSON shape (ECONOMIC_REEL)**:
-```json
-{
-  "page_id": "wonder_feed",
-  "post_type": "ECONOMIC_REEL",
-  "post_format": "DYNAMIC_REEL",
-  "topic": "Why we stay when we should leave",
-  "overlay_text": "You stayed because you thought love was enough.",
-  "humanized_caption": "...",
-  "b2_url": "https://s3.us-east-005.backblazeb2.com/MediaupscaleStorage/...",
-  "imgbb_url": "",
-  "caption_status": "FINAL",
-  "created_utc": "2026-06-05T14:22:11Z"
-}
+## Quick start
+
+Keyless. Reel tests use fakes. ffmpeg itself is real.
+
+```bash
+git clone https://github.com/diogolean/Omni-Engine.git
+cd Omni-Engine
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-ci.txt
+pytest -q tests channels_config --ignore=channels_config/aiwake
+OMNI_SKIP_DOTENV=1 OUTPUT_PATH=/tmp/demo python -m distribution.workers --role scheduler --once --dry-run
 ```
 
-Write helpers: `durable_library.py` — `write_atomic_json` / `merge_update_json`.
+That scheduler command builds cards and logs them. It does not call Pinterest and it does not write the ledger.
 
----
+A real render needs ffmpeg on `PATH` and the keys in `.env`. Install `requirements.txt` for the full media stack (`requirements-docker.txt` is the arm64 image). `main.py --test` prints scaffolds. When `GEMINI_API_KEY` is set, startup still opens a Gemini client before that scaffold returns. A keyless `--mock` flag for `main.py` is a follow-up.
 
-### Post Types and Formats
+```bash
+python main.py --channel wonder_feed --post-type ECONOMIC_REEL --quantity 1
+```
 
-| Post Type (`--post-type`) | Description |
+## Channels
+
+This table is a snapshot of the folders on this commit. `production.writers.persona.channel_profile_rows()` walks `channels_config/`, keeps every folder that has `master_dna.json`, and skips `aiwake` and `shared`. Eight folders match today. The same walk is the list at 10, 20, or 100 channels. Display name, default format, and avatar mode come from that folder's `page_config.py`. Aiwake is a product, so it is not a row. The function does not assign a publisher.
+
+| Channel | Display name | Default format | Avatar |
+|---|---|---|---|
+| `ancient_knowledge` | Ancient Knowledge | `IMAGE_BACKGROUND` | OFF |
+| `anna_protocol` | The Holistic Legacy — Anna's Protocol | `IMAGE_AVATAR` | ON |
+| `down_dirty` | Down & Dirty — Matrix Escape & Raw Mindset | `IMAGE_AVATAR` | OFF |
+| `endless_summer_paradise` | Endless Summer Paradise | `REFERENCE_BASED_REELS` | OFF |
+| `master_mei` | Master Mei \| Mind Control | `IMAGE_AVATAR` | ON |
+| `momma_circle` | Momma Circle | `REFERENCE_BASED_REELS` | OFF |
+| `principles_of_wealth_finance_economics` | Principles of Wealth — Finance & Economics | `REFERENCE_BASED_REELS` | OFF |
+| `wonder_feed` | Wonder Feed — Emotional Intelligence & Relationships | `IMAGE_AVATAR` | OFF |
+
+`python main.py --channel` accepts whatever `discover_channel_ids()` returns when the process starts (`production/pipeline/channel_context.py`). Aiwake runs from `products/aiwake/`.
+
+## Adding a channel
+
+Add a folder. Leave the engine source alone.
+
+```
+channels_config/<id>/
+  master_dna.json     required. The walker and the CLI key off this file
+  page_config.py      PAGE_DISPLAY_NAME, DEFAULT_FORMAT, DEFAULT_AVATAR_MODE, niche, fonts
+  persona_dna.py      this channel's prompt sentences, beside the JSON
+  tests/              pytest for this channel, collected with the factory suite
+  cli.py              optional. tools/channel_cli.py loads it
+  logo/logo.png       optional brand mark
+```
+
+`production.writers.persona.load_persona` reads `master_dna.json`. `persona_dna.py` is the channel's own prompt module. Momma Circle ships the JSON and `page_config.py` and has no `persona_dna.py`, and it still appears in the snapshot. A folder with `cli.py` owns `python tools/channel_cli.py --channel <id>`. A folder without one uses the Pinterest CLI. Set `IMAGE_SOURCE_POLICY` in `page_config.py` (`free_first`, `free_only`, or `ai_only`). A channel that omits it stays on `ai_only`.
+
+Account and scheduler registration is data:
+
+1. `config/brandings.yaml` — one branding key. Each platform (`pinterest`, `youtube`, `facebook`) has `active`. Token fields are env var names.
+2. `config/pinterest_accounts.yaml` — copy a block. `active: true`. A `site_url` or board that is still `TODO` is skipped. `runner` is `local`, `docker`, `both`, or `off`. The scheduler publishes every active row. No worker edit.
+3. `.env` names for that branding: `PINTEREST_ACCESS_TOKEN_<BRANDING>`, `PINTEREST_REFRESH_TOKEN_<BRANDING>`, `PINTEREST_BOARD_ID_<BRANDING>`, `PINTEREST_BOARD_NAME_<BRANDING>`, plus the app id and secret the yaml names. A per-channel file may live at `channels_config/<id>/.env.<id>` on the host (the container sees it under `channels_env/`). Values stay in `.env`.
+4. YouTube, when that platform is active: `credentials/tokens/youtube_token_<id>.json`. Uploads stay on `python main.py --publish-youtube`.
+5. Restart the scheduler process so it re-reads the yaml.
+
+Facebook `active` in the branding file is recorded. Publishing still goes through Playwright (`distribution/publishers/browser/facebook_scheduler/`) or the Post Planner xlsx. There is no Facebook Graph publisher module to register.
+
+## Scaling to N channels
+
+The snapshot above is eight factory channels. The path to 10, 20, or 100 is the same folder and the same yaml.
+
+**Cadence.** One scheduler process, one replica. Each wake visits every active row in `config/pinterest_accounts.yaml`, then sleeps one shared draw of `MIN_INTERVAL_HOURS` to `MAX_INTERVAL_HOURS`. Those are 7 and 9 (since #68). The gap is for the process. It is not a separate clock per account. The process keeps the pair it started with. A channel `.env` does not replace it. `outputs/scheduler/next_wake.json` stores that same next wake under each account id. A new row joins the next wake when the process restarts and re-reads the yaml.
+
+**Per account, per wake.** `PINTEREST_PINS_PER_RUN` (default 1) is how many pins that account may publish on the wake. `PINTEREST_PINS_PER_DAY` (default 4) is that account's cap on the `PINTEREST_DAY_TZ` calendar day (default `America/Sao_Paulo`). One hundred active accounts, each under its cap, means one hundred pins in a single wake, then the shared sleep.
+
+**Platform limits.** Pinterest HTTP 429 backs off and retries up to three times (`distribution/publishers/api/pinterest.py`). YouTube uploads are outside this loop. `YT_MAX_DAILY_UPLOADS` defaults to 20 per run, and `quotaExceeded` / `uploadLimitExceeded` stop the run. `YT_POST_INTERVAL_HOURS` defaults to 6. Each channel uses its own token file.
+
+**Ledger and the VM.** Idempotency is one file, `OUTPUT_PATH/_omni/publish_ledger.json` (`OMNI_LEDGER_PATH` overrides it). Every account appends to that file. The scheduler is a single replica because the file has no conditional write. A second replica waits on that store. The wake is serial: one account, then the next, one B2 object at a time. Wake duration grows with the number of active accounts. The Oracle VM stays one arm64 engine container plus this optional scheduler. Compose does not grow a service per channel.
+
+The production engine reads behaviour flags and does not special-case a folder id. What still names a channel is listed under [Known debt](docs/architecture/decisions/0008-target-architecture.md#known-debt-hard-coded-channels).
+
+## Configuration
+
+Names only. Values live in `.env`.
+
+| Group | Keys |
 |---|---|
-| `STANDARD_QUOTE` | Research → humanize caption → image with text overlay and logo |
-| `SMART_BAIT` | Ultra-short engagement bait overlay; 4-layer image stack; no avatar |
-| `LONG_CAPTION_IMAGE` | Long FB-style caption; clean illustration + logo (no baked text) |
-| `ECONOMIC_REEL` | Graphite sketch base → vertical MP4 reel with TTS + ambient audio |
+| Runtime | `OMNI_ROLE`, `OMNI_ROOT`, `OMNI_IMAGE_TAG`, `OMNI_SKIP_DOTENV`, `OMNI_LEDGER_PATH`, `SCHEDULER_ENABLED` |
+| Paths | `OUTPUT_PATH`, `ASSETS_PATH`, `OMNI_DRIVE_ROOT`, `REFERENCE_IMAGE_PATH`, `REFERENCE_AVATAR_PATH`, `FFMPEG_BINARY`, `FONT_DIRS` |
+| LLM | `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `USE_CLAUDE`, `CLAUDE_MODEL`, `CLAUDE_POLISH_MODEL`, `LOFI_SCRIPT_MODEL`, `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_PRO_MODEL`, `DEEPINFRA_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `CHEAP_TEXT_CHAIN`, `CHEAP_VISION_CHAIN` |
+| Media | `ELEVENLABS_API_KEY`, `IMGBB_API_KEY`, `REMOTE_GPU_BASE_URL`, `COMFYUI_BASE_URL`, `RUNPOD_API_KEY`, `RUNPOD_ENDPOINT_ID`, `RUNPOD_ENDPOINT_URL`, `CIVITAI_API_TOKEN`, `MODELS_AVATAR_BACKEND`, `MODELS_AVATAR_POD_URL`, `MODELS_AVATAR_MIN_INTERVAL_S`, `MODELS_AVATAR_MODELS_DIR` |
+| Cost | `REEL_REEL_BUDGET_USD`, `REEL_BEAT_BUDGET_USD`, `REEL_NANOBANANA_MAX_PER_REEL`, `REEL_QA_MODEL_CHAIN`, `REEL_HOOK_PARALLAX`, `REEL_RENDERER`, `MAX_GOOGLE_COST_PER_RUN_USD`, `GOOGLE_COST_ALLOW_ABOVE_CEILING`, `ALLOW_GOOGLE_API`, `ELEVENLABS_BILLING`, `ELEVENLABS_LIST_WARN_USD` |
+| Storage | `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET_NAME`, `B2_ENDPOINT_URL` |
+| Pinterest | `PINTEREST_ACCESS_TOKEN`, `PINTEREST_REFRESH_TOKEN`, `PINTEREST_BOARD_ID`, `PINTEREST_BOARD_NAME`, the same four with a `_<BRANDING>` suffix, `PINTEREST_APP_ID`, `PINTEREST_APP_SECRET`, `PINTEREST_PINS_PER_RUN`, `PINTEREST_DAY_TZ`, `MIN_INTERVAL_HOURS`, `MAX_INTERVAL_HOURS` |
+| Facebook | `FB_MOMMA_CIRCLE_PAGE_ID`, `FB_MOMMA_CIRCLE_ACCESS_TOKEN`, `FB_GRAPH_API_VERSION` |
+| Memory | `SUPERMEMORY_BASE_URL`, `SUPERMEMORY_API_KEY`, `SUPERMEMORY_REQUIRED`, `SUPERMEMORY_AUTOSTART_WSL`, `SUPERMEMORY_DISABLED` |
 
-| Post Format (`--format`) | Description |
+## Cost defaults
+
+The cheap stack runs first.
+
+Text (`CHEAP_TEXT_CHAIN`): DeepInfra `deepseek-ai/DeepSeek-V4-Flash`, then OpenRouter `deepseek/deepseek-v4.1-flash`, then DeepSeek `deepseek-flash`.
+
+Vision (`CHEAP_VISION_CHAIN`): Gemma 3 12B on OpenRouter, then the same model on DeepInfra, then `qwen/qwen3.7-flash`, then `z-ai/glm-5.3-flash`.
+
+The reel judge (`REEL_QA_MODEL_CHAIN`) defaults to `qwen` and fails closed. Gemini joins that chain only when the variable lists it.
+
+Claude runs only after an explicit opt-in: `USE_CLAUDE=1`, a non-empty `CLAUDE_MODEL` or `CLAUDE_POLISH_MODEL`, or `LOFI_SCRIPT_MODEL=claude`. `USE_CLAUDE=0` forces it off. A stored `ANTHROPIC_API_KEY` does not turn Claude on.
+
+| Knob | Default |
 |---|---|
-| `IMAGE_AVATAR` | Portrait image with optional avatar composite |
-| `IMAGE_BACKGROUND` | Hyper-literal Gemini background + text (SMART_BAIT default) |
-| `IMAGE_QUOTE` | Legacy text-on-image |
-| `HYBRID_VIDEO` | 7-second Ken Burns loop via `video_converter.py` |
-| `TEXT_QUOTE` | Solid brand backdrop + text; no Gemini image call |
-| `DYNAMIC_REEL` | Full ECONOMIC_REEL video pipeline |
-
-`wonder_feed` automatically forces `ECONOMIC_REEL` toward `DYNAMIC_REEL` and locks the draw style to `SKETCH`.
-
----
-
-### Video Pipeline
-
-**File:** `agents/media/video_engine.py` → `compile_dynamic_reel()`
-
-```
-Graphite PNG (logo-free)
-        │
-        ▼
-[1080x1920 fit, 30 fps]
-        │
-        ├─► Dual-stage Ken Burns zoom
-        │     Phase 1 (0–16s):  scale 1.0 → 1.35  (fast pull-in)
-        │     Phase 2 (16s–end): scale 1.35 → 1.15 (ease out)
-        │
-        ├─► Dark vignette overlay  (overlay_opacity ≈ 0.45)
-        ├─► Hook text layer        (static, centered, Poppins-Bold)
-        ├─► Word-level subtitles   (ElevenLabs timestamps → binary search)
-        ├─► Logo layer             (static PNG, post-zoom, page-tuned opacity)
-        ├─► Film grain             (cinematic noise overlay)
-        │
-        ▼
-   ElevenLabs voiceover MP3
-        + ambient SFX MP3 (22% volume, max 22s)
-        │
-        ▼
-   H.264 / AAC MP4  →  Backblaze B2 upload  →  PostPlanner XLSX
-```
-
-Duration = `max(page.REEL_DURATION, audio_length + 2s tail)`.
-
----
-
-## Integrated APIs
-
-| API | Role | Handler |
-|---|---|---|
-| **Google Gemini** | Image generation, research, economic text brain | `providers/image_provider.py`, `providers/gemini_utils.py`, `caption_engine.py` |
-| **Anthropic Claude** | Premium caption polish / humanizer | `caption_engine.py` |
-| **DeepSeek** | Economic text brain (research, bait, captions) | `caption_engine.py` (OpenAI-compatible client) |
-| **ElevenLabs** | TTS voiceover + word timestamps + ambient SFX | `agents/media/audio_engine.py` |
-| **ImgBB** | Image hosting → MEDIA URL for static posts | `agents/media/imgbb_client.py` |
-| **Backblaze B2** | Video hosting → MEDIA URL for reels | `agents/media/b2_client.py` |
-| **Pinterest API v5** | Pin creation, OAuth, board listing, drip schedule | `agents/posting/pinterest_engine/publisher.py`, `scheduler.py` |
-
-> **Note:** Meta (Facebook/IG) and TikTok fields exist in the inventory schema as future-ready placeholders; live publishing to those platforms is not yet implemented.
-
-All credentials are stored exclusively in `.env` (never committed) and loaded through `config.py`.
-
----
-
-## Cost-Optimization and Rate-Limit Strategy
-
-### Economic mode (`--economic`)
-
-Activating economic mode swaps every heavy LLM call to a cheaper provider:
-
-| Component | Premium | Economic |
-|---|---|---|
-| Text brain | Gemini 2.5 Flash (+ Claude polish) | Gemini 2.5 Flash primary (DeepSeek last-resort only) |
-| Image model | `gemini-3-pro-image-preview` | `gemini-3.1-flash-image` |
-| Research phase | Full PDF corpus sweep | Skipped (direct hook generation) |
-
-### ElevenLabs minimization
-- TTS is invoked **only** for `ECONOMIC_REEL`, never for static image posts.
-- Ambient SFX capped at **22 seconds** per request (`_SFX_MAX_DURATION`).
-- Ambient mixed at **22% volume** (`_AMBIENT_VOLUME`); failure degrades gracefully to voice-only.
-- Voiceover skipped entirely when the API key is absent or script is empty.
-
-### Rate-limit safeguards
-- Gemini image retries with exponential back-off; on repeated failure the premium model is tried.
-- Pinterest scheduler (`scheduler.py`) uses human-mimic timing with randomized inter-pin delays.
-- `write_lock` serializes all shared file writes to prevent race conditions across parallel workers.
-
----
-
-## Concurrency Model
-
-```
-main.py
-  └─► ThreadPoolExecutor(max_workers=min(qty, 5))
-          │
-          ├─► worker 1 ──┐
-          ├─► worker 2   │  (image API, LLM, audio — fully parallel)
-          ├─► worker 3   │
-          └─► ...        │
-                         ▼
-                    write_lock  ──► automated_bulk_posts_import.xlsx
-                                ──► content_library.json
-                    hooks_cache_lock ──► session_hooks_cache.json
-```
-
-- `qty == 1` runs synchronously (no thread overhead).
-- `qty > 1` fans out up to **5 workers**; failed variants are logged and skipped without crashing the batch.
-- All shared-file I/O is protected by `threading.Lock`.
-
----
-
-## Project structure rules
-
-The repository root holds entry points, config, and top-level packages only: `main.py`, `config.py`, `channel_loader.py`, `requirements.txt`, `.env`, and packages such as `agents/`, `channels_config/`, `core/`, `models_avatar/`, `utils/`, and `tests/`.
-
-- Temp, preview, review, and log files go in the per-project folder under `outputs/<project>/`. Use `temp_path(channel, *parts)` and `review_path(channel, *parts)` from `utils/pipeline_paths.py` (`outputs/<channel>/_tmp/` and `outputs/<channel>/_review/`). Do not create `_tmp*`, `_cp_preview`, `_review`, or log folders at the repo root.
-- Tests live in that project's `tests/` folder (`tests/` or `channels_config/<channel>/tests/`).
-- Unused temp folders are deleted once nothing references them.
-
-See `docs/PROJECT_STRUCTURE.md`.
-
----
-
-## Directory Structure
-
-```
-Unified Multi-Page Factory/
-├── main.py                     # Primary CLI orchestrator
-├── config.py                   # Credentials, model IDs, ACTIVE_PAGE paths
-├── channel_loader.py           # Channel-config bootstrap (PageContext; CLI `--page`)
-├── utils/run_ledger.py         # Per-run model/banner registry → outputs/logs/
-├── requirements.txt
-├── .env                        # Factory secrets — NOT committed, stays at root
-│
-├── agents/
-│   ├── writer/                 # Captions + LOFI scripts (script_agent, caption_engine)
-│   ├── rag/                    # Channel RAG + inspectable LOFI lookup (lofi_rag)
-│   ├── mcp/                    # model_api_flows.py + text_model.py (LOFI_SCRIPT_MODEL)
-│   ├── orchestrator/           # Agentic pipeline
-│   ├── media/                  # Audio, video, providers, VisualArchitect
-│   │   ├── avatar_engine/      # mei_visual + visual_architect
-│   │   └── providers/          # Image adapters (Together / Gemini / remote GPU)
-│   └── posting/                # YouTube / Pinterest / Facebook CLIs
-│       ├── pinterest_main.py
-│       ├── pinterest_oauth.py
-│       ├── publish_existing.py
-│       ├── youtube_publisher.py
-│       ├── facebook_scheduler/
-│       └── pinterest_engine/
-│
-├── core/                       # Reel engines (was core_engine/)
-│   ├── economic_reel_lofi/
-│   ├── principles_of_wealth/
-│   └── reel_sequence_engine.py
-│
-├── quality/VisualQA_Agent/     # Generate → critique → auto-correct
-├── utils/run_ledger.py         # Per-run model/banner registry
-├── infra/runpod/workflows/     # ComfyUI workflow JSON
-├── models_avatar/              # AI-model personas (Sophie Bennet). Not a video channel.
-├── tests/                      # Former root test_*.py
-├── scripts/                    # One-offs
-│
-├── channels_config/
-│   ├── wonder_feed/
-│   ├── anna_protocol/
-│   ├── master_mei/
-│   ├── down_dirty/
-│   ├── momma_circle/
-│   ├── ancient_knowledge/      # includes .env.ancient_knowledge + token_ancient_knowledge.json
-│   └── principles_of_wealth_finance_economics/
-│       └── wealth_main.py      # Library-ingest + YouTube publish CLI
-│
-├── docs/                       # Architecture + command docs
-│   └── architecture/           # DEPRECATED — artifacts live in portfolio_showcase/
-│
-└── outputs/                    # NOT committed (generated at runtime)
-    └── {page_id}/
-        ├── content_library.json
-        ├── assets/
-        └── library/
-```
-
----
-
-## Setup
-
-### Prerequisites
-
-- Python 3.10+
-- [Git for Windows](https://git-scm.com/) (or Git on Linux/macOS)
-- FFmpeg on `PATH` (required by MoviePy for video export)
-
-### Installation
-
-```bash
-git clone https://github.com/MediaUpScale/Unified-Multi-Page-Factory-edition.git
-cd Unified-Multi-Page-Factory-edition
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Environment Variables
-
-Copy `.env.example` (or create `.env`) and populate:
-
-```ini
-# LLM providers
-GEMINI_API_KEY=
-ANTHROPIC_API_KEY=
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-DEEPSEEK_MODEL=deepseek-v4-flash
-DEEPSEEK_PRO_MODEL=deepseek-v4-pro
-
-# Media
-ELEVENLABS_API_KEY=
-IMGBB_API_KEY=
-
-# Backblaze B2
-B2_KEY_ID=
-B2_APPLICATION_KEY=
-B2_BUCKET_NAME=
-B2_ENDPOINT_URL=https://s3.us-east-005.backblazeb2.com
-
-# Pinterest
-PINTEREST_ACCESS_TOKEN=
-PINTEREST_BOARD_ID=
-
-# Factory media root (Google Drive on the owner machine)
-OUTPUT_PATH=
-
-# AI-model avatars (models_avatar). Pod URL falls back to REMOTE_GPU_BASE_URL.
-CIVITAI_API_TOKEN=
-MODELS_AVATAR_BACKEND=runpod_pod
-MODELS_AVATAR_POD_URL=
-```
-
----
-
-## Usage
-
-### Generate content for a page
-
-```bash
-# 1 ECONOMIC_REEL for wonder_feed (economic mode, sketch style)
-python main.py --channel wonder_feed --post-type ECONOMIC_REEL --economic --qty 1
-
-# 3 SMART_BAIT images for anna_protocol (premium, avatar OFF)
-python main.py --channel anna_protocol --post-type SMART_BAIT --avatar OFF --qty 3
-
-# 5 STANDARD_QUOTE images for master_mei (economic)
-python main.py --channel master_mei --post-type STANDARD_QUOTE --economic --qty 5
-```
-
-### Retroactive B2 upload + PostPlanner
-
-```bash
-# Upload an existing clips directory and generate postplanner
-python upload_clips_to_b2.py --clips-dir outputs/wonder_feed/clips/
-```
-
-### Pinterest engine
-
-```bash
-# First-time OAuth
-python agents/posting/pinterest_oauth.py
-
-# Sync, transform, and schedule pins
-python agents/posting/pinterest_main.py schedule --channel wonder_feed
-```
-
----
-
-## Page Configuration
-
-Each page is self-contained. The minimal `page_config.py` shape:
-
-```python
-PAGE_ID          = "wonder_feed"
-PAGE_DISPLAY_NAME = "Wonder Feed"
-NICHE            = "Relationship Psychology"
-
-# ElevenLabs voice for ECONOMIC_REEL
-ELEVENLABS_VOICE_ID = "Dorothy"
-ELEVENLABS_MODEL    = "eleven_multilingual_v2"
-
-# Reel layout
-SUBTITLE_FONTSIZE    = 70
-SUBTITLE_Y_POSITION  = 1400
-LOGO_WIDTH           = 380
-LOGO_MAX_HEIGHT      = 95
-LOGO_OPACITY         = 0.98
-LOGO_BOTTOM_MARGIN   = 100
-HOOK_Y_FRAC          = 0.50
-REEL_OVERLAY_OPACITY = 0.45
-REEL_DURATION        = 45
-
-# Dynamic topic pool (prevents script repetition)
-TOPIC_POOL = [
-    "Why we stay past the expiration date",
-    "The psychology of trauma bonding",
-    # ... 20+ topics
-]
-
-# Image style lock
-ILLUSTRATION_STYLE  = "charcoal sketch, high contrast, dark azure shadows"
-STYLE_CHARACTERS    = "melancholic portrait subject, serpentine horror mask"
-```
-
-Add a new page by:
-1. Creating `channels_config/{your_page_id}/` with the files above.
-2. Adding `master_dna.json`, `logo/logo.png`, and (optionally) `avatar_reference/`.
-3. Running `python main.py --page your_page_id --post-type STANDARD_QUOTE`.
-
----
-
-## Pinterest Engine
-
-The Pinterest sub-engine operates independently via `agents/posting/pinterest_main.py`:
-
-| Action | Description |
+| `REEL_REEL_BUDGET_USD` | `0.05` per reel. The spend ledger refuses a paid call past this |
+| `REEL_BEAT_BUDGET_USD` | `0.02` |
+| `REEL_NANOBANANA_MAX_PER_REEL` | `0` |
+| `MAX_GOOGLE_COST_PER_RUN_USD` | ceiling `0.05`. A higher value is clamped unless `GOOGLE_COST_ALLOW_ABOVE_CEILING=1` |
+| `ELEVENLABS_BILLING` | `subscription`. List price is logged and sits outside the reel cap. `metered` bills list price |
+| `ELEVENLABS_LIST_WARN_USD` | `0.20` |
+| `REEL_RENDERER` | `ffmpeg`. `moviepy` is the legacy renderer |
+| `REEL_HOOK_PARALLAX` | off. `1` enables the depth-parallax hook. Ken Burns is the default motion |
+
+## Docs
+
+| | |
 |---|---|
-| `sync` | Pulls existing pins into `master_inventory.json` |
-| `transform` | Converts library assets to 2:3 sales-pin format |
-| `schedule` | Drip-publishes transformed pins with human-mimic delays |
-| `status` | Reports inventory readiness and scheduling queue |
+| Diagrams | [docs/architecture/diagrams.md](docs/architecture/diagrams.md) |
+| Layout | [docs/architecture/REPO_LAYOUT.md](docs/architecture/REPO_LAYOUT.md) |
+| Where it runs | [docs/architecture/overview.md](docs/architecture/overview.md) |
+| `main.py` map | [docs/architecture/main-module-map.md](docs/architecture/main-module-map.md) |
+| Commands | [docs/COMMAND_REFERENCE.md](docs/COMMAND_REFERENCE.md) |
+| Setup | [docs/setup.md](docs/setup.md) |
+| Deploy | [docs/deploy.md](docs/deploy.md) |
+| Index | [docs/README.md](docs/README.md) |
+| Target architecture | [docs/architecture/decisions/0008-target-architecture.md](docs/architecture/decisions/0008-target-architecture.md) |
 
-OAuth tokens are obtained once via `agents/posting/pinterest_oauth.py`. Channel tokens for Ancient Knowledge land in `channels_config/ancient_knowledge/.env.ancient_knowledge`; other channels use `channels_config/<id>/.env` or the factory-root `.env`.
-
----
-
-## License
-
-Proprietary — MediaUpScale LLC. All rights reserved.
-
-Internal use only. Do not distribute without authorization.
+Runbooks: [Google Drive](docs/runbooks/google-drive.md), [Supermemory](docs/runbooks/supermemory.md). Decision records are in [docs/architecture/decisions/](docs/architecture/decisions/).

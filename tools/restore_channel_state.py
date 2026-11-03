@@ -15,11 +15,8 @@ _FACTORY = Path(__file__).resolve().parents[1]
 if str(_FACTORY) not in sys.path:
     sys.path.insert(0, str(_FACTORY))
 
-from modules.durable_store import (  # noqa: E402
-    restore_all_channels_state,
-    restore_channel_state,
-)
-from utils.pipeline_paths import channel_store_dir, discover_channel_ids  # noqa: E402
+from shared.store import restore_all_channels_state, restore_channel_state
+from shared.paths import channel_store_dir, discover_channel_ids  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:

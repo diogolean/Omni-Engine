@@ -1,50 +1,21 @@
 # -*- coding: utf-8 -*-
+"""Shim until M14. Implementation: tools/lofi/verify_comm_v2.py."""
 from __future__ import annotations
 
-from pathlib import Path as _ReorgPath
-import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
-if str(_REORG_ROOT) not in _reorg_sys.path:
-    _reorg_sys.path.insert(0, str(_REORG_ROOT))
-
-from utils.pipeline_paths import coerce_outputs_path
-
-import json
+import sys
 from pathlib import Path
 
-from PIL import Image
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-from agents.writer.script_agent import (
-    _narrative_gate_reasons,
-    analyze_principle_voice,
-)
-from core.economic_reel_lofi.setting_archetypes import score_composition_types
+_TARGET = _ROOT / "tools/lofi/verify_comm_v2.py"
 
-meta_path = coerce_outputs_path("outputs/wonder_feed/clips/lofi_reel_communication_20260823_041756_v01.json")
-mp4 = coerce_outputs_path("outputs/wonder_feed/clips/lofi_reel_communication_20260823_041756_v01.mp4")
-data = json.loads(meta_path.read_text(encoding="utf-8"))
-script = data.get("script") or {}
-lines = script.get("lines") or []
-print("mp4", mp4.exists(), mp4.stat().st_size if mp4.exists() else 0)
-print("duration", data.get("duration_actual_s"), "scenes", data.get("scene_count"))
-print("style_tag", data.get("still_style_tag") or data.get("style_tag"))
-print("watermark", data.get("watermark_native_size"), data.get("logo_file"))
-print("reel", data.get("reel_width"), data.get("reel_height"))
-print("dedup", data.get("dedup") or data.get("near_duplicate"))
-print("composition", score_composition_types(lines).get("summary"))
-print("HOLDS", _narrative_gate_reasons(script, "relationship") or "none")
-for row in lines:
-    rec = analyze_principle_voice(str(row.get("text") or ""))
-    print(
-        f"  s{row.get('scene')} {row.get('beat_function'):12} "
-        f"{row.get('composition_type'):18} "
-        f"{row.get('close_variant') or '-':14} "
-        f"principle={rec.get('status')} {row.get('text')!r}"
-    )
-run = coerce_outputs_path("outputs/wonder_feed/assets/lofi_run_20260823_041455_01")
-for name in ("scene_01.png", "scene_07.png"):
-    im = Image.open(run / name)
-    print(name, im.size)
-    side = run / f"{name.replace('.png', '.style.json')}"
-    if side.exists():
-        print(" ", json.loads(side.read_text(encoding="utf-8")).get("style_tag"))
+if __name__ == "__main__":
+    import runpy
+
+    runpy.run_path(str(_TARGET), run_name="__main__")
+else:
+    import importlib
+
+    sys.modules[__name__] = importlib.import_module("tools.lofi.verify_comm_v2")

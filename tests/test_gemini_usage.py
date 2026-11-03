@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from utils.gemini_usage import GeminiUsage, extract_usage, flash_cost_usd, format_usage_line
-from utils.ocr_engine import _map_ocr_texts
+from production.cost.gemini_usage import GeminiUsage, extract_usage, flash_cost_usd, format_usage_line
+from production.formats.quotes.ocr_engine import _map_ocr_texts
 
 
 def test_flash_cost_matches_list_price() -> None:

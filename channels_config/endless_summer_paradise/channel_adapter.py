@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from core.interfaces.channel import BaseChannelConfig, VisualRules
+from shared.channel_protocol import BaseChannelConfig, VisualRules
 
 _CHANNEL_DIR = Path(__file__).resolve().parent
 _DNA_PATH = _CHANNEL_DIR / "master_dna.json"

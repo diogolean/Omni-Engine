@@ -4,22 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agents.media.scene_prompt_generator import (
-    apply_topic_visual_lock,
-    cosine_similarity,
-    domain_banned_subjects,
-    generate_scene_prompts,
-    infer_visual_domain,
-    sanitize_channel_style,
-)
-from channels_config.shared import mei_chrome
-from core.audio_chunker import AudioChunk, chunk_word_timings
-from modules.reel_visual_qa import (
-    _strip_json,
-    apply_banned_subject_gate,
-    resolve_cached_channel_background,
-)
-from quality.VisualQA_Agent.channel_rag import CHANNEL_DNA_SEED, get_channel_rules
+from production.providers.image.scene_prompt_generator import apply_topic_visual_lock, cosine_similarity, domain_banned_subjects, generate_scene_prompts, infer_visual_domain, sanitize_channel_style
+from production.formats.mei import mei_chrome
+from production.media.audio_chunker import AudioChunk, chunk_word_timings
+from production.qa.reel_visual_qa import _strip_json, apply_banned_subject_gate, resolve_cached_channel_background
+from production.qa.judges.visual_critic.channel_rag import CHANNEL_DNA_SEED, get_channel_rules
 
 
 def test_chunk_word_timings_3_to_5_seconds():
@@ -94,7 +83,7 @@ def test_mei_chrome_is_single_source():
 
 
 def test_page_ctx_inherits_mei_subtitle_chrome():
-    from channel_loader import load_page_context
+    from production.pipeline.channel_context import load_page_context
     from channels_config.master_mei import page_config as mei
 
     ctx = load_page_context(
@@ -228,7 +217,7 @@ def test_topic_lock_applies_to_long_caption_and_carousel_prompts():
     assert "pyramid" in locked["negative_prompt"].lower()
     assert "pyramid" in locked["banned_subjects"]
 
-    from agents.media.avatar_engine.visual_architect import build_carousel_slide_prompt
+    from production.formats.mei.visual_architect import build_carousel_slide_prompt
 
     slide = build_carousel_slide_prompt(
         topic=topic,
@@ -256,7 +245,7 @@ def test_ak_compose_image_prompt_strips_pyramid_on_greek_topic():
 
 def test_b2_bucket_resolves_at_call_time(monkeypatch=None):
     import os
-    from agents.media.b2_client import resolve_b2_bucket_name
+    from shared.storage.b2_client import resolve_b2_bucket_name
 
     previous = os.environ.get("B2_BUCKET_NAME")
     try:

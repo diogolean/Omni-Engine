@@ -1,0 +1,44 @@
+.git
+.github
+.cursor
+.venv
+venv
+env
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+.env
+.env.*
+!.env.example
+credentials
+**/*.pem
+**/*.key
+client_secret*.json
+
+# Safety net: live channel state must not be baked in by COPY . .
+# hydrate_state_file treats a non-empty store file as already present.
+channels_config/*/store/
+# Tracked Aiwake showcase snapshots. Re-include the directory and the files
+# inside it. store/.gitkeep is a git placeholder and stays out.
+!channels_config/aiwake/store/portfolio/
+!channels_config/aiwake/store/portfolio/**
+
+outputs
+logs
+**/*.mp4
+**/*.mp3
+**/*.wav
+**/*.mov
+**/*.avi
+**/*.safetensors
+**/*.zip
+
+portfolio_showcase
+_agent_log
+*.log
+.DS_Store

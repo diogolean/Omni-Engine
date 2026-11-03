@@ -7,9 +7,10 @@ so the core engine can call them uniformly without page-specific logic.
 """
 from __future__ import annotations
 
-import json
 import random
 from pathlib import Path
+
+from channels_config.shared.persona_bind import read_dna
 
 _DNA_PATH = Path(__file__).parent / "master_dna.json"
 _dna: dict = {}
@@ -18,7 +19,7 @@ def _load() -> dict:
     global _dna
     if not _dna:
         try:
-            _dna = json.loads(_DNA_PATH.read_text(encoding="utf-8"))
+            _dna = read_dna(_DNA_PATH)
         except Exception:
             _dna = {}
     return _dna

@@ -1,0 +1,267 @@
+name: Deploy
+
+# Push to main runs Validate first. This workflow starts only after that run
+# succeeds, so the Oracle VM and the GHCR tags move for a sha that already
+# passed lint, the factory tests, the Aiwake tests, and the secret scan.
+# workflow_dispatch rolls back to an image tag that is already in GHCR and
+# does not rebuild. image_tag is required and must be a 40-character SHA or
+# latest. An empty run must not deploy the SHA of whichever ref was selected
+# in the Actions UI.
+on:
+  workflow_run:
+    workflows: ["Validate"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Required. 40-character git SHA or latest already in GHCR. Does not deploy the selected branch SHA."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: omni-engine-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build arm64 image
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Skip when main has moved
+        id: fresh
+        run: |
+          set -euo pipefail
+          MAIN_SHA="$(git ls-remote origin main | awk '$2 == "refs/heads/main" {print $1}')"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          if [ -n "$MAIN_SHA" ] && [ "$HEAD_SHA" = "$MAIN_SHA" ]; then
+            echo "push=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not pushing :latest. ${HEAD_SHA} is not origin/main ${MAIN_SHA:-<unreadable>}." >&2
+            echo "push=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.fresh.outputs.push == 'yes'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.fresh.outputs.push == 'yes'
+
+      - uses: docker/login-action@v3
+        if: steps.fresh.outputs.push == 'yes'
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.fresh.outputs.push == 'yes'
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/diogolean/omni-engine:latest
+            ghcr.io/diogolean/omni-engine:${{ github.event.workflow_run.head_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/diogolean/Omni-Engine
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+
+  # Publishes the image only. The VM deploy job does not start this container.
+  supermemory-image:
+    name: build supermemory arm64 image
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Skip when main has moved
+        id: fresh
+        run: |
+          set -euo pipefail
+          MAIN_SHA="$(git ls-remote origin main | awk '$2 == "refs/heads/main" {print $1}')"
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          if [ -n "$MAIN_SHA" ] && [ "$HEAD_SHA" = "$MAIN_SHA" ]; then
+            echo "push=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not pushing the supermemory tag. ${HEAD_SHA} is not origin/main ${MAIN_SHA:-<unreadable>}." >&2
+            echo "push=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.fresh.outputs.push == 'yes'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.fresh.outputs.push == 'yes'
+
+      - uses: docker/login-action@v3
+        if: steps.fresh.outputs.push == 'yes'
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: steps.fresh.outputs.push == 'yes'
+        with:
+          context: deploy/docker/supermemory
+          file: deploy/docker/supermemory/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/diogolean/supermemory-server:0.0.9
+            ghcr.io/diogolean/supermemory-server:${{ github.event.workflow_run.head_sha }}
+          cache-from: type=gha,scope=supermemory
+          cache-to: type=gha,scope=supermemory,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/diogolean/Omni-Engine
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha }}
+
+  deploy:
+    name: ssh deploy
+    needs: build
+    if: >-
+      always() && (
+        (
+          github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main'
+          && needs.build.result == 'success'
+        )
+        || (
+          github.event_name == 'workflow_dispatch'
+          && needs.build.result == 'skipped'
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Dispatch copies compose from main. It must not check out a branch
+          # whose SHA was never built.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || 'main' }}
+
+      - name: Resolve image tag
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -z "$INPUT_TAG" ]; then
+              echo "image_tag is required. Pass a 40-character git SHA already in GHCR, or latest." >&2
+              exit 1
+            fi
+            TAG="$INPUT_TAG"
+          elif [ "$EVENT_NAME" = "workflow_run" ]; then
+            if [ -z "$HEAD_SHA" ]; then
+              echo "workflow_run.head_sha is empty. Refusing to deploy." >&2
+              exit 1
+            fi
+            MAIN_SHA="$(git ls-remote origin main | awk '$2 == "refs/heads/main" {print $1}')"
+            if [ -z "$MAIN_SHA" ]; then
+              echo "Could not read origin/main. Refusing to deploy." >&2
+              exit 1
+            fi
+            if [ "$HEAD_SHA" != "$MAIN_SHA" ]; then
+              echo "Skipping deploy. workflow_run.head_sha ${HEAD_SHA} is not origin/main ${MAIN_SHA}." >&2
+              echo "deploy=skip" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            TAG="$HEAD_SHA"
+          else
+            echo "Refusing event: $EVENT_NAME" >&2
+            exit 1
+          fi
+          if ! [[ "$TAG" =~ ^(latest|[0-9a-f]{40})$ ]]; then
+            echo "Refusing image tag: $TAG" >&2
+            echo "Pass a 40-character git SHA already in GHCR, or latest." >&2
+            exit 1
+          fi
+          if ! printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null; then
+            echo "Could not sign in to GHCR. Refusing to deploy." >&2
+            exit 1
+          fi
+          REF="ghcr.io/diogolean/omni-engine:${TAG}"
+          if ! docker manifest inspect "$REF" >/dev/null; then
+            echo "Refusing deploy. ${REF} is not in GHCR." >&2
+            exit 1
+          fi
+          echo "deploy=yes" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        if: steps.tag.outputs.deploy == 'yes'
+        with:
+          python-version: "3.12"
+
+      - name: Copy compose and deploy
+        if: steps.tag.outputs.deploy == 'yes'
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/vm_key
+          chmod 600 ~/.ssh/vm_key
+          known=(-o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes)
+          # Channel dirs come from VM_ENSURE_CHANNEL_DIR / VM_STATE_MOUNT.
+          # setup-python above puts python on PATH. Refuse an empty list or
+          # any path outside channels_config/<id> and state/<id>/store.
+          CHANNEL_DIRS="$(python -m production.pipeline.channel_flags --vm-mkdir)"
+          if [[ -z "${CHANNEL_DIRS//[[:space:]]/}" ]]; then
+            echo "Refusing deploy. CHANNEL_DIRS is empty." >&2
+            exit 1
+          fi
+          read -r -a _channel_paths <<< "${CHANNEL_DIRS}"
+          channel_abs=""
+          for rel in "${_channel_paths[@]}"; do
+            if ! [[ "$rel" =~ ^(channels_config|state)/[a-z0-9_]+(/store)?$ ]]; then
+              echo "Refusing deploy. CHANNEL_DIRS entry is not a channel path: ${rel}" >&2
+              exit 1
+            fi
+            channel_abs+=" /opt/omni-engine/${rel}"
+          done
+          ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
+            "mkdir -p /opt/omni-engine/credentials /opt/omni-engine/outputs/logs /opt/omni-engine/scripts${channel_abs}"
+          scp -i ~/.ssh/vm_key "${known[@]}" \
+            deploy/compose/docker-compose.yml "$VM_USER@$VM_HOST:/opt/omni-engine/docker-compose.yml"
+          scp -i ~/.ssh/vm_key "${known[@]}" \
+            deploy/vm/backup_supermemory.sh "$VM_USER@$VM_HOST:/opt/omni-engine/scripts/backup_supermemory.sh"
+          ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
+            "chmod 755 /opt/omni-engine/scripts/backup_supermemory.sh"
+          ssh -i ~/.ssh/vm_key "${known[@]}" "$VM_USER@$VM_HOST" \
+            "IMAGE_TAG='$IMAGE_TAG' CHANNEL_DIRS='$CHANNEL_DIRS' bash -s" < deploy/vm/remote-deploy.sh

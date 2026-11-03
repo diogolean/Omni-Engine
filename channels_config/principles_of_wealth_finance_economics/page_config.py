@@ -6,13 +6,11 @@ Library-ingest channel: existing long-form episodes + Shorts live on the
 external production drive. The factory only needs read access to the source
 directory; processed (re-signed) files land in a Processed/ sibling folder.
 
-Entry point: ``python channels_config/principles_of_wealth_finance_economics/wealth_main.py``
+Entry point: ``python tools/channel_cli.py --channel principles_of_wealth_finance_economics``
 """
 from __future__ import annotations
 
-from pathlib import Path
-
-from utils.pipeline_paths import path_from_env
+from shared.paths import drive_root, path_from_env
 
 # ---------------------------------------------------------------------------
 # Core profile
@@ -37,10 +35,9 @@ ECONOMIC_BRAIN_MODE: bool = True
 # ---------------------------------------------------------------------------
 # Source library — read-only from the factory; do not copy into the repo
 # ---------------------------------------------------------------------------
-_WINDOWS_WEALTH_SOURCE = Path(
-    r"G:\My Drive\Z sosFiles\Z_act\@ NETWORK\@ Contents"
-    r"\You Tube Content Videos\Ray Dalio"
-    r"\Ray Dalio Creation\Ray Dalio Principles of Wealth-Production"
+_WINDOWS_WEALTH_SOURCE = (
+    drive_root() / "@ Contents" / "You Tube Content Videos" / "Ray Dalio"
+    / "Ray Dalio Creation" / "Ray Dalio Principles of Wealth-Production"
 )
 SOURCE_DIRECTORY: str = str(
     path_from_env(("WEALTH_SOURCE_DIRECTORY",), _WINDOWS_WEALTH_SOURCE)
@@ -203,3 +200,9 @@ NICHE_DISCLAIMER: str = (
     "macroeconomics. Not financial advice. "
     "Tone: clear, structured, professional, high-RPM finance education."
 )
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+WEALTH_CATALOG: bool = True
+YOUTUBE_PRESERVE_RAW_TITLE: bool = True
+YOUTUBE_RAW_TITLE_FALLBACK: str = "Principles of Wealth"
+YOUTUBE_CHANNEL_HINT: str = "Principles of Wealth"

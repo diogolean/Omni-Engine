@@ -1,0 +1,501 @@
+# -*- coding: utf-8 -*-
+"""Shared pin ledger in B2, with a local cache when B2 cannot be read.
+
+One JSONL object per account: ``pinterest/ledger/<account>.jsonl``.
+A row is a duplicate when the normalized title, the source-image hash,
+or the library post id was already published or seeded from the board.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+_TITLE_NOISE = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_title(title: str) -> str:
+    return _TITLE_NOISE.sub(" ", (title or "").lower()).strip()
+
+
+def source_image_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def ledger_object_key(account_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", account_id.strip()) or "account"
+    return f"pinterest/ledger/{safe}.jsonl"
+
+
+class PinLedger:
+    def __init__(
+        self,
+        account_id: str,
+        *,
+        client: Any | None = None,
+        bucket: str | None = None,
+        cache_path: Path | None = None,
+    ) -> None:
+        self.account_id = account_id
+        self.client = client
+        self.bucket = bucket
+        self.key = ledger_object_key(account_id)
+        if cache_path is None:
+            from shared.paths import outputs_root  # noqa: PLC0415
+
+            cache_path = outputs_root() / "pinterest" / "ledger" / f"{self.key.split('/')[-1]}"
+        self.cache_path = cache_path
+        self.rows: list[dict] = []
+
+    def load(self) -> list[dict]:
+        text = self._read_remote()
+        if text is None:
+            text = self._read_cache()
+        self.rows = _parse_jsonl(text or "")
+        self._note_stale_reservations()
+        return self.rows
+
+    def read_rows(self) -> tuple[list[dict], bool]:
+        """Return ``(rows, reachable)`` without writing the ledger.
+
+        Reachable when B2 returns the object, when the key is missing, or
+        when the local cache can be read after B2 cannot. Unreachable when
+        neither copy can be read.
+        """
+        from shared.storage.b2_client import read_object_outcome  # noqa: PLC0415
+
+        text, status = read_object_outcome(
+            self.key, client=self.client, bucket=self.bucket
+        )
+        if status == "ok":
+            self.rows = _parse_jsonl(text or "")
+            self._note_stale_reservations()
+            return self.rows, True
+        if status == "missing":
+            cached, present = self._cache_payload()
+            if present:
+                self.rows = _parse_jsonl(cached)
+                self._note_stale_reservations()
+                return self.rows, True
+            self.rows = []
+            return [], True
+        cached, present = self._cache_payload()
+        if present:
+            self.rows = _parse_jsonl(cached)
+            self._note_stale_reservations()
+            return self.rows, True
+        return [], False
+
+    def seen(self, *, post_id: str = "", title: str = "", source_hash: str = "") -> bool:
+        wanted_title = normalize_title(title)
+        wanted_id = (post_id or "").strip()
+        wanted_hash = (source_hash or "").strip()
+        for row in self.rows:
+            if row.get("pin_recorded") is False:
+                continue
+            if wanted_id and str(row.get("post_id") or "") == wanted_id:
+                return True
+            if wanted_hash and str(row.get("source_hash") or "") == wanted_hash:
+                return True
+            row_title = normalize_title(str(row.get("title") or ""))
+            if wanted_title and row_title and row_title == wanted_title:
+                return True
+        return False
+
+    def facebook_exported(self, post_id: str) -> bool:
+        """True when this library post already has a Facebook Post Planner row."""
+        wanted = (post_id or "").strip()
+        if not wanted:
+            return False
+        for row in self.rows:
+            if str(row.get("post_id") or "") != wanted:
+                continue
+            if row.get("facebook_exported"):
+                return True
+        return False
+
+    def append(self, row: dict) -> None:
+        stored = {
+            "account": self.account_id,
+            "post_id": str(row.get("post_id") or ""),
+            "title": str(row.get("title") or ""),
+            "pin_id": str(row.get("pin_id") or ""),
+            "source_hash": str(row.get("source_hash") or ""),
+            "article": str(row.get("article") or ""),
+            "seeded": bool(row.get("seeded")),
+            "facebook_exported": bool(row.get("facebook_exported")),
+            "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        self.rows.append(stored)
+        self._write()
+
+    def reserve(
+        self,
+        *,
+        post_id: str = "",
+        title: str = "",
+        source_hash: str = "",
+        article: str = "",
+    ) -> None:
+        """Persist a row ``seen()`` treats as already published, before the API call.
+
+        The row has an empty ``pin_id`` and ``reserved=True``. It does not set
+        ``pin_recorded`` false, because that flag is how Facebook notes stay
+        invisible to ``seen()``. A kill after the Pinterest call still finds
+        this row, so the next run does not publish a second pin. A second
+        reserve for the same post does not add another row.
+
+        The row counts toward ``PINTEREST_PINS_PER_DAY`` on its
+        ``published_utc`` calendar day, the same way a finished pin does.
+        ``newest_pin_published`` also reads that stamp, so the reservation
+        covers a saved wake and skips catch-up when it falls inside the
+        5-minute margin. A reservation still open after one hour is logged
+        and left in place.
+        """
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        for row in self.rows:
+            if _open_reservation(row, post_id=wanted, source_hash=wanted_hash):
+                return
+        self.rows.append(
+            {
+                "account": self.account_id,
+                "post_id": wanted,
+                "title": str(title or ""),
+                "pin_id": "",
+                "source_hash": wanted_hash,
+                "article": str(article or ""),
+                "seeded": False,
+                "facebook_exported": False,
+                "reserved": True,
+                "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+        self._write()
+
+    def complete(
+        self,
+        *,
+        post_id: str,
+        pin_id: str,
+        facebook_exported: bool = False,
+        title: str = "",
+        source_hash: str = "",
+        article: str = "",
+    ) -> None:
+        """Store ``pin_id`` on the reserved row. Does not append a second row."""
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        for row in reversed(self.rows):
+            if not _open_reservation(row, post_id=wanted, source_hash=wanted_hash):
+                continue
+            row["pin_id"] = str(pin_id or "")
+            row["reserved"] = False
+            row["facebook_exported"] = bool(facebook_exported)
+            if title:
+                row["title"] = str(title)
+            if article:
+                row["article"] = str(article)
+            if wanted_hash and not str(row.get("source_hash") or "").strip():
+                row["source_hash"] = wanted_hash
+            self._write()
+            return
+        self.append(
+            {
+                "post_id": wanted,
+                "title": title,
+                "pin_id": pin_id,
+                "source_hash": source_hash,
+                "article": article,
+                "facebook_exported": facebook_exported,
+            }
+        )
+
+    def release(self, *, post_id: str = "", source_hash: str = "") -> None:
+        """Drop an unsent reservation so a failed call can be retried.
+
+        Facebook notes (``pin_recorded`` false) and seeded board rows stay.
+        A row that already has a ``pin_id`` stays too.
+        """
+        wanted = str(post_id or "").strip()
+        wanted_hash = str(source_hash or "").strip()
+        kept = [
+            row
+            for row in self.rows
+            if not _open_reservation(row, post_id=wanted, source_hash=wanted_hash)
+        ]
+        if len(kept) == len(self.rows):
+            return
+        self.rows = kept
+        self._write()
+
+    def _note_stale_reservations(self) -> None:
+        warn_stale_reservations(self.rows, account_id=self.account_id)
+
+    def note_facebook_export(self, *, post_id: str, article: str = "") -> None:
+        """Remember a Facebook row without treating the pin as already published.
+
+        A dry run queues the sheet before the live pin exists. That note must
+        not make ``seen()`` skip the later publish.
+        """
+        wanted = (post_id or "").strip()
+        if not wanted:
+            return
+        touched = False
+        for row in self.rows:
+            if str(row.get("post_id") or "") == wanted:
+                row["facebook_exported"] = True
+                touched = True
+        if touched:
+            self._write()
+            return
+        self.rows.append(
+            {
+                "account": self.account_id,
+                "post_id": wanted,
+                "title": "",
+                "pin_id": "",
+                "source_hash": "",
+                "article": str(article or ""),
+                "seeded": False,
+                "facebook_exported": True,
+                "pin_recorded": False,
+                "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+        self._write()
+
+    def seed_board_pins(self, pins: list[dict], *, persist: bool = True) -> int:
+        """Add board pins that are not already in the ledger. Returns how many were added.
+
+        A ``pin_id`` already stored on any row is left as it is, including
+        older duplicate rows. The seed does not refresh their timestamp.
+        ``persist=False`` keeps new rows in memory for this run and does not
+        upload the ledger. Dry runs use that so B2 stays unchanged.
+        """
+        known_ids = {
+            str(row.get("pin_id") or "").strip()
+            for row in self.rows
+            if str(row.get("pin_id") or "").strip()
+        }
+        added = 0
+        for pin in pins:
+            title = str(pin.get("title") or "").strip()
+            pin_id = str(pin.get("id") or pin.get("pin_id") or "").strip()
+            source_hash = str(pin.get("source_hash") or "").strip()
+            if not title and not pin_id and not source_hash:
+                continue
+            if pin_id and pin_id in known_ids:
+                continue
+            if self.seen(title=title, source_hash=source_hash, post_id=""):
+                continue
+            self.rows.append(
+                {
+                    "account": self.account_id,
+                    "post_id": "",
+                    "title": title,
+                    "pin_id": pin_id,
+                    "source_hash": source_hash,
+                    "article": "",
+                    "seeded": True,
+                    "published_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+            )
+            if pin_id:
+                known_ids.add(pin_id)
+            added += 1
+        if added and persist:
+            self._write()
+            log.info("Seeded %d existing board pin(s) into %s", added, self.key)
+        elif added:
+            log.info(
+                "Noted %d existing board pin(s) in memory only (no ledger upload).",
+                added,
+            )
+        return added
+
+    def _write(self) -> None:
+        payload = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in self.rows)
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.cache_path.with_suffix(".tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(self.cache_path)
+        try:
+            from shared.storage.b2_client import upload_object  # noqa: PLC0415
+
+            upload_object(
+                self.key,
+                payload.encode("utf-8"),
+                client=self.client,
+                bucket=self.bucket,
+                content_type="application/x-ndjson",
+            )
+        except Exception as exc:  # noqa: BLE001
+            from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+            if isinstance(exc, B2DailyCapError):
+                raise
+            log.info("B2 ledger write failed (%s); local cache kept.", type(exc).__name__)
+
+    def _read_remote(self) -> str | None:
+        try:
+            from shared.storage.b2_client import read_object_text  # noqa: PLC0415
+
+            return read_object_text(self.key, client=self.client, bucket=self.bucket)
+        except Exception as exc:  # noqa: BLE001
+            from shared.storage.b2_budget import B2DailyCapError  # noqa: PLC0415
+
+            if isinstance(exc, B2DailyCapError):
+                raise
+            log.info("B2 ledger read failed (%s); using the local cache.", type(exc).__name__)
+            return None
+
+    def _read_cache(self) -> str:
+        text, present = self._cache_payload()
+        return text if present else ""
+
+    def _cache_payload(self) -> tuple[str, bool]:
+        if not self.cache_path.is_file():
+            return "", False
+        try:
+            return self.cache_path.read_text(encoding="utf-8"), True
+        except OSError:
+            return "", False
+
+
+_STALE_RESERVATION = timedelta(hours=1)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _row_published_utc(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def warn_stale_reservations(
+    rows: list[dict],
+    *,
+    account_id: str,
+    now: datetime | None = None,
+) -> int:
+    """Warn once per open reservation older than one hour with no pin id.
+
+    Facebook notes (``pin_recorded`` false) and seeded board rows are not
+    open reservations. Rows that already have a ``pin_id`` are finished.
+    Nothing here deletes or releases a row.
+    """
+    moment = now or _utc_now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(timezone.utc)
+    warned = 0
+    for row in rows:
+        if not isinstance(row, dict) or row.get("reserved") is not True:
+            continue
+        if str(row.get("pin_id") or "").strip():
+            continue
+        if row.get("pin_recorded") is False or row.get("seeded") is True:
+            continue
+        stamp = _row_published_utc(row.get("published_utc"))
+        if stamp is None or moment - stamp <= _STALE_RESERVATION:
+            continue
+        post_id = str(row.get("post_id") or "").strip() or str(row.get("source_hash") or "").strip()
+        log.warning(
+            "Pinterest ledger %s reserved post_id=%s more than 1h ago and still has no pin_id (published_utc=%s)",
+            account_id,
+            post_id or "<blank>",
+            stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        warned += 1
+    return warned
+
+
+def _open_reservation(row: dict, *, post_id: str, source_hash: str) -> bool:
+    """True for a row reserved before Pinterest accepted the pin."""
+    if row.get("reserved") is not True:
+        return False
+    if str(row.get("pin_id") or "").strip():
+        return False
+    if row.get("pin_recorded") is False or row.get("seeded") is True:
+        return False
+    if post_id and str(row.get("post_id") or "") == post_id:
+        return True
+    row_hash = str(row.get("source_hash") or "").strip()
+    return bool(source_hash) and bool(row_hash) and row_hash == source_hash and not post_id
+
+
+def _parse_jsonl(text: str) -> list[dict]:
+    rows: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def fetch_board_pins(board_id: str, token: str, *, limit: int = 50) -> list[dict]:
+    """Latest pins on the board. Titles are used to stop a repeat post."""
+    if not board_id or not token:
+        return []
+    import requests  # noqa: PLC0415
+
+    url = f"https://api.pinterest.com/v5/boards/{board_id}/pins"
+    headers = {"Authorization": f"Bearer {token}"}
+    params: dict[str, str | int] = {"page_size": min(limit, 25)}
+    pins: list[dict] = []
+    bookmark = ""
+    while len(pins) < limit:
+        if bookmark:
+            params["bookmark"] = bookmark
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=20)
+        except requests.RequestException as exc:
+            log.info("Board pin list failed: %s", type(exc).__name__)
+            break
+        if resp.status_code != 200:
+            log.info("Board pin list HTTP %s", resp.status_code)
+            break
+        try:
+            payload = resp.json()
+        except ValueError:
+            break
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list) or not items:
+            break
+        for item in items:
+            if isinstance(item, dict):
+                pins.append(item)
+        bookmark = str(payload.get("bookmark") or "") if isinstance(payload, dict) else ""
+        if not bookmark:
+            break
+    return pins[:limit]

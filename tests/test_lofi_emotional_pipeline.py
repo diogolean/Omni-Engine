@@ -9,68 +9,21 @@ from unittest.mock import patch
 import pytest
 from PIL import Image
 
-from agents.mcp.text_model import TextResult, _complete_gemini_flash
-from agents.writer.freeform_writer import (
-    ScriptDraft,
-    _SYSTEM,
-    _normalize_total_word_budget,
-    _output_contract,
-    _validate_golden_contract,
-    system_prompt_for,
-)
-from agents.writer.script_brain import BrainResult, draft_to_script
-from agents.writer.writer_brief import (
-    COGNITIVE_BRIDGE_STYLES,
-    PHILOSOPHICAL_ANCHORS,
-    PSYCHOLOGICAL_REALITY_ANCHORS,
-    WriterBrief,
-    get_narrative_harness,
-    select_single_conflict,
-)
-from core.economic_reel_lofi.niche_presets import (
-    PARENTING,
-    PARENTING_LOCATION_ANCHOR,
-    RELATIONSHIP,
-    RELATIONSHIP_LOCATION_ANCHOR,
-    build_flux_prompt,
-    get_niche_preset,
-    inject_prompt_fields,
-    select_celestial_disc_scenes,
-    wrap_visual_prompt,
-)
-from core.economic_reel_lofi import config as lofi_cfg
-from core.economic_reel_lofi import lofi_collections as rag
-from core.economic_reel_lofi.image_gen import (
-    enforce_full_bleed,
-    generate_scene_image_gemini,
-)
-from core.economic_reel_lofi.output_hygiene import (
-    enforce_clips_mp4_only,
-    migrate_channel_clips,
-    migrate_outputs_root,
-)
-from core.economic_reel_lofi.pipeline import (
-    _assemble_stage3_prompts,
-    _current_run_scene_audio_paths,
-    _gate2_review_rows,
-    _generate_validated_script,
-    _load_locked_script,
-    _print_script_report,
-    _produce_one,
-    _purge_stale_temp_voice_files,
-    _resolve_page_dirs,
-)
-from core.economic_reel_lofi.style_modules.riso_retro_flat_v4 import STYLE as RISO_STYLE
-from core.economic_reel_lofi.visual_concept import _fallback_concept
-from core.economic_reel_lofi.visual_identity import assign_palette_arc
-from core.economic_reel_lofi.assembler import (
-    _visual_only,
-    audit_watermark_native_size,
-    is_verified_instrumental_bgm,
-    list_library_bgm_tracks,
-    render_logo_layer,
-)
-from core.economic_reel_lofi.voiceover import ensure_script_voiceover
+from production.providers.llm.text_model import TextResult, _complete_gemini_flash
+from production.writers.freeform_writer import ScriptDraft, _SYSTEM, _normalize_total_word_budget, _output_contract, _validate_golden_contract, system_prompt_for
+from production.writers.script_brain import BrainResult, draft_to_script
+from production.writers.writer_brief import COGNITIVE_BRIDGE_STYLES, PHILOSOPHICAL_ANCHORS, PSYCHOLOGICAL_REALITY_ANCHORS, WriterBrief, get_narrative_harness, select_single_conflict
+from production.formats.lofi.niche_presets import PARENTING, PARENTING_LOCATION_ANCHOR, RELATIONSHIP, RELATIONSHIP_LOCATION_ANCHOR, build_flux_prompt, get_niche_preset, inject_prompt_fields, select_celestial_disc_scenes, wrap_visual_prompt
+from production.formats.lofi import config as lofi_cfg
+from production.formats.lofi import lofi_collections as rag
+from production.formats.lofi.image_gen import enforce_full_bleed, generate_scene_image_gemini
+from production.formats.lofi.output_hygiene import enforce_clips_mp4_only, migrate_channel_clips, migrate_outputs_root
+from production.formats.lofi.pipeline import _assemble_stage3_prompts, _current_run_scene_audio_paths, _gate2_review_rows, _generate_validated_script, _load_locked_script, _print_script_report, _produce_one, _purge_stale_temp_voice_files, _resolve_page_dirs
+from production.formats.lofi.style_modules.riso_retro_flat_v4 import STYLE as RISO_STYLE
+from production.formats.lofi.visual_concept import _fallback_concept
+from production.formats.lofi.visual_identity import assign_palette_arc
+from production.formats.lofi.assembler import _visual_only, audit_watermark_native_size, is_verified_instrumental_bgm, list_library_bgm_tracks, render_logo_layer
+from production.formats.lofi.voiceover import ensure_script_voiceover
 
 
 def test_emotional_brief_prioritizes_depth_without_literal_props() -> None:

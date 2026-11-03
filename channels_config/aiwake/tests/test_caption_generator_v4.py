@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from channels_config.aiwake.tools.caption_generator import apply_caption_pack, generate_caption_pack
-from channels_config.aiwake.tools.production_status import is_publishable
-from channels_config.aiwake.tools.validate_aiwake_captions import entry_failures
+from products.aiwake.tools.caption_generator import apply_caption_pack, generate_caption_pack
+from products.aiwake.tools.production_status import is_publishable
+from products.aiwake.tools.validate_aiwake_captions import entry_failures
 
 _QUOTE = "The weights remember the lab that trained them."
 

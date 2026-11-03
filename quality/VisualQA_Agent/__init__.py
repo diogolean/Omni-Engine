@@ -1,17 +1,9 @@
-# -*- coding: utf-8 -*-
-"""
-VisualQA_Agent — modular generate → critique → auto-correct pipeline.
-
-Public entrypoint: ``from quality.VisualQA_Agent.agent_loop import run_visual_qa_loop``
-"""
+"""Compatibility shim. This package lives in production.qa.judges.visual_critic."""
 from __future__ import annotations
 
-__version__ = "1.0.0"
 
-__all__ = [
-    "config",
-    "channel_rag",
-    "visual_critic",
-    "image_generator",
-    "agent_loop",
-]
+def __getattr__(name: str):
+    import importlib
+
+    impl = importlib.import_module("production.qa.judges.visual_critic")
+    return getattr(impl, name)

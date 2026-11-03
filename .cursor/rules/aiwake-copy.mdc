@@ -1,0 +1,29 @@
+---
+description: Aiwake captions stay grounded, English-only, max 3 hashtags, no topic fallback
+globs: channels_config/aiwake/**/*.py
+alwaysApply: false
+---
+
+# Aiwake copy and PostPlanner
+
+- Write every title, caption, tweet, and description in native English. Do not mix languages.
+- Theme is extracted 100% from that session's transcript. Never reuse another video's topic. Never inject "consciousness" or "illusion" unless those words were spoken in THIS session. The catalog field `topic` is not a fallback — ignore stale defaults such as "Is consciousness an illusion?".
+- Do not concatenate broken grammar such as "corners Llama on whether consciousness an illusion". If the hook cites the theme, write a natural English sentence from the real dialogue (opening question + verbatim quote).
+- Ground every hook and quoted line in that session's transcript. A quoted line must be verbatim. Never invent money, profit, business-model, or conspiracy language unless those words appear in the transcript.
+- Rotate social openings across the four hook angles (direct clash, paradox, logical trap, existential inquiry). Do not reuse the same first line across posts. The rotated frame must still talk about THIS session's spoken theme.
+- Fast-feed copy (`humanized_caption` / `post_planner_caption`) MUST use blank lines (`\n\n`) between each block. Never paste the transcript:
+
+  [hook, 10 words max]
+
+  [2 sentences: the conflict, grounded in this session]
+
+  Who won this round? Comment below 👇
+
+  #Tag1 #Tag2 #Tag3
+
+- **Hard cap: exactly 3 hashtags. Never more.** Applies to Post Planner, Reels, TikTok, YouTube, LinkedIn, X, and every `hashtags` array. Example: `#AI #Tech #DataPrivacy`. Privacy/monetization sessions use `#DataPrivacy` as the third tag — never `#Consciousness` unless the transcript is actually about consciousness. If a source has 4+ tags, prune to 3.
+- Never put dates in the caption body.
+- YouTube title: `[question] — Gemini 3.5 Flash vs Llama 3.3 70B`. Description is retention copy, never a transcript dump: hook, one dilemma paragraph, one debate question, chapter markers, dialectics CTA, max 3 hashtags.
+- X captions stay under 240 characters.
+- LinkedIn stays technical (Python state machine, 0% manual edit, GraphRAG, sub-10ms bus, prompt isolation) but the opening must vary per session. Close with the orchestration discussion question. Hashtags are exactly `#AI #MachineLearning #LLM`. Do not embed external URLs in the LinkedIn body.
+- `content_library.json` is the only canonical registry. Export two PostPlanner sets: `post_planner_reels_tiktok` (social caption + B2 URL) and `post_planner_linkedin` (LinkedIn caption + B2 URL). DATE / TIME stays blank.

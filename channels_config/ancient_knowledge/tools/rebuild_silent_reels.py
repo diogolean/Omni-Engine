@@ -6,11 +6,11 @@ and atmosphere SFX, and generates ElevenLabs narration + burnt-in subtitles.
 Does not call image or music APIs.
 """
 from __future__ import annotations
+from shared.layer_bridge import Symbol
 
 import os
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -24,13 +24,11 @@ load_dotenv(ROOT / ".env", override=False, encoding="utf-8-sig")
 os.environ["ACTIVE_PAGE"] = "ancient_knowledge"
 os.environ.setdefault("ALLOW_GOOGLE_API", "false")
 
-from agents.media.audio_engine import (  # noqa: E402
-    _audio_file_duration_s,
-    assert_voice_and_subtitles_ready,
-    generate_voiceover_with_timestamps,
-)
+_audio_file_duration_s = Symbol('production.providers.tts.audio_engine', '_audio_file_duration_s')
+assert_voice_and_subtitles_ready = Symbol('production.providers.tts.audio_engine', 'assert_voice_and_subtitles_ready')
+generate_voiceover_with_timestamps = Symbol('production.providers.tts.audio_engine', 'generate_voiceover_with_timestamps')
 from main import _stitch_audio_sequential  # noqa: E402
-from utils.pipeline_paths import outputs_path  # noqa: E402
+from shared.paths import outputs_path, windows_fonts_dir  # noqa: E402
 
 CLIPS = outputs_path("ancient_knowledge", "clips")
 ASSETS = CLIPS.parent / "assets"
@@ -41,9 +39,9 @@ FFMPEG = Path(
 )
 FONT_CANDIDATES = [
     ROOT / "Fonts" / "Montserrat" / "static" / "Montserrat-Bold.ttf",
-    Path(r"C:\Windows\Fonts\arialbd.ttf"),
-    Path(r"C:\Windows\Fonts\Arial Bold.ttf"),
-    Path(r"C:\Windows\Fonts\trebucbd.ttf"),
+    windows_fonts_dir() / "arialbd.ttf",
+    windows_fonts_dir() / "Arial Bold.ttf",
+    windows_fonts_dir() / "trebucbd.ttf",
 ]
 VOICE_ID = "WdZjiN0nNcik2LBjOHiv"
 MODEL_ID = "eleven_multilingual_v2"
@@ -213,9 +211,11 @@ def _write_ass(
 
 
 def _run_ffmpeg(args: list[str]) -> None:
+    from shared.ffmpeg import run_ffmpeg
+
     exe = str(FFMPEG if FFMPEG.is_file() else shutil.which("ffmpeg") or "ffmpeg")
     cmd = [exe, "-y", *args]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = run_ffmpeg(cmd, text=True, timeout=600)
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "")[-2000:]
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {err}")
@@ -355,7 +355,7 @@ def _compile_from_stills(
     timings: list,
     out: Path,
 ) -> Path:
-    from core.reel_sequence_engine import compile_sequence_reel
+    compile_sequence_reel = Symbol('production.media.reel_sequence_engine', 'compile_sequence_reel')
 
     logo = ROOT / "channels_config" / "ancient_knowledge" / "logo" / "logo.png"
     compile_sequence_reel(
@@ -424,11 +424,13 @@ def remux_one(variant: int, reel_name: str, stem: str, captions: dict[int, str],
 
 
 def verify(path: Path) -> None:
+    from shared.ffmpeg import run_ffmpeg
+
     exe = str(FFMPEG if FFMPEG.is_file() else "ffmpeg")
-    proc = subprocess.run(
+    proc = run_ffmpeg(
         [exe, "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
-        capture_output=True,
         text=True,
+        timeout=120,
     )
     blob = (proc.stderr or "") + (proc.stdout or "")
     mean = re.search(r"mean_volume:\s*([-\d.]+)", blob)

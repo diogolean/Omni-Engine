@@ -11,9 +11,9 @@
 # Google Drive shortcut files (not real blobs; break `git add -A`)
 *.gsheet
 
-# Local credential JSON (service accounts / ad-hoc secrets)
-credentials/*.json
-!credentials/tokens/.gitkeep
+# Local credential JSON (service accounts / ad-hoc secrets).
+# The whole tree stays out. Nothing under credentials/ is tracked.
+credentials/
 
 # Google OAuth2 — client secrets and per-page YouTube access tokens
 client_secret*.json
@@ -62,8 +62,9 @@ pyvenv.cfg
 !.cursor/rules/**
 .idea/
 .vscode/
+.claude/
 
-# Heavy media outputs (generated at runtime)
+# Heavy media outputs (generated at runtime). Video never belongs in git.
 outputs/
 logs/
 clips/
@@ -72,14 +73,38 @@ clips/
 *.wav
 *.aac
 *.mov
+*.npz
+*.psd
+*.psb
+
+# Scheduler error dumps. Runtime shots go to outputs/<channel>/screenshots/.
+agents/posting/facebook_scheduler/screenshots/
+**/click_failed_*.png
+**/click_wait_failed_*.png
+**/*_error_*.png
+
+# Chat-recovery scratch and one-off transcript miners.
+*_recovered*.txt
+**/__mine_*
 
 # Excel output files
 PostPlanner_B2_*.xlsx
 postplan_*.xlsx
 
 # Temp / cache files
+# Lofi recent-aphorism cache. The package moved; ignore both homes.
 core/economic_reel_lofi/store/aphorism_recent.json
+production/formats/lofi/store/aphorism_recent.json
+
+# Visual critic index. The package moved; ignore the old tree and the new one.
+quality/VisualQA_Agent/chroma_db/
+quality/VisualQA_Agent/.channel_cache
+production/qa/judges/visual_critic/chroma_db/
+production/qa/judges/visual_critic/.channel_cache
 *.tmp
+# Scratch directory for each project, at the root and anywhere under it.
+.tmp/
+**/.tmp/
 *TEMP_MPY_wvf_snd*
 .cache/
 .pytest_cache/
@@ -138,6 +163,13 @@ desktop.ini
 .env
 .env.*
 !.env.example
+# `.env.*` does not match `.env.bak_20261017_prepinterest` (no second dot).
+.env.bak*
+.env*.bak
+.env.*.bak
+*.env.bak
+.env.backup
+.env.backup*
 client_secret*.json
 *.pem
 *.key
@@ -153,6 +185,10 @@ logs/*.log
 # ==========================================
 # Dynamic Runtime Data / Channel History
 # ==========================================
+# Per-run channel state stays out of git. The directory ignore also
+# covers backups (*.before_*.json, *.bak*) and regenerable caches
+# (openrouter_models.json), plus scene_library/, artefact_cache/,
+# and reel_checkpoints/.
 channels_config/*/store/
 channels_config/*/*/transcripts/
 channels_config/*/*/metrics/

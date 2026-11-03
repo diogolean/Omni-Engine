@@ -1,30 +1,13 @@
-# -*- coding: utf-8 -*-
-"""
-Post-type → pipeline runner registry.
-
-ECONOMIC_REEL stays on the legacy produce() path (not registered here) so
-behavior cannot regress. New early-dispatch post-types register a callable.
-"""
+"""Compatibility shim. The implementation is production.pipeline.post_type_registry."""
 from __future__ import annotations
 
-from typing import Any, Callable
+import sys
 
-Runner = Callable[..., dict[str, Any]]
+if __name__ == "__main__":
+    import runpy
 
-# Populated lazily / at import of each pipeline package.
-POST_TYPE_REGISTRY: dict[str, Runner] = {}
+    runpy.run_module("production.pipeline.post_type_registry", run_name="__main__")
+else:
+    from production.pipeline import post_type_registry as _impl
 
-
-def register_post_type(name: str, runner: Runner) -> None:
-    key = str(name or "").strip().upper()
-    if not key:
-        raise ValueError("post-type name is empty")
-    POST_TYPE_REGISTRY[key] = runner
-
-
-def get_post_type_runner(name: str) -> Runner | None:
-    return POST_TYPE_REGISTRY.get(str(name or "").strip().upper())
-
-
-def registered_post_types() -> list[str]:
-    return sorted(POST_TYPE_REGISTRY.keys())
+    sys.modules[__name__] = _impl

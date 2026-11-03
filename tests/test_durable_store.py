@@ -7,25 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from modules.durable_store import (
-    classify_state_path,
-    hydrate_state_file,
-    peer_paths,
-    reset_restore_cache,
-    restore_channel_state,
-    sync_state_file,
-    write_state_json,
-)
+from shared.store import classify_state_path, hydrate_state_file, peer_paths, reset_restore_cache, restore_channel_state, sync_state_file, write_state_json
 from modules.metadata_auditor import already_cataloged, build_generic_record, title_from_filename
-from utils.pipeline_paths import (
-    ProtectedStateError,
-    channel_store_dir,
-    contains_protected_store,
-    discover_channel_ids,
-    is_ephemeral_artifact_dir,
-    is_protected_state_path,
-    safe_rmtree,
-)
+from shared.paths import ProtectedStateError, channel_store_dir, contains_protected_store, discover_channel_ids, is_ephemeral_artifact_dir, is_protected_state_path, safe_rmtree
 
 
 @pytest.fixture

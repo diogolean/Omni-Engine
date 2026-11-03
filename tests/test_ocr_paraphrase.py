@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from utils.ocr_paraphrase import strip_keywords, word_change_ratio
-from utils.ocr_text import strip_wrapping_quotes
+from production.formats.quotes.ocr_paraphrase import strip_keywords, word_change_ratio
+from production.formats.quotes.ocr_text import strip_wrapping_quotes
 
 
 def test_strip_keywords_removes_mom_notes_footer() -> None:

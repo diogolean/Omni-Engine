@@ -1,100 +1,91 @@
 # -*- coding: utf-8 -*-
 """
-Master Mei persona — loaded from channels_config/master_mei/master_dna.json.
+Master Mei persona — sentences for this channel only.
 
-Provides the shared persona_dna interface plus avatar-capable visual helpers.
-Do NOT import this file directly — use the root persona_dna module (which
-dynamically delegates here when ACTIVE_PAGE == 'master_mei').
+DNA is ``master_dna.json`` in this folder. The generic loader is
+``production.writers.persona.load_persona``.
 """
 from __future__ import annotations
 
-import json
 import random
 from pathlib import Path
 
-_MASTER_DNA_PATH = Path(__file__).resolve().parent / "master_dna.json"
+from channels_config.shared.persona_bind import bind_dna, random_cta, read_dna, select_cta
 
-
-def _load() -> dict:
-    return json.loads(_MASTER_DNA_PATH.read_text(encoding="utf-8"))
-
-
-_P = _load()
+_P = read_dna(Path(__file__).resolve().parent / "master_dna.json")
 _persona = _P.get("persona", {})
-
-ANNA_DISPLAY_NAME: str = _persona.get("name") or _P.get("Subject", "Master Mei")
-ANNA_AGE_YEARS: int = _P.get("Physical_Appearance", {}).get("Age", 72)
-
 _phys = _P.get("Physical_Appearance", {})
-ANNA_PHYSICAL: str = (
-    f"{ANNA_AGE_YEARS}-year-old East Asian sage Master Mei: "
-    f"{_phys.get('Hair', 'long white hair in a traditional bun')}. "
-    f"Beard: {_phys.get('Beard', 'long flowing white beard')}. "
-    f"Wardrobe: {_phys.get('Wardrobe', 'traditional dark robes with gold accents')}. "
-    f"Physique: {_phys.get('Physique', '')}. "
-    f"Skin: {_phys.get('Skin_Texture', '')} "
-    f"Visual standard: {_phys.get('Visual_Standard', '')}"
-)
-
 _voice = _P.get("Brand_Voice_&_Mission", {})
-ANNA_VOICE_PRINCIPLES: str = (
-    f"Tone: {_voice.get('Tone', _persona.get('voice_tone', ''))}. "
-    f"Mission: {_voice.get('Mission_Statement', _persona.get('core_mission', ''))}. "
-    f"Themes: {_voice.get('Themes', '')}. "
-    "Command over comfort. No hype. No therapy-speak. Captions are precise and uncompromising."
+_age = _P.get("Physical_Appearance", {}).get("Age", 72)
+_name = _persona.get("name") or _P.get("Subject", "Master Mei")
+
+_V = bind_dna(
+    _P,
+    display_name=_name,
+    age_years=_age,
+    physical=(
+        f"{_age}-year-old East Asian sage Master Mei: "
+        f"{_phys.get('Hair', 'long white hair in a traditional bun')}. "
+        f"Beard: {_phys.get('Beard', 'long flowing white beard')}. "
+        f"Wardrobe: {_phys.get('Wardrobe', 'traditional dark robes with gold accents')}. "
+        f"Physique: {_phys.get('Physique', '')}. "
+        f"Skin: {_phys.get('Skin_Texture', '')} "
+        f"Visual standard: {_phys.get('Visual_Standard', '')}"
+    ),
+    voice=(
+        f"Tone: {_voice.get('Tone', _persona.get('voice_tone', ''))}. "
+        f"Mission: {_voice.get('Mission_Statement', _persona.get('core_mission', ''))}. "
+        f"Themes: {_voice.get('Themes', '')}. "
+        "Command over comfort. No hype. No therapy-speak. Captions are precise and uncompromising."
+    ),
+    lens=(
+        f"Target audience: {_voice.get('Target_Audience', 'Men seeking liberation')}. "
+        "Protocol for Liberation: Pai Mei cold discipline, financial warfare, "
+        "traps of illusion (seduction), and classical strategy "
+        "(Sun Tzu, Marcus Aurelius, Musashi, Buddhist detachment)."
+    ),
+    cta_fallback="DISCIPLINE",
+    cta_voice_default=(
+        "End with a firm command to master the mind or step into real discipline today."
+    ),
+    legacy_default={"Probability": 0.0},
+    batch_words_default="120-200",
 )
 
-ANNA_EXPERTISE_LENS: str = (
-    f"Target audience: {_voice.get('Target_Audience', 'Men seeking liberation')}. "
-    "Protocol for Liberation: Pai Mei cold discipline, financial warfare, "
-    "traps of illusion (seduction), and classical strategy "
-    "(Sun Tzu, Marcus Aurelius, Musashi, Buddhist detachment)."
-)
-
-CORE_DIRECTIVE: str = _P.get("Core_Directive", "")
-CORE_MECHANICS: list[str] = _P.get("Core_Natural_Mechanics", [])
-
-_PHIL = _P.get("Philosophical_Core", {})
-PHILOSOPHY_CORE_BELIEF: str = _PHIL.get("Core_Belief", "")
-PHILOSOPHY_THE_CONFLICT: str = _PHIL.get("The_Conflict", "")
-PHILOSOPHY_SCIENCE_METAPHORS: list[str] = _PHIL.get("Science_Metaphors", [])
-PHILOSOPHY_VOICE_ADJECTIVES: list[str] = _PHIL.get("Voice_Adjectives", [])
-PHILOSOPHY_BANNED_NAMES: list[str] = _PHIL.get("Banned_Name_References", [])
-
-NARRATIVE_ANGLES: list[dict] = _P.get("Narrative_Angles", [])
-
-_BATCH = _P.get("Batch_Research", {})
-BATCH_DEFAULT_SIZE: int = _BATCH.get("Default_Batch_Size", 20)
-BATCH_DELIMITER_OPEN: str = _BATCH.get("Delimiter_Open", "===NARRATIVE_")
-BATCH_DELIMITER_CLOSE: str = _BATCH.get("Delimiter_Close", "===")
-BATCH_WORDS_PER_NARRATIVE: str = _BATCH.get("Words_Per_Narrative", "120-200")
-BATCH_ROTATION_PATTERN: str = _BATCH.get("Rotation_Pattern", "")
-
-_CTA_INV = _P.get("Call_To_Action_Inventory", {})
-CTA_KEYWORDS: list[str] = _CTA_INV.get("Authorized_Keywords", [])
-_THEME_MAP: dict[str, str] = _CTA_INV.get("Theme_Keyword_Map", {})
-CTA_VOICE_INSTRUCTION: str = _CTA_INV.get(
-    "CTA_Voice_Instruction",
-    "End with a firm command to master the mind or step into real discipline today.",
-)
-
-ENVIRONMENTS: list[dict] = _P.get("Environments", [])
-CAMERA_ANGLES: list[str] = _P.get("Camera_Angles", [])
-TIMES_OF_DAY: list[str] = _P.get("Times_Of_Day", [])
-ANNA_ACTIONS: list[str] = _P.get("Anna_Actions", [])
-LEGACY_RULE: dict = _P.get("Legacy_Rule", {"Probability": 0.0})
+ANNA_DISPLAY_NAME: str = _V.display_name
+ANNA_AGE_YEARS: int = _V.age_years
+ANNA_PHYSICAL: str = _V.physical
+ANNA_VOICE_PRINCIPLES: str = _V.voice
+ANNA_EXPERTISE_LENS: str = _V.lens
+CORE_DIRECTIVE: str = _V.directive
+CORE_MECHANICS: list[str] = _V.mechanics
+PHILOSOPHY_CORE_BELIEF: str = _V.belief
+PHILOSOPHY_THE_CONFLICT: str = _V.conflict
+PHILOSOPHY_SCIENCE_METAPHORS: list[str] = _V.metaphors
+PHILOSOPHY_VOICE_ADJECTIVES: list[str] = _V.adjectives
+PHILOSOPHY_BANNED_NAMES: list[str] = _V.banned
+NARRATIVE_ANGLES: list[dict] = _V.angles
+BATCH_DEFAULT_SIZE: int = _V.batch_size
+BATCH_DELIMITER_OPEN: str = _V.batch_open
+BATCH_DELIMITER_CLOSE: str = _V.batch_close
+BATCH_WORDS_PER_NARRATIVE: str = _V.batch_words
+BATCH_ROTATION_PATTERN: str = _V.batch_rotation
+CTA_KEYWORDS: list[str] = _V.cta_keywords
+_THEME_MAP: dict[str, str] = _V.theme_map
+CTA_VOICE_INSTRUCTION: str = _V.cta_voice
+ENVIRONMENTS: list[dict] = _V.environments
+CAMERA_ANGLES: list[str] = _V.camera_angles
+TIMES_OF_DAY: list[str] = _V.times_of_day
+ANNA_ACTIONS: list[str] = _V.actions
+LEGACY_RULE: dict = _V.legacy
 
 
 def contextual_cta_keyword(topic: str = "") -> str:
-    topic_lower = (topic or "").lower()
-    for fragment in sorted(_THEME_MAP.keys(), key=len, reverse=True):
-        if fragment in topic_lower:
-            return _THEME_MAP[fragment]
-    return random_cta_keyword()
+    return select_cta(_THEME_MAP, CTA_KEYWORDS, topic or "", "DISCIPLINE")
 
 
 def random_cta_keyword() -> str:
-    return random.choice(CTA_KEYWORDS) if CTA_KEYWORDS else "DISCIPLINE"
+    return random_cta(CTA_KEYWORDS, "DISCIPLINE")
 
 
 def philosophy_block() -> str:

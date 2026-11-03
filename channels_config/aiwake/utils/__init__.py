@@ -1,25 +1,8 @@
-# -*- coding: utf-8 -*-
-"""Aiwake utilities — event bus and other cross-cutting helpers.
-
-The optional portfolio showcase lives outside this package and is never
-imported from here.
-"""
+"""Compatibility shim. The implementation is products.aiwake.utils."""
 from __future__ import annotations
 
-from .event_bus import (
-    EventBus,
-    attach_optional_plugins,
-    bus,
-    emit,
-    reset,
-    subscribe,
-)
+from products.aiwake import utils as _impl
 
-__all__ = [
-    "EventBus",
-    "attach_optional_plugins",
-    "bus",
-    "emit",
-    "reset",
-    "subscribe",
-]
+
+def __getattr__(attr: str):
+    return getattr(_impl, attr)

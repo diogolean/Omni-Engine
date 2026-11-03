@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Run 5 off-domain pattern stress tests (script-only, then assemble)."""
+"""Shim until M14. Implementation: tools/lofi/run_drift_batch.py."""
 from __future__ import annotations
 
-from pathlib import Path as _ReorgPath
-import sys as _reorg_sys
-_REORG_ROOT = _ReorgPath(__file__).resolve().parents[2]
-if str(_REORG_ROOT) not in _reorg_sys.path:
-    _reorg_sys.path.insert(0, str(_REORG_ROOT))
+import sys
+from pathlib import Path
 
-# Assignments: pattern (source domain) -> unrelated theme
-PAIRS = [
-    ("perseverance", "quiet_proof_inventory", "trust"),
-    ("belonging", "personification_sensory", "grief"),
-    ("communication", "learning_to_hold_it", "grief/healing"),
-    ("vulnerability", "setting_the_weight_down", "forgiveness"),
-    ("regret", "open_question", "loneliness"),
-]
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+_TARGET = _ROOT / "tools/lofi/run_drift_batch.py"
+
+if __name__ == "__main__":
+    import runpy
+
+    runpy.run_path(str(_TARGET), run_name="__main__")
+else:
+    import importlib
+
+    sys.modules[__name__] = importlib.import_module("tools.lofi.run_drift_batch")

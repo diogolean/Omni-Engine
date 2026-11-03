@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
-"""AI-model persona generation.
-
-Each avatar is a folder under ``models_avatar/avatars/``. The shared engine
-loads that folder, builds a ComfyUI prompt, and writes images under the
-factory ``OUTPUT_PATH``. This package does not register pages in
-``channel_loader.VALID_PAGES``.
-"""
+"""Compatibility shim. This package lives in production.providers.avatar."""
 from __future__ import annotations
 
-__version__ = "0.1.0"
+
+def __getattr__(name: str):
+    import importlib
+
+    impl = importlib.import_module("production.providers.avatar")
+    return getattr(impl, name)

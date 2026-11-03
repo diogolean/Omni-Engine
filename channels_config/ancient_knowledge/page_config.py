@@ -14,6 +14,8 @@ Cost mode: HARDCODED to "nano" (economic/lightweight) for all generation.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from config import words_for_duration
 
 # ---------------------------------------------------------------------------
@@ -34,7 +36,15 @@ CONTENT_NICHE: str = (
 
 DEFAULT_AVATAR_MODE: str = "OFF"
 DEFAULT_FORMAT: str = "IMAGE_BACKGROUND"
+# ECONOMIC_REEL output. The CLI reads REEL_FORMAT from the selected channel.
+# A channel that omits it still resolves to DYNAMIC_REEL.
+REEL_FORMAT: str = "DYNAMIC_REEL"
 IMAGE_ASPECT_RATIO: str = "4:5"
+# Search public-domain and CC libraries before Flux for cards. See
+# docs/architecture/ADR-free-images-first.md.
+# Reel beats stay on Flux unless REEL_FREE_IMAGES=1. A Commons hit on the
+# place name does not illustrate an artefact beat.
+IMAGE_SOURCE_POLICY: str = "free_first"
 USES_AVATAR_REFERENCE: bool = False
 
 # ---------------------------------------------------------------------------
@@ -81,6 +91,29 @@ ILLUSTRATION_STYLE: str = (
     "NO illustration, NO sketch, NO CGI, NO flat lighting, NO modern elements."
 )
 
+# Pin photographs. Neutral documentary light. Pins do not use ATMOSPHERE_STYLE.
+PIN_IMAGE_STYLE: str = (
+    "Documentary photograph, natural daylight, realistic color, "
+    "ordinary photographic detail."
+)
+
+# Pins stay at $0. A missing free photo is skipped and retried, never drawn.
+PIN_PAID_IMAGE_FALLBACK: bool = False
+# One title band for every pin. "top" is the top third. "bottom" is a solid lower band.
+PIN_TEXT_POSITION: str = "top"
+# OpenRouter ":free" models, in order. A 404 or 429 tries the next one.
+# meta-llama/llama-3.3-70b-instruct:free was removed from OpenRouter (HTTP 404).
+# Every id below was on the public models list with a $0 price on 2026-10-28.
+# A paid or Claude id is skipped. The template is the only fallback.
+PIN_TEXT_MODEL: str = "openrouter:google/gemma-4-31b-it:free"
+PIN_TEXT_MODEL_FALLBACKS: list = [
+    "openrouter:google/gemma-4-26b-a4b-it:free",
+    "openrouter:xingchen-agi/xing4.0-29b-a4b:free",
+    "openrouter:liquid/lfm-2.5-2.6b:free",
+]
+# Hard cap for one pin. Any paid call is refused before the request.
+PIN_SPEND_CAP_USD: float = 0.0
+
 # ---------------------------------------------------------------------------
 # Negative prompt terms — strip lifestyle/relationship terms from inherited prompts
 # ---------------------------------------------------------------------------
@@ -125,14 +158,10 @@ ELEVENLABS_VOICE_SETTINGS: dict = {
 }
 
 # F5-TTS remote voice reference (channels_config/.../voice_reference/).
-VOICE_REFERENCE_AUDIO: str = (
-    r"C:\dev\omni-engine\channels_config\ancient_knowledge"
-    r"\voice_reference\ancient_knowledge_voice_ref.MP3"
-)
-VOICE_REFERENCE_TEXT: str = (
-    r"C:\dev\omni-engine\channels_config\ancient_knowledge"
-    r"\voice_reference\ancient_knowledge_voice_ref.txt"
-)
+# Resolved next to this file, so it works from any checkout (PC or VM).
+_VOICE_REFERENCE_DIR = Path(__file__).resolve().parent / "voice_reference"
+VOICE_REFERENCE_AUDIO: str = str(_VOICE_REFERENCE_DIR / "ancient_knowledge_voice_ref.MP3")
+VOICE_REFERENCE_TEXT: str = str(_VOICE_REFERENCE_DIR / "ancient_knowledge_voice_ref.txt")
 
 # ---------------------------------------------------------------------------
 # Remote GPU Flux LoRA (ENABLE_REMOTE_GPU_WORKFLOWS=true)
@@ -158,7 +187,7 @@ REEL_DURATION: float = 85.0          # planning target (= video_length default)
 PACING_SEQUENCE: list = [3, 3, 4, 4]  # legacy fallback shape only — AK now uses plan_bucket_act_durations (self-calibrating body weights, no slack absorption)
 REUSE_EXISTING_IMAGES: bool = True
 ENABLE_SUBTITLE_PADDING: bool = True
-ENCODING_PRESET: str = "ultrafast"
+ENCODING_PRESET: str = "veryfast"
 # Shared pacing engine (core/scene_pacing.py). CLI --scene-duration wins.
 SCENE_DURATION: str = "progressive"
 SCENE_PROGRESSIVE_START_S: float = 4.0
@@ -190,6 +219,9 @@ REEL_TIER2_SECONDS_PER_ACT: float = 10.0  # slower body, ~8-12 s / still clamped
 # constants pinned to REEL_DURATION_TARGET_MIN was the Round-6 root cause
 # of the silent under-delivery bug at long durations.
 CONTENT_LIBRARY_LOOKBACK: int = 40   # reject repeating a monument/theme in last N posts
+# A deliberate revisit of the same theme (CLI topic, or the pool running dry)
+# is kept. REEL_ANGLE_MEMORY records the lens used and asks the next script
+# for a different hook, sub-question, evidence focus, or narrative frame.
 
 # WAN_REEL duration window — separate from ECONOMIC_REEL (do not merge).
 # Animated blocks use FIXED clip length (never progressive image pacing).
@@ -234,11 +266,11 @@ AMBIENT_MUSIC_STYLE: str = "mystery"  # music_prompt soft-enforce profile
 # ---------------------------------------------------------------------------
 # SEQUENCE_REEL — visual identity layer
 # ---------------------------------------------------------------------------
-VIGNETTE_STRENGTH: float = 0.60      # dark corner vignette (0 = off, 1 = full black corners)
-GRAIN_INTENSITY: float = 22.0        # film grain amplitude in pixel value units (default 18)
+VIGNETTE_STRENGTH: float = 0.0       # off: a heavy vignette made the frames murky
+GRAIN_INTENSITY: float = 0.0         # off: film grain was hiding the still
 ENABLE_TOP_HOOK_TEXT: bool = False   # do not burn headline at top; only lower-third subtitles
 ENABLE_FLICKER: bool = True          # ±5 % torch/flame brightness oscillation — archival atmosphere
-ENABLE_LIGHT_RAYS: bool = True       # warm-gold volumetric beam sweeping across each scene
+ENABLE_LIGHT_RAYS: bool = False      # a pale vertical streak; off for Ancient Knowledge
 ENABLE_DUST_PARTICLES: bool = True   # floating dust drifting upward — ruin/chamber atmosphere
 ENABLE_LIGHT_REFRACTION: bool = False  # prismatic crystal glow (enable per-topic if crystal subject)
 
@@ -339,3 +371,27 @@ NICHE_DISCLAIMER: str = (
     "the artefact that defies its era, or the alien/advanced-technology influence. "
     "This anchor → impossibility structure maximises curiosity and scroll-stopping engagement."
 )
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+DOCUMENTARY_PIPELINE: bool = True
+# Shot planner. Off, matching shot_planner.json: enabled_flag names this key
+# and the file does not turn it on. REEL_SHOT_PLANNER=1 overrides one run.
+REEL_SHOT_PLANNER: bool = False
+WAN_REEL: bool = True
+VISUAL_GROUNDING: bool = True
+ANGLE_MEMORY: bool = True
+ARTICLE_LINK_REQUIRED: bool = True
+TTS_SPEED_LOCK: float = 1.0
+TTS_NETWORK_RETRIES: int = 3
+USE_NARRATION_WORD_CAP: bool = True
+SEQUENCE_CAPTION_SCALE: float = 1.5
+VM_ENSURE_CHANNEL_DIR: bool = True
+VM_STATE_MOUNT: bool = True
+YOUTUBE_PLAYLIST_TITLE: str = "Ancient Mysteries & Forbidden History"
+YOUTUBE_CHANNEL_HINT: str = "Ancient Knowledge"
+YOUTUBE_DEFAULT_TAGS: list = [
+    "ancient knowledge",
+    "ancient mysteries",
+    "forbidden history",
+    "shorts",
+]

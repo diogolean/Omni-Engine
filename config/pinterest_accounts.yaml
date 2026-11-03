@@ -1,0 +1,55 @@
+# Pinterest accounts for the VM scheduler.
+#
+# Add an account by copying a block. No Python change is required.
+# Token values never go in this file — only the env var names.
+# The scheduler publishes image cards for every block with active: true
+# whose site and board are set (TODO means "not ready", and that account
+# is skipped).
+
+accounts:
+  - channel_id: ancient_knowledge
+    active: true
+    display_name: Ancient Knowledge
+    niche: ancient mysteries and lost civilizations
+    site_url: https://ancientknowledge.eokviral.com
+    # Same tree as outputs/ancient_knowledge/ on the PC. Library JSON is under
+    # library/; images are referenced beside it (usually assets/).
+    # On the VM that tree is read from Drive when DRIVE_OUTPUTS_FOLDER_ID
+    # is set. DRIVE_LIBRARY_FOLDER_ID_ANCIENT_KNOWLEDGE (or drive_folder_id)
+    # is an optional per-channel override.
+    # Post Planner still needs the B2 public URL, not a Drive link.
+    b2_prefix: ancient_knowledge/library/
+    # local = PC script only, docker = VM scheduler only, both = either, off = never.
+    runner: both
+    # The host currently presents a shared *.web-hosting.com certificate.
+    # This flag is article lookups only. Pinterest API calls stay verified.
+    article_tls_verify: false
+    # WordPress featured images on this site are title graphics. Never pin them.
+    # A missing or title-graphic library file can be filled from a free-license
+    # search before FLUX. The published card is still the PinTransformer composite.
+    use_featured_image: false
+    # Each new card is also a Facebook post for this page, queued in Post Planner.
+    facebook_postplanner: true
+    facebook_page_name: Ancient Knowledge
+    board_name: Ancient Knowledge
+    board_id_env: PINTEREST_BOARD_ID_ANCIENT_KNOWLEDGE
+    access_token_env: PINTEREST_ACCESS_TOKEN_ANCIENT_KNOWLEDGE
+    refresh_token_env: PINTEREST_REFRESH_TOKEN_ANCIENT_KNOWLEDGE
+    app_id_env: PINTEREST_APP_ID_ANCIENT_KNOWLEDGE
+    app_secret_env: PINTEREST_APP_SECRET_ANCIENT_KNOWLEDGE
+
+  - channel_id: anna_protocol
+    active: true
+    display_name: "Anna's Garden"
+    # Site and board are not known yet. Replace the TODOs before this
+    # account can publish. The B2 prefix and token env names are ready.
+    niche: TODO
+    site_url: TODO
+    b2_prefix: anna_protocol/library/
+    runner: both
+    board_name: TODO
+    board_id_env: PINTEREST_BOARD_ID_ANNA_PROTOCOL
+    access_token_env: PINTEREST_ACCESS_TOKEN_ANNA_PROTOCOL
+    refresh_token_env: PINTEREST_REFRESH_TOKEN_ANNA_PROTOCOL
+    app_id_env: PINTEREST_APP_ID_ANNA_PROTOCOL
+    app_secret_env: PINTEREST_APP_SECRET_ANNA_PROTOCOL

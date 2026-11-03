@@ -19,15 +19,7 @@ _FACTORY = Path(__file__).resolve().parents[1]
 if str(_FACTORY) not in sys.path:
     sys.path.insert(0, str(_FACTORY))
 
-from utils.pipeline_paths import (  # noqa: E402
-    ProtectedStateError,
-    channel_mirror_dir,
-    contains_protected_store,
-    discover_channel_ids,
-    is_ephemeral_artifact_dir,
-    outputs_root,
-    safe_rmtree,
-)
+from shared.paths import ProtectedStateError, channel_mirror_dir, contains_protected_store, discover_channel_ids, is_ephemeral_artifact_dir, outputs_root, safe_rmtree
 
 _LOG = logging.getLogger("cleanup_ephemeral")
 

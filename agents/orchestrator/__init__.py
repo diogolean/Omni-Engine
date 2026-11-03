@@ -1,24 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-4-tier agentic pipeline for Ancient Knowledge static posts.
-
-    ThemeCurator → Copywriter → VisualDirector ⇄ VisualQA (max 1 retry → r01+r02)
-"""
+"""Compatibility shim. This package lives in production.pipeline.agentic."""
 from __future__ import annotations
 
-from agents.orchestrator.criteria import MASTER_CRITERIA, MAX_RETRIES
-from agents.orchestrator.orchestrator import (
-    PipelineOrchestrator,
-    should_use_agentic_pipeline,
-)
-from agents.orchestrator.state import PipelineState, QAStatus, QAVerdict
+import importlib
 
-__all__ = [
-    "MASTER_CRITERIA",
-    "MAX_RETRIES",
-    "PipelineOrchestrator",
-    "PipelineState",
-    "QAStatus",
-    "QAVerdict",
-    "should_use_agentic_pipeline",
-]
+_impl = importlib.import_module("production.pipeline.agentic")
+
+
+def __getattr__(name: str):
+    return getattr(_impl, name)

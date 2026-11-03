@@ -14,7 +14,7 @@ Metadata strategy (US high-RPM):
   Category→ Entertainment (24) for cinematic visual-art / architecture
 
 Entry point:
-    python channels_config/endless_summer_paradise/esp_main.py scan
+    python tools/channel_cli.py --channel endless_summer_paradise scan
 """
 from __future__ import annotations
 
@@ -61,6 +61,8 @@ _PROJECT: dict = FACTORY_SETTINGS.get("PROJECT_CONFIG") or {}
 # ---------------------------------------------------------------------------
 PAGE_ID: str = "endless_summer_paradise"
 PAGE_DISPLAY_NAME: str = "Endless Summer Paradise"
+# Library ingest of owned source footage. Do not replace it with stock search.
+IMAGE_SOURCE_POLICY: str = "ai_only"
 YOUTUBE_CHANNEL_HINT: str = PAGE_DISPLAY_NAME
 YOUTUBE_PRESERVE_TITLE_STRUCTURE: bool = True
 CONTENT_NICHE: str = (

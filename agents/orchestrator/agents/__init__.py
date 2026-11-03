@@ -1,21 +1,10 @@
-# -*- coding: utf-8 -*-
+"""Compatibility shim. This package lives in production.pipeline.agentic.agents."""
 from __future__ import annotations
 
-from agents.orchestrator.agents.theme_curator import ThemeCuratorAgent
-from agents.orchestrator.agents.visual_director import VisualDirectorAgent
-from agents.orchestrator.agents.visual_qa import VisualQAAgent
+import importlib
 
-__all__ = [
-    "ThemeCuratorAgent",
-    "CopywriterAgent",
-    "VisualDirectorAgent",
-    "VisualQAAgent",
-]
+_impl = importlib.import_module("production.pipeline.agentic.agents")
 
 
 def __getattr__(name: str):
-    if name == "CopywriterAgent":
-        from agents.writer.copywriter import CopywriterAgent
-
-        return CopywriterAgent
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(_impl, name)

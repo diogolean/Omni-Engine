@@ -26,6 +26,8 @@ DEFAULT_FORMAT = "IMAGE_AVATAR"
 
 # Gemini aspect ratio used by VisualArchitect when page is active.
 IMAGE_ASPECT_RATIO = "3:4"
+# Anna's Garden posts can use a licensed photograph before a generated still.
+IMAGE_SOURCE_POLICY = "free_first"
 
 # Whether this page supports a human likeness reference image.
 USES_AVATAR_REFERENCE = True
@@ -81,3 +83,33 @@ TOPIC_POOL: list = [
 # ---------------------------------------------------------------------------
 LOGO_SIZE_SCALE: float = 0.30      # 30 % of canvas width — raised for brand visibility
 LOGO_POSITION: str = "bottom_right"
+
+# YouTube snippet tags. The publishers read this list; they do not keep a
+# channel-name map. Niche is holistic longevity, not relationship advice.
+YOUTUBE_DEFAULT_TAGS: list = [
+    "anna protocol",
+    "holistic health",
+    "natural remedies",
+    "ancestral wellness",
+    "herbal medicine",
+    "longevity",
+    "shorts",
+]
+
+# Engine flags. The pipeline reads these; it does not test the channel name.
+NATURAL_DRAW_LOCK: bool = True
+# Botanical film lock. On so this page keeps its current photography.
+# The flag defaults off for every other page.
+PHOTOGRAPHY_STYLE_LOCK: bool = True
+ALLOWS_CTA_CAPTION_IMAGE: bool = True
+VM_ENSURE_CHANNEL_DIR: bool = True
+LEGACY_SHARED_LEDGER: bool = True
+LEGACY_MEDIA_DNA: bool = True
+BRAND_GRADIENT: tuple = ((14, 10, 6), (30, 22, 12))
+BRAND_ACCENT_COLORS: tuple = (
+    (255, 220, 100),
+    (255, 235, 160),
+    (255, 200, 80),
+    (240, 215, 140),
+    (255, 230, 130),
+)

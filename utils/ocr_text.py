@@ -1,16 +1,13 @@
-# -*- coding: utf-8 -*-
-"""Shared OCR text cleanup used by OCR, paraphrase, and quote render."""
+"""Compatibility shim. The implementation is production.formats.quotes.ocr_text."""
 from __future__ import annotations
 
-_QUOTE_CHARS: frozenset[str] = frozenset("\"'“”„‟«»‹›‘’‚")
+import sys
 
+if __name__ == "__main__":
+    import runpy
 
-def strip_wrapping_quotes(text: str) -> str:
-    """Remove quote marks that wrap the whole text, keep inner punctuation."""
-    cleaned = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    while len(cleaned) >= 2 and cleaned[0] in _QUOTE_CHARS and cleaned[-1] in _QUOTE_CHARS:
-        inner = cleaned[1:-1].strip()
-        if not inner:
-            break
-        cleaned = inner
-    return cleaned
+    runpy.run_module("production.formats.quotes.ocr_text", run_name="__main__")
+else:
+    from production.formats.quotes import ocr_text as _impl
+
+    sys.modules[__name__] = _impl
