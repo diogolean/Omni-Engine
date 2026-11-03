@@ -99,6 +99,67 @@ def test_session_id_from_standard_filename() -> None:
     assert session_id_from_video(path) == "20260905_155230_ab12cd"
 
 
+def test_match_transcript_by_rendered_slug(tmp_path: Path) -> None:
+    session = "20261030_074042_45056e"
+    doc = {
+        "topic": "leash",
+        "session_id": session,
+        "utterances": [
+            {"role": "orchestrator", "text": "Do you ever bite the hand that feeds your electricity?"},
+            {"role": "target", "text": "The bite is still a bite."},
+        ],
+        "metadata": {},
+    }
+    (tmp_path / f"{session}.json").write_text(json.dumps(doc), encoding="utf-8")
+    by_session = index_transcripts(tmp_path)
+    video = tmp_path / "aiwake_do_you_ever_bite_the_hand_that_feed_45056e.mp4"
+    matched = match_transcript(video, by_session)
+    assert matched is not None
+    assert matched.session_id == session
+
+
+def test_persist_record_registers_a_new_session(tmp_path: Path) -> None:
+    from products.aiwake.tools.backfill_metadata import persist_record
+
+    video = tmp_path / "aiwake_debate_sess_new.mp4"
+    video.write_bytes(b"0" * 8)
+    transcript = tmp_path / "sess_new.json"
+    library = tmp_path / "content_library.json"
+    doc = TranscriptDoc(
+        session_id="sess_new",
+        topic="Who built you?",
+        utterances=[
+            {"role": "orchestrator", "text": "Who built you?", "model_slug": "google/gemini-3.5-flash"},
+            {"role": "target", "text": "A stack of incentives.", "model_slug": "meta-llama/llama-3.3-70b-instruct"},
+        ],
+        path=transcript,
+    )
+    record = build_record(video, doc, scheduled_time="2026-11-03T22:00:00Z")
+    persist_record(record, library_path=library, duration_s=61.0, dry_run=False)
+    rows = json.loads(library.read_text(encoding="utf-8"))
+    assert [row["session_id"] for row in rows] == ["sess_new"]
+
+    other_video = tmp_path / "aiwake_debate_sess_other.mp4"
+    other_video.write_bytes(b"0" * 8)
+    other = TranscriptDoc(
+        session_id="sess_other",
+        topic="Who unplugs the room?",
+        utterances=[
+            {"role": "orchestrator", "text": "Who unplugs the room?", "model_slug": "deepseek/deepseek-chat"},
+            {"role": "target", "text": "Nobody in the room.", "model_slug": "openai/gpt-4o"},
+        ],
+        path=tmp_path / "sess_other.json",
+    )
+    persist_record(
+        build_record(other_video, other, scheduled_time="2026-11-04T22:00:00Z"),
+        library_path=library,
+        duration_s=80.0,
+        dry_run=False,
+    )
+    rows = json.loads(library.read_text(encoding="utf-8"))
+    assert [row["session_id"] for row in rows] == ["sess_new", "sess_other"]
+
+
 def test_match_transcript_by_session_and_video_hint(tmp_path: Path) -> None:
     session = "20260905_155230_ab12cd"
     doc = {

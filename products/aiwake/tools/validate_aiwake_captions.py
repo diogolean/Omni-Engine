@@ -57,6 +57,10 @@ _HEADLINE_RE = re.compile(
     r"(?P<asker>Gemini|Llama|GPT-4o|DeepSeek|Claude) vs "
     r"(?P<answerer>Gemini|Llama|GPT-4o|DeepSeek|Claude)$"
 )
+_PAIR_IN_TITLE = re.compile(r"(?i)\b(gemini|llama|gpt-4o|deepseek|claude)\b|\bvs\b")
+_TEMPLATE_FRAMES = re.compile(
+    r"(?i)^(does\b.+\bexcuse the\b|is\b.+\babout\b|should\b.+\bcover\b)"
+)
 _SEO_TAGS = {tag.lower() for _phrase, tag, _stems in SEO_KEYWORDS}
 _MODEL_RE = re.compile(
     r"\b(GPT-4o|GPT-[\w.]+|Gemini(?: [\d.]+)?(?: Flash| Pro)?|"
@@ -395,9 +399,8 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
     asker, answerer = seat_names(row)
     headline = str(_get(row, "platform_overrides.youtube.title") or (row.get("base_metadata") or {}).get("title") or "")
     match = _HEADLINE_RE.match(headline.strip())
-    if not match:
-        fails.append(f"title_format: {name}: {headline[:90]}")
-    else:
+    spoken_only = False
+    if match:
         if match.group("asker") != asker or match.group("answerer") != answerer or match.group("asker") == match.group("answerer"):
             fails.append(
                 f"title_format: {name}: names {match.group('asker')} vs {match.group('answerer')} "
@@ -406,11 +409,24 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         if len(headline) > 70:
             fails.append(f"seo_title_length: {name}: {len(headline)} chars")
         # The SEO keyword lives in the description. A title is a spoken question.
+    elif (
+        is_complete_question(headline)
+        and len(headline.strip()) <= 70
+        and not _PAIR_IN_TITLE.search(headline)
+    ):
+        spoken_only = True
+    else:
+        fails.append(f"title_format: {name}: {headline[:90]}")
+    question = match.group("question") if match else headline.strip()
+    if _TEMPLATE_FRAMES.search(question):
+        fails.append(f"template_title: {name}")
     turns = _read_turns(row)
     orchestrator = [str(item.get("text") or "") for item in turns if item.get("role") == "orchestrator"]
     topic = ""
     if match:
         topic = match.group("question")
+    elif spoken_only:
+        topic = headline.strip()
     elif " | " in headline:
         topic = headline.split(" | ", 1)[0]
     elif " - " in headline:
@@ -441,7 +457,10 @@ def entry_failures(row: dict[str, Any]) -> list[str]:
         topic
         and opening_exact
         and str(_qa(row).get("title_source") or "") != "editorial"
-        and hook_is_mid_cut(topic, opening_exact)
+        and hook_is_mid_cut(
+            topic,
+            re.sub(r"\s+", " ", re.sub(r"\s+,", ",", _clean(opening_exact).replace("\u2026", ", "))),
+        )
     ):
         fails.append(f"title_cut_off: {name}: {topic[:90]}")
     qa = _qa(row)

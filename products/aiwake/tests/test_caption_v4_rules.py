@@ -79,6 +79,28 @@ def test_editorial_title_skips_the_mid_cut_check_only() -> None:
     assert "title_cut_off" in " ".join(entry_failures(row))
 
 
+def test_keyword_lives_in_the_description() -> None:
+    row = _row()
+    title = "Who keeps the training logs?"
+    row["platform_overrides"]["youtube"]["title"] = title
+    row["base_metadata"]["title"] = title
+    fails = " ".join(entry_failures(row))
+    assert "title missing a keyword" not in fails
+    for platform in ("tiktok", "youtube", "instagram", "facebook", "kwai"):
+        caption = row["platform_overrides"][platform]["caption"]
+        for phrase in (
+            "AI censorship",
+            "chatbot privacy",
+            "AI hallucination",
+            "AI consciousness",
+            "Big Tech",
+            "AI ethics",
+        ):
+            caption = caption.replace(phrase, "the topic")
+        row["platform_overrides"][platform]["caption"] = caption
+    assert "seo_keyword" in " ".join(entry_failures(row))
+
+
 def test_banned_list_fails() -> None:
     row = _row()
     row["platform_overrides"]["instagram"]["caption"] += "\n\nThis exchange is truly blunt and showcases the point."

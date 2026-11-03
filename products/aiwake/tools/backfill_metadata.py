@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -251,6 +252,28 @@ def index_transcripts(transcripts_dir: Path) -> dict[str, TranscriptDoc]:
     return by_session
 
 
+def rendered_video_names(doc: TranscriptDoc) -> set[str]:
+    """Filenames ``debate_video_filename`` writes, plus the old ``202610`` suffix.
+
+    New renders end in the session tail. Renders from before that fix ended in
+    the date prefix, so a slug-only match never found the transcript and
+    ``persist_record`` was never called.
+    """
+    opening = ""
+    for row in doc.utterances:
+        if str(row.get("role") or "").strip().lower() == "orchestrator":
+            opening = " ".join(str(row.get("text") or "").split()).strip()
+            if opening:
+                break
+    source = opening or str(doc.topic or "").strip() or "debate"
+    ascii_text = unicodedata.normalize("NFKD", source).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "_", ascii_text.lower()).strip("_")[:35].rstrip("_") or "debate"
+    tail = re.sub(r"[^a-zA-Z0-9]+", "", str(doc.session_id or "").rsplit("_", 1)[-1])[-6:]
+    names = {f"aiwake_{slug}_{tail or 'session'}.mp4"}
+    names.add(f"aiwake_{slug}_202610.mp4")
+    return {name.lower() for name in names}
+
+
 def match_transcript(
     video: Path,
     by_session: dict[str, TranscriptDoc],
@@ -268,7 +291,17 @@ def match_transcript(
             return doc
         if hint.lower() == video_key.replace("\\", "/").lower():
             return doc
-    return None
+    hits = [doc for doc in by_session.values() if video_name in rendered_video_names(doc)]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        return None
+    suffix = video.stem.rsplit("_", 1)[-1].lower()
+    exact = [doc for doc in hits if str(doc.session_id or "").lower().endswith(suffix)]
+    if len(exact) == 1:
+        return exact[0]
+    # A shared ``_202610`` name is the later render. The earlier file was overwritten.
+    return max(hits, key=lambda doc: str(doc.session_id or ""))
 
 
 def _utterance_text(row: dict[str, Any]) -> str:
@@ -441,29 +474,56 @@ def build_search_tags(
     return out
 
 
-def probe_duration_s(video: Path) -> float | None:
+def probe_clip(video: Path) -> tuple[float | None, bool]:
+    """Return ``(duration_s, has_audio)``. Missing tools yield ``(None, False)``."""
     try:
-        from shared.ffmpeg import run_ffmpeg
+        from shared.ffmpeg import resolve_ffmpeg, resolve_ffprobe, run_ffmpeg
 
-        proc = run_ffmpeg(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(video),
-            ],
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return round(float(proc.stdout.strip()), 3)
+        ffmpeg = resolve_ffmpeg()
+        ffprobe = resolve_ffprobe(ffmpeg)
+        if ffprobe:
+            proc = run_ffmpeg(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration:stream=codec_type",
+                    "-of",
+                    "json",
+                    str(video),
+                ],
+                text=True,
+                timeout=30,
+            )
+            if proc.returncode == 0 and (proc.stdout or "").strip():
+                payload = json.loads(proc.stdout)
+                raw = (payload.get("format") or {}).get("duration")
+                duration = round(float(raw), 3) if raw not in (None, "") else None
+                audio = any(
+                    str(item.get("codec_type") or "") == "audio"
+                    for item in (payload.get("streams") or [])
+                    if isinstance(item, dict)
+                )
+                return duration, audio
+        proc = run_ffmpeg([ffmpeg, "-hide_banner", "-i", str(video)], text=True, timeout=30)
+        err = proc.stderr or ""
+        duration = None
+        for line in err.splitlines():
+            if "Duration:" not in line:
+                continue
+            stamp = line.split("Duration:", 1)[1].split(",", 1)[0].strip()
+            hours, minutes, seconds = stamp.split(":")
+            duration = round(int(hours) * 3600 + int(minutes) * 60 + float(seconds), 3)
+            break
+        return duration, "Audio:" in err
     except Exception:  # noqa: BLE001 — duration is optional telemetry
-        pass
-    return None
+        return None, False
+
+
+def probe_duration_s(video: Path) -> float | None:
+    duration, _audio = probe_clip(video)
+    return duration
 
 
 def build_record(
@@ -569,6 +629,23 @@ def register_asset(
     )
 
 
+def _video_is_catalogued(path: Path) -> bool:
+    """Asset catalog entries stay inside the repo or the outputs root."""
+    from shared.paths import outputs_root
+
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    for root in (outputs_root(), Path(__file__).resolve().parents[3]):
+        try:
+            resolved.relative_to(Path(root).resolve())
+            return True
+        except (ValueError, OSError):
+            continue
+    return False
+
+
 def persist_record(
     record: DistributionRecord,
     *,
@@ -576,11 +653,37 @@ def persist_record(
     duration_s: float | None = None,
     dry_run: bool = False,
 ) -> tuple[DistributionRecord, str]:
+    """Upsert one session into ``content_library.json`` and return its asset id.
+
+    A dry run writes nothing. A real run registers the file in the asset
+    catalog when it lives under the factory, then refuses to return until the
+    session id is present in the library on disk.
+    """
     if dry_run:
         return record, ""
-    _ = duration_s
-    upsert_distribution_row(library_path, record)
-    return record, str(record.asset_id or "")
+    asset_id = str(record.asset_id or "")
+    video = Path(str(record.video_path or ""))
+    if video and _video_is_catalogued(video):
+        try:
+            stored = register_asset(record, duration_s=duration_s)
+        except Exception:
+            _LOG.exception("asset catalog skipped for %s", record.session_id)
+            stored = None
+        if isinstance(stored, dict) and stored.get("asset_id"):
+            asset_id = str(stored["asset_id"])
+            record = record.model_copy(update={"asset_id": asset_id})
+    elif duration_s is not None:
+        _LOG.debug("duration %s kept off the asset catalog for %s", duration_s, record.session_id)
+    saved = upsert_distribution_row(library_path, record)
+    session_id = str(record.session_id or "")
+    if session_id and str(saved.get("session_id") or "") != session_id:
+        raise RuntimeError(f"content_library did not register {session_id}")
+    if session_id and not any(
+        str(row.get("session_id") or "") == session_id
+        for row in load_distribution_library(library_path)
+    ):
+        raise RuntimeError(f"content_library is missing {session_id} after write")
+    return record, asset_id
 
 
 def _set_nested(row: dict[str, Any], keys: tuple[str, ...], value: str) -> None:
