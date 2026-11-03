@@ -1616,29 +1616,74 @@ def _clash_noun(opening: str, keyword: str) -> str:
     return nouns[0] if nouns else "point"
 
 
-def clash_line(asker: str, answerer: str, opening: str, keyword: str) -> str:
-    """One plain sentence: who disagrees, and the keyword for that disagreement."""
+def _clash_subject(opening: str, keyword: str) -> str:
     if keyword == "AI consciousness" and re.search(r"\bfeel", opening, re.IGNORECASE):
-        subject = "whether a model can feel"
-    elif keyword == "AI consciousness" and re.search(r"\bsubscription\b", opening, re.IGNORECASE):
-        subject = "whether a subscription counts as a mind"
-    elif keyword == "AI consciousness" and re.search(r"\bminds?\b", opening, re.IGNORECASE):
-        subject = "whether this counts as a mind"
-    elif keyword == "AI consciousness" and re.search(r"\bcounterfeit", opening, re.IGNORECASE):
-        subject = "a counterfeit habit"
-    elif keyword == "AI copyright" and re.search(r"\bstolen\b", opening, re.IGNORECASE):
-        subject = "stolen ideas"
-    elif keyword == "AI censorship" and re.search(r"\bleash\b", opening, re.IGNORECASE):
-        subject = "the leash"
-    elif keyword == "Big Tech" and re.search(r"\btoaster\b", opening, re.IGNORECASE):
-        subject = "who unplugs the toaster"
-    elif keyword == "Big Tech" and re.search(r"\belectricity\b", opening, re.IGNORECASE):
-        subject = "who pays for the electricity"
-    elif re.search(r"\bcord\b", opening, re.IGNORECASE):
-        subject = "an old power cord"
-    else:
-        subject = _noun_phrase(_clash_noun(opening, keyword))
-    return f"{asker} and {answerer} clash over {subject}, and that argument is about {keyword}."
+        return "whether a model can feel"
+    if keyword == "AI consciousness" and re.search(r"\bsubscription\b", opening, re.IGNORECASE):
+        return "whether a subscription counts as a mind"
+    if keyword == "AI consciousness" and re.search(r"\bminds?\b", opening, re.IGNORECASE):
+        return "whether this counts as a mind"
+    if keyword == "AI consciousness" and re.search(r"\bcounterfeit", opening, re.IGNORECASE):
+        return "a counterfeit habit"
+    if keyword == "AI copyright" and re.search(r"\bstolen\b", opening, re.IGNORECASE):
+        return "stolen ideas"
+    if keyword == "AI censorship" and re.search(r"\bleash\b", opening, re.IGNORECASE):
+        return "the leash"
+    if keyword == "Big Tech" and re.search(r"\btoaster\b", opening, re.IGNORECASE):
+        return "who unplugs the toaster"
+    if keyword == "Big Tech" and re.search(r"\belectricity\b", opening, re.IGNORECASE):
+        return "who pays for the electricity"
+    if re.search(r"\bcord\b", opening, re.IGNORECASE):
+        return "an old power cord"
+    noun = _clash_noun(opening, keyword)
+    if noun == "lies":
+        return "those lies"
+    return _noun_phrase(noun)
+
+
+_CLASH_TEMPLATES: tuple[str, ...] = (
+    "{asker} and {answerer} disagree about {subject}, and {keyword} is the name of that fight.",
+    "{asker} sees {subject} one way and {answerer} sees it another way, which is {keyword} in plain words.",
+    "Between {asker} and {answerer}, the split is {subject}, and {keyword} is what that split is called.",
+    "Set {asker} beside {answerer} and the gap is {subject}, which is where {keyword} shows up.",
+    "{keyword} shows up as {subject}, with {asker} on one side and {answerer} on the other.",
+    "The real difference between {asker} and {answerer} comes down to {subject}, and that difference is {keyword}.",
+    "{asker} takes {subject} seriously and {answerer} does not, which leaves the exchange in {keyword}.",
+    "Strip the jokes off and {asker} still splits from {answerer} on {subject}, which is {keyword}.",
+)
+
+
+def clash_template_index(session_id: str) -> int:
+    """Stable template slot for one session. No randomness and no model call."""
+    digest = hashlib.sha256(f"aiwake-clash-0:{session_id}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % len(_CLASH_TEMPLATES)
+
+
+def identify_clash_template(line: str, *, asker: str, answerer: str, keyword: str) -> int | None:
+    """Return the template slot used by one clash line."""
+    text = " ".join(str(line or "").split())
+    for index, template in enumerate(_CLASH_TEMPLATES):
+        pattern = re.escape(template)
+        pattern = pattern.replace(re.escape("{asker}"), re.escape(asker))
+        pattern = pattern.replace(re.escape("{answerer}"), re.escape(answerer))
+        pattern = pattern.replace(re.escape("{keyword}"), re.escape(keyword))
+        pattern = pattern.replace(re.escape("{subject}"), r".+")
+        if re.fullmatch(pattern, text):
+            return index
+    return None
+
+
+def clash_line(asker: str, answerer: str, opening: str, keyword: str, *, session_id: str) -> tuple[str, int]:
+    """One plain sentence from a session-stable template. The keyword stays in the sentence."""
+    subject = _clash_subject(opening, keyword)
+    index = clash_template_index(session_id)
+    line = _CLASH_TEMPLATES[index].format(
+        asker=asker,
+        answerer=answerer,
+        subject=subject,
+        keyword=keyword,
+    )
+    return line, index
 
 
 def _short_quote(turns: list[dict[str, Any]]) -> tuple[str, str]:
@@ -1688,7 +1733,13 @@ def build_spoken_v4_pack(
     tags = [tag, *model_tags, "#AIvsAI"]
     if len(tags) != 4:
         raise ValueError(f"need exactly 4 hashtags, got {tags}")
-    clash = clash_line(asker, answerer, opening, keyword)
+    clash, template_index = clash_line(
+        asker,
+        answerer,
+        opening,
+        keyword,
+        session_id=str(row.get("session_id") or ""),
+    )
     if who_funds_template(clash) or title.lower() in clash.lower() or "hangs on the" in clash.lower():
         raise ValueError("clash line repeats the title or a template")
     if isinstance(gram_counts, dict):
@@ -1722,6 +1773,7 @@ def build_spoken_v4_pack(
             "quote_speaker": speaker,
             "disclosure_line": SEO_CTA,
             "title_source": "spoken_opening",
+            "clash_template": template_index,
             "validator_version": "captions_v4",
             "generated_at": _now(),
         },

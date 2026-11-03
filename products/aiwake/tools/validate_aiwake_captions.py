@@ -33,6 +33,7 @@ from products.aiwake.tools.caption_generator import (
     closer_has_topic_word,
     closer_repeats_source,
     display_name,
+    identify_clash_template,
     is_complete_question,
     seat_names,
 )
@@ -188,6 +189,54 @@ def _quotes(text: str) -> list[str]:
     return [item.strip() for item in re.findall(r'"([^"]+)"', text or "") if item.strip()]
 
 
+_QUESTION_LEAD = re.compile(
+    r"^(?:who|whose|what|why|where|how|when|which|do|does|did|is|are|am|can|could|"
+    r"would|will|should|have|has|had|don't|doesn't|isn't|aren't|won't|can't|"
+    r"wouldn't|couldn't|shouldn't)\b",
+    re.IGNORECASE,
+)
+_TAG_QUESTION = re.compile(
+    r",\s*(?:do|does|did|is|are|am|was|were|isn't|aren't|don't|doesn't|won't|can't|"
+    r"wouldn't|couldn't|shouldn't|haven't|hasn't)\s+(?:i|you|we|they|he|she|it)\?$",
+    re.IGNORECASE,
+)
+_YOU_QUESTION = re.compile(r"^you\b", re.IGNORECASE)
+_EMBEDDED_QUESTION = re.compile(
+    r"\b(?:so|and|but|or)\s+(?:who|whose|what|why|where|how|when|which|do|does|did|"
+    r"is|are|can|could|would|will|should)\b",
+    re.IGNORECASE,
+)
+
+
+def sentence_is_question(sentence: str) -> bool:
+    """A real question, not a statement that picked up a stray question mark."""
+    text = sentence.strip()
+    if not text.endswith("?"):
+        return False
+    if (
+        _QUESTION_LEAD.match(text)
+        or _TAG_QUESTION.search(text)
+        or _YOU_QUESTION.match(text)
+        or _EMBEDDED_QUESTION.search(text)
+    ):
+        return True
+    return False
+
+
+def straighten_stray_question(text: str) -> str:
+    """Turn ``I'm a tool, not a truth-teller?`` into a statement. Keep real questions."""
+    parts = re.findall(r"[^.!?]*[.!?]+|[^.!?]+$", str(text or "").strip())
+    fixed: list[str] = []
+    for part in parts:
+        chunk = part.strip()
+        if not chunk:
+            continue
+        if chunk.endswith("?") and not sentence_is_question(chunk):
+            chunk = chunk[:-1].rstrip() + "."
+        fixed.append(chunk)
+    return " ".join(fixed)
+
+
 def _quote_surface(text: str) -> str:
     """Whitespace and dash normalization shared by the quote and the transcript."""
     cleaned = str(text or "")
@@ -195,7 +244,8 @@ def _quote_surface(text: str) -> str:
     cleaned = cleaned.replace("\u2018", "'").replace("\u2019", "'")
     cleaned = cleaned.replace("\u2014", ", ").replace("\u2013", ", ")
     cleaned = cleaned.replace("...", "…")
-    return re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return straighten_stray_question(cleaned)
 
 
 def _quote_in_utterance(quote: str, utterance: str) -> bool:
@@ -683,6 +733,49 @@ def _active(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return posting_order([row for row in rows if _ready_ok(row)])
 
 
+def _spoken_clash_line(row: dict[str, Any]) -> str:
+    caption = str(_get(row, _PLATFORMS["tiktok"][0]) or "")
+    for line in _lines(caption):
+        if line.startswith('"') or line.startswith("\u201c"):
+            continue
+        if _is_unscripted_line(line):
+            continue
+        return line
+    return ""
+
+
+def consecutive_clash_template_failures(rows: list[dict[str, Any]]) -> list[str]:
+    """Spoken rows that sit next to each other must not reuse one clash template."""
+    fails: list[str] = []
+    previous: int | None = None
+    previous_sid = ""
+    for row in rows:
+        qa = _qa(row)
+        sid = str(row.get("session_id") or "?")
+        if str(qa.get("title_source") or "") != "spoken_opening":
+            previous = None
+            previous_sid = ""
+            continue
+        asker, answerer = seat_names(row)
+        opening = ""
+        for item in _read_turns(row):
+            if str(item.get("role") or "") == "orchestrator" and str(item.get("text") or "").strip():
+                opening = str(item.get("text") or "").strip()
+                break
+        keyword = topic_keyword(opening)[0] if opening else ""
+        found = identify_clash_template(
+            _spoken_clash_line(row),
+            asker=asker,
+            answerer=answerer,
+            keyword=keyword,
+        )
+        if found is not None and found == previous:
+            fails.append(f"clash_template_repeat: {previous_sid} and {sid} both use template {found}")
+        previous = found
+        previous_sid = sid
+    return fails
+
+
 def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) -> list[str]:
     active = _active(rows)
     if expected is None:
@@ -696,6 +789,7 @@ def _cross_failures(rows: list[dict[str, Any]], *, expected: int | None = None) 
         expected = ready_count or len(active)
     expected = max(int(expected), 1)
     fails: list[str] = []
+    fails.extend(consecutive_clash_template_failures(active))
     angles = [str(_qa(row).get("angle") or "") for row in active]
     for index in range(1, len(angles)):
         if angles[index] and angles[index] == angles[index - 1]:
