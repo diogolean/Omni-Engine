@@ -15,8 +15,8 @@ One request makes one character:
    Rhubarb viseme ``X A B C D E F G H``. The ``right`` view mirrors ``left``.
 5. ``front``: one more Gemini call redraws the same character facing the
    camera, with the side shot as reference. It is cut, detected and rigged
-   (eyes, lids, warped mouths) like the side. If the budget or detection
-   fails, ``front`` falls back to the left art and ``viewStatus`` says so.
+   (eyes, lids, warped mouths) like the side. A plate that is still
+   three-quarter does not fill ``views/front``; ``viewStatus`` says it is missing.
 
 ``style`` (see :mod:`styles`) swaps the drawing-style sentence of the prompt.
 
@@ -432,7 +432,7 @@ def rebuild_rig(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
     if not closed.exists():
         raise FileNotFoundError(f"{skin.name}: no source_closed.png to re-rig from")
     side = {"closed": closed} | {k: skin / f"source_{k}.png" for k in ("mouthless", "sheet") if (skin / f"source_{k}.png").exists()}
-    status = {"left": "re-rigged offline", "right": "re-rigged offline (mirror of left)", "front": "left art (no front shot saved)"}
+    status = {"left": "re-rigged offline", "right": "re-rigged offline (mirror of left)", "front": "missing (no front shot saved)"}
     matte = BiRefNetMatte()
     try:
         views = assemble(skin, side, boxes_of("rig.json", closed), url, matte=matte, sheet=side.get("sheet"))
@@ -440,13 +440,19 @@ def rebuild_rig(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
         if fr.exists():
             fshots = {"closed": fr} | ({"mouthless": skin / "source_front_mouthless.png"} if (skin / "source_front_mouthless.png").exists() else {})
             fsheet = skin / "source_sheet_front.png"
-            views |= assemble(skin, fshots, boxes_of("rig_front.json", fr), url, matte=matte, front=True,
-                              sheet=fsheet if fsheet.exists() else side.get("sheet"))
-            status["front"] = "re-rigged offline (saved gemini front)"
+            got = assemble(skin, fshots, boxes_of("rig_front.json", fr), url, matte=matte, front=True,
+                           sheet=fsheet if fsheet.exists() else side.get("sheet"))
+            if got.get("front"):
+                views |= got
+                status["front"] = "re-rigged offline (saved gemini front)"
+            else:
+                _drop_front_slot(skin)
+                status["front"] = "missing (saved plate is not frontal)"
+        else:
+            _drop_front_slot(skin)
         report = qa.finalize(skin, 0.0, {"rerig": 1})
     finally:
         matte.close()
-    views.setdefault("front", views["left"])
     return {"views": views, "viewStatus": status,
             "qa": {"score": report["score"], "costUsd": 0.0, "attempts": {"rerig": 1},
                    "failed": [k for k, g in report["gates"].items() if not g["pass"]]}}
@@ -1316,6 +1322,18 @@ def blank_mouth_box(image: Image.Image, face: Box) -> Box:
     return (cx - mw // 2, top, cx + mw // 2, min(fy1 - 2, top + height))
 
 
+def _drop_front_slot(skin: Path) -> None:
+    """Remove a front view that is missing or not actually frontal."""
+    import shutil  # noqa: PLC0415
+
+    front_dir = skin / "views" / "front"
+    if front_dir.exists():
+        shutil.rmtree(front_dir)
+    rig_front = skin / "rig_front.json"
+    if rig_front.is_file():
+        rig_front.unlink()
+
+
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
              matte: Callable[[Image.Image], Image.Image], front: bool = False,
              sheet: Path | None = None, mouthless: bool = False) -> dict[str, Any]:
@@ -1472,6 +1490,12 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
                     "mouthless": mouthless,
                     **({"anchor": anchor.to_dict()} if anchor is not None else {})},
     }
+    if front:
+        facing = anchor.view if anchor is not None else ("front" if frontality(boxes)["frontal"] else "side")
+        if facing != "front":
+            # A 3/4 plate must not occupy the front slot, even as a best attempt.
+            return {}
+    skin.mkdir(parents=True, exist_ok=True)
     (skin / ("sheet_front.json" if front else "sheet.json")).write_text(json.dumps(
         {"used": sorted(good), "ncc": parts_from_sheet.get("cellNcc") if parts_from_sheet else None}), encoding="utf-8")
     if front:
@@ -1563,25 +1587,38 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
     boxes = gen["boxes"]
     sheet = gen["shots"].get("sheet")
     matte = BiRefNetMatte()
-    status = {"left": "ready", "right": "ready (mirror of left)", "front": "ready (left art; no frontal shot)"}
+    status = {"left": "ready", "right": "ready (mirror of left)", "front": "missing (no frontal shot)"}
     try:
         views = assemble(skin, gen["shots"], boxes, url, matte=matte, sheet=sheet)
         fr = gen["shots"].get("front")
         fshots = {"closed": fr} | ({"mouthless": gen["shots"]["front_mouthless"]} if "front_mouthless" in gen["shots"] else {})
-        if fr:
+
+        def _use_front(sheet_path: Path | None) -> None:
+            if not fr:
+                return
             try:
-                views |= assemble(skin, fshots, gen.get("frontBoxes") or detect_features(fr), url, matte=matte,
-                                  front=True, sheet=gen["shots"].get("sheet_front") or sheet)
-                status["front"] = "ready (gemini front view, side as reference; sheet mouths where cells register)"
-            except Exception as exc:  # noqa: BLE001 — detection/cut failure keeps the side art
+                got = assemble(
+                    skin, fshots, gen.get("frontBoxes") or detect_features(fr), url, matte=matte,
+                    front=True, sheet=sheet_path,
+                )
+            except Exception as exc:  # noqa: BLE001 — detection/cut failure leaves the front slot empty
                 _LOG.warning("front view rig failed: %s", exc)
-                status["front"] = f"ready (left art; front rig failed: {str(exc)[:120]})"
+                if "front" not in views:
+                    status["front"] = f"missing (front rig failed: {str(exc)[:120]})"
+                return
+            if got.get("front"):
+                views.update(got)
+                status["front"] = "ready (gemini front view, side as reference; sheet mouths where cells register)"
+            elif "front" not in views:
+                _drop_front_slot(skin)
+                status["front"] = "missing (plate is not frontal)"
+
+        _use_front(gen["shots"].get("sheet_front") or sheet)
         report = qa.finalize(skin, spent_usd(), attempts)
         if sheet is not None and not (report["gates"]["skin"]["pass"] and report["gates"]["edges"]["pass"]):
             attempts["sheetFallback"] = 1  # free retry: deterministic mouths/lids instead of the sheet
             views |= assemble(skin, gen["shots"], boxes, url, matte=matte)
-            if fr:
-                views |= assemble(skin, fshots, gen.get("frontBoxes") or detect_features(fr), url, matte=matte, front=True)
+            _use_front(gen["shots"].get("sheet_front") or sheet)
             gen["notes"]["sheet"] = gen["notes"].get("sheet", "") + " | QA fallback to warped mouths"
             report = qa.finalize(skin, spent_usd(), attempts)
         views, report = _settle_mouths(skin, views, report, attempts)
@@ -1595,17 +1632,11 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
                 if closed is not None:
                     _mouthless_shot(closed, skin, boxes, "mouthless_anchor", attempts, gen["notes"], tries=1)
                     views = assemble(skin, gen["shots"], boxes, url, matte=matte, sheet=sheet)
-                    fr = gen["shots"].get("front")
-                    if fr:
-                        views |= assemble(
-                            skin, fshots, gen.get("frontBoxes") or detect_features(fr), url,
-                            matte=matte, front=True, sheet=gen["shots"].get("sheet_front") or sheet,
-                        )
+                    _use_front(gen["shots"].get("sheet_front") or sheet)
                     report = qa.finalize(skin, spent_usd(), attempts)
                     views, report = _settle_mouths(skin, views, report, attempts)
     finally:
         matte.close()
-    views.setdefault("front", views["left"])
     return {"views": views, "viewStatus": status, "mouthShots": {"sheet": gen["notes"].get("sheet", "none"), "sheetFront": gen["notes"].get("sheet_front", "none")},
             "frontShot": gen["notes"].get("front", "skipped"),
             "qa": {"score": report["score"], "costUsd": report["costUsd"], "attempts": attempts,

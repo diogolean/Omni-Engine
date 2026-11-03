@@ -210,6 +210,15 @@ def create_avatar(
         if not placed["pass"]:
             raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
         _reject_avatar_faults(skin, views)
+        origin = _ensure_front(
+            skin, views, url, description=description, budget=budget,
+            spent=float(ledger.get("spentUsd") or 0.0) + float(cost),
+            generate=not cached,
+        )
+        if origin == "missing":
+            front_status = "missing (three-quarter plate)"
+        elif origin in {"cached", "generated"}:
+            front_status = "facing_front"
     else:
         views = _rig_views(left, front, skin, url, mouthless=mouthless)
     rig_path = skin / "rig.json"
@@ -813,6 +822,163 @@ def write_character_json(skin: Path, built: dict[str, Any], *, character_id: str
     return path
 
 
+def cached_front_plate(skin: Path) -> Path | None:
+    """A frontal plate already on disk. Never the three-quarter master."""
+    for name in ("source_front_mouthless.png", "source_front.png"):
+        path = skin / name
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def _drop_front(skin: Path) -> None:
+    import shutil  # noqa: PLC0415
+
+    front = skin / "views" / "front"
+    if front.exists():
+        shutil.rmtree(front)
+    rig_front = skin / "rig_front.json"
+    if rig_front.is_file():
+        rig_front.unlink()
+
+
+def _front_anchor_ok(skin: Path) -> bool:
+    """The saved front slot is a midline mouth on a frontal plate."""
+    path = skin / "views" / "front" / "view.json"
+    if not path.is_file():
+        return False
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    anchor = (doc.get("mouthQA") or {}).get("anchor") or {}
+    face = (doc.get("mouthQA") or {}).get("face") or None
+    if anchor.get("view") != "front" or not face or len(face) < 4:
+        return False
+    width = max(1, int(face[2]) - int(face[0]))
+    centre = (int(face[0]) + int(face[2])) / 2
+    return abs((float(anchor.get("x", centre + width)) - centre) / width) <= 0.01
+
+
+def install_cached_front(
+    skin: Path,
+    url: Callable[[Path], str],
+    *,
+    description: str,
+) -> dict[str, Any] | None:
+    """Rig ``source_front.png`` into ``views/front`` without an image call.
+
+    The side puppet stays where it is. A plate whose eyes are still
+    three-quarter is not copied over, and a failed cut does not raise:
+    the side rig has already succeeded.
+    """
+    import shutil  # noqa: PLC0415
+
+    from products.aiwake.animator.factory.create_puppet import create_puppet  # noqa: PLC0415
+
+    plate = cached_front_plate(skin)
+    if plate is None:
+        return None
+    stage_root = skin / "_front_stage"
+    if stage_root.exists():
+        shutil.rmtree(stage_root)
+    stage_root.mkdir(parents=True)
+    staged = stage_root / "front"
+    try:
+        create_puppet(
+            character_id="front",
+            prompt=puppet_v3.avatar_prompt(description, stick=False, facing="front"),
+            facing="left",
+            image_path=plate,
+            puppets_dir=stage_root,
+            rerig=False,
+            require_human_face=True,
+        )
+        try:
+            _install_human_eyes(staged)
+        except (OSError, RuntimeError, ValueError):
+            pass
+        views = puppet_v3.adapt(staged, url)
+        front = views.get("front")
+        if not front or not _front_anchor_ok(staged):
+            return None
+        _drop_front(skin)
+        shutil.copytree(staged / "views" / "front", skin / "views" / "front")
+        rig_front = staged / "rig_front.json"
+        if rig_front.is_file():
+            shutil.copy2(rig_front, skin / "rig_front.json")
+        return front
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return None
+    finally:
+        shutil.rmtree(stage_root, ignore_errors=True)
+
+
+def _draw_facing_front(
+    skin: Path,
+    description: str,
+    budget: image_models.RunBudget,
+    spent: float,
+) -> bool:
+    """One frontal plate, only when the side view is not already front."""
+    if not _gemini_ready():
+        return False
+    dest = skin / "source_front.png"
+    reference = next(
+        (path for path in (skin / "_gemini.png", skin / "character.png") if path.is_file()),
+        None,
+    )
+    try:
+        _plate(
+            puppet_v3.avatar_prompt(description, stick=False, facing="front"),
+            dest, budget, spent, reference=reference,
+        )
+    except (OSError, RuntimeError, ValueError, TypeError, image_models.BudgetExceeded):
+        dest.unlink(missing_ok=True)
+        return False
+    return dest.is_file() and dest.stat().st_size > 0
+
+
+def _ensure_front(
+    skin: Path,
+    views: dict[str, Any],
+    url: Callable[[Path], str],
+    *,
+    description: str,
+    budget: image_models.RunBudget,
+    spent: float,
+    generate: bool,
+) -> str:
+    """Fill ``views/front`` from a cached frontal plate, or draw one on create.
+
+    Returns ``side`` when the three-quarter master was itself frontal,
+    ``cached`` or ``generated`` when a dedicated front plate was seated,
+    and ``missing`` when the slot stays empty.
+    """
+    plate = cached_front_plate(skin)
+    side = cached_plate(skin)
+    same = plate is not None and side is not None and plate.resolve() == side.resolve()
+    if plate is not None and not (same and _front_anchor_ok(skin)):
+        installed = install_cached_front(skin, url, description=description)
+        if installed is not None:
+            views["front"] = installed
+            return "cached"
+    if _front_anchor_ok(skin):
+        return "side"
+    if generate and cached_front_plate(skin) is None:
+        if _draw_facing_front(skin, description, budget, spent):
+            installed = install_cached_front(skin, url, description=description)
+            if installed is not None:
+                views["front"] = installed
+                return "generated"
+            (skin / "source_front.png").unlink(missing_ok=True)
+    if not _front_anchor_ok(skin):
+        views.pop("front", None)
+        _drop_front(skin)
+        return "missing"
+    return "side"
+
+
 def cached_plate(skin: Path) -> Path | None:
     """A plate already paid for. Re-rigging must not call the image model.
 
@@ -922,7 +1088,12 @@ def rerig_from_plate(
     if not placed["pass"]:
         raise RuntimeError(placed.get("note") or "mouth or eyes are off the face")
     _reject_avatar_faults(skin, views)
-    front_status = "facing_front" if "front" in views else "missing (three-quarter plate)"
+    # Re-rig never draws a new plate. A source_front.png already in the skin is seated as-is.
+    origin = _ensure_front(
+        skin, views, url, description=description,
+        budget=budget or image_models.run_budget(), spent=cost, generate=False,
+    )
+    front_status = "facing_front" if origin != "missing" else "missing (three-quarter plate)"
     built = {
         "views": views,
         "viewStatus": {"left": "image-model", "right": "mirror of left", "front": front_status},

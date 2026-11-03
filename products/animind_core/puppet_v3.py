@@ -59,10 +59,20 @@ def avatar_prompt(description: str, *, stick: bool, facing: str) -> str:
             "NO human mouth, NO lips, NO lip colour, NO pink mouth, NO smile, NO teeth, NO smile creases. "
             "The skin under the moustache is one even blank skin tone with no line drawn on it."
         )
-    side = "left" if facing == "left" else "right"
+    if facing == "front":
+        pose = (
+            "STRICT POSE LOCK: dead-front, facing the camera, zero degrees of yaw. "
+            "The nose sits on the vertical midline. Both eyes are the same size and "
+            "the same distance from the nose. Both ears are visible and the same width."
+        )
+    else:
+        side = "left" if facing == "left" else "right"
+        pose = (
+            f"STRICT POSE LOCK: exactly 25 degrees facing {side} "
+            "in three-quarter view, never dead-front."
+        )
     return (
-        f"{subject} Medium bust, STRICT POSE LOCK: exactly 25 degrees facing {side} "
-        "in three-quarter view, never dead-front. "
+        f"{subject} Medium bust, {pose} "
         "STRICT PROPORTION: crown-to-chin head height is exactly 27 percent of the 9:16 "
         "portrait height; the torso fills the lower 73 percent. "
         "The head docks into a short collar and the opaque torso is cut off by the bottom edge. "

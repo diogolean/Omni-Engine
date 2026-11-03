@@ -1,4 +1,5 @@
 """Mouthless heads: the animated mouth is drawn on blank skin, never inpainted over a lip."""
+import json
 import os
 import subprocess
 import sys
@@ -356,3 +357,161 @@ def test_cached_plate_prefers_mouthless_then_closed_then_front(tmp_path):
     assert avatar.cached_plate(skin).name == "source_front.png"
     (skin / "source_front.png").write_bytes(b"")
     assert avatar.cached_plate(skin).name == "_gemini.png"
+
+
+def _marked_plate(*, eyes: tuple[tuple[int, int], tuple[int, int]], marker: tuple[int, int, int]) -> Image.Image:
+    """Magenta bust. The cheek block is the only way to tell the two plates apart."""
+    image = Image.new("RGBA", (256, 256), (255, 0, 255, 255))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((48, 28, 208, 220), fill=(232, 186, 156, 255))
+    draw.ellipse((78, 118, 178, 156), fill=(181, 168, 161, 255))
+    for cx, cy in eyes:
+        draw.ellipse((cx - 14, cy - 14, cx + 14, cy + 14), fill=(248, 248, 246, 255))
+        draw.ellipse((cx - 5, cy - 6, cx + 5, cy + 6), fill=(20, 16, 14, 255))
+    draw.rectangle((148, 168, 176, 196), fill=marker + (255,))
+    return image
+
+
+def _iris_landmarks(image: Image.Image, *, require_human_face: bool = False):
+    """Eyes follow the painted irises, so a 3/4 plate is not reported as frontal."""
+    import cv2
+
+    from animation.parametric.factory.landmark_detector import EyeLandmark, FacialLandmarks, Point3D
+    from products.animind_core.tests.fake_face import fake_human_landmarks
+
+    del require_human_face
+    arr = np.asarray(image.convert("RGBA"))
+    height, width = arr.shape[:2]
+    alpha = arr[:, :, 3] > 8
+    ys, xs = np.nonzero(alpha)
+    if xs.size == 0:
+        return fake_human_landmarks(image)
+    x0, y0, x1, y1 = int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
+    head_bottom = y0 + max(8, int((y1 - y0) * 0.90))
+    head = (x0, y0, x1, min(height, head_bottom))
+    span_x = max(1, head[2] - head[0])
+    span_y = max(1, head[3] - head[1])
+    lum = arr[:, :, :3].astype(np.int16).mean(axis=2)
+    dark = (alpha & (lum < 40)).astype(np.uint8)
+    dark[int(head[1] + 0.62 * span_y):, :] = 0
+    count, _labels, stats, centroids = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    blobs = []
+    for index in range(1, count):
+        area = int(stats[index, cv2.CC_STAT_AREA])
+        if 6 <= area <= 800:
+            blobs.append((area, centroids[index]))
+    if len(blobs) < 2:
+        return fake_human_landmarks(image)
+    pair = sorted(blobs, key=lambda item: item[0], reverse=True)[:2]
+    pair.sort(key=lambda item: item[1][0])
+    left = (int(round(pair[0][1][0])), int(round(pair[0][1][1])))
+    right = (int(round(pair[1][1][0])), int(round(pair[1][1][1])))
+    mouth = (head[0] + span_x // 2, head[1] + int(span_y * 0.72))
+    chin = (mouth[0], head[3] - 1)
+
+    def uv(px: int, py: int) -> Point3D:
+        return Point3D((px - head[0]) / span_x, (py - head[1]) / span_y, 0.0)
+
+    return FacialLandmarks(
+        left_eye=EyeLandmark(uv(*left), 0.04),
+        right_eye=EyeLandmark(uv(*right), 0.04),
+        mouth_center=uv(*mouth),
+        mouth_width=0.16,
+        jawline=(),
+        chin_base=uv(*chin),
+        neck_pivot=uv(chin[0], min(height - 1, head[3] + 2)),
+        head_bbox=head,
+        confidence=0.95,
+        backend="mediapipe_tasks",
+    )
+
+
+def _view_has(folder: Path, kind: str) -> bool:
+    for path in folder.rglob("*.png"):
+        arr = np.asarray(Image.open(path).convert("RGBA"))
+        rgb = arr[:, :, :3].astype(np.int16)
+        alpha = arr[:, :, 3] > 128
+        if kind == "blue":
+            hit = alpha & (rgb[:, :, 2] > 200) & (rgb[:, :, 0] < 80) & (rgb[:, :, 1] < 120)
+        else:
+            hit = alpha & (rgb[:, :, 1] > 180) & (rgb[:, :, 0] < 80) & (rgb[:, :, 2] < 100)
+        if bool(hit.any()):
+            return True
+    return False
+
+
+def test_rerig_fills_front_from_source_front_and_leaves_the_three_quarter_on_the_left(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "animation.parametric.factory.landmark_detector.detect_landmarks",
+        _iris_landmarks,
+    )
+    monkeypatch.setattr(
+        "animation.parametric.factory.rigger.detect_landmarks",
+        _iris_landmarks,
+    )
+
+    def generate(*_args, **_kwargs):
+        raise AssertionError("re-rig must not call the image model when source_front.png exists")
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        generate,
+    )
+    skin = tmp_path / "albert_einstein"
+    skin.mkdir()
+    blue = (20, 40, 240)
+    green = (20, 220, 40)
+    _marked_plate(eyes=((78, 92), (118, 92)), marker=blue).save(skin / "source_mouthless.png")
+    _marked_plate(eyes=((104, 92), (156, 92)), marker=green).save(skin / "source_front.png")
+    built = avatar.rerig_from_plate(
+        skin, description="Albert Einstein, bushy white moustache",
+        url=lambda path: path.name, character_id="albert_einstein", name="Albert Einstein",
+        edit=False,
+    )
+    assert built["qa"]["costUsd"] == 0.0
+    assert built["frontShot"] == "facing_front"
+    assert _view_has(skin / "views" / "left", "blue")
+    assert not _view_has(skin / "views" / "left", "green")
+    assert _view_has(skin / "views" / "front", "green")
+    assert not _view_has(skin / "views" / "front", "blue")
+    front_boxes = json.loads((skin / "rig_front.json").read_text(encoding="utf-8"))["boxes"]
+    assert qa.front_symmetry(front_boxes)["pass"] is True
+    saved = json.loads((skin / "views" / "front" / "view.json").read_text(encoding="utf-8"))
+    anchor = saved["mouthQA"]["anchor"]
+    face = saved["mouthQA"]["face"]
+    width = max(1, face[2] - face[0])
+    centre = (face[0] + face[2]) / 2
+    assert anchor["view"] == "front"
+    assert abs(anchor["x"] - centre) / width <= 0.01
+    left = json.loads((skin / "views" / "left" / "view.json").read_text(encoding="utf-8"))
+    assert left["mouthQA"]["anchor"]["view"] == "left"
+
+
+def test_assemble_refuses_a_three_quarter_plate_in_the_front_slot(tmp_path):
+    image = Image.new("RGBA", (200, 240), (0, 0, 0, 0))
+    ImageDraw.Draw(image).ellipse((40, 20, 160, 180), fill=(232, 186, 156, 255))
+    closed = tmp_path / "closed.png"
+    image.save(closed)
+    boxes = {
+        "face": (40, 20, 160, 180),
+        "left_eye": (50, 60, 78, 88),
+        "right_eye": (84, 60, 104, 88),
+        "mouth": (70, 120, 110, 140),
+    }
+    skin = tmp_path / "skin"
+    views = rig.assemble(
+        skin, {"closed": closed}, boxes, lambda path: path.name,
+        matte=lambda im: im.convert("RGBA"), front=True,
+    )
+    assert views == {}
+    assert not (skin / "views" / "front").exists()
+
+
+def test_front_prompt_asks_for_a_dead_front_face():
+    from products.animind_core import puppet_v3
+
+    front = puppet_v3.avatar_prompt("a person", stick=False, facing="front").lower()
+    assert "dead-front" in front and "zero degrees" in front
+    assert "never dead-front" not in front
+    side = puppet_v3.avatar_prompt("a person", stick=False, facing="left").lower()
+    assert "never dead-front" in side and "25 degrees" in side
