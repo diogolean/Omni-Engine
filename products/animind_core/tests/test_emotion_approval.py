@@ -121,6 +121,28 @@ def test_illustrated_vowels_open_past_the_rest_mouth(tmp_path: Path):
         assert share <= qa.EXPRESSION_OPEN_ABS + qa.OPEN_SLACK
 
 
+def test_speech_viseme_x_is_not_replaced_by_the_expression(skins: dict[str, Path]):
+    skin = skins["stick"]
+    scene, _track = approval.monologue(skin)
+    seen_x = False
+    for line in scene.script:
+        for cue in line["visemes"]:
+            if cue["v"] != "X":
+                continue
+            t = float(cue["t"]) + 0.02
+            if not (line["startMs"] / 1000 <= t <= line["endMs"] / 1000):
+                continue
+            scene.frame(t)
+            assert scene.trace[-1]["mouths"][0]["v"] == "X"
+            seen_x = True
+            break
+        if seen_x:
+            break
+    assert seen_x
+    scene.frame(2.60)
+    assert scene.trace[-1]["mouths"][0]["v"].startswith("X_")
+
+
 def test_illustrated_still_uses_the_brow_model_and_one_viseme_mark(skins: dict[str, Path]):
     built = human_eyes.load(skins["illustrated"])
     assert built is not None and built.get("browModel")

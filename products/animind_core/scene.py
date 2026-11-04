@@ -733,7 +733,10 @@ class Scene:
             self._cache[key] = (img, xy)
         return self._cache[key]
 
-    def _draw_char(self, stage: Image.Image, idx: int, t: float, amp: float, vis: tuple[str, str, float], soft: bool = False) -> None:
+    def _draw_char(
+        self, stage: Image.Image, idx: int, t: float, amp: float, vis: tuple[str, str, float],
+        soft: bool = False, *, speaking: bool = False,
+    ) -> None:
         cx = W * self.places[min(idx, len(self.places) - 1)][0] * SS
         seed = 1.3 * idx
         breathe = math.sin(t * 1.6 + seed) * 2 * SS
@@ -807,12 +810,11 @@ class Scene:
         self._face_log.append(face_row)
         cur_v, prev_v, wv = vis
         expression = EMO_MOUTH.get(emotion, "neutral")
-        mouth = (
-            rv.expressions.get(expression)
-            if cur_v == "X"
-            else None
-        ) or rv.visemes.get(cur_v) or rv.visemes.get("X")
-        mouth_tag = f"X_{expression}" if cur_v == "X" and expression in rv.expressions else cur_v
+        # Speech keeps the viseme, including a rest X between syllables.
+        # The expression mouth is the silent beat, when the line is not talking.
+        resting = not speaking and cur_v == "X" and expression in rv.expressions
+        mouth = (rv.expressions.get(expression) if resting else None) or rv.visemes.get(cur_v) or rv.visemes.get("X")
+        mouth_tag = f"X_{expression}" if resting else cur_v
         face_row["puppet"] = {"x": int(x0), "y": int(y0), "w": int(rv.size[0]), "h": int(rv.size[1])}
         if rv.human_mouth and mouth is not None and qa_robot_mouth(mouth[0]):
             face_row["robotMouth"] = True
@@ -1033,7 +1035,10 @@ class Scene:
         for idx in order:
             speaking = line is not None and line["speaker"] == idx
             soft = single and line is not None and not speaking
-            self._draw_char(stage, idx, t, amp if speaking else 0.0, self._viseme(line, t) if speaking else ("X", "X", 1.0), soft)
+            self._draw_char(
+                stage, idx, t, amp if speaking else 0.0,
+                self._viseme(line, t) if speaking else ("X", "X", 1.0), soft, speaking=speaking,
+            )
             img, xy = self._set_piece("lectern", idx, soft)
             stage.alpha_composite(img, xy)
         return stage

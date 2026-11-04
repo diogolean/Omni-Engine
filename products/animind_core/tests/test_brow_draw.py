@@ -169,7 +169,7 @@ def test_scene_brow_follows_emotion_while_the_mouth_stays_on_the_viseme():
             names=["Lia"], roles=["Talk"], lang="en-US",
         )
         stage = Image.new("RGBA", (round(scene_mod.W * scene_mod.SS), round(scene_mod.H * scene_mod.SS)), (0, 0, 0, 0))
-        scene._draw_char(stage, 0, 0.5, 0.4, ("X", "X", 1.0), False)
+        scene._draw_char(stage, 0, 0.5, 0.4, ("X", "X", 1.0), False, speaking=True)
         return np.asarray(stage), scene._face_log[-1], scene._mouth_log[-1]
 
     evil, evil_face, evil_mouth = paint("mau")
