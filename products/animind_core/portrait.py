@@ -1,8 +1,10 @@
 """Procedural Einstein bust for the product path. No image call.
 
 The plate is a shaded head: warm skin, white hair, a moustache, and a blank
-mouth. Drawn lips composite on that skin. Landmark boxes stay the illustrated
-face so the nose–chin anchor still lands under the moustache.
+mouth. Drawn lips composite on that skin. ``mouth_fit`` then paints the soft
+fringe with the cheek under it, so the skin gate measures a real match.
+Landmark boxes stay the illustrated face so the nose–chin anchor still lands
+under the moustache.
 """
 from __future__ import annotations
 
