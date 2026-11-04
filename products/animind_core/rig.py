@@ -1776,12 +1776,17 @@ def build_einstein_product(
     searched = list(searched or [])
     if cached is not None and _einstein_views_ready(cached):
         _install_cached_skin(cached, skin)
+        from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
+
+        seated = mouth_anchor_mod.repair_collar_mouths(skin)
         generator = "cached-plate"
         model = EINSTEIN_PLATE_ID
         frontal = _plate_front_is_frontal(skin)
         note = f"reused photographed plate {EINSTEIN_PLATE_ID} from {cached}"
         if not frontal:
             note += "; front cut is the photographed plate, not a midline bust"
+        if any((row or {}).get("moved") for row in seated.values()):
+            note += "; mouths seated on the photographed lip, not the collar"
     else:
         approval.build_einstein(skin)
         plate = skin / "character.png"

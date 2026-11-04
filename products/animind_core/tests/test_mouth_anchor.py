@@ -94,6 +94,28 @@ def test_a_mouth_on_the_nose_or_the_wrong_side_fails_the_gate():
     assert good["pass"] is True
 
 
+def test_a_sweater_is_not_the_chin_and_the_mouth_stays_under_the_moustache():
+    """A face box that runs into the collar used to park the lip on the ribbing."""
+    image = Image.new("RGBA", (320, 520), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((40, 36, 280, 360), fill=(232, 186, 156, 255))
+    draw.rectangle((118, 330, 202, 410), fill=(214, 166, 140, 255))
+    draw.rectangle((24, 392, 296, 510), fill=(176, 178, 184, 255))
+    draw.ellipse((70, 150, 118, 186), fill=(250, 250, 248, 255))
+    draw.ellipse((190, 150, 238, 186), fill=(250, 250, 248, 255))
+    draw.ellipse((88, 158, 100, 174), fill=(24, 16, 14, 255))
+    draw.ellipse((208, 158, 220, 174), fill=(24, 16, 14, 255))
+    draw.ellipse((96, 230, 224, 278), fill=(236, 236, 238, 255))
+    face = (24, 30, 296, 500)
+    left, right = (70, 150, 118, 186), (190, 150, 238, 186)
+    anchor = mouth_anchor.place(image, face, left, right, view="front")
+    assert anchor.moustache_bottom is not None
+    assert anchor.moustache_bottom < 300
+    assert anchor.y > anchor.moustache_bottom
+    assert anchor.y < 392  # above the turtleneck
+    assert anchor.chin[1] < 430
+
+
 def test_moustache_keeps_the_mouth_below_the_hair():
     image, face, left, right = _portrait("front")
     draw = ImageDraw.Draw(image)

@@ -136,22 +136,123 @@ def _nose_chin(
     return nose, chin, eye_bottom
 
 
+def _clothing_row(arr: np.ndarray, face: tuple[int, int, int, int] | list[int], y: int) -> bool:
+    """A sweater or collar: desaturated cloth across the bust, with no cheek skin left.
+
+    A moustache is desaturated too, but the cheeks beside it stay skin. Cloth
+    replaces the whole row.
+    """
+    height = arr.shape[0]
+    if y < 0 or y >= height:
+        return False
+    fx0, _fy0, fx1, _fy1 = (int(v) for v in face)
+    fw = max(1, fx1 - fx0)
+    x0, x1 = fx0 + int(fw * 0.08), fx1 - int(fw * 0.08)
+    x0, x1 = max(0, x0), min(arr.shape[1], x1)
+    if x1 <= x0 + 4:
+        return False
+    row = arr[y, x0:x1]
+    rgb = row[:, :3].astype(np.int16)
+    opaque = row[:, 3] > 128
+    if float(opaque.mean()) < 0.45:
+        return False
+    lum = rgb.mean(axis=1)
+    sat = (rgb.max(axis=1) - rgb.min(axis=1)) / np.maximum(rgb.max(axis=1), 1)
+    skin = opaque & (sat >= 0.18) & (rgb[:, 0] > rgb[:, 2] + 8) & (lum > 70)
+    cloth = opaque & (sat < 0.18) & (lum > 60) & (lum < 235)
+    return float(cloth.mean()) >= 0.70 and float(skin.mean()) < 0.12
+
+
+def _on_clothing(
+    image: Image.Image | None,
+    face: tuple[int, int, int, int] | list[int],
+    y: int,
+) -> bool:
+    if image is None:
+        return False
+    arr = np.asarray(image.convert("RGBA"))
+    hits = sum(
+        1 for dy in (0, 3, 6, -3)
+        if _clothing_row(arr, face, int(y) + dy)
+    )
+    return hits >= 2
+
+
+def _jaw_above_collar(
+    image: Image.Image | None,
+    face: tuple[int, int, int, int] | list[int],
+    eye_bottom: int,
+) -> int | None:
+    """Chin tip when the face box runs on into a collar. None when the box already ends at the jaw.
+
+    The cheeks are the widest skin. The chin is the narrowest skin below them,
+    before a collar makes the outline grow again or the skin stops.
+    """
+    if image is None:
+        return None
+    arr = np.asarray(image.convert("RGBA"))
+    fx0, fy0, fx1, fy1 = (int(v) for v in face)
+    fw = max(1, fx1 - fx0)
+    y_start = max(0, int(eye_bottom) + 4)
+    y_end = min(arr.shape[0], int(fy1))
+    spans: list[float] = []
+    for y in range(y_start, y_end):
+        row = arr[y, max(0, fx0):min(arr.shape[1], fx1)]
+        if row.size == 0:
+            spans.append(0.0)
+            continue
+        rgb = row[:, :3].astype(np.int16)
+        alpha = row[:, 3]
+        lum = rgb.mean(axis=1)
+        sat = (rgb.max(axis=1) - rgb.min(axis=1)) / np.maximum(rgb.max(axis=1), 1)
+        skin = (alpha > 128) & (sat >= 0.18) & (rgb[:, 0] > rgb[:, 2] + 8) & (lum > 60)
+        xs = np.nonzero(skin)[0]
+        if xs.size < max(8, int(0.08 * fw)):
+            spans.append(0.0)
+        else:
+            spans.append(float(xs[-1] - xs[0]) / fw)
+    if len(spans) < 8:
+        return None
+    upper = spans[: max(4, len(spans) // 3)]
+    cheek = max(upper) if upper else 0.0
+    if cheek < 0.35:
+        return None
+    min_span = cheek
+    chin_i = 0
+    for index, span in enumerate(spans):
+        if span <= 0.0:
+            if min_span < cheek - 0.08 and index > chin_i:
+                return y_start + chin_i
+            return None
+        if span < min_span - 0.015:
+            min_span = span
+            chin_i = index
+        elif span > min_span + 0.10 and index > chin_i + 6 and min_span < cheek - 0.08:
+            return y_start + chin_i
+    return None
+
+
 def moustache_bottom(
     image: Image.Image | None,
     face: tuple[int, int, int, int] | list[int],
     nose_y: int,
     chin_y: int,
+    *,
+    limit: float | None = 0.62,
 ) -> int | None:
-    """Lowest row of a wide moustache between the nose tip and the upper chin.
+    """Lowest row of a wide moustache between the nose tip and the chin.
 
     Pale facial hair (Einstein) and a dark moustache both count. Skin, the
-    eyes, and a collar below the band do not.
+    eyes, and a collar or sweater below the jaw do not. A second pale band
+    under a gap (sideburn, shirt) is not the moustache. ``limit`` caps the
+    search as a share of the nose–chin span; a jaw that already stops above
+    the collar searches the whole span.
     """
     if image is None:
         return None
-    span = chin_y - nose_y
     y0 = int(nose_y)
-    y1 = int(min(chin_y - 2, nose_y + 0.62 * span))
+    span = int(chin_y) - y0
+    y1 = int(chin_y) - 2 if limit is None else int(min(chin_y - 2, y0 + limit * span))
     if y1 <= y0 + 2:
         return None
     fx0, _fy0, fx1, _fy1 = (int(v) for v in face)
@@ -176,9 +277,24 @@ def moustache_bottom(
     hair = pale | dark
     need = max(4, int(0.22 * hair.shape[1]))
     rows = np.nonzero(hair.sum(axis=1) >= need)[0]
-    if rows.size == 0:
+    kept = [int(row) for row in rows if not _clothing_row(arr, face, y0 + int(row))]
+    if not kept:
         return None
-    return y0 + int(rows.max())
+    band = [kept[0]]
+    for row in kept[1:]:
+        if row - band[-1] > 4:
+            if len(band) >= 3:
+                break
+            band = [row]
+            continue
+        band.append(row)
+    if len(band) < 3 and len(kept) >= 3:
+        band = kept[:1]
+        for row in kept[1:]:
+            if row - band[-1] > 4:
+                break
+            band.append(row)
+    return y0 + int(band[-1])
 
 
 def place(
@@ -189,15 +305,40 @@ def place(
     *,
     view: str,
 ) -> Anchor:
-    """Centre shared by every viseme and expression on this view."""
+    """Centre shared by every viseme and expression on this view.
+
+    A face box that includes the sweater used to call the collar the chin, so
+    64% of that span sat on the ribbing. The jaw above the cloth is the chin,
+    and the lip is the skin just under the moustache.
+    """
     facing = resolve_view(view, face, left_eye, right_eye)
     nose, chin, eye_bottom = _nose_chin(face, left_eye, right_eye, facing)
+    jaw = _jaw_above_collar(image, face, eye_bottom)
+    face_h = max(1, int(face[3]) - int(face[1]))
+    long_jaw = jaw is not None and jaw < chin[1] - max(16, int(0.06 * face_h))
+    if long_jaw and jaw is not None:
+        chin_y = int(jaw)
+        span_eye = max(8, chin_y - eye_bottom)
+        nose_y = eye_bottom + int(round(NOSE_FROM_EYES * span_eye))
+        nose_y = min(chin_y - 4, max(eye_bottom + 2, nose_y))
+        nose = (nose[0], int(nose_y))
+        chin = (chin[0], chin_y)
     span = max(1, chin[1] - nose[1])
-    hair = moustache_bottom(image, face, nose[1], chin[1])
+    hair = moustache_bottom(image, face, nose[1], chin[1], limit=None if long_jaw else 0.62)
+    # A tight head keeps the small gap. A jaw above a collar needs the lip
+    # clear of the moustache, not sitting in the last white hairs.
     gap = max(3, int(0.03 * span))
+    if long_jaw:
+        gap = max(gap, 12, int(0.08 * span))
     y = nose[1] + ALONG * span
     if hair is not None:
-        y = max(y, hair + gap)
+        lip = hair + gap
+        # 64% of a long jaw, or a point that has landed on the sweater, is not the lip.
+        if _on_clothing(image, face, int(y)) or (long_jaw and y - lip > max(8, int(0.06 * span))):
+            floor = lip if _on_clothing(image, face, int(y)) and not long_jaw else nose[1] + ALONG_LO * span
+            y = max(lip, floor)
+        else:
+            y = max(y, lip)
     y = max(y, eye_bottom + 4)
     if hair is None:
         y = min(nose[1] + ALONG_HI * span, max(nose[1] + ALONG_LO * span, y))
@@ -459,3 +600,233 @@ def reposition_skin(skin: Path) -> dict[str, tuple[int, int]]:
             rig_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
         shifts[name] = applied
     return shifts
+
+
+def _ink_bbox(image: Image.Image, *, threshold: int = 8) -> tuple[int, int, int, int] | None:
+    box = image.getchannel("A").point(lambda alpha: 255 if alpha > threshold else 0).getbbox()
+    return box
+
+
+def _scale_ink(image: Image.Image, factor: float) -> Image.Image:
+    """Grow the painted mouth, not the empty canvas around it."""
+    if factor <= 1.04:
+        return image
+    box = _ink_bbox(image, threshold=0)
+    if not box:
+        return image
+    part = image.crop(box)
+    size = (max(1, int(round(part.width * factor))), max(1, int(round(part.height * factor))))
+    grown = part.resize(size, Image.Resampling.LANCZOS)
+    margin = 4
+    canvas = Image.new("RGBA", (grown.width + 2 * margin, grown.height + 2 * margin), (0, 0, 0, 0))
+    canvas.paste(grown, (margin, margin), grown)
+    return canvas
+
+
+def _fit_mouth(image: Image.Image, face: list[int] | tuple[int, int, int, int]) -> Image.Image:
+    """Grow a speck of a mouth up to the lip. One viseme that is already wide stays put.
+
+    The soft shadow is dropped before the scale. Grown and then dilated, it
+    reads as a grey halo around the opening. Height stays under the mouthOpen
+    floor (6% of the face box) so a thin rest lip can sit next to a taller vowel.
+    """
+    arr = np.array(image.convert("RGBA"))
+    arr[..., 3] = np.where(arr[..., 3] >= 128, arr[..., 3], 0).astype(np.uint8)
+    image = Image.fromarray(arr, "RGBA")
+    box = _ink_bbox(image, threshold=128)
+    if not box:
+        return image
+    width, height = box[2] - box[0], box[3] - box[1]
+    face_w = max(1, int(face[2]) - int(face[0]))
+    face_h = max(1, int(face[3]) - int(face[1]))
+    target_w = face_w * 0.16
+    max_h = face_h * 0.058
+    factor = 1.0
+    if width < target_w * 0.72:
+        factor = target_w / max(1, width)
+    if height * factor > max_h:
+        factor = max_h / max(1, height)
+    factor = min(5.0, max(1.0, factor))
+    fitted = _scale_ink(image, factor)
+    out = np.array(fitted)
+    out[..., 3] = np.where(out[..., 3] >= 160, np.uint8(255), np.uint8(0))
+    # One opaque pixel of lip colour covers the gate's 2×2 open, which
+    # otherwise counts the skin just beside a narrow viseme as ink outside it.
+    from . import mouthset  # noqa: PLC0415
+
+    return mouthset._contain_ink(Image.fromarray(out, "RGBA"))
+
+
+def _clear_painted_lip(
+    folder: Path,
+    view: dict[str, Any],
+    face: tuple[int, int, int, int] | list[int],
+    anchor: Anchor,
+) -> None:
+    """Paint the photographed smile back to cheek skin so the viseme is the only mouth.
+
+    The moustache stays. The collar and the chin below the lip stay.
+    """
+    import cv2  # noqa: PLC0415
+
+    layer = next((item for item in view.get("layers") or [] if item.get("name") == "head"), None)
+    if layer is None:
+        return
+    path = folder / str(layer.get("url") or "")
+    if not path.is_file():
+        return
+    image = Image.open(path).convert("RGBA")
+    arr = np.array(image)
+    ox, oy = int(layer["x"]), int(layer["y"])
+    fw = max(1, int(face[2]) - int(face[0]))
+    hair = anchor.moustache_bottom if anchor.moustache_bottom is not None else anchor.y - 8
+    y0 = int(hair) - 2 - oy
+    y1 = int(anchor.y + max(16, int(0.07 * max(1, anchor.chin[1] - anchor.nose[1])))) - oy
+    half = int(fw * 0.18)
+    x0 = int(anchor.x) - half - ox
+    x1 = int(anchor.x) + half - ox
+    height, width = arr.shape[:2]
+    y0, x0 = max(0, y0), max(0, x0)
+    y1, x1 = min(height, y1), min(width, x1)
+    if y1 <= y0 + 2 or x1 <= x0 + 2:
+        return
+    rgb = arr[:, :, :3].astype(np.int16)
+    alpha = arr[:, :, 3]
+    lum = rgb.mean(axis=2)
+    sat = (rgb.max(axis=2) - rgb.min(axis=2)) / np.maximum(rgb.max(axis=2), 1)
+    opaque = alpha > 128
+    skin = opaque & (sat >= 0.18) & (rgb[:, :, 0] > rgb[:, :, 2] + 8) & (lum > 80)
+    sample_box = (
+        max(0, y0 - 8),
+        min(height, y1 + 10),
+        max(0, x0 - int(fw * 0.06)),
+        min(width, x1 + int(fw * 0.06)),
+    )
+    ring = skin[sample_box[0]:sample_box[1], sample_box[2]:sample_box[3]].copy()
+    ring[y0 - sample_box[0]:y1 - sample_box[0], x0 - sample_box[2]:x1 - sample_box[2]] = False
+    if int(ring.sum()) < 12:
+        return
+    cheek = np.median(rgb[sample_box[0]:sample_box[1], sample_box[2]:sample_box[3]][ring], axis=0)
+    cheek_lum = float(cheek.mean())
+    sub_opaque = opaque[y0:y1, x0:x1]
+    sub_lum = lum[y0:y1, x0:x1]
+    sub_sat = sat[y0:y1, x0:x1]
+    hair_px = sub_opaque & (sub_sat < 0.20) & (sub_lum >= 115) & (sub_lum <= 250)
+    hair_px |= sub_opaque & (sub_lum < 75) & (sub_sat < 0.28)
+    crease = sub_opaque & ~hair_px & (sub_lum < cheek_lum - 16)
+    if int(crease.sum()) < 8:
+        return
+    soft = cv2.GaussianBlur(crease.astype(np.float32), (0, 0), 1.1)
+    colour = arr[y0:y1, x0:x1, :3].astype(np.float32)
+    colour = colour * (1.0 - soft[..., None]) + cheek.astype(np.float32) * soft[..., None]
+    arr[y0:y1, x0:x1, :3] = np.clip(colour, 0, 255).astype(np.uint8)
+    Image.fromarray(arr, "RGBA").save(path)
+
+
+def _family_sprites(
+    folder: Path,
+    view: dict[str, Any],
+    family: str,
+    face: list[int] | tuple[int, int, int, int],
+) -> dict[str, Image.Image]:
+    from . import mouthset  # noqa: PLC0415
+
+    scaled: dict[str, Image.Image] = {}
+    for key, layer in (view.get(family) or {}).items():
+        path = folder / layer["url"]
+        if not path.is_file():
+            continue
+        scaled[key] = _fit_mouth(Image.open(path).convert("RGBA"), face)
+    return mouthset._same_canvas(scaled) if scaled else {}
+
+
+def _write_mouth_box(skin: Path, name: str, box: list[int]) -> None:
+    rig_name = {"left": "rig.json", "front": "rig_front.json"}.get(name)
+    if rig_name is None:
+        return
+    path = skin / rig_name
+    if not path.is_file():
+        return
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc.setdefault("boxes", {})["mouth"] = box
+    doc["mouthBox"] = box
+    path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+
+def repair_collar_mouths(skin: Path) -> dict[str, Any]:
+    """Seat a photographed plate's mouths on the lip when they were saved on the collar.
+
+    A tight face, or a mouth already on the lip, is left alone. No image call.
+    The front folder stays even when the plate is three-quarter: dropping it
+    would hide the only photographed bust.
+    """
+    notes: dict[str, Any] = {}
+    for name in ("left", "front", "right"):
+        folder = skin / "views" / name
+        path = folder / "view.json"
+        if not path.is_file():
+            continue
+        view = json.loads(path.read_text(encoding="utf-8"))
+        boxes = _boxes(folder, view, skin, name)
+        visemes = view.get("visemes") or {}
+        layer = visemes.get("X") or next(iter(visemes.values()), None)
+        if boxes is None or layer is None:
+            notes[name] = {"moved": False, "reason": "no mouth"}
+            continue
+        sprite = _open_layer(folder, layer)
+        center = _ink_center(sprite, (int(layer["x"]), int(layer["y"]))) if sprite is not None else None
+        if center is None:
+            notes[name] = {"moved": False, "reason": "empty"}
+            continue
+        face, left_eye, right_eye = boxes
+        head = _paste_head(folder, view)
+        anchor = place(head, face, left_eye, right_eye, view=name)
+        on_cloth = _on_clothing(head, face, int(center[1]))
+        if abs(center[1] - anchor.y) <= 28 and not on_cloth:
+            notes[name] = {"moved": False, "y": int(round(center[1]))}
+            continue
+        _clear_painted_lip(folder, view, face, anchor)
+        seated_sprites: dict[str, Image.Image] = {}
+        seated_layers: dict[str, dict[str, Any]] = {}
+        for family in ("visemes", "expressions"):
+            shared = _family_sprites(folder, view, family, face)
+            for key, image in shared.items():
+                token = f"{family}:{key}"
+                seated_sprites[token] = image
+                seated_layers[token] = view[family][key]
+        placed = seat(seated_sprites, anchor)
+        for token, (image, xy) in placed.items():
+            item = seated_layers[token]
+            image.save(folder / item["url"], "PNG")
+            item["x"], item["y"] = int(xy[0]), int(xy[1])
+            item["w"], item["h"] = image.size
+        rest = placed.get("visemes:X")
+        if rest is None:
+            notes[name] = {"moved": False, "reason": "no rest mouth"}
+            continue
+        rest_image, rest_xy = rest
+        ink = _ink_bbox(rest_image, threshold=128)
+        if ink is None:
+            mouth_box = list(anchor.as_box(face, max(12, int((int(face[2]) - int(face[0])) * 0.22))))
+        else:
+            mouth_box = [
+                int(rest_xy[0] + ink[0]), int(rest_xy[1] + ink[1]),
+                int(rest_xy[0] + ink[2]), int(rest_xy[1] + ink[3]),
+            ]
+        meta = view.setdefault("mouthQA", {})
+        meta["anchor"] = anchor.to_dict()
+        meta["face"] = [int(v) for v in face]
+        meta["mouth"] = mouth_box
+        meta["mouthBox"] = mouth_box
+        # The photographed smile stays on the head. It is not a mouthless cut,
+        # and the collar used to hide that from the blank-skin check.
+        meta["mouthless"] = False
+        path.write_text(json.dumps(view, indent=2), encoding="utf-8")
+        _write_mouth_box(skin, name, mouth_box)
+        notes[name] = {
+            "moved": True,
+            "from": [int(round(center[0])), int(round(center[1]))],
+            "to": [anchor.x, anchor.y],
+            "onCloth": on_cloth,
+        }
+    return notes
