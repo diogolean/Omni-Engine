@@ -151,7 +151,6 @@ def align(cell: Image.Image, base: Image.Image, region: Box, face: Box | None = 
     """Per-cell alignment: scale/translate NCC seed, then an affine ECC refine (cells are drawn
     separately, so each has its own small tilt / shift). Returns the warped RGBA cell in master
     coordinates and the NCC of the grey drawing over ``region`` after warping."""
-    import cv2  # noqa: PLC0415
 
     # Gemini often draws whole heads instead of the asked close-ups: also seed on the face, and
     # keep whichever seed ends best after the affine refine.

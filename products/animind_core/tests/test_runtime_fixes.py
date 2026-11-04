@@ -322,7 +322,7 @@ def _bust(flat: bool) -> Image.Image:
 
 
 def test_a_failed_bust_does_not_replace_the_passing_cache(tmp_path, monkeypatch):
-    from products.animind_core import avatar, image_models
+    from products.animind_core import avatar
 
     patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))
@@ -354,7 +354,7 @@ def test_a_failed_bust_does_not_replace_the_passing_cache(tmp_path, monkeypatch)
 
 
 def test_avatar_image_cap_is_thirty_cents(tmp_path, monkeypatch):
-    from products.animind_core import avatar, image_models
+    from products.animind_core import avatar
 
     patch_human_landmarks(monkeypatch)
     monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path / "data"))

@@ -188,7 +188,7 @@ def test_white_mustache_stays_and_only_the_lips_are_filled():
 
 
 def test_f_viseme_is_not_grown_to_a_full_open_mouth():
-    from products.animind_core.scene import F_FACE_SHARE, _MOUTH_OF_FACE, scale_mouth_to_face
+    from products.animind_core.scene import _MOUTH_OF_FACE, F_FACE_SHARE, scale_mouth_to_face
 
     face_w = 200
     hole = Image.new("RGBA", (80, 40), (0, 0, 0, 0))

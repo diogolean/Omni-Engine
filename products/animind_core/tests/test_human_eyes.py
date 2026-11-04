@@ -1,10 +1,9 @@
 """Human eyelids follow the drawn lid. No image API and no MediaPipe."""
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
-
-import numpy as np
 
 from products.animind_core import eyes, frameqa, human_eyes, qa, scene
 

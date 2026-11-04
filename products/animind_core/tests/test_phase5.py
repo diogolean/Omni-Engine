@@ -318,6 +318,7 @@ def _ink_widths(image: Image.Image) -> dict[float, int]:
 def test_south_park_smile_stays_under_the_happy_face_share():
     """A wide smile on a short face used to reach ~0.18 of the face height."""
     import numpy as np
+
     from products.animind_core import frameqa, mouthset, qa
     colours = {
         "outline": (40, 30, 30, 255), "cavity": (20, 12, 14, 255),

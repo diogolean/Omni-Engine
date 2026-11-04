@@ -149,8 +149,6 @@ def paint_lid(
     xs = np.unique(np.nonzero(covered)[1])
     for x in xs:
         column = np.nonzero(covered[:, x])[0]
-        y0, y1 = int(column.min()), int(column.max())
-        span = max(1, y1 - y0)
         shade = np.linspace(0.0, 1.0, column.size)
         colours = light * (1 - shade[:, None]) + shadow * shade[:, None]
         out[column, x, :3] = np.clip(colours, 0, 255).astype(np.uint8)

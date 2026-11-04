@@ -2062,7 +2062,6 @@ def write(template: str, topic: str, names: list[str], lang: str = "en-US", *,
             for i, beat in enumerate(plan):
                 sp = min(beat.speaker, n - 1)
                 sheet = sheets[sp]
-                by_id = {q["id"]: q for q in _quotable(sheet)}
                 speaker_name = names[sp] if sp < len(names) else ""
                 draft = draft_source.get(i) or {}
                 line: dict[str, Any] = {"speaker": sp, "beat": beat.name, "maxS": max_seconds(beat.max_words, beat.rate),

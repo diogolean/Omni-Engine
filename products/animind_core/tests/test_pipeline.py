@@ -8,8 +8,10 @@ from PIL import Image, ImageDraw
 def _face(size=(400, 400)):
     im = Image.new("RGBA", size, (230, 190, 160, 255))
     d = ImageDraw.Draw(im)
-    d.ellipse((150, 130, 190, 160), fill=(255, 255, 255, 255)); d.ellipse((160, 135, 180, 155), fill=(40, 30, 20, 255))
-    d.ellipse((220, 130, 260, 160), fill=(255, 255, 255, 255)); d.ellipse((230, 135, 250, 155), fill=(40, 30, 20, 255))
+    d.ellipse((150, 130, 190, 160), fill=(255, 255, 255, 255))
+    d.ellipse((160, 135, 180, 155), fill=(40, 30, 20, 255))
+    d.ellipse((220, 130, 260, 160), fill=(255, 255, 255, 255))
+    d.ellipse((230, 135, 250, 155), fill=(40, 30, 20, 255))
     d.line((170, 250, 230, 250), fill=(150, 40, 50, 255), width=6)
     d.polygon([(200, 180), (190, 220), (210, 220)], fill=(200, 150, 120, 255))
     return im
@@ -50,7 +52,8 @@ def test_qa_gates_score_a_mock_rig(tmp_path):
 def _head_view(tmp_path, paint):
     im = Image.new("RGBA", (200, 200), (235, 180, 160, 255))  # pinkish anime skin
     paint(ImageDraw.Draw(im))
-    view = tmp_path / "v"; view.mkdir(parents=True)
+    view = tmp_path / "v"
+    view.mkdir(parents=True)
     im.save(view / "head.png")
     (view / "view.json").write_text(json.dumps({"layers": [{"name": "head", "url": "head.png", "x": 0, "y": 0}]}))
     return view

@@ -24,7 +24,18 @@ from typing import Any
 
 import numpy as np
 
-from . import casting, characters, frameqa, languages, rig, scene, settings, styles, telemetry, titles
+from . import (
+    casting,
+    characters,
+    frameqa,
+    languages,
+    rig,
+    scene,
+    settings,
+    styles,
+    telemetry,
+    titles,
+)
 from . import script as scripts
 
 _LOG = logging.getLogger("animind_core")

@@ -12,7 +12,6 @@ import cv2
 import numpy as np
 from PIL import Image
 
-
 CANVAS_W = 640
 CANVAS_H = 800
 # 600 / 1920 and 0.423 of the canvas, the Aiwake broadcast lines scaled to this stage.

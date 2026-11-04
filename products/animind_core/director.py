@@ -278,14 +278,14 @@ def _llm_json(
     started = time.perf_counter()
 
     def gemini_text(text: str) -> str:
+        import os  # noqa: PLC0415
+
         from google.genai import types  # noqa: PLC0415
 
         from production.cost.google_guardrail import (  # noqa: PLC0415
             guarded_generate_content,
             make_guarded_gemini_client,
         )
-
-        import os  # noqa: PLC0415
 
         client = make_guarded_gemini_client((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
         response = guarded_generate_content(
