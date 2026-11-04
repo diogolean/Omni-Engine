@@ -135,16 +135,8 @@ EMO_BROW_POSE = {
     "skeptical": (-2.0, 1.0, -8.0, 5.0),
     "thinking": (-1.8, 0.6, -5.0, 4.0),
 }
-# How far a resting blink-open lid squints. Surprised stays wide (0).
-EMO_LID = {
-    "neutro": 0.0, "neutral": 0.0, "alegre": 0.0,
-    "irritado": 0.40, "bravo": 0.40, "angry": 0.40,
-    "triste": 0.22, "sad": 0.22,
-    "surpreso": 0.0, "surprised": 0.0,
-    "pensativo": 0.18, "thinking": 0.18,
-    "desdenhoso": 0.32, "sceptical": 0.32, "skeptical": 0.32,
-    "ironico": 0.32, "irônico": 0.32,
-}
+# Lid travel and the gaze offset live on brow_draw, next to the vector brow
+# states, so mau / alegre / triste squint and look the same way on the sheet.
 EMO_ARM_ROT = {"alegre": (-5.0, 5.0), "irritado": (7.0, -7.0), "bravo": (7.0, -7.0),
                 "triste": (4.0, -4.0), "surpreso": (-10.0, 10.0), "pensativo": (-3.0, -8.0),
                 "desdenhoso": (-8.0, 2.0), "ironico": (-8.0, 2.0), "irônico": (-8.0, 2.0)}
@@ -779,15 +771,15 @@ class Scene:
                 )
             return
         lids = eyes.blink(t, 7 + idx * 13)
-        emotion_now, _blend = self._emotion(idx, t)
-        if lids == "open" and EMO_LID.get(emotion_now, 0.0) >= 0.25:
-            lids = "half"  # angry, sad, sceptical and thinking squint; surprise stays wide
+        from . import brow_draw  # noqa: PLC0415
+
+        emotion, blend = self._emotion(idx, t)
+        # Angry, sad, evil and perplexed squint. Happy and surprise stay wide.
+        if lids == "open" and brow_draw.lid_amount(emotion) >= brow_draw.SQUINT_AT and blend >= 0.45:
+            lids = "half"
         # head micro-movements: slow sway + a small nod with the speech envelope (whole head group, mouth included)
         hx = round((math.sin(t * 0.63 + seed * 2.1) * 0.9 + math.sin(t * 1.37 + seed) * 0.4) * SS)
         hy = round(amp * 1.5 * SS)
-        emotion, blend = self._emotion(idx, t)
-        from . import brow_draw  # noqa: PLC0415
-
         brow_pose = tuple(v * blend for v in EMO_BROW_POSE.get(brow_draw.pose_key(emotion), EMO_BROW_POSE["neutro"]))
         arm_pose = tuple(v * blend for v in EMO_ARM_ROT.get(emotion, (0.0, 0.0)))
         brow = self._brow(idx, t) * SS  # legacy rigs keep their single combined brow layer
@@ -796,7 +788,10 @@ class Scene:
         if rv.seated_eyes:
             face_row["eyes"] = [{"lid": list(lid), "iris": list(iris)} for lid, iris in rv.seated_eyes]
         gx, gy = self.gaze(idx, t, view)
-        gx, gy = max(-1.0, min(1.0, gx)), max(-1.0, min(1.0, gy))
+        bias_x, bias_y = brow_draw.gaze_bias(emotion)
+        gx = max(-1.0, min(1.0, gx + bias_x * blend))
+        gy = max(-1.0, min(1.0, gy + bias_y * blend))
+        face_row["gaze"] = [round(gx, 3), round(gy, 3)]
         if rv.human_eyes:
             info = rv.human_eyes
             state = lids if lids in info.get("lines", {}) else "open"

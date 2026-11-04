@@ -111,6 +111,50 @@ def pose_key(name: str) -> str:
     return _POSE_KEY[resolve(name)]
 
 
+# How far the upper lid travels toward the lower lid. 0 is wide open.
+# The still sheet and the scene compositor both read this table.
+LID = {
+    "neutral": 0.0,
+    "evil": 0.46,
+    "happy": 0.0,
+    "perplexed": 0.30,
+    "sad": 0.22,
+    "angry": 0.40,
+    "surprised": 0.0,
+    "mocking": 0.32,
+    "thoughtful": 0.18,
+}
+# Iris offset in gaze units. Happy looks up. Sad and evil look down.
+GAZE = {
+    "neutral": (0.0, 0.0),
+    "evil": (0.2, 0.85),
+    "happy": (0.0, -1.0),
+    "perplexed": (-0.7, -0.35),
+    "sad": (0.0, 1.0),
+    "angry": (0.25, 0.45),
+    "surprised": (0.0, -0.4),
+    "mocking": (0.45, -0.2),
+    "thoughtful": (-0.25, -0.15),
+}
+# Same cut as the painted lid: at this amount the open eye uses the half lid.
+SQUINT_AT = 0.20
+
+
+def lid_amount(name: str) -> float:
+    """Upper-lid travel for a speech emotion, including mau, alegre and triste."""
+    return LID[resolve(name)]
+
+
+def eye_lids(name: str) -> str:
+    """Blink-open pose. A squint uses the half lid. A blink can still close it."""
+    return "half" if lid_amount(name) >= SQUINT_AT else "open"
+
+
+def gaze_bias(name: str) -> tuple[float, float]:
+    """``(x, y)`` added to the look target. Positive y looks down."""
+    return GAZE[resolve(name)]
+
+
 def masks_from_polygons(size: tuple[int, int], polygons: Sequence[Sequence[tuple[int, int]]]) -> list[tuple[np.ndarray, str]]:
     """Raster brow contours. The first polygon is the viewer's left brow."""
     found = []

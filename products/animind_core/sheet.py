@@ -14,7 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-from . import eyes, rig, styles
+from . import brow_draw, eyes, rig, styles
 
 _FONT_DIR = Path(__file__).resolve().parents[2] / "Fonts" / "Montserrat" / "static"
 PHONEMES = {
@@ -35,6 +35,26 @@ EXPRESSIONS = [
     ("pensativo", "thoughtful", (-1.8, 0.6, -5.0, 4.0)),
     ("irônico", "ironic", (-2.0, 1.0, -8.0, 5.0)),
 ]
+# Mood row. Brows come from browModel. Eyes squint and look with the mood.
+# The mouth stays on one viseme, so a smile is not painted over the speech shape.
+MOODS = (
+    ("neutro", "neutral"),
+    ("mau", "evil"),
+    ("alegre", "happy"),
+    ("triste", "sad"),
+    ("perplexo", "perplexed"),
+    ("bravo", "angry"),
+    ("surpreso", "surprised"),
+)
+_FALLBACK_POSE = {
+    "neutral": (0.0, 0.0, 0.0, 0.0),
+    "evil": (2.5, 2.5, 12.0, -12.0),
+    "happy": (-1.5, -1.5, -4.0, 4.0),
+    "sad": (-1.0, -1.0, -10.0, 10.0),
+    "perplexed": (-2.0, 1.0, -8.0, 5.0),
+    "angry": (2.5, 2.5, 12.0, -12.0),
+    "surprised": (-4.0, -4.0, 1.0, -1.0),
+}
 VIEW_LABEL = {"front": "FRENTE", "left": "PERFIL ESQUERDO", "right": "PERFIL DIREITO"}
 CELL, PAD, LABEL_H, ROW_HEAD = 190, 14, 30, 34
 
@@ -51,20 +71,28 @@ def compose(
     gaze: tuple[float, float] = (0.0, 0.0),
     expression: str | None = None,
     brow_pose: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
+    brow_state: str | None = None,
 ) -> Image.Image:
-    """Full character at canvas size (``view`` from :func:`rig.load_view`)."""
+    """Full character at canvas size (``view`` from :func:`rig.load_view`).
+
+    ``brow_state`` draws the vector brow and leaves the mouth on ``vis``.
+    An ``expression`` without it still swaps in that rest mouth.
+    """
     W, H = view["canvas"]["w"], view["canvas"]["h"]
     out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    from . import brow_draw  # noqa: PLC0415
 
     layers = {l["name"]: l for l in view["layers"]}
     names = set(layers)
     movable = {"eye_white", "iris", "eye_socket"} <= names
+    state_name = brow_state or expression or "neutral"
     vector_brows = None
     if view.get("browModel") and {"brow_left", "brow_right"} & names:
-        vector_brows = brow_draw.render_state(view["browModel"], expression or "neutral", 1.0)
+        vector_brows = brow_draw.render_state(view["browModel"], state_name, 1.0)
     mx, my = (view.get("eyeRig") or {}).get("maxShift", (0, 0))
-    mouth = (view.get("expressions") or {}).get(expression or "") or view["visemes"].get(vis) or view["visemes"]["X"]
+    if brow_state:
+        mouth = view["visemes"].get(vis) or view["visemes"]["X"]
+    else:
+        mouth = (view.get("expressions") or {}).get(expression or "") or view["visemes"].get(vis) or view["visemes"]["X"]
     parts = sorted(view["layers"], key=lambda l: l["z"]) + [mouth]
     for l in sorted(parts, key=lambda l: l["z"]):
         name = l["name"]
@@ -152,7 +180,7 @@ def build(skin: Path, name: str = "", style: str = "") -> Path:
     title, small, tag = _font("Bold", 30), _font("SemiBold", 15), _font("Bold", 16)
     label = styles.STYLES.get(style, {}).get("label", "")
     d.text((PAD, 22), " · ".join(x for x in ("Ficha de revisão", name, f"estilo {label}" if label else "") if x), font=title, fill=(255, 255, 255))
-    d.text((PAD, 60), "Bocas South Park/Aiwake, olhos, sobrancelhas e expressões, por vista", font=small, fill=(170, 170, 178))
+    d.text((PAD, 60), "Bocas no visema, olhos e sobrancelhas no humor, por vista", font=small, fill=(170, 170, 178))
     y = 90
     for vname, view in views.items():
         size = (view["canvas"]["w"], view["canvas"]["h"])
@@ -162,7 +190,10 @@ def build(skin: Path, name: str = "", style: str = "") -> Path:
         rows = [[(f"{v} · {PHONEMES[v]}", dict(vis=v, gaze=eyes.camera_target(vname, {"left": -1, "right": 1}.get(vname, 0)))) for v in rig.VISEMES],
                 [(label, dict(lids=lids, gaze=g)) for label, lids, g in EYE_STATES]
                 + [("olha câmera", dict(gaze=eyes.camera_target(vname, {"left": -1, "right": 1}.get(vname, 0))))],
-                [(label, dict(expression=expression, brow_pose=pose)) for label, expression, pose in EXPRESSIONS]]
+                [(f"{label} · C", dict(
+                    vis="C", lids=brow_draw.eye_lids(state), brow_state=state,
+                    gaze=brow_draw.gaze_bias(state), brow_pose=_FALLBACK_POSE[state],
+                )) for label, state in MOODS]]
         for row in rows:
             for i, (label, kw) in enumerate(row):
                 x = PAD + i * (CELL + PAD)

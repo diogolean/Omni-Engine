@@ -1,0 +1,101 @@
+"""Mood sheet and monologue: brows and eyes follow the line, the viseme does not."""
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from products.animind_core import approval, brow_draw, human_eyes, qa, render, rig
+
+
+def _diff(a, b, box: tuple[int, int, int, int] | None = None) -> int:
+    left, right = (a, b) if box is None else (a.crop(box), b.crop(box))
+    return int(np.abs(
+        np.asarray(left.convert("RGB")).astype(np.int16)
+        - np.asarray(right.convert("RGB")).astype(np.int16)
+    ).sum())
+
+
+@pytest.fixture(scope="module")
+def skins(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    approval.clear_paid_keys()
+    root = tmp_path_factory.mktemp("emotion-approval")
+    return {
+        "stick": approval.build_stick(root / "stick"),
+        "illustrated": approval.build_illustrated(root / "illustrated"),
+    }
+
+
+def test_beats_cover_ten_seconds_and_three_mood_changes():
+    starts = [row[0] for row in approval.BEATS]
+    ends = [row[1] for row in approval.BEATS]
+    emotions = [row[2] for row in approval.BEATS]
+    assert ends[-1] - starts[0] >= 9.5
+    assert ends[-1] <= 12.0
+    assert len(emotions) >= 4
+    assert sum(a != b for a, b in zip(emotions, emotions[1:])) >= 3
+    cues = {vis for _t, vis in render.envelope_visemes(approval._pcm(2.4))}
+    assert "X" in cues and len(cues) >= 3
+
+
+@pytest.mark.parametrize("kind", ("stick", "illustrated"))
+def test_approval_gates_pass_and_the_mood_row_keeps_one_mouth(skins: dict[str, Path], kind: str):
+    skin = skins[kind]
+    gates = approval.approval_gates(skin)
+    failed = [name for name, gate in gates.items() if not gate["pass"]]
+    assert failed == []
+    view = rig.load_view(skin, "front")
+    model = view["browModel"]
+    arches = {}
+    for state in ("evil", "happy", "sad", "perplexed"):
+        drawn = brow_draw.render_state(model, state, 1.0)
+        arches[state] = qa.brow_arch(drawn["left"][0], drawn["right"][0])
+    assert arches["evil"] == "v"
+    assert arches["sad"] == "inverse"
+    assert arches["perplexed"] == "other"
+    assert arches["happy"] != "v"
+    moods = {state: approval.mood_frame(skin, state) for state in ("neutral", "evil", "happy", "sad")}
+    mouth = view["visemes"]["C"]
+    box = (mouth["x"], mouth["y"], mouth["x"] + mouth["w"], mouth["y"] + mouth["h"])
+    assert _diff(moods["evil"], moods["happy"], box) == 0
+    assert _diff(moods["sad"], moods["happy"], box) == 0
+    assert _diff(moods["neutral"], moods["evil"]) > 50_000
+    face = moods["evil"].size
+    band = (0, 0, face[0], face[1] // 2)
+    assert _diff(moods["evil"], moods["happy"], band) > 20_000
+    assert brow_draw.eye_lids("evil") == "half"
+    assert brow_draw.eye_lids("happy") == "open"
+    assert brow_draw.gaze_bias("happy")[1] < brow_draw.gaze_bias("evil")[1]
+
+
+@pytest.mark.parametrize("kind", ("stick", "illustrated"))
+def test_monologue_squints_and_looks_with_the_mood_while_the_viseme_stays(skins: dict[str, Path], kind: str):
+    skin = skins[kind]
+    scene, _track = approval.monologue(skin, viseme="C")
+    assert scene.duration_s >= 10.0
+    gazes = {}
+    for start, end, emotion, _text in approval.BEATS:
+        t = approval.open_time(start, end)
+        scene.frame(t)
+        face = scene.trace[-1]["faces"][0]
+        mouth = scene.trace[-1]["mouths"][0]
+        assert face["emotion"] == emotion
+        assert mouth["v"] == "C"
+        assert face["blink"] == brow_draw.eye_lids(emotion)
+        base_x, base_y = scene.gaze(0, t, "front")
+        _name, blend = scene._emotion(0, t)
+        bias_x, bias_y = brow_draw.gaze_bias(emotion)
+        assert face["gaze"][0] == round(max(-1.0, min(1.0, base_x + bias_x * blend)), 3)
+        assert face["gaze"][1] == round(max(-1.0, min(1.0, base_y + bias_y * blend)), 3)
+        gazes[emotion] = face["gaze"]
+    assert gazes["alegre"][1] < gazes["mau"][1] - 0.5
+    assert gazes["triste"][1] > gazes["neutro"][1] + 0.4
+
+
+def test_illustrated_still_uses_the_brow_model_and_one_viseme_mark(skins: dict[str, Path]):
+    built = human_eyes.load(skins["illustrated"])
+    assert built is not None and built.get("browModel")
+    evil = human_eyes.still_cell(built, "evil")
+    happy = human_eyes.still_cell(built, "happy")
+    width, height = evil.size
+    assert _diff(evil, happy, (0, 120, width, 280)) > 5_000
+    assert _diff(evil, happy, (width // 2 - 40, 320, width // 2 + 40, 380)) == 0

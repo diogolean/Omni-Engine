@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from . import brow_draw, eyes, settings
 
@@ -55,6 +55,8 @@ MOUTH = {
     "thinking": "thoughtful",
 }
 BLINK_STATES = ("open", "half", "closed")
+# Columns on the still sheet. Evil, happy and perplexed are brow-model states.
+SHEET_MOODS = ("neutral", "evil", "happy", "sad", "perplexed", "angry", "surprised")
 _BLINK_AMOUNT = {"open": 0.0, "half": 0.5, "closed": 1.0}
 
 
@@ -428,6 +430,68 @@ def frame_faults(sample: dict[str, Any], *, tol: int = 4) -> list[str]:
     return faults
 
 
+def _viseme_mark(size: tuple[int, int], qa: dict[str, Any] | None) -> Image.Image:
+    """One rest mouth, the same pixels on every mood. The viseme does not follow the brow."""
+    image = Image.new("RGBA", size, (0, 0, 0, 0))
+    eye = int((qa or {}).get("eyeTop") or size[1] // 2)
+    y = min(size[1] - 14, eye + max(28, size[1] // 6))
+    x = size[0] // 2
+    ImageDraw.Draw(image).arc((x - 26, y - 8, x + 26, y + 10), 18, 162, fill=(150, 72, 74, 255), width=4)
+    return image
+
+
+def _shift_iris(iris: Image.Image, socket: Image.Image | None, bias: tuple[float, float], shift: Sequence[float]) -> Image.Image:
+    dx = int(round(bias[0] * float(shift[0])))
+    dy = int(round(bias[1] * float(shift[1])))
+    moved = Image.new("RGBA", iris.size, (0, 0, 0, 0))
+    moved.paste(iris, (dx, dy))
+    if socket is None:
+        return moved
+    moved.putalpha(ImageChops.multiply(moved.getchannel("A"), socket.getchannel("A")))
+    return moved
+
+
+def still_cell(built: dict[str, Any], name: str, blink: str = "open") -> Image.Image:
+    """One mood at one blink. Brows and lids follow the mood. The mouth mark does not."""
+    layers = built.get("layers") or built
+    plate = layers.get("head")
+    if plate is None:
+        raise KeyError("head")
+    lid = brow_draw.lid_amount(name)
+    amount = max(_BLINK_AMOUNT.get(blink, 0.0), lid if blink == "open" else _BLINK_AMOUNT.get(blink, 0.0))
+    cell = Image.new("RGBA", plate.size, (0, 0, 0, 255))
+    cell.alpha_composite(plate)
+    if "eye_white" in layers:
+        cell.alpha_composite(layers["eye_white"])
+    if "iris" in layers:
+        info = built.get("qa") or {}
+        shift = info.get("shift") or [4, 3]
+        cell.alpha_composite(_shift_iris(layers["iris"], layers.get("eye_socket"), brow_draw.gaze_bias(name), shift))
+    painted = paint_amount(layers, amount)
+    if painted is not None:
+        cell.alpha_composite(painted)
+    drawn = brow_draw.render_state(built["browModel"], name, 1.0) if built.get("browModel") else {}
+    if drawn:
+        for side in ("left", "right"):
+            if side not in drawn:
+                continue
+            sprite, origin = drawn[side]
+            cell.alpha_composite(sprite, origin)
+    else:
+        info = built.get("qa") or {}
+        pose = (built.get("emotions") or {}).get(name, {}).get("brow") or BROW_POSE.get(name) or (0, 0, 0, 0)
+        for layer, dy, angle in (
+            (layers.get("brow_left"), pose[0], pose[2]),
+            (layers.get("brow_right"), pose[1], pose[3]),
+        ):
+            if layer is None:
+                continue
+            turned, origin = pose_brow(layer, (0, 0), dy, angle, info.get("browHeight") or 12, info.get("forehead"))
+            cell.alpha_composite(turned, origin)
+    cell.alpha_composite(_viseme_mark(plate.size, built.get("qa")))
+    return cell
+
+
 def render_still_sheet(skin: Path, dest: Path | None = None) -> Path:
     """Every emotion by every blink, from files already on disk. No image call."""
     plate_path = next(
@@ -460,45 +524,19 @@ def render_still_sheet(skin: Path, dest: Path | None = None) -> Path:
         save(skin, built_raw)
         built = load(skin)
     assert built is not None
-    layers = built["layers"]
-    emotions = built["emotions"]
     cell_w, cell_h = 200, 240
-    sheet = Image.new("RGB", (cell_w * len(EMOTIONS), cell_h * len(BLINK_STATES) + 28), (24, 24, 28))
+    sheet = Image.new("RGB", (cell_w * len(SHEET_MOODS), cell_h * len(BLINK_STATES) + 28), (24, 24, 28))
     draw = ImageDraw.Draw(sheet)
-    for col, name in enumerate(EMOTIONS):
-        spec = emotions[name]
-        pose = spec["brow"]
+    for col, name in enumerate(SHEET_MOODS):
         for row, state in enumerate(BLINK_STATES):
-            amount = max(_BLINK_AMOUNT[state], float(spec["lid"]) if state == "open" else _BLINK_AMOUNT[state])
-            cell = Image.new("RGBA", plate.size, (0, 0, 0, 255))
-            cell.alpha_composite(layers.get("head", plate))
-            cell.alpha_composite(layers["eye_white"])
-            cell.alpha_composite(layers["iris"])
-            lid = paint_amount(layers, amount)
-            if lid is not None:
-                cell.alpha_composite(lid)
-            info = built.get("qa") or {}
-            drawn = brow_draw.render_state(built["browModel"], name, 1.0) if built.get("browModel") else {}
-            if drawn:
-                for side in ("left", "right"):
-                    if side not in drawn:
-                        continue
-                    sprite, origin = drawn[side]
-                    cell.alpha_composite(sprite, origin)
-            else:
-                for layer, dy, angle in (
-                    (layers["brow_left"], pose[0], pose[2]),
-                    (layers["brow_right"], pose[1], pose[3]),
-                ):
-                    turned, origin = pose_brow(layer, (0, 0), dy, angle, info.get("browHeight") or 12, info.get("forehead"))
-                    cell.alpha_composite(turned, origin)
+            cell = still_cell(built, name, state)
             thumb = cell.convert("RGB")
             thumb.thumbnail((cell_w - 8, cell_h - 36))
             x = col * cell_w + (cell_w - thumb.width) // 2
             y = 28 + row * cell_h + 4
             sheet.paste(thumb, (x, y))
             draw.text((col * cell_w + 6, 6), name, fill=(240, 240, 240))
-            draw.text((col * cell_w + 6, y + thumb.height + 2), f"{state} / {spec['mouth']}", fill=(180, 180, 180))
+            draw.text((col * cell_w + 6, y + thumb.height + 2), f"{state} / viseme X", fill=(180, 180, 180))
     out = dest or (skin / "emotion_sheet.png")
     sheet.save(out)
     return out
