@@ -38,3 +38,16 @@ def test_stage_publish_sets_seo_title_before_library_entry() -> None:
             (lines_set if isinstance(node.ctx, ast.Store) else lines_read).append(node.lineno)
     assert lines_set and lines_read
     assert min(lines_set) < min(lines_read)
+
+
+def test_youtube_client_has_socket_timeout() -> None:
+    import pytest
+
+    pytest.importorskip("google_auth_httplib2")
+    pytest.importorskip("googleapiclient")
+    from google.oauth2.credentials import Credentials
+
+    from distribution.publishers.api import youtube_upload
+
+    client = youtube_upload.build_youtube_client(Credentials(token="t"))
+    assert client._http.http.timeout == youtube_upload.YOUTUBE_HTTP_TIMEOUT_S

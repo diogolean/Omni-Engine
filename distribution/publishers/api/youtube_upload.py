@@ -478,13 +478,26 @@ def build_credentials(
     return creds
 
 
+YOUTUBE_HTTP_TIMEOUT_S = 120
+
+
 def build_youtube_client(creds):
     """Return an authorised YouTube Data API v3 resource."""
     from googleapiclient.discovery import build  # type: ignore[import]
     import googleapiclient.discovery as _disc
 
     _disc.logger.setLevel(logging.WARNING)
-    return build("youtube", "v3", credentials=creds)
+    try:
+        import google_auth_httplib2  # type: ignore[import]
+        import httplib2  # type: ignore[import]
+    except ImportError:
+        return build("youtube", "v3", credentials=creds)
+    # A socket timeout stops a stale connection from hanging forever after a
+    # resumable upload (seen on the playlist lookup that follows it).
+    http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=YOUTUBE_HTTP_TIMEOUT_S)
+    )
+    return build("youtube", "v3", http=http)
 
 
 # ---------------------------------------------------------------------------
@@ -1130,7 +1143,7 @@ def get_or_create_playlist(
         params: dict = dict(part="snippet", mine=True, maxResults=50)
         if page_token:
             params["pageToken"] = page_token
-        resp = youtube.playlists().list(**params).execute()
+        resp = youtube.playlists().list(**params).execute(num_retries=2)
 
         for item in resp.get("items", []):
             if item["snippet"]["title"].strip().lower() == cache_key:
