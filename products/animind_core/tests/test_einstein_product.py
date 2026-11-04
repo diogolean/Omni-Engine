@@ -1,5 +1,6 @@
 """Einstein on the product path: a cached plate when it is valid, else the bust."""
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,11 @@ def _offline(monkeypatch, data: Path) -> None:
     monkeypatch.delenv("ANIMIND_FORCE_MOCK", raising=False)
     for key in _PAID:
         monkeypatch.delenv(key, raising=False)
+    # The product search also looks in ~/.animind-core. Tests must not pick up
+    # a plate installed on the machine that happens to run them.
+    home = data / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
 
 
 def _refuse_image(monkeypatch) -> None:
@@ -110,6 +116,54 @@ def test_rerig_of_the_product_bust_does_not_create_puppet(tmp_path, monkeypatch)
         description="Albert Einstein",
         url=lambda path: path.name,
         character_id=built["id"],
+        name="Albert Einstein",
+        edit=False,
+    )
+    assert again["qa"]["costUsd"] == 0.0
+    assert again["frontShot"] == "facing_front"
+
+
+def test_an_older_three_quarter_plate_is_reused_without_create_puppet(tmp_path, monkeypatch):
+    """Archive stamps and a three-quarter front still count as the photographed cut."""
+    _offline(monkeypatch, tmp_path)
+    _refuse_image(monkeypatch)
+    plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
+    rig.build_einstein_product(plate, lambda path: path.name)
+    plate_file = rig._plate_file(plate)
+    assert plate_file is not None
+    front_path = plate / "views" / "front" / "view.json"
+    doc = json.loads(front_path.read_text(encoding="utf-8"))
+    anchor = doc["mouthQA"]["anchor"]
+    face = doc["mouthQA"]["face"]
+    anchor["view"] = "left"
+    anchor["x"] = int(face[0]) + 8
+    front_path.write_text(json.dumps(doc), encoding="utf-8")
+    newer = plate_file.stat().st_mtime_ns + 5_000_000_000
+    os.utime(plate_file, ns=(newer, newer))
+    older = newer - 10_000_000_000
+    for name in ("front", "left", "right"):
+        spec = plate / "views" / name / "view.json"
+        os.utime(spec, ns=(older, older))
+    assert spec.stat().st_mtime_ns < plate_file.stat().st_mtime_ns
+    assert rig._einstein_views_ready(plate)
+
+    def refuse_paint(*_args, **_kwargs):
+        raise AssertionError("a complete photographed cut must not be repainted")
+
+    monkeypatch.setattr("products.animind_core.portrait.paint", refuse_paint)
+    built = _einstein()
+    assert built["generator"] == "cached-plate"
+    assert built["model"] == rig.EINSTEIN_PLATE_ID
+    assert "not a midline bust" in (built.get("generatorNote") or "")
+    assert built["qa"]["costUsd"] == 0.0
+    skin = characters.puppets_dir() / built["id"]
+    kept = json.loads((skin / "views" / "front" / "view.json").read_text(encoding="utf-8"))
+    assert kept["mouthQA"]["anchor"]["view"] == "left"
+    again = avatar.rerig_from_plate(
+        plate,
+        description="Albert Einstein",
+        url=lambda path: path.name,
+        character_id=rig.EINSTEIN_PLATE_ID,
         name="Albert Einstein",
         edit=False,
     )

@@ -7,9 +7,10 @@ Real path (Gemini key set), see :mod:`products.animind_core.rig`:
   in ``left`` and ``right`` (mirror) views. ``front`` is a frontal plate only.
 Mock path (no key, or ``ANIMIND_FORCE_MOCK=1``): a flat PIL drawing cut into
 the same layers, for wiring tests. Einstein is the exception: a cached
-``albert_einstein_ca8386e2`` plate is reused when its views are already
-valid, and otherwise the procedural bust is painted. No image call.
-``generator`` says which one ran.
+``albert_einstein_ca8386e2`` plate is reused when its layered cut is already
+on disk, even if the plate file is newer than the views or the front pose is
+the photograph rather than a midline bust. Otherwise the procedural bust is
+painted. No image call. ``generator`` says which one ran.
 """
 from __future__ import annotations
 

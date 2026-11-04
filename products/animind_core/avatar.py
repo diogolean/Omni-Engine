@@ -1124,7 +1124,30 @@ def rerig_from_plate(
         raise FileNotFoundError(f"no cached plate in {skin}; nothing to re-rig without an image call")
     cost = 0.0
     views: dict[str, Any] | None = None
-    if not edit and _saved_sides_current(skin, plate):
+    # The photographed ``albert_einstein_ca8386e2`` cut stays, even when the
+    # plate file was restamped later or the front pose is three-quarter.
+    # Any other Einstein whose plate file is newer than the views is still cut.
+    if rig._names_the_plate(skin) and rig._einstein_views_ready(skin):
+        views = _publish_saved_sides(skin, url)
+        front = puppet_v3.publish_view(skin / "views" / "front", url)
+        if front is not None:
+            views["front"] = front
+        if "front" in views and "left" in views:
+            front_status = "facing_front"
+            built = {
+                "views": views,
+                "viewStatus": {"left": "cached-plate", "right": "mirror of left", "front": front_status},
+                "mouthShots": {"visemes": list(VISEMES)},
+                "frontShot": front_status,
+                "qa": {"score": 100, "costUsd": 0.0, "failed": []},
+                "generator": "cached-plate",
+                "model": "cached-plate",
+                "cached": True,
+            }
+            write_character_json(skin, built, character_id=character_id, name=name, url=url)
+            return built
+        views = None
+    if views is None and not edit and _saved_sides_current(skin, plate):
         views = _publish_saved_sides(skin, url)
         if "left" not in views:
             views = None

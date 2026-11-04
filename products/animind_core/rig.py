@@ -1658,25 +1658,24 @@ def _plate_file(folder: Path) -> Path | None:
 
 
 def _einstein_views_ready(folder: Path) -> bool:
-    """Frontal front plus current left/right. A newer plate still needs a cut."""
+    """A complete layered cut of the photographed plate.
+
+    Left, right, and front must each point at layer files that exist.
+    The plate file may be newer than those views — an archive often
+    restamps the png — and the front anchor may be the photographed
+    three-quarter pose rather than a midline bust. Either case reuses
+    the cut. It does not call ``create_puppet`` or paint a new bust.
+    """
     from . import puppet_v3  # noqa: PLC0415
 
     plate = _plate_file(folder)
     rig_doc = folder / "rig.json"
     if plate is None or not rig_doc.is_file() or rig_doc.stat().st_size <= 0:
         return False
-    plate_ns = plate.stat().st_mtime_ns
     for name in ("left", "right", "front"):
-        view = folder / "views" / name
-        spec = view / "view.json"
-        try:
-            current = spec.stat().st_mtime_ns >= plate_ns
-        except OSError:
+        if not puppet_v3.saved_view_ready(folder / "views" / name):
             return False
-        if not current or not puppet_v3.saved_view_ready(view):
-            return False
-    front = json.loads((folder / "views" / "front" / "view.json").read_text(encoding="utf-8"))
-    return puppet_v3.frontal_anchor(front)
+    return True
 
 
 def _names_the_plate(folder: Path) -> bool:
@@ -1762,10 +1761,11 @@ def build_einstein_product(
 ) -> dict[str, Any]:
     """Einstein on the product path. No Gemini, Together, or OpenRouter call.
 
-    A cached ``albert_einstein_ca8386e2`` folder whose front is frontal and
-    whose side views are at least as new as the plate is copied in. Otherwise
-    the procedural bust is painted, seated, and sealed so a later re-rig does
-    not pay ``create_puppet``.
+    A cached ``albert_einstein_ca8386e2`` folder with a complete layered cut
+    (front, left, and right) is copied in, even when the plate file is newer
+    than the views or the front anchor is the photographed three-quarter pose.
+    Otherwise the procedural bust is painted, seated, and sealed so a later
+    re-rig does not pay ``create_puppet``.
     """
     import shutil  # noqa: PLC0415
 
@@ -1778,7 +1778,10 @@ def build_einstein_product(
         _install_cached_skin(cached, skin)
         generator = "cached-plate"
         model = EINSTEIN_PLATE_ID
+        frontal = _plate_front_is_frontal(skin)
         note = f"reused photographed plate {EINSTEIN_PLATE_ID} from {cached}"
+        if not frontal:
+            note += "; front cut is the photographed plate, not a midline bust"
     else:
         approval.build_einstein(skin)
         plate = skin / "character.png"
@@ -1787,6 +1790,7 @@ def build_einstein_product(
         _seal_plates(skin)
         generator = "procedural"
         model = "portrait-einstein"
+        frontal = True
         looked = [row["path"] for row in searched if row["path"].endswith(EINSTEIN_PLATE_ID)]
         note = (
             f"no photographed plate {EINSTEIN_PLATE_ID} with valid views "
@@ -1812,9 +1816,23 @@ def build_einstein_product(
         "generator": generator,
         "model": model,
         "note": note,
+        "plateFrontal": frontal,
         "plateSearch": searched,
         "plateId": EINSTEIN_PLATE_ID,
     }
+
+
+def _plate_front_is_frontal(skin: Path) -> bool:
+    from . import puppet_v3  # noqa: PLC0415
+
+    spec = skin / "views" / "front" / "view.json"
+    if not spec.is_file():
+        return False
+    try:
+        doc = json.loads(spec.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return puppet_v3.frontal_anchor(doc)
 
 
 def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_prompt: str | None = None,
@@ -1824,8 +1842,8 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
     skin/edge gate on sheet mouths rebuilds with the deterministic mouths, and ``qa.json`` + ``qa_sheet.png``
     are stored with the character.
 
-    Einstein with no Gemini key, or with a valid cached ``albert_einstein_ca8386e2``
-    plate, is painted or copied here. That path does not call the image model.
+    Einstein with no Gemini key, or with a complete cached ``albert_einstein_ca8386e2``
+    cut, is painted or copied here. That path does not call the image model.
     """
     from . import qa, settings  # noqa: PLC0415
 
