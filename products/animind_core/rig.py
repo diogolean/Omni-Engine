@@ -1579,14 +1579,260 @@ def _settle_mouths(skin: Path, views: dict[str, Any], report: dict[str, Any], at
     return views, qa.finalize(skin, spent_usd(), attempts)
 
 
+EINSTEIN_PLATE_ID = "albert_einstein_ca8386e2"
+_PLATE_FILES = (
+    "source_mouthless.png",
+    "source_closed.png",
+    "source_front.png",
+    "_gemini.png",
+    "source_original.png",
+    "_plate.png",
+    "character.png",
+)
+
+
+def is_einstein(*texts: str) -> bool:
+    """True when a product name or prompt is Albert Einstein."""
+    for raw in texts:
+        text = " ".join((raw or "").lower().replace("_", " ").replace("-", " ").split())
+        if not text:
+            continue
+        if "albert einstein" in text or "einstein" in text.split():
+            return True
+    return False
+
+
+def einstein_plate_candidates() -> list[Path]:
+    """Folders that may hold the photographed ``albert_einstein_ca8386e2`` rig.
+
+    ``ANIMIND_DATA_DIR`` (and the default ``~/.animind-core``) is checked first.
+    The list is the search the product path actually runs. Missing folders stay
+    in the list so a run can say what it looked at.
+    """
+    from . import settings  # noqa: PLC0415
+
+    found: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(path)
+
+    bases: list[Path] = [settings.data_dir(), Path.home() / ".animind-core"]
+    for env_name in ("ANIMIND_DATA_DIR", "ANIMIND_DATA", "ANIMIND_PLATE_DIR"):
+        raw = (os.getenv(env_name) or "").strip()
+        if raw:
+            bases.append(Path(raw))
+    for extra in (Path("/opt/animind"), Path("/data"), Path("/mnt/animind")):
+        bases.append(extra)
+    for base in bases:
+        add(base / "assets" / "puppets" / EINSTEIN_PLATE_ID)
+        add(base / "puppets" / EINSTEIN_PLATE_ID)
+        add(base / EINSTEIN_PLATE_ID)
+    data = settings.data_dir()
+    cache = data / "avatar_cache"
+    add(cache / EINSTEIN_PLATE_ID)
+    if cache.is_dir():
+        for meta_path in cache.glob("*/meta.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            blob = json.dumps(meta)
+            description = str(meta.get("description") or "")
+            if EINSTEIN_PLATE_ID in blob or is_einstein(description):
+                add(meta_path.parent)
+                add(meta_path.parent / "passing")
+    return found
+
+
+def _plate_file(folder: Path) -> Path | None:
+    for name in _PLATE_FILES:
+        path = folder / name
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def _einstein_views_ready(folder: Path) -> bool:
+    """Frontal front plus current left/right. A newer plate still needs a cut."""
+    from . import puppet_v3  # noqa: PLC0415
+
+    plate = _plate_file(folder)
+    rig_doc = folder / "rig.json"
+    if plate is None or not rig_doc.is_file() or rig_doc.stat().st_size <= 0:
+        return False
+    plate_ns = plate.stat().st_mtime_ns
+    for name in ("left", "right", "front"):
+        view = folder / "views" / name
+        spec = view / "view.json"
+        try:
+            current = spec.stat().st_mtime_ns >= plate_ns
+        except OSError:
+            return False
+        if not current or not puppet_v3.saved_view_ready(view):
+            return False
+    front = json.loads((folder / "views" / "front" / "view.json").read_text(encoding="utf-8"))
+    return puppet_v3.frontal_anchor(front)
+
+
+def _names_the_plate(folder: Path) -> bool:
+    """Only ``albert_einstein_ca8386e2`` is the photographed plate."""
+    if folder.name == EINSTEIN_PLATE_ID:
+        return True
+    character = folder / "character.json"
+    if not character.is_file():
+        return False
+    try:
+        doc = json.loads(character.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return doc.get("id") == EINSTEIN_PLATE_ID
+
+
+def locate_einstein_plate() -> tuple[Path | None, list[dict[str, Any]]]:
+    """The photographed rig when its views are already valid, else None."""
+    report: list[dict[str, Any]] = []
+    chosen: Path | None = None
+    for folder in einstein_plate_candidates():
+        exists = folder.is_dir()
+        named = _names_the_plate(folder)
+        ready = exists and named and _einstein_views_ready(folder)
+        report.append({"path": str(folder), "exists": exists, "ready": ready})
+        if ready and chosen is None:
+            chosen = folder
+    return chosen, report
+
+
+def _same_dir(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return str(left) == str(right)
+
+
+def _install_cached_skin(src: Path, dest: Path) -> None:
+    import shutil  # noqa: PLC0415
+
+    if _same_dir(src, dest):
+        return
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns("character.json", "_front_stage", "_plate.png"))
+
+
+def _seal_plates(skin: Path) -> None:
+    """Leave every plate older than the views so a re-rig does not call ``create_puppet``."""
+    stamps: list[int] = []
+    for name in ("left", "right", "front"):
+        spec = skin / "views" / name / "view.json"
+        try:
+            stamps.append(spec.stat().st_mtime_ns)
+        except OSError:
+            continue
+    if not stamps:
+        return
+    older = max(0, min(stamps) - 1_000_000_000)
+    for name in _PLATE_FILES:
+        path = skin / name
+        if path.is_file():
+            os.utime(path, ns=(older, older))
+
+
+def _publish_product_views(skin: Path, url: Callable[[Path], str]) -> dict[str, Any]:
+    from . import puppet_v3  # noqa: PLC0415
+
+    views: dict[str, Any] = {}
+    for name in ("front", "left", "right"):
+        published = puppet_v3.publish_view(skin / "views" / name, url)
+        if published is not None:
+            views[name] = published
+    return views
+
+
+def build_einstein_product(
+    skin: Path,
+    url: Callable[[Path], str],
+    *,
+    cached: Path | None = None,
+    searched: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Einstein on the product path. No Gemini, Together, or OpenRouter call.
+
+    A cached ``albert_einstein_ca8386e2`` folder whose front is frontal and
+    whose side views are at least as new as the plate is copied in. Otherwise
+    the procedural bust is painted, seated, and sealed so a later re-rig does
+    not pay ``create_puppet``.
+    """
+    import shutil  # noqa: PLC0415
+
+    from . import approval, qa  # noqa: PLC0415
+
+    if cached is None and searched is None:
+        cached, searched = locate_einstein_plate()
+    searched = list(searched or [])
+    if cached is not None and _einstein_views_ready(cached):
+        _install_cached_skin(cached, skin)
+        generator = "cached-plate"
+        model = EINSTEIN_PLATE_ID
+        note = f"reused photographed plate {EINSTEIN_PLATE_ID} from {cached}"
+    else:
+        approval.build_einstein(skin)
+        plate = skin / "character.png"
+        if plate.is_file():
+            shutil.copy2(plate, skin / "source_front.png")
+        _seal_plates(skin)
+        generator = "procedural"
+        model = "portrait-einstein"
+        looked = [row["path"] for row in searched if row["path"].endswith(EINSTEIN_PLATE_ID)]
+        note = (
+            f"no photographed plate {EINSTEIN_PLATE_ID} with valid views "
+            f"(looked in {', '.join(looked) or '(no candidates)'}); "
+            "procedural Einstein bust, no image call"
+        )
+    views = _publish_product_views(skin, url)
+    report = qa.finalize(skin, 0.0, {})
+    failed = [key for key, gate in report["gates"].items() if not gate.get("pass")]
+    front = "facing_front" if "front" in views else "missing"
+    return {
+        "views": views,
+        "viewStatus": {"left": generator, "right": "mirror of left", "front": front},
+        "mouthShots": {"source": "products.animind_core.mouthset", "visemes": list(VISEMES)},
+        "frontShot": generator,
+        "qa": {
+            "score": report["score"],
+            "costUsd": 0.0,
+            "attempts": {},
+            "failed": failed,
+            "gates": report["gates"],
+        },
+        "generator": generator,
+        "model": model,
+        "note": note,
+        "plateSearch": searched,
+        "plateId": EINSTEIN_PLATE_ID,
+    }
+
+
 def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_prompt: str | None = None,
               style: str = "cartoon") -> dict[str, Any]:
     """One call, generate-then-verify: Gemini master + parts sheet + front, each gated and re-drawn within
     the cap; BiRefNet mattes; layered rig in 3 views; then the QA gates (:mod:`qa`) score the rig, a failed
     skin/edge gate on sheet mouths rebuilds with the deterministic mouths, and ``qa.json`` + ``qa_sheet.png``
-    are stored with the character."""
-    from . import qa  # noqa: PLC0415
+    are stored with the character.
 
+    Einstein with no Gemini key, or with a valid cached ``albert_einstein_ca8386e2``
+    plate, is painted or copied here. That path does not call the image model.
+    """
+    from . import qa, settings  # noqa: PLC0415
+
+    if is_einstein(subject, raw_prompt or ""):
+        cached, searched = locate_einstein_plate()
+        if cached is not None or not settings.gemini_available():
+            return build_einstein_product(skin, url, cached=cached, searched=searched)
     reset_budget()
     attempts: dict[str, int] = {}
     gen = generate_shots(subject, skin, raw_prompt=raw_prompt, style=style, attempts=attempts)

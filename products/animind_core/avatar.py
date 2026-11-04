@@ -105,11 +105,15 @@ def _store_passing(cache: Path, left: Image.Image, front: Image.Image) -> None:
 
 
 def _image_ok(image: Image.Image) -> bool:
-    """A bust with pixels, not an empty or flat plate that failed image QA."""
+    """A bust with pixels, not an empty or flat plate that failed image QA.
+
+    Variance is across the picture. ``ndarray.std`` on RGB treats solid magenta
+    as textured because the channels differ, so a flat plate used to pass.
+    """
     if image.getchannel("A").getbbox() is None:
         return False
     sample = np.asarray(image.convert("RGB").resize((32, 40)), dtype=np.float32)
-    return float(sample.std()) > 8.0
+    return float(sample.mean(axis=2).std()) > 8.0
 
 
 def create_avatar(
@@ -162,6 +166,7 @@ def create_avatar(
             f"(spent US${ledger['spentUsd']:.2f}) and no saved bust can be reused"
         )
     else:
+        restored = False
         try:
             left, front, spec_provider, spec_model, cost, mock, front_status, mouthless = _acquire(
                 description, style_id, stick_figure, skin, model_id, budget, allow_mock, ledger,
@@ -174,14 +179,16 @@ def create_avatar(
             spec_provider, spec_model = "cached", "cached"
             cost, mock, mouthless = 0.0, False, True
             front_status = "cached passing bust"
+            restored = True
             if (cache / "v3" / "puppet.json").is_file():
                 puppet_v3.restore(cache / "v3", skin)
         fresh = _image_ok(left) and _image_ok(front)
         ledger["spentUsd"] = round(float(ledger["spentUsd"]) + float(cost), 4)
         ledger["passed"] = bool(ledger.get("passed") or fresh)
-        if fresh and not mock and (skin / "puppet.json").is_file():
+        if fresh and not restored and not mock and (skin / "puppet.json").is_file():
             puppet_v3.snapshot(skin, cache / "v3")
-        if fresh:
+        # A miss that falls back to the saved bust must not re-encode those PNGs.
+        if fresh and not restored:
             _store_passing(cache, left, front)
         elif passing is not None:
             left, front = passing
@@ -329,6 +336,10 @@ def _acquire(
     _image, cost = _plate(prompt, plate_path, budget, spent)
     _image = _prepare_plate(_image)
     _image.save(plate_path)
+    if not _image_ok(_image):
+        # A flat plate must not be rigged and then stored over a bust that already passed.
+        spec = image_models.selected(_FLASH_MODEL_ID)
+        return _image, _image.copy(), spec.provider, spec.model, cost, False, "flat plate", False
     from animation.parametric.factory.landmark_detector import (  # noqa: PLC0415
         RoboticLandmarkRefused,
         detect_landmarks,

@@ -6,7 +6,10 @@ Real path (Gemini key set), see :mod:`products.animind_core.rig`:
   boxes -> torso / neck / mouthless head / eyes / lids / brows layers + 9 Rhubarb mouth sprites,
   in ``left`` and ``right`` (mirror) views. ``front`` is a frontal plate only.
 Mock path (no key, or ``ANIMIND_FORCE_MOCK=1``): a flat PIL drawing cut into
-the same layers, for wiring tests. ``generator`` says which one ran.
+the same layers, for wiring tests. Einstein is the exception: a cached
+``albert_einstein_ca8386e2`` plate is reused when its views are already
+valid, and otherwise the procedural bust is painted. No image call.
+``generator`` says which one ran.
 """
 from __future__ import annotations
 
@@ -306,10 +309,25 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 if not settings.is_billing_error(exc):
                     raise
-                # No credit / bad key: never a 500. Draw the mock rig and say why, so the app can show it.
-                _LOG.warning("character %s: Gemini unavailable (%s); mock art instead", character_id, str(exc)[:160])
+                # No credit / bad key: never a 500. Draw stand-in art and say why.
+                _LOG.warning("character %s: Gemini unavailable (%s); stand-in art instead", character_id, str(exc)[:160])
                 shutil.rmtree(skin, ignore_errors=True)
+                skin.mkdir(parents=True, exist_ok=True)
                 mode, note = "mock", f"Gemini indisponível: {str(exc)[:200]}"
+            else:
+                if built.get("generator") in {"procedural", "cached-plate"}:
+                    mode = str(built["generator"])
+                    note = str(built.get("note") or "")
+        if built is None and character_type != "stick" and rig.is_einstein(subject, name):
+            built = rig.build_einstein_product(skin, url)
+            mode = str(built.get("generator") or "procedural")
+            plate_note = str(built.get("note") or "")
+            # A dead key still explains the miss. The no-key mock line does not:
+            # this skin is the Einstein bust, not the flat stand-in.
+            billing = note and any(
+                token in note.lower() for token in ("402", "indispon", "depleted", "provider unavailable")
+            )
+            note = f"{note} — {plate_note}" if billing else plate_note
         if built is None:
             built = (
                 stick.build(skin, url, **stick_options)
