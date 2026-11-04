@@ -97,6 +97,8 @@ def test_illustrated_brow_keeps_measured_taper_and_clears_the_head():
     sad_l, sad_r = _pair(lifted["model"], "sad")
     assert qa.brow_arch(evil_l, evil_r) == "v"
     assert qa.brow_arch(sad_l, sad_r) == "inverse"
+    happy_l, happy_r = _pair(lifted["model"], "happy")
+    assert qa.brow_arch(happy_l, happy_r) == "happy"
 
 
 def test_stick_generator_draws_vector_brows_and_the_head_has_no_ink():
@@ -114,6 +116,8 @@ def test_stick_generator_draws_vector_brows_and_the_head_has_no_ink():
     sad_l, sad_r = _pair(parts["browModel"], "sad")
     assert qa.brow_arch(evil_l, evil_r) == "v"
     assert qa.brow_arch(sad_l, sad_r) == "inverse"
+    happy_l, happy_r = _pair(parts["browModel"], "happy")
+    assert qa.brow_arch(happy_l, happy_r) == "happy"
 
 
 def test_human_build_redraws_the_brow_it_erases():
@@ -133,6 +137,8 @@ def test_human_build_redraws_the_brow_it_erases():
     sad_l, _sad_r = _pair(built["browModel"], "sad")
     assert qa.brow_arch(evil_l, None) == "v"
     assert qa.brow_arch(sad_l, None) == "inverse"
+    happy_l, _happy_r = _pair(built["browModel"], "happy")
+    assert qa.brow_arch(happy_l, None) == "happy"
 
 
 def test_scene_brow_follows_emotion_while_the_mouth_stays_on_the_viseme():

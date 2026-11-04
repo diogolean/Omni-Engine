@@ -23,6 +23,7 @@ from . import (
     mouth_anchor,
     mouth_fit,
     mouthset,
+    portrait,
     qa,
     render,
     rig,
@@ -85,9 +86,31 @@ def _eye_geom(center: tuple[int, int]) -> dict[str, Any]:
     return {"upper": upper, "lower": lower, "iris": center, "radius": 8}
 
 
+def _cut_portrait(
+    dest: Path,
+    plate: Image.Image,
+    eyes_geom: list[dict[str, Any]],
+    brows: list[list[tuple[int, int]]],
+    colours: dict[str, tuple[int, int, int, int]],
+    *,
+    body: tuple[int, int, int, int],
+    lip_width: int,
+    jacket_top: int = 360,
+) -> Path:
+    """Cut eyes and brows, seat the drawn mouths, and match the lip fringe to the skin."""
+    dest.mkdir(parents=True, exist_ok=True)
+    built = human_eyes.build(plate, eyes_geom=eyes_geom, brows=brows)
+    human_eyes.save(dest, built)
+    plate.save(dest / "character.png", "PNG")
+    mouths = mouthset.draw_set(lip_width, colours, open_cap=34)
+    expressions = mouthset.draw_expressions(lip_width, colours, open_cap=26)
+    _write_illustrated_views(dest, built, mouths, expressions, body=body, jacket_top=jacket_top)
+    mouth_fit.apply(dest)
+    return dest
+
+
 def build_illustrated(dest: Path) -> Path:
     """A drawn portrait cut into human eyes and vector brows. No image API."""
-    dest.mkdir(parents=True, exist_ok=True)
     plate = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
     draw = ImageDraw.Draw(plate)
     skin_tone = (232, 186, 156, 255)
@@ -99,22 +122,30 @@ def build_illustrated(dest: Path) -> Path:
     for eye in (left, right):
         draw.polygon(eye["upper"] + eye["lower"][::-1], fill=(248, 246, 242, 255))
         cx, cy = eye["iris"]
-        r = eye["radius"]
-        draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(36, 28, 24, 255))
+        radius = eye["radius"]
+        draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=(36, 28, 24, 255))
     for poly in brows:
         draw.polygon(poly, fill=(42, 30, 24, 255))
-    built = human_eyes.build(plate, eyes_geom=[left, right], brows=brows)
-    human_eyes.save(dest, built)
-    plate.save(dest / "character.png", "PNG")
     colours = {
         "outline": ink, "cavity": (42, 30, 34, 255), "teeth": (247, 244, 236, 255),
         "tongue": (190, 86, 92, 255), "lip": (158, 78, 76, 255),
     }
-    mouths = mouthset.draw_set(78, colours, open_cap=34)
-    expressions = mouthset.draw_expressions(78, colours, open_cap=26)
-    _write_illustrated_views(dest, built, mouths, expressions)
-    mouth_fit.apply(dest)
-    return dest
+    return _cut_portrait(
+        dest, plate, [left, right], brows, colours,
+        body=(72, 96, 140, 255), lip_width=78,
+    )
+
+
+def build_einstein(dest: Path) -> Path:
+    """Shaded Einstein bust. Same anchor as the illustrated face. No image API."""
+    left = _eye_geom((278, 210))
+    right = _eye_geom((362, 210))
+    brows = [_brow_poly(236, 314, 168, thick=13), _brow_poly(326, 404, 168, thick=13)]
+    plate = portrait.paint([left, right], brows)
+    return _cut_portrait(
+        dest, plate, [left, right], brows, portrait.LIP,
+        body=(28, 30, 36, 255), lip_width=78, jacket_top=468,
+    )
 
 
 def _write_layer(folder: Path, name: str, image: Image.Image, xy: tuple[int, int], z: int) -> dict[str, Any]:
@@ -132,11 +163,14 @@ def _write_illustrated_views(
     built: dict[str, Any],
     mouths: dict[str, Image.Image],
     expressions: dict[str, Image.Image],
+    *,
+    body: tuple[int, int, int, int] = (72, 96, 140, 255),
+    jacket_top: int = 360,
 ) -> None:
-    body = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
-    ImageDraw.Draw(body).rounded_rectangle((150, 360, 490, 760), 40, fill=(72, 96, 140, 255))
+    jacket = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+    ImageDraw.Draw(jacket).rounded_rectangle((150, jacket_top, 490, 780), 36, fill=body)
     order = (
-        ("body", body, 0),
+        ("body", jacket, 0),
         ("head", built["head"], 2),
         ("eye_white", built["eye_white"], 3),
         ("iris", built["iris"], 4),
@@ -212,6 +246,22 @@ def mood_frame(skin: Path, state: str, *, vis: str = "C") -> Image.Image:
     )
 
 
+def mouth_zoom(skin: Path, vis: str = "D", *, scale: int = 4) -> Image.Image:
+    """Nearest-neighbour crop of one viseme so the lip fringe stays visible."""
+    frame = mood_frame(skin, "neutral", vis=vis)
+    view = rig.load_view(skin, "front")
+    mouth = view["visemes"][vis]
+    pad = 28
+    box = (
+        max(0, int(mouth["x"]) - pad),
+        max(0, int(mouth["y"]) - pad),
+        min(frame.width, int(mouth["x"]) + int(mouth["w"]) + pad),
+        min(frame.height, int(mouth["y"]) + int(mouth["h"]) + pad),
+    )
+    crop = frame.crop(box)
+    return crop.resize((crop.width * scale, crop.height * scale), Image.Resampling.NEAREST)
+
+
 def face_zoom(skin: Path, state: str, *, scale: int = 2) -> Image.Image:
     frame = mood_frame(skin, state)
     box = sheet._face_box(skin, "front", frame.size)
@@ -250,7 +300,7 @@ def _write_wav(path: Path, pcm: np.ndarray) -> None:
         handle.writeframes(pcm.astype(np.int16).tobytes())
 
 
-def monologue(skin: Path, *, viseme: str | None = None) -> tuple[scene.Scene, np.ndarray]:
+def monologue(skin: Path, *, viseme: str | None = None, name: str = "Nia") -> tuple[scene.Scene, np.ndarray]:
     """About ten seconds. Four moods. ``viseme`` holds one mouth; otherwise the envelope talks."""
     lines = []
     parts: list[np.ndarray] = []
@@ -284,16 +334,16 @@ def monologue(skin: Path, *, viseme: str | None = None) -> tuple[scene.Scene, np
     built = scene.Scene(
         template="solo", scenario="studio", rigs=[views], script=lines,
         envelope=render.envelope(track), env_fps=render.ENV_FPS, duration_s=duration,
-        disclaimer="Parody", names=["Nia"], roles=["A short monologue"], lang="en-US",
+        disclaimer="Parody", names=[name], roles=["A short monologue"], lang="en-US",
         fmt="16:9", style="cartoon", topic="a change of mind",
     )
     return built, track
 
 
-def render_monologue(skin: Path, dest: Path, *, fps: int = 24) -> Path:
+def render_monologue(skin: Path, dest: Path, *, fps: int = 24, name: str = "Nia") -> Path:
     """Write the voiced monologue. Audio is the syllable envelope, not a paid voice."""
     clear_paid_keys()
-    built, track = monologue(skin)
+    built, track = monologue(skin, name=name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     wav = dest.with_suffix(".wav")
     _write_wav(wav, track)
@@ -317,10 +367,25 @@ def write_pack(dest: Path, *, video: bool = True, fps: int = 24) -> dict[str, An
     clear_paid_keys()
     dest.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"paidKeys": "unset", "files": []}
-    for kind, builder in (("stick", build_stick), ("illustrated", build_illustrated)):
+    builders = (
+        ("stick", build_stick, "Nia"),
+        ("illustrated", build_illustrated, "Nia"),
+        ("einstein", build_einstein, "Albert Einstein"),
+    )
+    for kind, builder, speaker in builders:
         skin = dest / "_build" / kind
         builder(skin)
-        report[kind] = {"gates": approval_gates(skin)}
+        full = qa.run(skin)
+        report[kind] = {
+            "score": qa.score(full),
+            "skin": full["skin"],
+            "gates": approval_gates(skin),
+            "limit": qa.LIMITS["skinDeltaE"],
+        }
+        packed = qa.finalize(skin, 0.0, {})
+        qa_sheet = dest / f"{kind}_qa_sheet.png"
+        qa_sheet.write_bytes((skin / "qa_sheet.png").read_bytes())
+        report["files"].append(str(qa_sheet))
         sheet_path = contact_sheet(skin)
         copied = dest / f"{kind}_review_sheet.png"
         copied.write_bytes(sheet_path.read_bytes())
@@ -329,12 +394,17 @@ def write_pack(dest: Path, *, video: bool = True, fps: int = 24) -> dict[str, An
             zoom = dest / f"{kind}_zoom_{state}.png"
             face_zoom(skin, state).save(zoom, "PNG")
             report["files"].append(str(zoom))
-        if kind == "illustrated":
-            still = human_eyes.render_still_sheet(skin, dest / "illustrated_emotion_sheet.png")
+        for vis in ("X", "D"):
+            zoom = dest / f"{kind}_mouth_{vis}.png"
+            mouth_zoom(skin, vis).save(zoom, "PNG")
+            report["files"].append(str(zoom))
+        if kind in {"illustrated", "einstein"}:
+            still = human_eyes.render_still_sheet(skin, dest / f"{kind}_emotion_sheet.png")
             report["files"].append(str(still))
         if video:
-            movie = render_monologue(skin, dest / f"{kind}_monologue.mp4", fps=fps)
+            movie = render_monologue(skin, dest / f"{kind}_monologue.mp4", fps=fps, name=speaker)
             report["files"].append(str(movie))
-        print(kind, json.dumps(report[kind]["gates"]))
+        report[kind]["qaScore"] = packed["score"]
+        print(kind, json.dumps({"score": report[kind]["score"], "skin": report[kind]["skin"], "gates": report[kind]["gates"]}))
     (dest / "gates.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report

@@ -160,3 +160,10 @@ def test_drawn_human_mouths_skip_the_skin_rim_and_a_cut_mouth_does_not(tmp_path)
     cut = qa.skin_delta_e(view)
     assert cut["pass"] is False
     assert cut["value"] > qa.LIMITS["skinDeltaE"]
+    assert qa.LIMITS["skinDeltaE"] == 6.0
+    qa.match_skin_rim(view)
+    matched = qa.skin_delta_e(view)
+    assert matched["pass"] is True
+    assert matched["value"] <= qa.LIMITS["skinDeltaE"]
+    assert matched["limit"] == 6.0
+    assert "drawn" not in (matched.get("note") or "")

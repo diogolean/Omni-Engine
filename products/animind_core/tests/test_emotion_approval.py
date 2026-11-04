@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from products.animind_core import approval, brow_draw, human_eyes, qa, render, rig, stick
 
@@ -53,7 +54,7 @@ def test_approval_gates_pass_and_the_mood_row_keeps_one_mouth(skins: dict[str, P
     assert arches["evil"] == "v"
     assert arches["sad"] == "inverse"
     assert arches["perplexed"] == "other"
-    assert arches["happy"] != "v"
+    assert arches["happy"] == "happy"
     moods = {state: approval.mood_frame(skin, state) for state in ("neutral", "evil", "happy", "sad")}
     mouth = view["visemes"]["C"]
     box = (mouth["x"], mouth["y"], mouth["x"] + mouth["w"], mouth["y"] + mouth["h"])
@@ -105,6 +106,32 @@ def test_stick_build_passes_the_mouth_gates_without_a_later_legalize(tmp_path: P
     assert ratios["H"] >= 1.20
     for share in gates["mouthOpen"]["expressionFaceShare"].values():
         assert share <= qa.EXPRESSION_OPEN_ABS + qa.OPEN_SLACK
+
+
+def test_product_mouths_match_the_cheek_and_einstein_clears_skin(tmp_path: Path):
+    """The skin gate is measured. A lip fringe recoloured to the cheek passes at ΔE 6.0."""
+    approval.clear_paid_keys()
+    assert qa.LIMITS["skinDeltaE"] == 6.0
+    teacher = tmp_path / "teacher"
+    stick.build(teacher, lambda path: str(path), preset="teacher")
+    stick_skin = qa.skin_delta_e(teacher / "views" / "front")
+    assert stick_skin["pass"] is True
+    assert stick_skin["value"] <= 6.0
+    assert stick_skin["limit"] == 6.0
+    assert "drawn" not in (stick_skin.get("note") or "")
+    tagged = json.loads((teacher / "views" / "front" / "view.json").read_text(encoding="utf-8"))
+    assert (tagged.get("mouthQA") or {}).get("mouths") not in {"human", "aiwake drawn set"}
+    skin = approval.build_einstein(tmp_path / "einstein")
+    gates = qa.run(skin)
+    assert gates["skin"]["pass"] is True, gates["skin"]
+    assert gates["skin"]["value"] <= qa.LIMITS["skinDeltaE"]
+    assert "drawn" not in (gates["skin"].get("note") or "")
+    failed = [name for name in qa.APPROVAL if not gates[name]["pass"]]
+    assert failed == [], {name: gates[name] for name in failed}
+    assert qa.score(gates) == 100
+    head = next(layer for layer in rig.load_view(skin, "front")["layers"] if layer["name"] == "head")
+    plate = np.asarray(Image.open(skin / "views" / "front" / head["url"]).convert("RGB"))
+    assert float(plate.std()) > 18
 
 
 def test_illustrated_vowels_open_past_the_rest_mouth(tmp_path: Path):

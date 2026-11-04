@@ -27,26 +27,109 @@ def _lab(rgb: np.ndarray) -> np.ndarray:
     return np.stack([lab[:, 0] * 100 / 255, lab[:, 1] - 128, lab[:, 2] - 128], axis=1)
 
 
+def _layer_canvas(view: Path, spec: dict[str, Any]) -> Image.Image:
+    """Head and the other layers, without a mouth sprite on top."""
+    canvas = Image.new("RGBA", (spec["canvas"]["w"], spec["canvas"]["h"]), (0, 0, 0, 0))
+    for layer in sorted(spec["layers"], key=lambda item: item["z"]):
+        canvas.alpha_composite(Image.open(view / layer["url"]).convert("RGBA"), (layer["x"], layer["y"]))
+    return canvas
+
+
+def _rim_mask(sprite: np.ndarray, under: np.ndarray) -> np.ndarray:
+    """Soft fringe the skin gate compares: alpha in (40, 200) over opaque art."""
+    return (sprite[..., 3] > 40) & (sprite[..., 3] < 200) & (under[..., 3] > 200)
+
+
+def match_skin_rim(view: Path) -> int:
+    """Give the soft mouth fringe the colour of the art under it.
+
+    Drawn lips store lip colour in the anti-aliased edge. The skin gate
+    compares that edge to the cheek, so a lip-coloured fringe fails ΔE
+    even when the composite looks blended. Pixels at alpha 128 and above
+    stay opaque lip. The fringe keeps its alpha and takes the pixel
+    underneath. The limit stays ``LIMITS['skinDeltaE']``.
+    """
+    spec = json.loads((view / "view.json").read_text(encoding="utf-8"))
+    base = np.asarray(_layer_canvas(view, spec))
+    changed = 0
+    for family in ("visemes", "expressions"):
+        for layer in (spec.get(family) or {}).values():
+            path = view / layer["url"]
+            if not path.is_file():
+                continue
+            sprite = np.array(Image.open(path).convert("RGBA"))
+            core = sprite[..., 3] >= 128
+            sprite[core, 3] = 255
+            x, y = int(layer["x"]), int(layer["y"])
+            height, width = sprite.shape[:2]
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(base.shape[1], x + width), min(base.shape[0], y + height)
+            if x1 > x0 and y1 > y0:
+                under = base[y0:y1, x0:x1]
+                part = sprite[y0 - y:y1 - y, x0 - x:x1 - x]
+                rim = _rim_mask(part, under)
+                changed += int(rim.sum())
+                part[..., :3][rim] = under[..., :3][rim]
+            Image.fromarray(sprite, "RGBA").save(path)
+    return changed
+
+
 def skin_delta_e(view: Path) -> dict[str, Any]:
     """Median CIE76 dE between each mouth sprite's soft rim and the head right under it."""
     v = json.loads((view / "view.json").read_text())
-    canvas = Image.new("RGBA", (v["canvas"]["w"], v["canvas"]["h"]), (0, 0, 0, 0))
-    for layer in sorted(v["layers"], key=lambda l: l["z"]):
-        canvas.alpha_composite(Image.open(view / layer["url"]).convert("RGBA"), (layer["x"], layer["y"]))
+    canvas = _layer_canvas(view, v)
     # Inked lips (Aiwake set and the human mouth library) have no skin rim to match.
     if (v.get("mouthQA") or {}).get("mouths") in {"aiwake drawn set", "human"}:
         return {"pass": True, "value": 0.0, "limit": LIMITS["skinDeltaE"], "note": "drawn mouths: no skin rim"}
     worst = 0.0
-    for name, m in v["visemes"].items():
+    for _name, m in v["visemes"].items():
         p = view / m["url"]
         spr = np.asarray(Image.open(p).convert("RGBA")).astype(np.int16)
         under = np.asarray(canvas.crop((m["x"], m["y"], m["x"] + spr.shape[1], m["y"] + spr.shape[0]))).astype(np.int16)
-        rim = (spr[..., 3] > 40) & (spr[..., 3] < 200) & (under[..., 3] > 200)
+        rim = _rim_mask(spr, under)
         if rim.sum() < 10:
             continue
         de = np.linalg.norm(_lab(spr[rim][:, :3]) - _lab(under[rim][:, :3]), axis=1)
         worst = max(worst, float(np.median(de)))
     return {"pass": worst <= LIMITS["skinDeltaE"], "value": round(worst, 2), "limit": LIMITS["skinDeltaE"]}
+
+
+def _cheek_redness(img: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> float:
+    """Median r−g of coloured skin around the mouth.
+
+    A white moustache in the band above the lip is desaturated. Using it as
+    the skin sample makes the cheek look like lipstick. Coloured pixels win.
+    """
+    height, width = img.shape[:2]
+    span_w, span_h = max(1, x1 - x0), max(1, y1 - y0)
+    boxes = (
+        (x0, max(0, y0 - span_h), x1, y0),
+        (max(0, x0 - span_w // 2), y0, x0, min(height, y1)),
+        (x1, y0, min(width, x1 + span_w // 2), min(height, y1)),
+    )
+    chosen = []
+    for xa, ya, xb, yb in boxes:
+        if xb - xa < 2 or yb - ya < 2:
+            continue
+        patch = img[ya:yb, xa:xb]
+        opaque = patch[..., 3] > 128
+        if not opaque.any():
+            continue
+        rgb = patch[opaque][:, :3].astype(np.int16)
+        chroma = rgb.max(axis=1) - rgb.min(axis=1)
+        warm = rgb[chroma > 18]
+        if len(warm) >= 16:
+            chosen.append(warm)
+        elif len(rgb):
+            chosen.append(rgb)
+    if not chosen:
+        px = img[img[..., 3] > 128][:, :3]
+        return float(np.median(px[:, 0] - px[:, 1])) if len(px) else 0.0
+    rgb = np.concatenate(chosen, axis=0)
+    chroma = rgb.max(axis=1) - rgb.min(axis=1)
+    warm = rgb[chroma > 18]
+    sample = warm if len(warm) >= 16 else rgb
+    return float(np.median(sample[:, 0] - sample[:, 1]))
 
 
 def residual_mouth(view: Path, mouth_box: list[int]) -> dict[str, Any]:
@@ -62,10 +145,7 @@ def residual_mouth(view: Path, mouth_box: list[int]) -> dict[str, Any]:
         return {"pass": True, "value": 0.0, "limit": LIMITS["residualMouth"]}
     r, g, b, a = (patch[..., i] for i in range(4))
     # relative to this character's own skin (anime skin is often pink): median redness of the head
-    hr = img[..., 0] - img[..., 1]
-    ring = img[max(0, y0 - h):max(0, y0), max(0, x0):max(0, x1)]
-    ring = ring[ring[..., 3] > 128]
-    skin_red = float(np.median(ring[:, 0] - ring[:, 1])) if len(ring) else float(np.median(hr[img[..., 3] > 128]))
+    skin_red = _cheek_redness(img, x0, y0, x1, y1)
     lips = (r - g > skin_red + 30) & (r > b + 25) & (a > 128)
     # saturated dark red only: a brown beard drawn over the closed mouth is not a residual cavity
     cavity = ((r + g + b) / 3 < 70) & (r > g + 30) & (r - b > 40) & (a > 128)
@@ -672,7 +752,7 @@ def visemes_share_one_scale(view: dict) -> bool:
 
 
 def brow_arch(left: Image.Image | None, right: Image.Image | None = None) -> str:
-    """``v`` when the inner tips sit lower than the outer tips, ``inverse`` when they sit higher."""
+    """``happy`` when the middle arches up, ``v`` when the inner tips sit lower, ``inverse`` when they sit higher."""
     from . import brow_draw  # noqa: PLC0415
 
     return brow_draw.classify(left, right)

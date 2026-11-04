@@ -4,7 +4,8 @@ The painted brow is a measurement, not a sprite. ``Stroke`` keeps the
 centerline from outer tip to inner tip, the thickness at each sample, and
 one ink colour. ``STATES`` bends that stroke. Positive lift and inner drop
 move the brow down. Evil drops the inner tips, so the pair reads as a V.
-Sad lifts them, so the pair reads as an inverse V.
+Sad lifts them, so the pair reads as an inverse V. Happy lifts the
+middle and leaves the tips level, so the pair reads as an arch.
 
 Stick redraws one flat ink width. Illustrated keeps the measured colour,
 thickness, and tapered tips. Both are drawn at 4x and scaled down, the same
@@ -28,7 +29,9 @@ Pose = tuple[float, float, float]
 STATES: dict[str, tuple[Pose, Pose]] = {
     "neutral": ((0.0, 0.0, 0.06), (0.0, 0.0, 0.06)),
     "evil": ((0.02, 0.26, 0.0), (0.02, 0.26, 0.0)),
-    "happy": ((-0.12, -0.04, 0.18), (-0.12, -0.04, 0.18)),
+    # Inner drop stays 0 so the tips do not rise into an inverse V.
+    # The arch is strong enough to clear the stick rest curve.
+    "happy": ((-0.08, 0.0, 0.36), (-0.08, 0.0, 0.36)),
     "perplexed": ((-0.04, 0.20, 0.02), (-0.02, -0.16, 0.14)),
     "sad": ((0.04, -0.26, 0.02), (0.04, -0.26, 0.02)),
     "angry": ((0.06, 0.18, -0.02), (0.06, 0.18, -0.02)),
@@ -390,15 +393,60 @@ def arch_delta(sprite: Image.Image, side: str) -> float:
     return inner - outer
 
 
+# Middle above both ends, in pixels. Below this a resting stick curve is not an arch.
+_HAPPY_RISE = 8.0
+
+
+def _profile(sprite: Image.Image, side: str) -> tuple[float, float, float] | None:
+    """Outer, middle, and inner median y. Smaller y is higher on the sprite."""
+    alpha = np.asarray(sprite.getchannel("A")) > 32
+    _rows, xs = np.nonzero(alpha)
+    if xs.size < 8:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max())
+    third = max(1, (x1 - x0) // 3)
+
+    def median_y(start: int, end: int) -> float | None:
+        slab = alpha[:, start:end + 1]
+        rows, _cols = np.nonzero(slab)
+        if rows.size == 0:
+            return None
+        return float(np.median(rows))
+
+    left_y = median_y(x0, x0 + third)
+    mid_y = median_y(x0 + third, max(x0 + third, x1 - third))
+    right_y = median_y(x1 - third, x1)
+    if left_y is None or mid_y is None or right_y is None:
+        return None
+    outer, inner = (left_y, right_y) if side == "left" else (right_y, left_y)
+    return outer, mid_y, inner
+
+
+def _arched(outer: float, mid: float, inner: float) -> bool:
+    """The middle is the high point, and it clears the tip-to-tip slope."""
+    rise = min(outer, inner) - mid
+    return rise >= _HAPPY_RISE and rise >= abs(inner - outer) + 4.0
+
+
 def classify(left: Image.Image | None, right: Image.Image | None = None) -> str:
-    """``v`` when every drawn inner tip is down, ``inverse`` when every one is up."""
+    """``happy`` when the middle arches above both ends, ``v`` when every inner tip is down,
+    ``inverse`` when every inner tip is up."""
     deltas = []
+    profiles = []
     if left is not None and _inked(left):
         deltas.append(arch_delta(left, "left"))
+        found = _profile(left, "left")
+        if found is not None:
+            profiles.append(found)
     if right is not None and _inked(right):
         deltas.append(arch_delta(right, "right"))
+        found = _profile(right, "right")
+        if found is not None:
+            profiles.append(found)
     if not deltas:
         return "flat"
+    if profiles and all(_arched(*profile) for profile in profiles):
+        return "happy"
     if all(delta > 1.5 for delta in deltas):
         return "v"
     if all(delta < -1.5 for delta in deltas):

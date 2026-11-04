@@ -225,4 +225,9 @@ def apply(skin: Path) -> dict[str, Any]:
         notes[name] = bool(qa.mouth_open(folder, face)["pass"])
     mouth_anchor.reposition_skin(skin)
     _fill_mouth_box(skin)
+    # Last, so a later scale cannot put lip colour back into the fringe.
+    for name in ("left", "front", "right"):
+        folder = skin / "views" / name
+        if (folder / "view.json").is_file():
+            qa.match_skin_rim(folder)
     return notes
