@@ -177,6 +177,7 @@ def _stage_publish_01(state: VariantState) -> None:
     except Exception:
         pass
     state.meta = {}
+    state._seo_title = getattr(state, '_seo_title', '') or getattr(state, '_seo_title_local', '') or ''
     with state.write_lock:
         state.meta = append_entry(app_config.CONTENT_LIBRARY_PATH, build_library_metadata(topic=state.resolved_subject, final_caption=state.caption_str, imgbb_url=state.imgbb_url, video_path=state.video_path_str or '', carousel_images=state._carousel_imgbb if state.post_type == 'CAROUSEL' else None, channel_id=getattr(app_config, 'ACTIVE_PAGE', '') or '', post_type=state.post_type or '', title=state._seo_title or state.overlay_text or state.resolved_subject or ''))
     from production.qa.publish import write_postplanner_xlsx_if_allowed
