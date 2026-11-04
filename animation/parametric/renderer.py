@@ -511,34 +511,37 @@ class AnimationRenderer:
                     rgb = np.ascontiguousarray(frame, dtype=np.uint8)
                     yuv420 = cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420)
                     payload = yuv420.tobytes()
-                    if deadline is None:
-                        proc.stdin.write(payload)
-                    else:
-                        _write_stdin(
-                            proc,
-                            payload,
-                            max(0.05, deadline - time.monotonic()),
-                            float(encode_timeout_s or 0.0),
-                        )
+                    try:
+                        if deadline is None:
+                            proc.stdin.write(payload)
+                        else:
+                            _write_stdin(
+                                proc,
+                                payload,
+                                max(0.05, deadline - time.monotonic()),
+                                float(encode_timeout_s or 0.0),
+                            )
+                    except (BrokenPipeError, OSError) as exc:
+                        # A missing puppet file is an OSError too. Only a write
+                        # to the encoder is the pipe closing early.
+                        if _past_deadline(deadline):
+                            _kill_if_alive(proc)
+                            raise RenderTimeout(encode_timeout_s or 0.0) from exc
+                        stderr = _finish_ffmpeg_pipe(proc, timeout=30)
+                        elapsed = time.perf_counter() - start
+                        # -shortest closes stdin once the audio ends. A clean exit with
+                        # a finished file is the stop, not a failed encode.
+                        if proc.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
+                            _LOG.info(
+                                "ffmpeg closed the frame pipe after %d frame(s) (exit 0)",
+                                frames_written,
+                            )
+                            return frames_written, elapsed
+                        raise _FfmpegFailure(_ffmpeg_failure_text(stderr, exc, proc.returncode), [])
                     frames_written += 1
             except RenderTimeout:
                 _kill_if_alive(proc)
                 raise
-            except (BrokenPipeError, OSError) as exc:
-                if _past_deadline(deadline):
-                    _kill_if_alive(proc)
-                    raise RenderTimeout(encode_timeout_s or 0.0) from exc
-                stderr = _finish_ffmpeg_pipe(proc, timeout=30)
-                elapsed = time.perf_counter() - start
-                # -shortest closes stdin once the audio ends. A clean exit with
-                # a finished file is the stop, not a failed encode.
-                if proc.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
-                    _LOG.info(
-                        "ffmpeg closed the frame pipe after %d frame(s) (exit 0)",
-                        frames_written,
-                    )
-                    return frames_written, elapsed
-                raise _FfmpegFailure(_ffmpeg_failure_text(stderr, exc, proc.returncode), [])
             if _past_deadline(deadline):
                 _kill_if_alive(proc)
                 raise RenderTimeout(encode_timeout_s or 0.0)
