@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from PIL import Image, ImageDraw
 
-from . import brow_draw, mouthset
+from . import brow_draw, mouth_fit, mouthset
 
 VISEMES = "XABCDEFGH"
 CANVAS = (640, 800)
@@ -276,6 +276,39 @@ def _write_view(
     return view
 
 
+def _reload_geometry(view: dict[str, Any], folder: Path) -> None:
+    """Copy x/y/w/h from the fitted ``view.json`` onto the in-memory view."""
+    path = folder / "view.json"
+    if not path.is_file():
+        return
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    for family in ("visemes", "expressions"):
+        for key, layer in (view.get(family) or {}).items():
+            src = (saved.get(family) or {}).get(key)
+            if not src:
+                continue
+            layer["x"], layer["y"] = int(src["x"]), int(src["y"])
+            layer["w"], layer["h"] = int(src["w"]), int(src["h"])
+
+
+def _write_preview(skin: Path) -> None:
+    """Front composite after the mouths have moved, so the still matches the rig."""
+    folder = skin / "views" / "front"
+    path = folder / "view.json"
+    if not path.is_file():
+        return
+    view = json.loads(path.read_text(encoding="utf-8"))
+    canvas = Image.new("RGBA", (view["canvas"]["w"], view["canvas"]["h"]), (0, 0, 0, 0))
+    parts = list(view["layers"])
+    mouth = (view.get("visemes") or {}).get("X")
+    if mouth:
+        parts.append(mouth)
+    for layer in sorted(parts, key=lambda item: item["z"]):
+        with Image.open(folder / layer["url"]) as image:
+            canvas.alpha_composite(image.convert("RGBA"), (int(layer["x"]), int(layer["y"])))
+    canvas.save(skin / "character.png", "PNG", optimize=True)
+
+
 def build(
     skin: Path,
     url: Callable[[Path], str],
@@ -316,6 +349,10 @@ def build(
         preview.alpha_composite(image, xy)
     preview.alpha_composite(*parts["mouths"]["X"])
     preview.save(skin / "character.png", "PNG", optimize=True)
+    mouth_fit.apply(skin)
+    for name, view in views.items():
+        _reload_geometry(view, skin / "views" / name)
+    _write_preview(skin)
     return {
         "views": views,
         "viewStatus": {"front": "procedural", "left": "procedural", "right": "procedural mirror"},

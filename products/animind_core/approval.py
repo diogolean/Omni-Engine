@@ -21,6 +21,7 @@ from . import (
     eyes,
     human_eyes,
     mouth_anchor,
+    mouth_fit,
     mouthset,
     qa,
     render,
@@ -53,159 +54,18 @@ def clear_paid_keys() -> None:
         os.environ.pop(key, None)
 
 
-def _scale_ink(image: Image.Image, factor: float) -> Image.Image:
-    if factor <= 0 or abs(factor - 1.0) < 0.03:
-        return image
-    box = image.getchannel("A").getbbox()
-    if not box:
-        return image
-    part = image.crop(box).resize(
-        (max(1, box[2] - box[0]), max(1, int(round((box[3] - box[1]) * factor)))),
-        Image.Resampling.LANCZOS,
-    )
-    pad = 6
-    canvas = Image.new("RGBA", (part.width + 2 * pad, part.height + 2 * pad), (0, 0, 0, 0))
-    canvas.paste(part, (pad, pad), part)
-    return canvas
-
-
-def _reseat(skin: Path, name: str) -> None:
-    folder = skin / "views" / name
-    view = json.loads((folder / "view.json").read_text(encoding="utf-8"))
-    boxes = mouth_anchor._boxes(folder, view, skin, name)
-    if not boxes:
-        return
-    face, left_eye, right_eye = boxes
-    anchor = mouth_anchor.place(mouth_anchor._paste_head(folder, view), face, left_eye, right_eye, view=name)
-    sprites: dict[str, Image.Image] = {}
-    layers: dict[str, dict[str, Any]] = {}
-    for family in ("visemes", "expressions"):
-        for key, layer in (view.get(family) or {}).items():
-            token = f"{family}:{key}"
-            sprites[token] = Image.open(folder / layer["url"]).convert("RGBA")
-            layers[token] = layer
-    for token, (image, xy) in mouth_anchor.seat(sprites, anchor).items():
-        layer = layers[token]
-        image.save(folder / layer["url"], "PNG")
-        layer["x"], layer["y"] = int(xy[0]), int(xy[1])
-        layer["w"], layer["h"] = image.size
-    (folder / "view.json").write_text(json.dumps(view, indent=2), encoding="utf-8")
-
-
-def _face_for(skin: Path, name: str) -> list[int]:
-    rig_name = "rig_front.json" if name == "front" and (skin / "rig_front.json").is_file() else "rig.json"
-    return list(json.loads((skin / rig_name).read_text(encoding="utf-8"))["boxes"]["face"])
-
-
-def _retarget(folder: Path, family: str, key: str, factor: float) -> None:
-    view = json.loads((folder / "view.json").read_text(encoding="utf-8"))
-    layer = (view.get(family) or {}).get(key)
-    if layer is None or abs(factor - 1.0) < 0.03:
-        return
-    image = _scale_ink(Image.open(folder / layer["url"]).convert("RGBA"), factor)
-    image.save(folder / layer["url"], "PNG")
-    layer["w"], layer["h"] = image.size
-    (folder / "view.json").write_text(json.dumps(view, indent=2), encoding="utf-8")
-
-
-def _share_canvas(folder: Path) -> None:
-    """One canvas for every viseme so the mouth-range gate can compare them."""
-    view = json.loads((folder / "view.json").read_text(encoding="utf-8"))
-    visemes = view.get("visemes") or {}
-    if len(visemes) < 2:
-        return
-    images = {code: Image.open(folder / layer["url"]).convert("RGBA") for code, layer in visemes.items()}
-    width = max(image.width for image in images.values())
-    height = max(image.height for image in images.values())
-    for code, image in images.items():
-        # RGBA paste already uses the alpha band. A second mask squares it and
-        # knocks the scaled rest mouth back under the open-height gate.
-        if image.size == (width, height):
-            continue
-        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        canvas.paste(image, ((width - image.width) // 2, (height - image.height) // 2))
-        layer = visemes[code]
-        canvas.save(folder / layer["url"], "PNG")
-        layer["w"], layer["h"] = canvas.size
-    (folder / "view.json").write_text(json.dumps(view, indent=2), encoding="utf-8")
-
-
 def legalize_mouths(skin: Path) -> dict[str, Any]:
-    """Raise a hairline rest mouth, then shorten only a shape that is still past the cap.
+    """Seat and open a skin that was not built by the product generators.
 
-    ``mouthOpen`` compares each vowel with X. Thickening X first keeps the vowel
-    taller than the rest mouth. Shrinking in the same step used to crush it.
+    ``stick.build`` and :func:`build_illustrated` already call :func:`mouth_fit.apply`.
     """
-    mouth_anchor.reposition_skin(skin)
-    notes: dict[str, Any] = {}
-    for name in ("left", "front", "right"):
-        folder = skin / "views" / name
-        if not (folder / "view.json").is_file():
-            continue
-        face = _face_for(skin, name)
-        for _ in range(8):
-            gate = qa.mouth_open(folder, face)
-            if gate["pass"]:
-                break
-            shares = gate.get("faceShare") or {}
-            x_share = float(shares.get("X") or 0.0)
-            if x_share < 0.09:
-                _retarget(folder, "visemes", "X", min(2.2, 0.10 / max(x_share, 0.01)))
-                _reseat(skin, name)
-                continue
-            ratios = gate.get("ratios") or {}
-            moved = False
-            for code, ratio in ratios.items():
-                if code in "XA":
-                    continue
-                limit = qa.OPEN_REL.get(code, 1.7) + 0.05
-                if shares.get(code, 0) > qa.OPEN_FLOOR and float(ratio) > limit:
-                    _retarget(folder, "visemes", code, (limit * 0.92) / float(ratio))
-                    moved = True
-            for code, share in shares.items():
-                if code not in "XA" and share > qa.OPEN_ABS + qa.OPEN_SLACK:
-                    _retarget(folder, "visemes", code, (qa.OPEN_ABS * 0.9) / float(share))
-                    moved = True
-            for key, share in (gate.get("bad") or {}).items():
-                if str(key).startswith("expression:"):
-                    _retarget(folder, "expressions", key.split(":", 1)[1],
-                              min(0.92, (qa.EXPRESSION_OPEN_ABS * 0.90) / max(float(share), 1e-3)))
-                    moved = True
-            if not moved:
-                break
-            _reseat(skin, name)
-        _share_canvas(folder)
-        _reseat(skin, name)
-        notes[name] = qa.mouth_open(folder, face)["pass"]
-    mouth_anchor.reposition_skin(skin)
-    _fill_mouth_box(skin)
-    return notes
-
-
-def _fill_mouth_box(skin: Path) -> None:
-    """``reposition_skin`` records an anchor without the mouth rectangle ``double_mouth`` reads."""
-    for name in ("left", "front", "right"):
-        folder = skin / "views" / name
-        path = folder / "view.json"
-        if not path.is_file():
-            continue
-        view = json.loads(path.read_text(encoding="utf-8"))
-        boxes = mouth_anchor._boxes(folder, view, skin, name)
-        if not boxes:
-            continue
-        face, left_eye, right_eye = boxes
-        anchor = mouth_anchor.place(mouth_anchor._paste_head(folder, view), face, left_eye, right_eye, view=name)
-        meta = view.setdefault("mouthQA", {})
-        meta["mouth"] = list(anchor.as_box(face, max(12, int((int(face[2]) - int(face[0])) * 0.34))))
-        meta["face"] = [int(v) for v in face]
-        path.write_text(json.dumps(view, indent=2), encoding="utf-8")
+    return mouth_fit.apply(skin)
 
 
 def build_stick(dest: Path) -> Path:
-    """Procedural stick hero, mouths moved onto the approval anchor."""
+    """Procedural stick hero. ``stick.build`` seats and opens the mouths."""
     dest.mkdir(parents=True, exist_ok=True)
     stick.build(dest, lambda path: str(path), preset="teacher")
-    legalize_mouths(dest)
     return dest
 
 
@@ -253,7 +113,7 @@ def build_illustrated(dest: Path) -> Path:
     mouths = mouthset.draw_set(78, colours, open_cap=34)
     expressions = mouthset.draw_expressions(78, colours, open_cap=26)
     _write_illustrated_views(dest, built, mouths, expressions)
-    legalize_mouths(dest)
+    mouth_fit.apply(dest)
     return dest
 
 
@@ -332,7 +192,7 @@ def _write_illustrated_views(
             "browModel": brow_draw.mirror_model(model, CANVAS[0]) if mirror else model,
         }
         (folder / "view.json").write_text(json.dumps(view, indent=2), encoding="utf-8")
-    # The front seating above is replaced by legalize. Keep the first pass so the files exist.
+    # mouth_fit.apply reseats this first pass onto the nose–chin anchor.
     del seated_mouths, seated_expressions
 
 

@@ -1,10 +1,11 @@
 """Mood sheet and monologue: brows and eyes follow the line, the viseme does not."""
+import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from products.animind_core import approval, brow_draw, human_eyes, qa, render, rig
+from products.animind_core import approval, brow_draw, human_eyes, qa, render, rig, stick
 
 
 def _diff(a, b, box: tuple[int, int, int, int] | None = None) -> int:
@@ -89,6 +90,35 @@ def test_monologue_squints_and_looks_with_the_mood_while_the_viseme_stays(skins:
         gazes[emotion] = face["gaze"]
     assert gazes["alegre"][1] < gazes["mau"][1] - 0.5
     assert gazes["triste"][1] > gazes["neutro"][1] + 0.4
+
+
+def test_stick_build_passes_the_mouth_gates_without_a_later_legalize(tmp_path: Path):
+    """The product generator seats and opens the mouths. A fixture pass is not required."""
+    skin = tmp_path / "teacher"
+    stick.build(skin, lambda path: str(path), preset="teacher")
+    gates = qa.run(skin)
+    failed = [name for name in qa.APPROVAL if not gates[name]["pass"]]
+    assert failed == [], {name: gates[name].get("note") or gates[name].get("bad") for name in failed}
+    ratios = gates["mouthOpen"]["ratios"]
+    assert ratios["D"] >= 1.35
+    assert ratios["C"] >= 1.25
+    assert ratios["H"] >= 1.20
+    for share in gates["mouthOpen"]["expressionFaceShare"].values():
+        assert share <= qa.EXPRESSION_OPEN_ABS + qa.OPEN_SLACK
+
+
+def test_illustrated_vowels_open_past_the_rest_mouth(tmp_path: Path):
+    """Phase 26 left the illustrated vowel at about 1.04× the rest lip."""
+    skin = tmp_path / "face"
+    approval.build_illustrated(skin)
+    face = json.loads((skin / "rig.json").read_text(encoding="utf-8"))["boxes"]["face"]
+    gate = qa.mouth_open(skin / "views" / "front", face)
+    assert gate["pass"], gate.get("bad")
+    assert gate["ratios"]["D"] >= 1.35
+    assert gate["ratios"]["C"] >= 1.25
+    assert gate["ratios"]["H"] >= 1.20
+    for share in gate["expressionFaceShare"].values():
+        assert share <= qa.EXPRESSION_OPEN_ABS + qa.OPEN_SLACK
 
 
 def test_illustrated_still_uses_the_brow_model_and_one_viseme_mark(skins: dict[str, Path]):
