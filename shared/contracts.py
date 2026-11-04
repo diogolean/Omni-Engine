@@ -414,7 +414,7 @@ def build_platform_overrides(
     scheduled_time: str | datetime | None = "",
 ) -> PlatformOverrides:
     return PlatformOverrides(
-        x=XOverride(caption=x_caption),
+        x=XOverride(caption=clip_text(x_caption, X_CAPTION_MAX_CHARS)),
         pinterest=PinterestOverride(
             board_name=board_name,
             destination_url=destination_url,
