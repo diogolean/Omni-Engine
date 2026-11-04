@@ -124,7 +124,11 @@ def test_rerig_of_the_product_bust_does_not_create_puppet(tmp_path, monkeypatch)
 
 
 def test_an_older_three_quarter_plate_is_reused_without_create_puppet(tmp_path, monkeypatch):
-    """Archive stamps and a three-quarter front still count as the photographed cut."""
+    """A complete cut is copied when the plate file is newer than the views.
+
+    This plate's boxes already pass the front gate, so a left anchor tag is
+    copied as filed. A front that fails symmetry is mirrored on the copy.
+    """
     _offline(monkeypatch, tmp_path)
     _refuse_image(monkeypatch)
     plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID

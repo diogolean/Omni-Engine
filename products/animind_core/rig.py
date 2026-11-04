@@ -1763,9 +1763,9 @@ def build_einstein_product(
 
     A cached ``albert_einstein_ca8386e2`` folder with a complete layered cut
     (front, left, and right) is copied in, even when the plate file is newer
-    than the views or the front anchor is the photographed three-quarter pose.
-    Otherwise the procedural bust is painted, seated, and sealed so a later
-    re-rig does not pay ``create_puppet``.
+    than the views. A three-quarter front is mirrored into a midline bust
+    before the gates run. Otherwise the procedural bust is painted, seated,
+    and sealed so a later re-rig does not pay ``create_puppet``.
     """
     import shutil  # noqa: PLC0415
 
@@ -1779,11 +1779,19 @@ def build_einstein_product(
         from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
 
         seated = mouth_anchor_mod.repair_collar_mouths(skin)
+        from . import front_plate  # noqa: PLC0415
+
+        turned = front_plate.install_true_front(skin)
         generator = "cached-plate"
         model = EINSTEIN_PLATE_ID
         frontal = _plate_front_is_frontal(skin)
         note = f"reused photographed plate {EINSTEIN_PLATE_ID} from {cached}"
-        if not frontal:
+        if turned.get("installed"):
+            note += (
+                f"; front mirrored from the three-quarter plate"
+                f" (symmetry {turned.get('before')} -> {turned.get('after')})"
+            )
+        elif not frontal:
             note += "; front cut is the photographed plate, not a midline bust"
         if any((row or {}).get("moved") for row in seated.values()):
             note += "; mouths seated on the photographed lip, not the collar"
