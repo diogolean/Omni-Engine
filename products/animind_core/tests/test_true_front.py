@@ -177,8 +177,15 @@ def test_rerig_of_a_three_quarter_plate_warps_without_create_puppet(tmp_path, mo
     )
     plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
     rig.build_einstein_product(plate, lambda path: path.name)
+    monkeypatch.setattr(rig, "einstein_plate_candidates", lambda: [plate])
     face = json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"]["face"]
     _shift_front(plate, -int(0.12 * (face[2] - face[0])))
+    for view_name in ("left", "front"):
+        spec = plate / "views" / view_name / "view.json"
+        doc = json.loads(spec.read_text(encoding="utf-8"))
+        doc.setdefault("mouthQA", {})["mouths"] = "human"
+        doc["visemes"]["A"]["w"] = int(doc["visemes"]["X"]["w"]) + 36
+        spec.write_text(json.dumps(doc), encoding="utf-8")
     plate_png = (plate / "character.png").read_bytes()
     left_head = (plate / "views" / "left" / "head.png").read_bytes()
     built = avatar.rerig_from_plate(
@@ -196,6 +203,13 @@ def test_rerig_of_a_three_quarter_plate_warps_without_create_puppet(tmp_path, mo
     assert (plate / "views" / "left" / "head.png").read_bytes() == left_head
     gate = qa.front_symmetry(json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"])
     assert gate["pass"] is True and gate["value"] <= 0.05
+    assert built["frontKind"] == "camera-warp"
+    assert built["frontIsTruePhoto"] is False
+    gates = built["qa"]["gates"]
+    for key in ("front", "doubleMouth", "brow_arch", "mouthAnchor", "mouthOpen", "skin", "landmarks"):
+        assert gates[key]["pass"], (key, gates[key])
+    assert not any(key in (built["qa"]["failed"] or []) for key in qa.APPROVAL)
+    assert built["qa"]["score"] >= 90
 
 
 def _frontal_boxes(skin: Path) -> dict:

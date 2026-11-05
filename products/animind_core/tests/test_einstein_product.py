@@ -130,6 +130,44 @@ def test_rerig_of_the_product_bust_does_not_create_puppet(tmp_path, monkeypatch)
     assert again["frontShot"] == "facing_front"
 
 
+def test_rerig_no_edit_survives_a_viseme_canvas_mismatch(tmp_path, monkeypatch):
+    """``--no-edit`` finalizes the saved cut. It does not call create_puppet or the scale reject."""
+    _offline(monkeypatch, tmp_path)
+    _refuse_image(monkeypatch)
+    built = _einstein()
+    skin = characters.puppets_dir() / built["id"]
+    # The product copy of the photographed plate, not the procedural bust.
+    document = json.loads((skin / "character.json").read_text(encoding="utf-8"))
+    document["model"] = rig.EINSTEIN_PLATE_ID
+    document["generator"] = "cached-plate"
+    (skin / "character.json").write_text(json.dumps(document), encoding="utf-8")
+    for view_name in ("left", "front"):
+        spec = skin / "views" / view_name / "view.json"
+        doc = json.loads(spec.read_text(encoding="utf-8"))
+        doc.setdefault("mouthQA", {})["mouths"] = "human"
+        doc["visemes"]["A"]["w"] = int(doc["visemes"]["X"]["w"]) + 36
+        spec.write_text(json.dumps(doc), encoding="utf-8")
+    again = avatar.rerig_from_plate(
+        skin,
+        description="Albert Einstein",
+        url=lambda path: path.name,
+        character_id=built["id"],
+        name="Albert Einstein",
+        edit=False,
+    )
+    assert again["qa"]["costUsd"] == 0.0
+    assert again["frontShot"] == "facing_front"
+    assert again["qa"]["score"] >= 90
+    failed = again["qa"]["failed"]
+    assert failed == [] or not any(key in failed for key in qa.APPROVAL)
+    gates = again["qa"]["gates"]
+    for key in ("front", "doubleMouth", "brow_arch", "mouthAnchor", "mouthOpen", "skin", "landmarks"):
+        assert gates[key]["pass"], (key, gates[key])
+    assert gates["brow_arch"]["value"] != "inverse"
+    stored = json.loads((skin / "character.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "ready"
+
+
 def test_an_older_three_quarter_plate_is_reused_without_create_puppet(tmp_path, monkeypatch):
     """A complete cut is copied when the plate file is newer than the views.
 

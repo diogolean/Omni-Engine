@@ -1108,6 +1108,66 @@ def _publish_saved_sides(skin: Path, url: Callable[[Path], str]) -> dict[str, An
     return views
 
 
+def _cached_plate_copy(skin: Path) -> bool:
+    """A product character built from the photographed plate, not the procedural bust."""
+    path = skin / "character.json"
+    if not path.is_file():
+        return False
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return doc.get("model") == rig.EINSTEIN_PLATE_ID
+
+
+def _reuse_photographed_cut(skin: Path, character_id: str, name: str, edit: bool) -> bool:
+    """Repair the photographed plate in place. Other Einstein cuts still re-cut.
+
+    The plate folder always takes this path. A product copy does too when
+    ``--no-edit`` is set. A procedural bust and a generic ``albert_einstein``
+    folder keep the older re-cut path.
+    """
+    del character_id, name
+    if not (skin / "rig.json").is_file() or not (skin / "views" / "left" / "view.json").is_file():
+        return False
+    if rig._names_the_plate(skin):
+        return True
+    return (not edit) and _cached_plate_copy(skin)
+
+
+def _front_donors(skin: Path) -> list[Path]:
+    """Other on-disk copies of the photographed plate. A procedural bust has none."""
+    named = rig._names_the_plate(skin)
+    if not named:
+        model = ""
+        path = skin / "character.json"
+        if path.is_file():
+            try:
+                model = str(json.loads(path.read_text(encoding="utf-8")).get("model") or "")
+            except (OSError, ValueError):
+                model = ""
+        if model != rig.EINSTEIN_PLATE_ID:
+            return []
+    donors: list[Path] = []
+    for folder in rig.einstein_plate_candidates():
+        if folder.is_dir():
+            donors.append(folder)
+    return donors
+
+
+def _repair_photographed(skin: Path) -> dict[str, Any]:
+    """Front, South Park rests, smile clear, and brow orientation. No image call."""
+    from . import brow_draw, front_plate  # noqa: PLC0415
+    from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
+
+    mouth_anchor_mod.repair_collar_mouths(skin)
+    turned = front_plate.install_true_front(skin, donors=_front_donors(skin))
+    mouthset.repair_filled_rests(skin)
+    mouth_anchor_mod.clear_painted_smiles(skin)
+    brow_draw.repair_orientation(skin)
+    return turned
+
+
 def rerig_from_plate(
     skin: Path,
     *,
@@ -1124,41 +1184,39 @@ def rerig_from_plate(
         raise FileNotFoundError(f"no cached plate in {skin}; nothing to re-rig without an image call")
     cost = 0.0
     views: dict[str, Any] | None = None
-    # The photographed ``albert_einstein_ca8386e2`` cut stays on disk, even when
-    # the plate file was restamped later. A three-quarter front is warped from
-    # the left view. Any other Einstein whose plate file is newer than the
-    # views is still cut.
-    if rig._names_the_plate(skin) and rig._einstein_views_ready(skin):
-        # A 3/4 front becomes a camera frontal from the left view. The plate
-        # png stays. This does not call create_puppet.
-        front_doc = skin / "rig_front.json"
-        if front_doc.is_file():
-            try:
-                front_boxes = json.loads(front_doc.read_text(encoding="utf-8")).get("boxes")
-            except (OSError, ValueError):
-                front_boxes = None
-            from . import front_plate  # noqa: PLC0415
-            from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
-
-            if isinstance(front_boxes, dict) and not qa.front_symmetry(front_boxes).get("pass"):
-                front_plate.install_true_front(skin)
-            mouthset.repair_filled_rests(skin)
-            mouth_anchor_mod.clear_painted_smiles(skin)
+    # The photographed plate and any Einstein ``--no-edit`` stay on the saved
+    # cut. A real frontal is installed when one is on disk; otherwise the left
+    # view is warped and that warp is not called a photograph. create_puppet
+    # is not called, so a viseme canvas mismatch cannot abort the re-rig.
+    if _reuse_photographed_cut(skin, character_id, name, edit):
+        turned = _repair_photographed(skin)
         views = _publish_saved_sides(skin, url)
         front = puppet_v3.publish_view(skin / "views" / "front", url)
         if front is not None:
             views["front"] = front
-        if "front" in views and "left" in views:
-            front_status = "facing_front"
+        if "left" in views:
+            front_status = "facing_front" if "front" in views else "missing"
+            kind = str(turned.get("front_kind") or "")
+            note = f"re-rigged saved cut; front_kind={kind}"
+            if turned.get("method") == "camera-warp":
+                note += f"; front camera warped from the {turned.get('reference') or 'left'} view"
+            elif turned.get("front_is_true_photo"):
+                note += f"; true frontal from {turned.get('source') or 'views/front'}"
+            elif kind == "three-quarter":
+                note += "; front head is the three-quarter view, not a frontal photo"
             built = {
                 "views": views,
                 "viewStatus": {"left": "cached-plate", "right": "mirror of left", "front": front_status},
                 "mouthShots": {"visemes": list(VISEMES)},
                 "frontShot": front_status,
-                "qa": {"score": 100, "costUsd": 0.0, "failed": []},
+                "qa": {"score": 0, "costUsd": 0.0, "failed": []},
                 "generator": "cached-plate",
-                "model": "cached-plate",
+                "model": rig.EINSTEIN_PLATE_ID if rig._names_the_plate(skin) else "portrait-einstein",
                 "cached": True,
+                "note": note,
+                "frontKind": kind,
+                "frontEqualsLeft": turned.get("front_equals_left"),
+                "frontIsTruePhoto": bool(turned.get("front_is_true_photo")),
             }
             write_character_json(skin, built, character_id=character_id, name=name, url=url)
             return built
