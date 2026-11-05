@@ -920,8 +920,9 @@ def _mouthless(head: Image.Image, mbox: Box, mouth: Box, *, keep_hair: bool = Fa
     the mouth layer alone carries lips and mustache and its soft rim lies over unchanged art.
 
     ``keep_hair`` (drawn mouth sets, which carry no mustache): facial hair stays in the head and only
-    the skin/lips around it are filled, from skin alone (hair is masked out of the inpaint source too,
-    so it cannot smear into a grey patch)."""
+    lip-coloured pixels under it are filled, from skin alone (hair is masked out of the inpaint
+    source too, so it cannot smear into a grey patch). Shaded skin beside the lip is left as drawn,
+    so the fill does not become a flat beige band."""
     import cv2  # noqa: PLC0415
 
     arr = np.asarray(head).copy()
@@ -961,6 +962,13 @@ def _mouthless(head: Image.Image, mbox: Box, mouth: Box, *, keep_hair: bool = Fa
             keep = cv2.GaussianBlur(keep.astype(np.float32), (0, 0), max(2.0, band / 6))
             white = (lum > 200) & (chroma < 25)  # collar / teeth-white cloth is never skin
             soft = soft[gy0:gy1, gx0:gx1] * keep[gy0:gy1, gx0:gx1] * (sub[..., 3] > 128) * ~hair[gy0:gy1, gx0:gx1] * ~white
+            # Only the lip itself. A geometric band under the moustache paints a flat beige strip
+            # over shaded skin and reads as a second jaw layer.
+            red = sub[..., 0] - sub[..., 1]
+            known_px = known > 0.5
+            if known_px.any():
+                skin_red = float(np.median(red[known_px]))
+                soft = soft * (red > skin_red + 18)
             k = soft[..., None]
             sub[..., :3] = sub[..., :3] * (1 - k) + fill * k
             arr[gy0:gy1, gx0:gx1, :3] = np.clip(sub[..., :3], 0, 255).astype(np.uint8)

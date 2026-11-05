@@ -300,8 +300,19 @@ def _write_wav(path: Path, pcm: np.ndarray) -> None:
         handle.writeframes(pcm.astype(np.int16).tobytes())
 
 
-def monologue(skin: Path, *, viseme: str | None = None, name: str = "Nia") -> tuple[scene.Scene, np.ndarray]:
-    """About ten seconds. Four moods. ``viseme`` holds one mouth; otherwise the envelope talks."""
+def monologue(
+    skin: Path,
+    *,
+    viseme: str | None = None,
+    name: str = "Nia",
+    scenario: str = "studio",
+) -> tuple[scene.Scene, np.ndarray]:
+    """About ten seconds. Four moods. ``viseme`` holds one mouth; otherwise the envelope talks.
+
+    The bust is lit with the scenario's rim and bounce and stands on ``look.plates``.
+    ``scenario`` is the request's set, or ``studio`` when the request does not name one.
+    """
+    scenario = scenario if scenario in scene.SCENARIOS else "studio"
     lines = []
     parts: list[np.ndarray] = []
     cursor = 0.0
@@ -326,13 +337,13 @@ def monologue(skin: Path, *, viseme: str | None = None, name: str = "Nia") -> tu
         parts.append(np.zeros(int((duration - cursor) * render.SAMPLE_RATE), np.int16))
     track = np.concatenate(parts) if parts else np.zeros(1, np.int16)
     views = {}
-    for name in ("front", "left", "right"):
-        data = rig.load_view(skin, name)
-        views[name] = scene.load_rig_view(
-            data, scene.fit_scale(data["canvas"]["h"], "solo", 0), scene.light("studio", "solo", 0),
+    for view_name in ("front", "left", "right"):
+        data = rig.load_view(skin, view_name)
+        views[view_name] = scene.load_rig_view(
+            data, scene.fit_scale(data["canvas"]["h"], "solo", 0), scene.light(scenario, "solo", 0),
         )
     built = scene.Scene(
-        template="solo", scenario="studio", rigs=[views], script=lines,
+        template="solo", scenario=scenario, rigs=[views], script=lines,
         envelope=render.envelope(track), env_fps=render.ENV_FPS, duration_s=duration,
         disclaimer="Parody", names=[name], roles=["A short monologue"], lang="en-US",
         fmt="16:9", style="cartoon", topic="a change of mind",
@@ -340,10 +351,17 @@ def monologue(skin: Path, *, viseme: str | None = None, name: str = "Nia") -> tu
     return built, track
 
 
-def render_monologue(skin: Path, dest: Path, *, fps: int = 24, name: str = "Nia") -> Path:
+def render_monologue(
+    skin: Path,
+    dest: Path,
+    *,
+    fps: int = 24,
+    name: str = "Nia",
+    scenario: str = "studio",
+) -> Path:
     """Write the voiced monologue. Audio is the syllable envelope, not a paid voice."""
     clear_paid_keys()
-    built, track = monologue(skin, name=name)
+    built, track = monologue(skin, name=name, scenario=scenario)
     dest.parent.mkdir(parents=True, exist_ok=True)
     wav = dest.with_suffix(".wav")
     _write_wav(wav, track)

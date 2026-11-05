@@ -14,7 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-from . import brow_draw, eyes, rig, styles
+from . import brow_draw, dock, eyes, rig, styles
 
 _FONT_DIR = Path(__file__).resolve().parents[2] / "Fonts" / "Montserrat" / "static"
 PHONEMES = {
@@ -94,6 +94,22 @@ def compose(
     else:
         mouth = (view.get("expressions") or {}).get(expression or "") or view["visemes"].get(vis) or view["visemes"]["X"]
     parts = sorted(view["layers"], key=lambda l: l["z"]) + [mouth]
+    seated: dict[int, tuple[Image.Image, tuple[int, int]]] = {}
+    stack: list[tuple[str, Image.Image, tuple[int, int], int]] = []
+    stack_layers = []
+    for layer in parts:
+        layer_name = layer["name"]
+        if layer_name not in dock.STAGE_LAYERS and layer_name != "mustache" and not dock.is_mouth(layer_name):
+            continue
+        with Image.open(layer["url"]) as opened:
+            sprite = opened.convert("RGBA")
+        stored = (int(layer.get("w") or sprite.width), int(layer.get("h") or sprite.height))
+        if sprite.size != stored:
+            sprite = sprite.resize(stored, Image.Resampling.LANCZOS)
+        stack_layers.append(layer)
+        stack.append((layer_name, sprite, (int(layer["x"]), int(layer["y"])), int(layer.get("z") or 0)))
+    for layer, seated_part in zip(stack_layers, dock.seat_parts(stack)):
+        seated[id(layer)] = (seated_part[1], seated_part[2])
     for l in sorted(parts, key=lambda l: l["z"]):
         name = l["name"]
         if name == "eye_socket" or (movable and name == "eyes"):
@@ -102,13 +118,17 @@ def compose(
             continue
         if (name == "eyes" and lids == "closed") or (name == "eyes_closed" and lids != "closed") or (name == "eyes_half" and lids != "half"):
             continue
-        with Image.open(l["url"]) as im:
-            img = im.convert("RGBA")
-        xy = (l["x"], l["y"])
-        stored = (int(l.get("w") or img.width), int(l.get("h") or img.height))
-        if img.size != stored:
-            # The viseme file must not bring its own scale. The rig box is shared.
-            img = img.resize(stored, Image.Resampling.LANCZOS)
+        hit = seated.get(id(l))
+        if hit is not None and name not in {"brow_left", "brow_right", "brows", "iris"}:
+            img, xy = hit
+        else:
+            with Image.open(l["url"]) as im:
+                img = im.convert("RGBA")
+            xy = (l["x"], l["y"])
+            stored = (int(l.get("w") or img.width), int(l.get("h") or img.height))
+            if img.size != stored:
+                # The viseme file must not bring its own scale. The rig box is shared.
+                img = img.resize(stored, Image.Resampling.LANCZOS)
         if name in {"brow_left", "brow_right", "brows"}:
             side_name = "left" if name == "brow_left" else "right"
             drawn = vector_brows.get(side_name) if vector_brows and name != "brows" else None

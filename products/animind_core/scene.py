@@ -21,7 +21,7 @@ from typing import Any, Iterator
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from . import eyes, frameqa, languages, look, styles, titles
+from . import dock, eyes, frameqa, languages, look, styles, titles
 from .look import Light, Shot
 
 W, H, FPS = look.W, look.H, 24
@@ -282,6 +282,8 @@ def load_rig_view(view: dict[str, Any], scale: float, light: Light | None = None
     def sized(layer: dict[str, Any], rim: bool) -> tuple[Image.Image, tuple[int, int]]:
         with Image.open(layer["url"]) as im:
             img = im.convert("RGBA")
+        if layer["name"] in dock.STAGE_LAYERS:
+            img = dock.key_backdrop(img)
         w, h = max(1, round(layer["w"] * scale)), max(1, round(layer["h"] * scale))
         img, xy = img.resize((w, h), Image.LANCZOS), (round(layer["x"] * scale), round(layer["y"] * scale))
         return (look.lit_layer(img, xy, size, light, rim) if light else img), xy
@@ -831,6 +833,7 @@ class Scene:
             fading = mouth[0].copy()  # only valid when all visemes share one alpha shape; off by default
             fading.putalpha(fading.getchannel("A").point(lambda a: int(a * wv)))
             parts = list(rv.layers) + [("mouth", before[0], before[1], before[2]), ("mouth", fading, mouth[1], mouth[2] + 0.001)]
+        parts = dock.seat_parts(parts)
         mouths = [p for p in parts if p[0] == "mouth"]
         mouth_drop = 0
         if mouths and cur_v not in "XA":
