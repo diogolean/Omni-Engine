@@ -89,6 +89,20 @@ def test_frontalize_sprite_keeps_both_cheeks():
     assert origin <= 0
 
 
+def test_control_points_stretch_the_narrow_eye():
+    boxes = {
+        "face": [100, 0, 500, 400],
+        "left_eye": [180, 80, 250, 140],
+        "right_eye": [340, 90, 380, 130],
+        "mouth": [250, 200, 330, 250],
+    }
+    src, dst = front_plate.control_points(boxes, 640, 12)
+    far = float(np.interp(380, src, dst) - np.interp(340, src, dst))
+    near = float(np.interp(250, src, dst) - np.interp(180, src, dst))
+    assert far > 50
+    assert abs(near - 70) < 8
+
+
 def test_cached_three_quarter_front_becomes_a_camera_front(tmp_path, monkeypatch):
     _offline(monkeypatch, tmp_path)
     plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
@@ -130,6 +144,9 @@ def test_cached_three_quarter_front_becomes_a_camera_front(tmp_path, monkeypatch
     # The front is the left view seen by a frontal camera. Both cheeks survive.
     # A near-half mirror would have painted the red cheek blue.
     assert _colors(image) == {(20, 40, 220), (220, 30, 40)}
+    eyes = json.loads((skin / "rig_front.json").read_text(encoding="utf-8"))["boxes"]
+    gap = int(eyes["right_eye"][0]) - int(eyes["left_eye"][2])
+    assert gap >= 8, eyes
     anchor = view["mouthQA"]["anchor"]
     assert anchor["view"] == "front"
     width = max(1, int(view["mouthQA"]["face"][2]) - int(view["mouthQA"]["face"][0]))

@@ -34,8 +34,12 @@ def _centre(box: list[int] | tuple[int, ...]) -> float:
 
 def _axis(boxes: dict[str, list[int]]) -> float:
     """Feature midline: halfway between the eye midpoint and the mouth."""
-    eyes = (_centre(boxes["left_eye"]) + _centre(boxes["right_eye"])) / 2
-    return (eyes + _centre(boxes["mouth"])) / 2
+    return (_eye_axis(boxes) + _centre(boxes["mouth"])) / 2
+
+
+def _eye_axis(boxes: dict[str, list[int]]) -> float:
+    """Camera yaw is the eyes. A left-view mouth anchor is not a turned head."""
+    return (_centre(boxes["left_eye"]) + _centre(boxes["right_eye"])) / 2
 
 
 def _symmetry(boxes: dict[str, Any] | None) -> dict[str, Any]:
@@ -71,7 +75,7 @@ def control_points(
     eye's width. Canvas edges stay put, so the plate is not slid off the frame.
     """
     typed = {key: [int(v) for v in boxes[key]] for key in _BOXES}
-    axis = int(round(_axis(typed)))
+    axis = int(round(_eye_axis(typed)))
     face_cx = _centre(typed["face"])
     keep_left = axis <= face_cx
     dest = _centered_features(typed, axis, shift, keep_left=keep_left)
@@ -330,10 +334,18 @@ def install_true_front(skin: Path) -> dict[str, Any]:
     if ref_name != "front" and ref_w not in (0, canvas_w):
         ref_name, ref_dir, ref_view, ref_boxes = "front", folder, view, boxes
     typed = {key: [int(v) for v in ref_boxes[key]] for key in _BOXES}
-    axis = int(round(_axis(typed)))
+    axis = int(round(_eye_axis(typed)))
     face_cx = _centre(typed["face"])
     keep_left = axis <= face_cx
     shift = int(round(face_cx - axis))
+    from .rig import frontality  # noqa: PLC0415
+
+    pose = frontality({key: tuple(typed[key]) for key in _BOXES})
+    # Equal, centred eyes are already the frontal camera. Resampling them
+    # from the left mouth anchor pinches both eyes into one socket.
+    straight = bool(pose["eyesOffset"] <= 0.04 and pose["eyeRatio"] >= 0.8)
+    if straight:
+        shift = 0
     src_x, dst_x = control_points(typed, canvas_w, shift)
     ref_layers = {
         layer["name"]: layer
@@ -351,13 +363,14 @@ def install_true_front(skin: Path) -> dict[str, Any]:
             path = folder / str(layer.get("url") or "")
         if not path.is_file():
             continue
-        warped, origin_x, origin_y = frontalize_sprite(
-            Image.open(path).convert("RGBA"),
-            int(source.get("x") or 0),
-            int(source.get("y") or 0),
-            src_x,
-            dst_x,
-        )
+        image = Image.open(path).convert("RGBA")
+        if straight:
+            origin_x, origin_y = int(source.get("x") or 0), int(source.get("y") or 0)
+            warped = image
+        else:
+            warped, origin_x, origin_y = frontalize_sprite(
+                image, int(source.get("x") or 0), int(source.get("y") or 0), src_x, dst_x,
+            )
         loaded.append((layer, warped, origin_x, origin_y))
     if not loaded:
         return {"installed": False, "reason": "no layers", "before": before.get("value")}
