@@ -118,6 +118,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Debate ending, or longform as a compatibility alias for --long-format",
     )
     parser.add_argument(
+        "--style",
+        choices=("cornered", "light"),
+        default=None,
+        help=(
+            "Prompt preset. cornered (the default) is the interrogation. "
+            "light is an open philosophical exchange with no cross-examination "
+            "and no provocation. Independent of --mode and of duration."
+        ),
+    )
+    parser.add_argument(
+        "--cornered-max-duration",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "Spoken cap for cornered mode, in seconds. Overrides "
+            "debate.cornered_max_duration_s from the config (75 when unset). "
+            "The debate stops after a finished turn once real TTS audio reaches "
+            "this. Speech is not cut with ffmpeg -t."
+        ),
+    )
+    parser.add_argument(
         "--long-format",
         action="store_true",
         help="Render an isolated 16:9 dual-presence YouTube episode.",
@@ -300,11 +321,31 @@ def _print_model_table(settings) -> None:
     print("\nAny name absent from the table is passed through as a full slug.\n")
 
 
+def _apply_debate_flags(settings, args):
+    """Apply ``--style`` and ``--cornered-max-duration`` without mixing them.
+
+    An omitted flag leaves the config value in place. Duration never rewrites
+    the prompt preset, and the preset never rewrites the spoken window.
+    """
+    update: dict[str, object] = {}
+    style = getattr(args, "style", None)
+    if style:
+        update["style"] = style
+    max_duration = getattr(args, "cornered_max_duration", None)
+    if max_duration is not None:
+        update["cornered_max_duration_s"] = float(max_duration)
+    if not update:
+        return settings
+    return settings.model_copy(update={"debate": settings.debate.model_copy(update=update)})
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns a shell exit code."""
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(raw_argv)
+    if args.cornered_max_duration is not None and not 0 < args.cornered_max_duration <= 600:
+        parser.error("--cornered-max-duration must be greater than 0 and at most 600 seconds")
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -316,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
         print("registered LLM providers:", ", ".join(available_providers()))
         return 0
 
-    settings = load_settings(args.config)
+    settings = _apply_debate_flags(load_settings(args.config), args)
 
     # Seat overrides are applied before --list-models so the table doubles as a
     # dry-run: `--list-models -o deepseek-r1` shows exactly what a live run would
