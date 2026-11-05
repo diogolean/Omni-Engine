@@ -66,8 +66,19 @@ def repo_root() -> Path:
 
 
 def repo_outputs_fallback() -> Path:
-    """Local ``<repo>/outputs`` — last-resort only when factory env is unset."""
+    """Local ``<repo>/outputs``. Not the default: that directory is inside the git tree."""
     return _FACTORY_ROOT / "outputs"
+
+
+def user_outputs_fallback() -> Path:
+    """Outputs root outside the repository when ``OUTPUT_PATH`` is unset.
+
+    ``~/.cache/omni-engine/outputs`` (or ``$XDG_CACHE_HOME/omni-engine/outputs``).
+    The animind core's own media stays under ``ANIMIND_DATA_DIR``.
+    """
+    root = (os.getenv("XDG_CACHE_HOME") or "").strip()
+    base = Path(root).expanduser() if root else Path.home() / ".cache"
+    return base / "omni-engine" / "outputs"
 
 
 def _env_path(*names: str) -> Path | None:
@@ -85,19 +96,18 @@ def _env_path(*names: str) -> Path | None:
 def outputs_root() -> Path:
     """Factory outputs root: ``OUTPUT_PATH`` or ``OUTPUTS_DIR``.
 
-    Falls back to ``<repo>/outputs`` only when neither key is set in the
-    process environment or the factory ``.env``. That fallback is a last
-    resort for tests — production runs must set ``OUTPUT_PATH``.
+    When neither key is set, the root is a user cache directory, not
+    ``<repo>/outputs``. Shared ledgers used by the animind core must not
+    create a tree inside the git checkout.
     """
     global _warned_local_fallback
     resolved = _env_path("OUTPUT_PATH", "OUTPUTS_DIR")
     if resolved is not None:
         return resolved
-    fallback = repo_outputs_fallback()
+    fallback = user_outputs_fallback()
     if not _warned_local_fallback:
         _LOG.warning(
-            "OUTPUT_PATH/OUTPUTS_DIR unset; falling back to %s. "
-            "Set OUTPUT_PATH in the factory .env so no channel writes to the repo tree.",
+            "OUTPUT_PATH/OUTPUTS_DIR unset; writing to %s (outside the repository).",
             fallback,
         )
         _warned_local_fallback = True

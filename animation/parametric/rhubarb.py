@@ -166,6 +166,7 @@ def analyze_visemes(
     *,
     dialog_text: str = "",
     allow_download: bool = True,
+    recognizer: str = "phonetic",
 ) -> list[tuple[float, str]] | None:
     """Run Rhubarb over ``audio_path``.
 
@@ -173,6 +174,8 @@ def analyze_visemes(
     Rhubarb is unavailable or failed — callers should then use
     :func:`visemes_from_envelope`.
     """
+    if recognizer not in {"phonetic", "pocketSphinx"}:
+        raise ValueError("recognizer must be phonetic or pocketSphinx")
     binary = ensure_rhubarb(allow_download=allow_download)
     if binary is None:
         return None
@@ -235,7 +238,7 @@ def analyze_visemes(
     cmd = [
         str(binary),
         "-f", "json",
-        "-r", "phonetic",
+        "-r", recognizer,
         "--extendedShapes", "GHX",
         "--consoleLevel", "Error",
         str(analysis_path),
@@ -297,7 +300,8 @@ def analyze_visemes(
         return None
 
     _LOG.info(
-        "Rhubarb phonetic schedule for %s (%d cues, shapes=%s): %s",
+        "Rhubarb %s schedule for %s (%d cues, shapes=%s): %s",
+        recognizer,
         audio_path.name,
         len(cues),
         "".join(sorted({shape for _, shape in cues})),

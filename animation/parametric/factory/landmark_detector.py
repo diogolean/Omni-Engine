@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import importlib.util
+import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +50,14 @@ class FacialLandmarks:
     backend: str
     facial_plate_bbox: tuple[float, float, float, float] | None = None
     forehead_plate_bbox: tuple[float, float, float, float] | None = None
+    # Pixel polylines from FaceLandmarker. Empty on the robotic fallback.
+    left_upper: tuple[tuple[int, int], ...] = ()
+    left_lower: tuple[tuple[int, int], ...] = ()
+    right_upper: tuple[tuple[int, int], ...] = ()
+    right_lower: tuple[tuple[int, int], ...] = ()
+    left_brow: tuple[tuple[int, int], ...] = ()
+    right_brow: tuple[tuple[int, int], ...] = ()
+    lip_ring: tuple[tuple[int, int], ...] = ()
 
     def pixel_point(self, point: Point3D) -> tuple[int, int]:
         x0, y0, x1, y1 = self.head_bbox
@@ -60,6 +71,36 @@ class FacialLandmarks:
 
 
 ImageInput = Image.Image | np.ndarray | str | Path
+
+# MediaPipe Tasks model. Cached outside the repo so it is never committed.
+_FACE_LANDMARKER_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/1/face_landmarker.task"
+)
+
+
+class RoboticLandmarkRefused(RuntimeError):
+    """A person or stick figure must not be rigged on the mecha fallback."""
+
+
+def face_landmarker_model_path() -> Path:
+    """Where the FaceLandmarker ``.task`` file lives. Never inside the git tree."""
+    override = (os.getenv("MEDIAPIPE_FACE_LANDMARKER_TASK") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".cache" / "animind" / "face_landmarker.task"
+
+
+def ensure_face_landmarker_model() -> Path:
+    """Download the Tasks model once. Setup and the first rig share this cache."""
+    path = face_landmarker_model_path()
+    if path.is_file() and path.stat().st_size > 100_000:
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".task.part")
+    urllib.request.urlretrieve(_FACE_LANDMARKER_URL, tmp)  # noqa: S310 — pinned Google model URL
+    tmp.replace(path)
+    return path
 
 
 def _as_rgba(image: ImageInput) -> np.ndarray:
@@ -103,6 +144,136 @@ def _uv(
         float(np.clip((x - x0) / width, 0.0, 1.0)),
         float(np.clip((y - y0) / height, 0.0, 1.0)),
         float(z / width),
+    )
+
+
+def _mesh_landmarks(
+    points: list[Any],
+    origin: tuple[int, int],
+    crop_size: tuple[int, int],
+    bbox: tuple[int, int, int, int],
+    *,
+    backend: str,
+    confidence: float,
+) -> FacialLandmarks | None:
+    """Map Face Mesh / FaceLandmarker points (normalised to the crop) onto the plate."""
+    if len(points) < 468:
+        return None
+    x0, y0 = origin
+    width, height = crop_size
+
+    def mean_point(indices: tuple[int, ...]) -> tuple[float, float, float]:
+        selected = [points[index] for index in indices if index < len(points)]
+        return (
+            x0 + float(np.mean([point.x for point in selected])) * width,
+            y0 + float(np.mean([point.y for point in selected])) * height,
+            float(np.mean([getattr(point, "z", 0.0) for point in selected])) * width,
+        )
+
+    left_indices = (468, 469, 470, 471, 472) if len(points) > 477 else (33, 133, 159, 145)
+    right_indices = (473, 474, 475, 476, 477) if len(points) > 477 else (362, 263, 386, 374)
+    eye_pixels = [mean_point(left_indices), mean_point(right_indices)]
+    eye_pixels.sort(key=lambda point: point[0])
+
+    def iris_radius(indices: tuple[int, ...], center: tuple[float, float, float]) -> float:
+        ring = [points[index] for index in indices[1:] if index < len(points)]
+        if not ring:
+            return 0.035
+        distances = [
+            np.hypot((point.x * width + x0) - center[0], (point.y * height + y0) - center[1])
+            for point in ring
+        ]
+        return float(np.clip(np.mean(distances) / max(1, width), 0.01, 0.12))
+
+    mouth_left = mean_point((61,))
+    mouth_right = mean_point((291,))
+    mouth_top = mean_point((13,))
+    mouth_bottom = mean_point((14,))
+    mouth_center_px = (
+        (mouth_top[0] + mouth_bottom[0]) / 2.0,
+        (mouth_top[1] + mouth_bottom[1]) / 2.0,
+        (mouth_top[2] + mouth_bottom[2]) / 2.0,
+    )
+    jaw_indices = (234, 93, 132, 58, 172, 136, 150, 176, 152, 400, 379, 365, 397, 288, 361, 323, 454)
+    jawline = tuple(
+        _uv(x0 + points[index].x * width, y0 + points[index].y * height, getattr(points[index], "z", 0.0) * width, bbox)
+        for index in jaw_indices
+        if index < len(points)
+    )
+    chin_px = mean_point((152,))
+    _bx0, by0, _bx1, by1 = bbox
+    neck_px = (chin_px[0], min(float(by1), chin_px[1] + height * 0.075), chin_px[2])
+
+    def chain(indices: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
+        return tuple(
+            (int(round(x0 + points[index].x * width)), int(round(y0 + points[index].y * height)))
+            for index in indices
+            if index < len(points)
+        )
+
+    return FacialLandmarks(
+        left_eye=EyeLandmark(_uv(*eye_pixels[0], bbox), iris_radius(left_indices, eye_pixels[0])),
+        right_eye=EyeLandmark(_uv(*eye_pixels[1], bbox), iris_radius(right_indices, eye_pixels[1])),
+        mouth_center=_uv(*mouth_center_px, bbox),
+        mouth_width=float(np.clip(abs(mouth_right[0] - mouth_left[0]) / max(1, width), 0.08, 0.7)),
+        jawline=jawline,
+        chin_base=_uv(*chin_px, bbox),
+        neck_pivot=_uv(*neck_px, bbox),
+        head_bbox=bbox,
+        confidence=confidence,
+        backend=backend,
+        left_upper=chain((33, 246, 161, 160, 159, 158, 157, 173, 133)),
+        left_lower=chain((33, 7, 163, 144, 145, 153, 154, 155, 133)),
+        right_upper=chain((263, 466, 388, 387, 386, 385, 384, 398, 362)),
+        right_lower=chain((263, 249, 390, 373, 374, 380, 381, 382, 362)),
+        left_brow=chain((70, 63, 105, 66, 107)),
+        right_brow=chain((300, 293, 334, 296, 336)),
+        lip_ring=chain((61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146)),
+    )
+
+
+def _mediapipe_tasks(
+    rgba: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> FacialLandmarks | None:
+    """MediaPipe Tasks FaceLandmarker. The current wheel has no ``solutions`` API."""
+    try:
+        import mediapipe as mp  # noqa: PLC0415
+        from mediapipe.tasks.python import vision  # noqa: PLC0415
+        from mediapipe.tasks.python.core import base_options as base_options_lib  # noqa: PLC0415
+    except ImportError:
+        return None
+    if not hasattr(vision, "FaceLandmarker"):
+        return None
+    try:
+        model = ensure_face_landmarker_model()
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError):
+        return None
+    x0, y0, x1, y1 = bbox
+    crop = np.ascontiguousarray(rgba[y0:y1, x0:x1, :3])
+    height, width = crop.shape[:2]
+    options = vision.FaceLandmarkerOptions(
+        base_options=base_options_lib.BaseOptions(model_asset_path=str(model)),
+        running_mode=vision.RunningMode.IMAGE,
+        num_faces=1,
+        min_face_detection_confidence=0.5,
+    )
+    try:
+        landmarker = vision.FaceLandmarker.create_from_options(options)
+        try:
+            detected = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=crop))
+        finally:
+            close = getattr(landmarker, "close", None)
+            if callable(close):
+                close()
+    except (RuntimeError, ValueError, OSError):
+        return None
+    faces = getattr(detected, "face_landmarks", None) or []
+    if not faces:
+        return None
+    return _mesh_landmarks(
+        list(faces[0]), (x0, y0), (width, height), bbox,
+        backend="mediapipe_tasks", confidence=0.95,
     )
 
 
@@ -150,81 +321,13 @@ def _mediapipe_face_mesh(
         return None
     if not result.multi_face_landmarks:
         return None
-
-    points = result.multi_face_landmarks[0].landmark
-
-    def mean_point(indices: tuple[int, ...]) -> tuple[float, float, float]:
-        selected = [points[index] for index in indices if index < len(points)]
-        return (
-            x0 + float(np.mean([point.x for point in selected])) * width,
-            y0 + float(np.mean([point.y for point in selected])) * height,
-            float(np.mean([point.z for point in selected])) * width,
-        )
-
-    # Iris landmarks exist only when refine_landmarks=True. Eye-ring indices
-    # keep the path compatible with older Face Mesh model files.
-    left_indices = (468, 469, 470, 471, 472) if len(points) > 477 else (33, 133, 159, 145)
-    right_indices = (473, 474, 475, 476, 477) if len(points) > 477 else (362, 263, 386, 374)
-    eye_pixels = [mean_point(left_indices), mean_point(right_indices)]
-    eye_pixels.sort(key=lambda point: point[0])
-
-    def iris_radius(indices: tuple[int, ...], center: tuple[float, float, float]) -> float:
-        ring = [points[index] for index in indices[1:] if index < len(points)]
-        if not ring:
-            return 0.035
-        distances = [
-            np.hypot(
-                (point.x * width + x0) - center[0],
-                (point.y * height + y0) - center[1],
-            )
-            for point in ring
-        ]
-        return float(np.clip(np.mean(distances) / max(1, width), 0.01, 0.12))
-
-    mouth_left = mean_point((61,))
-    mouth_right = mean_point((291,))
-    mouth_top = mean_point((13,))
-    mouth_bottom = mean_point((14,))
-    mouth_center_px = (
-        (mouth_top[0] + mouth_bottom[0]) / 2.0,
-        (mouth_top[1] + mouth_bottom[1]) / 2.0,
-        (mouth_top[2] + mouth_bottom[2]) / 2.0,
-    )
-    jaw_indices = (234, 93, 132, 58, 172, 136, 150, 176, 152, 400, 379, 365, 397, 288, 361, 323, 454)
-    jawline = tuple(
-        _uv(
-            x0 + points[index].x * width,
-            y0 + points[index].y * height,
-            points[index].z * width,
-            bbox,
-        )
-        for index in jaw_indices
-    )
-    chin_px = mean_point((152,))
-    neck_px = (
-        chin_px[0],
-        min(float(y1), chin_px[1] + height * 0.075),
-        chin_px[2],
-    )
-    return FacialLandmarks(
-        left_eye=EyeLandmark(
-            _uv(*eye_pixels[0], bbox),
-            iris_radius(left_indices, eye_pixels[0]),
-        ),
-        right_eye=EyeLandmark(
-            _uv(*eye_pixels[1], bbox),
-            iris_radius(right_indices, eye_pixels[1]),
-        ),
-        mouth_center=_uv(*mouth_center_px, bbox),
-        mouth_width=float(
-            np.clip(abs(mouth_right[0] - mouth_left[0]) / max(1, width), 0.08, 0.7)
-        ),
-        jawline=jawline,
-        chin_base=_uv(*chin_px, bbox),
-        neck_pivot=_uv(*neck_px, bbox),
-        head_bbox=bbox,
-        confidence=0.95,
+    return _mesh_landmarks(
+        list(result.multi_face_landmarks[0].landmark),
+        (x0, y0),
+        (width, height),
+        bbox,
         backend="mediapipe_face_mesh",
+        confidence=0.95,
     )
 
 
@@ -521,13 +624,24 @@ def _opencv_robot_fallback(
     )
 
 
-def detect_landmarks(image: ImageInput) -> FacialLandmarks:
-    """Detect face geometry and return coordinates normalized to head bounds."""
+def detect_landmarks(image: ImageInput, *, require_human_face: bool = False) -> FacialLandmarks:
+    """Detect face geometry and return coordinates normalized to head bounds.
+
+    Tasks FaceLandmarker runs first. Legacy ``solutions.face_mesh`` is the
+    fallback when that wheel still ships it. The robotic OpenCV guess is only
+    for mecha plates: a person or stick figure refuses it.
+    """
     rgba = _as_rgba(image)
     bbox = _content_bbox(rgba)
-    detected = _mediapipe_face_mesh(rgba, bbox)
-    if detected is not None and detected.confidence >= 0.5:
-        return detected
+    for finder in (_mediapipe_tasks, _mediapipe_face_mesh):
+        detected = finder(rgba, bbox)
+        if detected is not None and detected.confidence >= 0.5:
+            return detected
+    if require_human_face:
+        raise RoboticLandmarkRefused(
+            "refusing to rig a human or stick character on the robotic landmark "
+            "fallback (opencv_robotic_fallback); MediaPipe FaceLandmarker did not find a face"
+        )
     return _opencv_robot_fallback(rgba, bbox)
 
 
@@ -535,5 +649,8 @@ __all__ = [
     "EyeLandmark",
     "FacialLandmarks",
     "Point3D",
+    "RoboticLandmarkRefused",
     "detect_landmarks",
+    "ensure_face_landmarker_model",
+    "face_landmarker_model_path",
 ]

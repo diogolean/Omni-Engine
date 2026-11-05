@@ -575,6 +575,7 @@ def create_puppet(
     puppets_dir: Path | None = None,
     rerig: bool = False,
     regenerate: bool = False,
+    require_human_face: bool = False,
 ) -> dict[str, Any]:
     """Acquire, isolate, and rig a character, returning run metadata."""
     root = Path(puppets_dir) if puppets_dir else assets_root() / "puppets"
@@ -666,6 +667,7 @@ def create_puppet(
         character_id,
         facing=facing,
         component_mode=component_mode,
+        require_human_face=require_human_face,
     )
     rigging_seconds = time.perf_counter() - rig_started
 

@@ -637,6 +637,7 @@ def auto_rig_character(
     *,
     facing: str = "right",
     component_mode: bool = False,
+    require_human_face: bool = False,
 ) -> Path:
     """Create a V3 rig unless an artist-owned manifest already exists."""
     skin_dir = Path(skin_dir)
@@ -650,7 +651,7 @@ def auto_rig_character(
         canvas_size = character.size
         if source_path.name == "character.png":
             _save_layer(character, source_path)
-        landmarks = detect_landmarks(character)
+        landmarks = detect_landmarks(character, require_human_face=require_human_face)
         palette = extract_palette(character)
     palette = palette_overrides(character_id, palette)
 

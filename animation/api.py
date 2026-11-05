@@ -1,8 +1,10 @@
 """Public facade over the parametric engine.
 
-``render_dynamic_animation`` keeps today's signature. A product may register
-a scene resolver; this module does not know arena filenames. The picture is
-always an ffmpeg pipe (see :class:`animation.parametric.renderer.AnimationRenderer`).
+``render_dynamic_animation`` keeps today's signature. ``render_scene`` is the
+declarative entry: a JSON or YAML spec plus an audio file. A product may
+register a scene resolver; this module does not know arena filenames. The
+picture is always an ffmpeg pipe
+(see :class:`animation.parametric.renderer.AnimationRenderer`).
 """
 from __future__ import annotations
 
@@ -18,6 +20,8 @@ from animation.parametric.compositor import (
 )
 from animation.parametric.puppet import PuppetRig, PuppetSkin
 from animation.parametric.renderer import AnimationRenderer, RenderStats
+from animation.parametric.scene_render import render_scene
+from animation.parametric.scene_spec import SceneSpec, load_scene
 from animation.parametric.subtitles import build_ass
 
 _LOG = logging.getLogger("animator")
@@ -141,6 +145,9 @@ def render_dynamic_animation(
 
 
 __all__ = [
+    "SceneSpec",
+    "load_scene",
     "register_scene_resolver",
     "render_dynamic_animation",
+    "render_scene",
 ]
