@@ -5,7 +5,10 @@ centerline from outer tip to inner tip, the thickness at each sample, and
 one ink colour. ``STATES`` bends that stroke. Positive lift and inner drop
 move the brow down. Evil drops the inner tips, so the pair reads as a V.
 Sad lifts them, so the pair reads as an inverse V. Happy lifts the
-middle and leaves the tips level, so the pair reads as an arch.
+middle and leaves the tips level, so the pair reads as an arch. A rest
+whose inner tip already sits above the outer tip is releveled onto that
+arch before it is drawn: the ends stay level and the bow in the middle
+stays. The sad pose still lifts the inner tips.
 
 Stick redraws one flat ink width. Illustrated keeps the measured colour,
 thickness, and tapered tips. Both are drawn at 4x and scaled down, the same
@@ -452,6 +455,218 @@ def classify(left: Image.Image | None, right: Image.Image | None = None) -> str:
     if all(delta < -1.5 for delta in deltas):
         return "inverse"
     return "other"
+
+
+def orient_stroke(stroke: Stroke) -> Stroke:
+    """Level a rest whose inner tip sits above the outer tip.
+
+    The Aiwake arch keeps the ends level and the middle high. Deviation
+    from the tip-to-tip chord stays, so a bow remains a bow. A straight
+    inverse slope becomes flat. A stroke that is already level is unchanged.
+    """
+    points = stroke.points
+    if len(points) < 2:
+        return stroke
+    outer_y = float(points[0][1])
+    inner_y = float(points[-1][1])
+    if inner_y >= outer_y - 1.5:
+        return stroke
+    last = max(1, len(points) - 1)
+    leveled: list[tuple[float, float]] = []
+    for index, (x, y) in enumerate(points):
+        chord = outer_y + (inner_y - outer_y) * (index / last)
+        leveled.append((float(x), outer_y + (float(y) - chord)))
+    return Stroke(tuple(leveled), stroke.thickness, stroke.color)
+
+
+def orient_model(model: dict) -> dict:
+    """Relevel every rest stroke. Emotion poses are applied later."""
+    strokes = {}
+    for side, raw in (model.get("strokes") or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        strokes[side] = orient_stroke(Stroke.from_dict(raw)).to_dict()
+    return {**model, "strokes": strokes}
+
+
+def _flip_stroke(stroke: Stroke) -> Stroke:
+    return Stroke(tuple(reversed(stroke.points)), tuple(reversed(stroke.thickness)), stroke.color)
+
+
+def _rest_kind(model: dict) -> str:
+    drawn = render_state(model, "neutral", 1.0)
+    left = drawn["left"][0] if "left" in drawn else None
+    right = drawn["right"][0] if "right" in drawn else None
+    return classify(left, right)
+
+
+def _layer_map(view: dict) -> dict[str, dict]:
+    return {
+        str(layer.get("name")): layer
+        for layer in (view.get("layers") or [])
+        if isinstance(layer, dict) and layer.get("name")
+    }
+
+
+def _local_stroke(stroke: Stroke, layer: dict) -> bool:
+    """True when the points live in the sprite, not on the view canvas."""
+    ox, oy = int(layer.get("x") or 0), int(layer.get("y") or 0)
+    if ox == 0 and oy == 0:
+        return False
+    width, height = int(layer.get("w") or 0), int(layer.get("h") or 0)
+    if width < 2 or height < 2 or not stroke.points:
+        return False
+    return all(0 <= x <= width + 2 and 0 <= y <= height + 2 for x, y in stroke.points)
+
+
+def _to_canvas(model: dict, layers: dict[str, dict]) -> dict:
+    strokes = {}
+    for side, raw in (model.get("strokes") or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        stroke = Stroke.from_dict(raw)
+        layer = layers.get(f"brow_{side}") or {}
+        if _local_stroke(stroke, layer):
+            ox, oy = int(layer.get("x") or 0), int(layer.get("y") or 0)
+            stroke = Stroke(
+                tuple((x + ox, y + oy) for x, y in stroke.points),
+                stroke.thickness,
+                stroke.color,
+            )
+        strokes[side] = stroke.to_dict()
+    return {**model, "strokes": strokes}
+
+
+def _stroke_from_layer(folder, layer: dict, side: str) -> Stroke | None:
+    path = folder / str(layer.get("url") or "")
+    if not path.is_file():
+        return None
+    image = Image.open(path).convert("RGBA")
+    mask = np.asarray(image.getchannel("A")) > 32
+    if int(mask.sum()) < 6:
+        return None
+    stroke = measure(mask, np.asarray(image.convert("RGB")), side)
+    if stroke is None:
+        return None
+    ox, oy = int(layer.get("x") or 0), int(layer.get("y") or 0)
+    return Stroke(tuple((x + ox, y + oy) for x, y in stroke.points), stroke.thickness, stroke.color)
+
+
+def _model_from_layers(folder, view: dict) -> dict | None:
+    layers = _layer_map(view)
+    strokes = {}
+    for side in ("left", "right"):
+        layer = layers.get(f"brow_{side}")
+        if layer is None:
+            continue
+        stroke = _stroke_from_layer(folder, layer, side)
+        if stroke is not None:
+            strokes[side] = stroke.to_dict()
+    if not strokes:
+        return None
+    return {"style": "illustrated", "strokes": strokes}
+
+
+def _view_brow_kind(folder, view: dict) -> str | None:
+    layers = _layer_map(view)
+    images: dict[str, Image.Image] = {}
+    for side in ("left", "right"):
+        layer = layers.get(f"brow_{side}")
+        if layer is None:
+            continue
+        path = folder / str(layer.get("url") or "")
+        if path.is_file():
+            images[side] = Image.open(path).convert("RGBA")
+    if not images:
+        return None
+    return classify(images.get("left"), images.get("right"))
+
+
+def _canvas_size(view: dict) -> tuple[int, int]:
+    canvas = view.get("canvas") or {}
+    width, height = int(canvas.get("w") or 0), int(canvas.get("h") or 0)
+    if width > 1 and height > 1:
+        return width, height
+    width = height = 1
+    for layer in view.get("layers") or []:
+        if not isinstance(layer, dict):
+            continue
+        width = max(width, int(layer.get("x") or 0) + int(layer.get("w") or 0))
+        height = max(height, int(layer.get("y") or 0) + int(layer.get("h") or 0))
+    return width, height
+
+
+def _paint_brows(folder, view: dict, model: dict) -> None:
+    layers = _layer_map(view)
+    width, height = _canvas_size(view)
+    style = str(model.get("style") or "illustrated")
+    neutral = poses("neutral")
+    for index, side in enumerate(("left", "right")):
+        raw = (model.get("strokes") or {}).get(side)
+        layer = layers.get(f"brow_{side}")
+        if not raw or layer is None:
+            continue
+        sprite, origin = draw(Stroke.from_dict(raw), neutral[index], style)
+        plate = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        paste(plate, sprite, origin)
+        url = str(layer.get("url") or f"brow_{side}.png")
+        path = folder / url
+        path.parent.mkdir(parents=True, exist_ok=True)
+        plate.save(path)
+        layer["x"], layer["y"] = 0, 0
+        layer["w"], layer["h"] = width, height
+        layer["url"] = url
+
+
+def repair_orientation(skin) -> list[str]:
+    """Redraw a rest brow that classifies as inverse. Sad still lifts the inner tips.
+
+    Uses the stored ``browModel`` when there is one, otherwise the pixels of
+    the brow layers. Views that are already not inverse are left alone.
+    """
+    import json
+    from pathlib import Path
+
+    skin = Path(skin)
+    changed: list[str] = []
+    for view_name in ("front", "left", "right"):
+        folder = skin / "views" / view_name
+        spec = folder / "view.json"
+        if not spec.is_file():
+            continue
+        try:
+            view = json.loads(spec.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(view, dict) or _view_brow_kind(folder, view) != "inverse":
+            continue
+        layers = _layer_map(view)
+        model = view.get("browModel") if isinstance(view.get("browModel"), dict) else None
+        if model and (model.get("strokes") or {}):
+            model = _to_canvas(model, layers)
+        else:
+            model = _model_from_layers(folder, view)
+        if not model:
+            continue
+        fixed = orient_model(model)
+        if _rest_kind(fixed) == "inverse":
+            flipped = {
+                "style": fixed.get("style") or "illustrated",
+                "strokes": {
+                    side: orient_stroke(_flip_stroke(Stroke.from_dict(raw))).to_dict()
+                    for side, raw in (fixed.get("strokes") or {}).items()
+                    if isinstance(raw, dict)
+                },
+            }
+            if _rest_kind(flipped) != "inverse":
+                fixed = flipped
+        if _rest_kind(fixed) == "inverse":
+            continue
+        _paint_brows(folder, view, fixed)
+        view["browModel"] = fixed
+        spec.write_text(json.dumps(view, indent=2), encoding="utf-8")
+        changed.append(view_name)
+    return changed
 
 
 def mirror_model(model: dict, width: int) -> dict:

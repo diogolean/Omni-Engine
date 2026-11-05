@@ -16,7 +16,7 @@ IMAGE_USD = 0.039
 LIMITS = {"skinDeltaE": 6.0, "residualMouth": 0.04, "frontOffset": 0.05, "landmarkDrift": 0.08,
           "hardEdge": 0.0, "mouthRange": 10.0, "faceWidthPx": 200}
 WEIGHTS = {"skin": 10, "mouthless": 10, "doubleMouth": 15, "mouthOpen": 10, "mouths": 10, "front": 10, "landmarks": 10,
-           "edges": 10, "resolution": 5, "mouthAnchor": 10}
+           "edges": 10, "resolution": 5, "mouthAnchor": 10, "brow_arch": 0}
 # A character is not approved while any of these fail. mouthAnchor is the nose–chin / gaze check.
 APPROVAL = ("mouthAnchor", "landmarks", "mouthOpen")
 
@@ -529,6 +529,7 @@ def run(skin: Path) -> dict[str, Any]:
         fe = alpha_edges(skin / "views" / "front")  # rectangles on the front sprites fail the same gate
         if not fe["pass"]:
             gates["edges"] = fe | {"view": "front"}
+    gates["brow_arch"] = brow_arch_gate(skin)
     return gates
 
 
@@ -749,6 +750,33 @@ def visemes_share_one_scale(view: dict) -> bool:
         return True
     first = mouths[0]
     return all(m["x"] == first["x"] and m["y"] == first["y"] and m["w"] == first["w"] and m["h"] == first["h"] for m in mouths)
+
+
+def brow_arch_gate(skin: Path) -> dict[str, Any]:
+    """The rest brow is not an inverse arch. Missing brows do not fail the gate."""
+    for name in ("front", "left"):
+        folder = skin / "views" / name
+        spec = folder / "view.json"
+        if not spec.is_file():
+            continue
+        try:
+            view = json.loads(spec.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        layers = {layer.get("name"): layer for layer in view.get("layers") or [] if isinstance(layer, dict)}
+        images: dict[str, Image.Image] = {}
+        for side in ("left", "right"):
+            layer = layers.get(f"brow_{side}")
+            if not isinstance(layer, dict):
+                continue
+            path = folder / str(layer.get("url") or "")
+            if path.is_file():
+                images[side] = Image.open(path).convert("RGBA")
+        if not images:
+            continue
+        kind = brow_arch(images.get("left"), images.get("right"))
+        return {"pass": kind != "inverse", "value": kind, "limit": "not inverse"}
+    return {"pass": True, "value": "flat", "limit": "not inverse"}
 
 
 def brow_arch(left: Image.Image | None, right: Image.Image | None = None) -> str:

@@ -1831,6 +1831,9 @@ def build_einstein_product(
 
     mouthset_mod.repair_filled_rests(skin)
     mouth_anchor_clear.clear_painted_smiles(skin)
+    from . import brow_draw  # noqa: PLC0415
+
+    brow_draw.repair_orientation(skin)
     views = _publish_product_views(skin, url)
     report = qa.finalize(skin, 0.0, {})
     failed = [key for key, gate in report["gates"].items() if not gate.get("pass")]

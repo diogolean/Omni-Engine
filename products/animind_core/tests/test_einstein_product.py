@@ -72,8 +72,9 @@ def test_build_rig_paints_einstein_when_gemini_is_off(tmp_path, monkeypatch):
     assert not mouthset.filled_dark_oval(rest)
     assert not mouthset.filled_dark_oval(happy)
     gates = qa.run(skin)
-    for key in ("mouthAnchor", "landmarks", "mouthOpen", "skin"):
+    for key in ("mouthAnchor", "landmarks", "mouthOpen", "skin", "brow_arch"):
         assert gates[key]["pass"], gates[key]
+    assert gates["brow_arch"]["value"] != "inverse"
     assert rig.EINSTEIN_PLATE_ID in built["note"]
     assert any(row["path"].endswith(rig.EINSTEIN_PLATE_ID) for row in built["plateSearch"])
     assert not any(row["ready"] for row in built["plateSearch"])

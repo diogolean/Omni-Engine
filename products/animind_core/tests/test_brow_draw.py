@@ -184,3 +184,65 @@ def test_scene_brow_follows_emotion_while_the_mouth_stays_on_the_viseme():
     assert evil_face["emotion"] == "mau" and sad_face["emotion"] == "triste"
     assert any(abs(v) > 0.5 for v in evil_face["brows"])
     assert int(np.abs(evil.astype(int) - sad.astype(int)).sum()) > 5000
+
+
+def _inverse_model() -> dict:
+    """Inner tip higher than the outer tip. The right brow's inner tip is on the left."""
+    left = brow_draw.Stroke(((20.0, 48.0), (50.0, 36.0), (84.0, 22.0)), (5.0, 5.0, 5.0), (32, 24, 18, 255))
+    right = brow_draw.Stroke(((84.0, 48.0), (50.0, 36.0), (20.0, 22.0)), (5.0, 5.0, 5.0), (32, 24, 18, 255))
+    return {"style": "illustrated", "strokes": {"left": left.to_dict(), "right": right.to_dict()}}
+
+
+def test_an_inverse_rest_levels_and_sad_stays_inverse():
+    model = _inverse_model()
+    raw_left, raw_right = _pair(model, "neutral")
+    # The stored slope is inverse before orientation. Neutral's small arch
+    # does not hide a 26px rise of the inner tip.
+    assert brow_draw.classify(raw_left, raw_right) == "inverse"
+    fixed = brow_draw.orient_model(model)
+    rest_left, rest_right = _pair(fixed, "neutral")
+    assert brow_draw.classify(rest_left, rest_right) != "inverse"
+    sad_left, sad_right = _pair(fixed, "sad")
+    evil_left, evil_right = _pair(fixed, "evil")
+    happy_left, happy_right = _pair(fixed, "happy")
+    assert brow_draw.classify(sad_left, sad_right) == "inverse"
+    assert brow_draw.classify(evil_left, evil_right) == "v"
+    assert brow_draw.classify(happy_left, happy_right) == "happy"
+
+
+def test_repair_redraws_an_inverse_brow_layer(tmp_path):
+    import json
+
+    model = _inverse_model()
+    folder = tmp_path / "views" / "front"
+    folder.mkdir(parents=True)
+    for side in ("left", "right"):
+        sprite, origin = brow_draw.draw(
+            brow_draw.Stroke.from_dict(model["strokes"][side]), (0.0, 0.0, 0.0), "illustrated",
+        )
+        # One sprite per file, the raw inverse stroke with no arch.
+        plate = Image.new("RGBA", (160, 90), (0, 0, 0, 0))
+        brow_draw.paste(plate, sprite, origin)
+        plate.save(folder / f"brow_{side}.png")
+    assert brow_draw.classify(
+        Image.open(folder / "brow_left.png"), Image.open(folder / "brow_right.png"),
+    ) == "inverse"
+    view = {
+        "canvas": {"w": 160, "h": 90},
+        "layers": [
+            {"name": "brow_left", "url": "brow_left.png", "x": 0, "y": 0, "w": 160, "h": 90, "z": 4},
+            {"name": "brow_right", "url": "brow_right.png", "x": 0, "y": 0, "w": 160, "h": 90, "z": 4},
+        ],
+        "browModel": model,
+    }
+    (folder / "view.json").write_text(json.dumps(view), encoding="utf-8")
+    changed = brow_draw.repair_orientation(tmp_path)
+    assert changed == ["front"]
+    kind = brow_draw.classify(
+        Image.open(folder / "brow_left.png"), Image.open(folder / "brow_right.png"),
+    )
+    assert kind != "inverse"
+    stored = json.loads((folder / "view.json").read_text(encoding="utf-8"))["browModel"]
+    assert qa.brow_arch_gate(tmp_path)["pass"] is True
+    sad_left, sad_right = _pair(stored, "sad")
+    assert brow_draw.classify(sad_left, sad_right) == "inverse"
