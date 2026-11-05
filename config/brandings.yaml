@@ -97,3 +97,22 @@ brandings:
       pinterest: {active: false}
       youtube: {active: false}
       facebook: {active: false}
+
+  # Inactive until a site URL exists. The drip does not publish this row.
+  enigmas_do_universo:
+    display_name: Enigmas do Universo
+    platforms:
+      pinterest:
+        active: false
+        account_id: enigmas_do_universo
+        token_env: PINTEREST_ACCESS_TOKEN_ENIGMAS_DO_UNIVERSO
+        board_id_env: PINTEREST_BOARD_ID_ENIGMAS_DO_UNIVERSO
+        board_name_env: PINTEREST_BOARD_NAME_ENIGMAS_DO_UNIVERSO
+        refresh_token_env: PINTEREST_REFRESH_TOKEN_ENIGMAS_DO_UNIVERSO
+        board_name: TODO
+      youtube:
+        active: false
+        account_id: enigmas_do_universo
+      facebook:
+        active: false
+        account_id: enigmas_do_universo

@@ -105,7 +105,7 @@ python main.py --channel wonder_feed --post-type ECONOMIC_REEL --quantity 1
 
 ## Channels
 
-This table is a snapshot of the folders on this commit. `production.writers.persona.channel_profile_rows()` walks `channels_config/`, keeps every folder that has `master_dna.json`, and skips `aiwake` and `shared`. Eight folders match today. The same walk is the list at 10, 20, or 100 channels. Display name, default format, and avatar mode come from that folder's `page_config.py`. Aiwake is a product, so it is not a row. The function does not assign a publisher.
+This table is a snapshot of the folders on this commit. `production.writers.persona.channel_profile_rows()` walks `channels_config/`, keeps every folder that has `master_dna.json`, and skips `aiwake` and `shared`. Nine folders match today. The same walk is the list at 10, 20, or 100 channels. Display name, default format, and avatar mode come from that folder's `page_config.py`. Aiwake is a product, so it is not a row. The function does not assign a publisher.
 
 | Channel | Display name | Default format | Avatar |
 |---|---|---|---|
@@ -113,6 +113,7 @@ This table is a snapshot of the folders on this commit. `production.writers.pers
 | `anna_protocol` | The Holistic Legacy — Anna's Protocol | `IMAGE_AVATAR` | ON |
 | `down_dirty` | Down & Dirty — Matrix Escape & Raw Mindset | `IMAGE_AVATAR` | OFF |
 | `endless_summer_paradise` | Endless Summer Paradise | `REFERENCE_BASED_REELS` | OFF |
+| `enigmas_do_universo` | Enigmas do Universo | `IMAGE_BACKGROUND` | OFF |
 | `master_mei` | Master Mei \| Mind Control | `IMAGE_AVATAR` | ON |
 | `momma_circle` | Momma Circle | `REFERENCE_BASED_REELS` | OFF |
 | `principles_of_wealth_finance_economics` | Principles of Wealth — Finance & Economics | `REFERENCE_BASED_REELS` | OFF |
@@ -148,7 +149,7 @@ Facebook `active` in the branding file is recorded. Publishing still goes throug
 
 ## Scaling to N channels
 
-The snapshot above is eight factory channels. The path to 10, 20, or 100 is the same folder and the same yaml.
+The snapshot above is nine factory channels. The path to 10, 20, or 100 is the same folder and the same yaml.
 
 **Cadence.** One scheduler process, one replica. Each wake visits every active row in `config/pinterest_accounts.yaml`, then sleeps one shared draw of `MIN_INTERVAL_HOURS` to `MAX_INTERVAL_HOURS`. Those are 7 and 9 (since #68). The gap is for the process. It is not a separate clock per account. The process keeps the pair it started with. A channel `.env` does not replace it. `outputs/scheduler/next_wake.json` stores that same next wake under each account id. A new row joins the next wake when the process restarts and re-reads the yaml.
 
