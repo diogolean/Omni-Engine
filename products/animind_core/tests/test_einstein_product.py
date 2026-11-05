@@ -65,6 +65,12 @@ def test_build_rig_paints_einstein_when_gemini_is_off(tmp_path, monkeypatch):
     assert built["qa"]["costUsd"] == 0.0
     assert built["qa"]["score"] == 100
     assert set(built["views"]) == {"front", "left", "right"}
+    from products.animind_core import mouthset
+    front = skin / "views" / "front"
+    rest = Image.open(next((front / "mouths").glob("*X*"))).convert("RGBA")
+    happy = Image.open(front / "expressions" / "expression_happy.png").convert("RGBA")
+    assert not mouthset.filled_dark_oval(rest)
+    assert not mouthset.filled_dark_oval(happy)
     gates = qa.run(skin)
     for key in ("mouthAnchor", "landmarks", "mouthOpen", "skin"):
         assert gates[key]["pass"], gates[key]

@@ -117,6 +117,16 @@ def test_viseme_b_ink_stays_inside_the_sprite_on_a_moustache(tmp_path):
     assert "B" not in (gate.get("bad") or {})
 
 
+def test_closed_rest_is_a_lip_stroke_not_a_filled_oval():
+    rest = mouthset.south_park_rest(80, height=22)
+    assert not mouthset.filled_dark_oval(rest)
+    box = rest.getchannel("A").point(lambda alpha: 255 if alpha > 128 else 0).getbbox()
+    assert box is not None
+    crop = np.asarray(rest.crop(box))
+    ink = crop[..., 3] > 128
+    assert float(ink.mean()) < 0.42
+
+
 def test_south_park_smile_ink_stays_inside_the_png():
     for width in (12, 20, 112):
         drawn = mouthset.draw_expressions(width, _COLOURS, squeeze=0.92, open_cap=40)

@@ -830,3 +830,57 @@ def repair_collar_mouths(skin: Path) -> dict[str, Any]:
             "onCloth": on_cloth,
         }
     return notes
+
+
+def clear_painted_smiles(skin: Path) -> dict[str, bool]:
+    """Blank a photographed smile so the drawn rest is the only closed mouth.
+
+    A cheek with no flat dark lip is left alone. The moustache stays.
+    """
+    from . import mouthset  # noqa: PLC0415
+
+    notes: dict[str, bool] = {}
+    for name in _VIEWS:
+        folder = skin / "views" / name
+        path = folder / "view.json"
+        if not path.is_file():
+            notes[name] = False
+            continue
+        view = json.loads(path.read_text(encoding="utf-8"))
+        meta = view.get("mouthQA") or {}
+        face = meta.get("face")
+        raw = meta.get("anchor") or {}
+        mouth = meta.get("mouth") or meta.get("mouthBox")
+        layer = next((item for item in view.get("layers") or [] if item.get("name") == "head"), None)
+        if not face or not mouth or not isinstance(raw, dict) or "x" not in raw or layer is None:
+            notes[name] = False
+            continue
+        head_path = folder / str(layer.get("url") or "")
+        if not head_path.is_file():
+            notes[name] = False
+            continue
+        head = Image.open(head_path).convert("RGBA")
+        ox, oy = int(layer.get("x") or 0), int(layer.get("y") or 0)
+        x0, y0 = max(0, int(mouth[0]) - ox), max(0, int(mouth[1]) - oy)
+        x1, y1 = min(head.width, int(mouth[2]) - ox), min(head.height, int(mouth[3]) - oy)
+        if x1 <= x0 + 2 or y1 <= y0 + 2:
+            notes[name] = False
+            continue
+        crop = np.asarray(head.crop((x0, y0, x1, y1)).convert("RGB"))
+        if not mouthset.painted_mouth_is_flat(crop):
+            notes[name] = False
+            continue
+        nose = raw.get("nose") or [raw["x"], int(raw["y"]) - 20]
+        chin = raw.get("chin") or [raw["x"], int(raw["y"]) + 40]
+        anchor = Anchor(
+            x=int(raw["x"]),
+            y=int(raw["y"]),
+            nose=(int(nose[0]), int(nose[1])),
+            chin=(int(chin[0]), int(chin[1])),
+            view=str(raw.get("view") or name),
+            along=float(raw.get("along") or ALONG),
+            moustache_bottom=raw.get("moustacheBottom"),
+        )
+        _clear_painted_lip(folder, view, face, anchor)
+        notes[name] = True
+    return notes

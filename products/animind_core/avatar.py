@@ -1139,8 +1139,11 @@ def rerig_from_plate(
                 front_boxes = None
             if isinstance(front_boxes, dict) and not qa.front_symmetry(front_boxes).get("pass"):
                 from . import front_plate  # noqa: PLC0415
+                from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
 
                 front_plate.install_true_front(skin)
+                mouthset.repair_filled_rests(skin)
+                mouth_anchor_mod.clear_painted_smiles(skin)
         views = _publish_saved_sides(skin, url)
         front = puppet_v3.publish_view(skin / "views" / "front", url)
         if front is not None:

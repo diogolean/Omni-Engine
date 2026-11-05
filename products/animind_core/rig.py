@@ -1810,6 +1810,11 @@ def build_einstein_product(
             f"(looked in {', '.join(looked) or '(no candidates)'}); "
             "procedural Einstein bust, no image call"
         )
+    from . import mouth_anchor as mouth_anchor_clear  # noqa: PLC0415
+    from . import mouthset as mouthset_mod  # noqa: PLC0415
+
+    mouthset_mod.repair_filled_rests(skin)
+    mouth_anchor_clear.clear_painted_smiles(skin)
     views = _publish_product_views(skin, url)
     report = qa.finalize(skin, 0.0, {})
     failed = [key for key, gate in report["gates"].items() if not gate.get("pass")]

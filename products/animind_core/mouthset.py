@@ -6,6 +6,8 @@ generated art: one shape per cue, same scale and one fixed anchor for all nine, 
 avatar's own lip / skin tones. The renderer swaps exactly one PNG per frame (hard cut)."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -231,6 +233,53 @@ def draw_expressions(
     if open_cap:
         sealed["happy"] = _fit_ink_height(sealed["happy"], float(open_cap))
     return _same_canvas(sealed)
+
+
+def filled_dark_oval(image: Image.Image) -> bool:
+    """A filled dark crescent: the closed mouth that covers the lip.
+
+    A South Park rest is a stroke. Its box is mostly clear, so it does not match.
+    """
+    if not flat_dark_blob(image):
+        return False
+    box = image.getchannel("A").point(lambda alpha: 255 if alpha > 128 else 0).getbbox()
+    if not box:
+        return False
+    width, height = box[2] - box[0], box[3] - box[1]
+    if width < 8 or height / max(1, width) < 0.34:
+        return False
+    crop = np.asarray(image.crop(box))
+    ink = crop[..., 3] > 128
+    return float(ink.mean()) > 0.42
+
+
+def south_park_rest(width: int, height: int | None = None) -> Image.Image:
+    """Closed South Park mouth: one curved lip stroke, interior left clear."""
+    import cv2  # noqa: PLC0415
+
+    width = max(8, int(width))
+    bow = max(5, int(height) if height else max(5, int(round(width * 0.28))))
+    stroke = max(2, min(max(2, bow // 5), max(2, width // 16)))
+    pad = 3
+    canvas_w, canvas_h = width + 2 * pad, bow + 2 * pad
+    scale = 4
+    canvas = np.zeros((canvas_h * scale, canvas_w * scale, 4), np.uint8)
+    pts = []
+    for step in range(21):
+        u = step / 20
+        x = pad + 1 + u * (width - 2)
+        y = pad + stroke * 0.6 + np.sin(u * np.pi) * max(1.0, bow - stroke)
+        pts.append([int(round(x * scale)), int(round(y * scale))])
+    cv2.polylines(
+        canvas, [np.array(pts, np.int32)], False, (62, 34, 32, 255),
+        max(1, stroke * scale), cv2.LINE_8,
+    )
+    alpha = canvas[..., 3]
+    canvas[..., 3] = np.where(alpha >= _SPRITE_ALPHA, np.maximum(alpha, _SPRITE_ALPHA), 0)
+    image = Image.fromarray(canvas).resize((canvas_w, canvas_h), Image.Resampling.NEAREST)
+    arr = np.array(image)
+    arr[..., 3] = np.where(arr[..., 3] >= _SPRITE_ALPHA, np.maximum(arr[..., 3], _SPRITE_ALPHA), 0)
+    return _seal(Image.fromarray(arr))
 
 
 def flat_dark_blob(image: Image.Image) -> bool:
@@ -526,6 +575,54 @@ def place(lips: tuple[int, int, int, int], sprites: dict[str, Image.Image], *,
         cy = (lips[1] + lips[3]) / 2
         return {v: (im, (round(cx - im.width / 2), round(cy - im.height / 2))) for v, im in sprites.items()}
     return {v: (im, (round(cx - im.width / 2), int(top))) for v, im in sprites.items()}
+
+
+def repair_filled_rests(skin: Path) -> list[str]:
+    """Replace a filled dark rest with a South Park stroke, and a dark-oval happy with the wedge.
+
+    The sprite stays on its canvas, so the shared anchor does not move.
+    """
+    changed: list[str] = []
+    for name in ("left", "front", "right"):
+        folder = skin / "views" / name
+        spec = folder / "view.json"
+        if not spec.is_file():
+            continue
+        view = json.loads(spec.read_text(encoding="utf-8"))
+        touched = False
+        jobs = (
+            ("visemes", "X", True),
+            ("expressions", "happy", False),
+        )
+        for family, key, is_rest in jobs:
+            layer = (view.get(family) or {}).get(key)
+            if not isinstance(layer, dict):
+                continue
+            path = folder / str(layer.get("url") or "")
+            if not path.is_file():
+                continue
+            image = Image.open(path).convert("RGBA")
+            if not filled_dark_oval(image):
+                continue
+            box = image.getchannel("A").point(lambda alpha: 255 if alpha > 128 else 0).getbbox()
+            if not box:
+                continue
+            width, height = max(8, box[2] - box[0]), max(6, box[3] - box[1])
+            drawn = south_park_rest(width, height=height) if is_rest else _fit_ink_height(_open_happy(width), float(height))
+            drawn_box = drawn.getchannel("A").point(lambda alpha: 255 if alpha > 128 else 0).getbbox()
+            if not drawn_box:
+                continue
+            # Keep the canvas and the ink centre so the shared anchor holds.
+            old_cx, old_cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+            new_cx, new_cy = (drawn_box[0] + drawn_box[2]) / 2, (drawn_box[1] + drawn_box[3]) / 2
+            canvas = Image.new("RGBA", image.size, (0, 0, 0, 0))
+            canvas.paste(drawn, (round(old_cx - new_cx), round(old_cy - new_cy)), drawn)
+            canvas.save(path)
+            touched = True
+        if touched:
+            spec.write_text(json.dumps(view, indent=2), encoding="utf-8")
+            changed.append(name)
+    return changed
 
 
 def describe() -> dict[str, Any]:
