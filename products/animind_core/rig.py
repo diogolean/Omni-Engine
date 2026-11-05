@@ -1763,9 +1763,11 @@ def build_einstein_product(
 
     A cached ``albert_einstein_ca8386e2`` folder with a complete layered cut
     (front, left, and right) is copied in, even when the plate file is newer
-    than the views. A three-quarter front is warped from the left view into
-    a frontal camera before the gates run. Otherwise the procedural bust is
-    painted, seated, and sealed so a later re-rig does not pay ``create_puppet``.
+    than the views. A distinct frontal (this plate, a donor copy, or a frontal
+    master) is installed as the front. The left view is warped only when no
+    distinct frontal exists, and that warp is not reported as a photograph.
+    Otherwise the procedural bust is painted, seated, and sealed so a later
+    re-rig does not pay ``create_puppet``.
     """
     import shutil  # noqa: PLC0415
 
@@ -1774,6 +1776,7 @@ def build_einstein_product(
     if cached is None and searched is None:
         cached, searched = locate_einstein_plate()
     searched = list(searched or [])
+    turned: dict[str, Any] = {}
     if cached is not None and _einstein_views_ready(cached):
         _install_cached_skin(cached, skin)
         from . import mouth_anchor as mouth_anchor_mod  # noqa: PLC0415
@@ -1781,18 +1784,31 @@ def build_einstein_product(
         seated = mouth_anchor_mod.repair_collar_mouths(skin)
         from . import front_plate  # noqa: PLC0415
 
-        turned = front_plate.install_true_front(skin)
+        donors: list[Path] = []
+        for row in searched:
+            raw = str((row or {}).get("path") or "")
+            if raw:
+                donors.append(Path(raw))
+        donors.append(cached)
+        turned = front_plate.install_true_front(skin, donors=donors)
         generator = "cached-plate"
         model = EINSTEIN_PLATE_ID
         frontal = _plate_front_is_frontal(skin)
         note = f"reused photographed plate {EINSTEIN_PLATE_ID} from {cached}"
-        if turned.get("installed"):
+        if turned.get("method") == "camera-warp":
             note += (
                 f"; front camera warped from the {turned.get('reference') or 'left'} view"
                 f" (symmetry {turned.get('before')} -> {turned.get('after')})"
             )
+        elif turned.get("front_is_true_photo"):
+            note += f"; true frontal from {turned.get('source') or 'views/front'}"
         elif not frontal:
             note += "; front cut is the photographed plate, not a midline bust"
+        if turned.get("front_kind"):
+            note += (
+                f"; front_kind={turned.get('front_kind')}"
+                f"; front_equals_left={str(bool(turned.get('front_equals_left'))).lower()}"
+            )
         if any((row or {}).get("moved") for row in seated.values()):
             note += "; mouths seated on the photographed lip, not the collar"
     else:
@@ -1837,6 +1853,9 @@ def build_einstein_product(
         "plateFrontal": frontal,
         "plateSearch": searched,
         "plateId": EINSTEIN_PLATE_ID,
+        "frontKind": turned.get("front_kind") or "procedural",
+        "frontEqualsLeft": turned.get("front_equals_left"),
+        "frontIsTruePhoto": bool(turned.get("front_is_true_photo")),
     }
 
 

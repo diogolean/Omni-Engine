@@ -112,6 +112,13 @@ def test_cached_three_quarter_front_becomes_a_camera_front(tmp_path, monkeypatch
     shift = -int(0.12 * (face[2] - face[0]))
     _shift_front(plate, shift)
     _paint_cheeks(plate, "left")
+    # Cheek paint lives on the left only. Copy it onto the front head so the
+    # bytes match: this plate has no distinct frontal photo to recover.
+    front_head = front_plate._head_file(plate, "front")
+    left_file = front_plate._head_file(plate, "left")
+    assert front_head is not None and left_file is not None
+    front_head.write_bytes(left_file.read_bytes())
+    assert front_plate.heads_equal(plate)
     turned = qa.front_symmetry(
         json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"],
     )
@@ -136,6 +143,8 @@ def test_cached_three_quarter_front_becomes_a_camera_front(tmp_path, monkeypatch
     assert built["qa"]["score"] >= 90
     assert built["qa"]["costUsd"] == 0.0
     assert "camera warped from the left view" in built["note"]
+    assert built["frontKind"] == "camera-warp"
+    assert built["frontIsTruePhoto"] is False
     assert built["plateFrontal"] is True
 
     view = json.loads((skin / "views" / "front" / "view.json").read_text(encoding="utf-8"))
@@ -187,3 +196,115 @@ def test_rerig_of_a_three_quarter_plate_warps_without_create_puppet(tmp_path, mo
     assert (plate / "views" / "left" / "head.png").read_bytes() == left_head
     gate = qa.front_symmetry(json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"])
     assert gate["pass"] is True and gate["value"] <= 0.05
+
+
+def _frontal_boxes(skin: Path) -> dict:
+    return json.loads((skin / "rig_front.json").read_text(encoding="utf-8"))["boxes"]
+
+
+def test_a_distinct_front_head_is_not_replaced_by_the_left_warp(tmp_path, monkeypatch):
+    _offline(monkeypatch, tmp_path)
+    plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
+    rig.build_einstein_product(plate, lambda path: path.name)
+    frontal = _frontal_boxes(plate)
+    _shift_front(plate, -int(0.12 * (frontal["face"][2] - frontal["face"][0])))
+    head = front_plate._head_file(plate, "front")
+    assert head is not None
+    image = Image.open(head).convert("RGBA")
+    ImageDraw.Draw(image).rectangle((2, 2, 9, 9), fill=(10, 220, 30, 255))
+    image.save(head)
+    kept = head.read_bytes()
+    assert front_plate.heads_equal(plate) is False
+
+    def measured(_path, _layer):
+        return {key: list(frontal[key]) for key in ("face", "left_eye", "right_eye", "mouth")}
+
+    monkeypatch.setattr(front_plate, "_measured_boxes", measured)
+    skin = tmp_path / "product"
+    built = rig.build_einstein_product(skin, lambda path: path.name, cached=plate, searched=[])
+    copied = front_plate._head_file(skin, "front")
+    assert copied is not None and copied.read_bytes() == kept
+    assert built["frontKind"] == "photo"
+    assert built["frontIsTruePhoto"] is True
+    assert built["frontEqualsLeft"] is False
+    assert "camera warped" not in built["note"]
+    assert built["qa"]["gates"]["front"]["pass"] is True
+    assert built["qa"]["costUsd"] == 0.0
+    assert head.read_bytes() == kept
+
+
+def test_a_collapsed_front_adopts_a_donor_frontal(tmp_path, monkeypatch):
+    import shutil
+
+    _offline(monkeypatch, tmp_path)
+    plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
+    rig.build_einstein_product(plate, lambda path: path.name)
+    donor = tmp_path / "older" / rig.EINSTEIN_PLATE_ID
+    shutil.copytree(plate, donor)
+    head = front_plate._head_file(donor, "front")
+    assert head is not None
+    image = Image.open(head).convert("RGBA")
+    ImageDraw.Draw(image).rectangle((3, 3, 12, 12), fill=(10, 220, 30, 255))
+    image.save(head)
+    donor_bytes = head.read_bytes()
+    assert front_plate.heads_equal(donor) is False
+    assert qa.front_symmetry(_frontal_boxes(donor))["pass"] is True
+    face = _frontal_boxes(plate)["face"]
+    _shift_front(plate, -int(0.12 * (face[2] - face[0])))
+    assert front_plate.heads_equal(plate) is True
+    skin = tmp_path / "product"
+    built = rig.build_einstein_product(
+        skin,
+        lambda path: path.name,
+        cached=plate,
+        searched=[{"path": str(donor), "exists": True, "ready": True}],
+    )
+    copied = front_plate._head_file(skin, "front")
+    assert copied is not None and copied.read_bytes() == donor_bytes
+    assert built["frontKind"] == "photo"
+    assert built["frontIsTruePhoto"] is True
+    assert built["frontEqualsLeft"] is False
+    assert "camera warped" not in built["note"]
+    assert "true frontal" in built["note"]
+    assert built["qa"]["gates"]["front"]["pass"] is True
+    assert built["qa"]["costUsd"] == 0.0
+    assert front_plate._head_file(donor, "front").read_bytes() == donor_bytes
+    assert front_plate.heads_equal(plate) is True
+
+
+def test_source_front_is_used_when_it_is_a_real_frontal(tmp_path, monkeypatch):
+    _offline(monkeypatch, tmp_path)
+    plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
+    rig.build_einstein_product(plate, lambda path: path.name)
+    frontal = _frontal_boxes(plate)
+    face = frontal["face"]
+    _shift_front(plate, -int(0.12 * (face[2] - face[0])))
+    assert front_plate.heads_equal(plate) is True
+    head = front_plate._head_file(plate, "front")
+    assert head is not None
+    image = Image.open(head).convert("RGBA")
+    master_image = Image.new("RGBA", (image.width + 3, image.height + 3), (0, 0, 0, 0))
+    master_image.paste(image, (0, 0))
+    ImageDraw.Draw(master_image).rectangle((4, 4, 14, 14), fill=(10, 220, 30, 255))
+    master = plate / "source_front.png"
+    master_image.save(master)
+    kept = master.read_bytes()
+
+    def measured(_path, _layer):
+        return {key: list(frontal[key]) for key in ("face", "left_eye", "right_eye", "mouth")}
+
+    monkeypatch.setattr(front_plate, "_measured_boxes", measured)
+    skin = tmp_path / "product"
+    built = rig.build_einstein_product(skin, lambda path: path.name, cached=plate, searched=[])
+    copied = front_plate._head_file(skin, "front")
+    assert copied is not None
+    seated = np.asarray(Image.open(copied).convert("RGBA"))
+    mark = np.all(seated[..., :3] == (10, 220, 30), axis=-1) & (seated[..., 3] > 200)
+    assert int(mark.sum()) > 8
+    assert copied.read_bytes() != front_plate._head_file(skin, "left").read_bytes()
+    assert built["frontKind"] == "photo"
+    assert built["frontIsTruePhoto"] is True
+    assert built["frontEqualsLeft"] is False
+    assert built["qa"]["gates"]["front"]["pass"] is True
+    assert "camera warped" not in built["note"]
+    assert master.read_bytes() == kept

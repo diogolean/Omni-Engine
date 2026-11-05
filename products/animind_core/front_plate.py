@@ -1,10 +1,11 @@
-"""Frontal camera from the left three-quarter view. No image call.
+"""Frontal camera for a photographed plate. No image call.
 
-The front gate reads detector boxes. A photographed bust fails when the eyes
-and the mouth sit off the face-box centre. The left view is the character.
-This warps that view so the nose lands on the face centre and the far eye
-opens to the near eye's width. Both cheeks stay their own pixels. Left and
-right stay the three-quarter plate. The source plate file is not removed.
+A distinct frontal already on disk is the front: ``views/front`` whose head
+is not the left head, a donor plate that still has that head, or
+``source_front.png`` / ``character_front.png`` when those bytes are a real
+frontal. The left three-quarter view is warped into the front only when no
+distinct frontal exists. That warp is not a photograph. Left and right stay
+the three-quarter plate. The source plate file is not removed.
 """
 from __future__ import annotations
 
@@ -295,27 +296,399 @@ def _reference(skin: Path) -> tuple[str, Path, dict[str, Any], dict[str, Any]] |
     return None
 
 
-def install_true_front(skin: Path) -> dict[str, Any]:
-    """Replace ``views/front`` with a frontal camera warped from the left view.
+# Full-canvas plates that are the side photograph, not a frontal master.
+_SIDE_PLATES = (
+    "character.png",
+    "_plate.png",
+    "source_original.png",
+    "source_closed.png",
+    "source.png",
+    "source_mouthless.png",
+    "_gemini.png",
+)
+_FRONT_MASTERS = ("source_front.png", "source_front_mouthless.png", "character_front.png")
 
-    A plate that already passes the front gate is left alone. Left and right
-    stay three-quarter. The photographed plate file is not deleted. Mouth
-    sprites are moved onto the new nose, not repainted.
+
+def heads_equal(skin: Path) -> bool:
+    """True when the front head file is the same bytes as the left head."""
+    front = _head_file(skin, "front")
+    left = _head_file(skin, "left")
+    if front is None or left is None:
+        return False
+    try:
+        return front.read_bytes() == left.read_bytes()
+    except OSError:
+        return False
+
+
+def _head_file(skin: Path, view_name: str) -> Path | None:
+    folder = skin / "views" / view_name
+    view = _load(folder / "view.json")
+    if view:
+        for layer in view.get("layers") or []:
+            if layer.get("name") != "head":
+                continue
+            path = folder / str(layer.get("url") or "")
+            return path if path.is_file() else None
+    path = folder / "head.png"
+    return path if path.is_file() else None
+
+
+def _head_layer(view: dict[str, Any]) -> dict[str, Any] | None:
+    for layer in view.get("layers") or []:
+        if layer.get("name") == "head":
+            return layer
+    return None
+
+
+def _same_dir(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:
+        return str(left) == str(right)
+
+
+def _gate_value(item: Any) -> Any:
+    if isinstance(item, dict):
+        return item.get("value")
+    return item
+
+
+def _report(
+    *,
+    installed: bool,
+    method: str,
+    front_kind: str,
+    photo: bool,
+    equals: bool,
+    reason: str,
+    before: Any = None,
+    after: Any = None,
+    source: str = "",
+    reference: str = "",
+) -> dict[str, Any]:
+    return {
+        "installed": installed,
+        "method": method,
+        "front_kind": front_kind,
+        "front_is_true_photo": photo,
+        "front_equals_left": equals,
+        "reason": reason,
+        "before": _gate_value(before),
+        "after": _gate_value(after if after is not None else before),
+        "source": source,
+        "reference": reference,
+    }
+
+
+def _landmark_boxes(path: Path) -> dict[str, list[int]] | None:
+    """MediaPipe boxes in image pixels. The robotic fallback is not a face."""
+    try:
+        from animation.parametric.factory.landmark_detector import (  # noqa: PLC0415
+            RoboticLandmarkRefused,
+            detect_landmarks,
+        )
+    except Exception:
+        return None
+    try:
+        marks = detect_landmarks(path, require_human_face=True)
+    except RoboticLandmarkRefused:
+        return None
+    except Exception:
+        return None
+    if getattr(marks, "backend", "") == "opencv_robotic_fallback":
+        return None
+    try:
+        with Image.open(path) as image:
+            width = int(image.width)
+    except OSError:
+        return None
+
+    def eye_box(eye: Any, upper: Any, lower: Any) -> list[int]:
+        points = list(upper or ()) + list(lower or ())
+        if len(points) >= 4:
+            xs = [int(point[0]) for point in points]
+            ys = [int(point[1]) for point in points]
+            return [min(xs), min(ys), max(xs), max(ys)]
+        cx, cy = marks.pixel_point(eye.center)
+        radius = max(4.0, float(eye.iris_radius) * width)
+        return [
+            int(cx - radius * 2.2), int(cy - radius * 1.4),
+            int(cx + radius * 2.2), int(cy + radius * 1.4),
+        ]
+
+    left = eye_box(marks.left_eye, marks.left_upper, marks.left_lower)
+    right = eye_box(marks.right_eye, marks.right_upper, marks.right_lower)
+    if left[0] > right[0]:
+        left, right = right, left
+    ring = list(marks.lip_ring or ())
+    if len(ring) >= 4:
+        xs = [int(point[0]) for point in ring]
+        ys = [int(point[1]) for point in ring]
+        mouth = [min(xs), min(ys), max(xs), max(ys)]
+    else:
+        mx, my = marks.pixel_point(marks.mouth_center)
+        half = max(6.0, float(marks.mouth_width) * width / 2.0)
+        mouth = [int(mx - half), int(my - half * 0.45), int(mx + half), int(my + half * 0.55)]
+    x0, y0, x1, y1 = marks.head_bbox
+    boxes = {
+        "face": [int(x0), int(y0), int(x1), int(y1)],
+        "left_eye": left,
+        "right_eye": right,
+        "mouth": mouth,
+    }
+    if any(box[2] - box[0] < 2 or box[3] - box[1] < 2 for box in boxes.values()):
+        return None
+    return boxes
+
+
+def _measured_boxes(path: Path, layer: dict[str, Any] | None) -> dict[str, list[int]] | None:
+    """Landmark boxes in canvas pixels. A head crop is shifted by its layer origin."""
+    raw = _landmark_boxes(path)
+    if not raw or not layer:
+        return raw
+    try:
+        with Image.open(path) as image:
+            size = image.size
+    except OSError:
+        return raw
+    if size != (int(layer.get("w") or -1), int(layer.get("h") or -1)):
+        return raw
+    ox, oy = int(layer.get("x") or 0), int(layer.get("y") or 0)
+    if ox == 0 and oy == 0:
+        return raw
+    return {
+        key: [box[0] + ox, box[1] + oy, box[2] + ox, box[3] + oy]
+        for key, box in raw.items()
+    }
+
+
+def _write_front_boxes(skin: Path, boxes: dict[str, list[int]]) -> None:
+    """Store frontal boxes and reseat the front mouths on them."""
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    folder = skin / "views" / "front"
+    view = _load(folder / "view.json") or {}
+    rig_doc = _load(skin / "rig_front.json") or {}
+    rig_doc["boxes"] = {**(rig_doc.get("boxes") or {}), **{key: list(boxes[key]) for key in _BOXES}}
+    rig_doc["mouthBox"] = list(boxes["mouth"])
+    irises = (view.get("eyeRig") or {}).get("irises")
+    if isinstance(irises, list):
+        for iris, key in zip(irises, ("left_eye", "right_eye")):
+            box = boxes[key]
+            iris[0] = (int(box[0]) + int(box[2])) / 2
+            iris[1] = (int(box[1]) + int(box[3])) / 2
+    _reseat_mouths(folder, view, boxes["face"], boxes["left_eye"], boxes["right_eye"])
+    (folder / "view.json").write_text(json.dumps(view, indent=2), encoding="utf-8")
+    (skin / "rig_front.json").write_text(json.dumps(rig_doc, indent=2), encoding="utf-8")
+    qa_mod.match_skin_rim(folder)
+
+
+def _copy_front_view(src: Path, dest: Path) -> None:
+    import shutil  # noqa: PLC0415
+
+    target = dest / "views" / "front"
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(src / "views" / "front", target)
+    rig = src / "rig_front.json"
+    if rig.is_file():
+        shutil.copy2(rig, dest / "rig_front.json")
+
+
+def _side_bytes(skin: Path) -> set[bytes]:
+    found: set[bytes] = set()
+    left = _head_file(skin, "left")
+    if left is not None:
+        try:
+            found.add(left.read_bytes())
+        except OSError:
+            pass
+    for name in _SIDE_PLATES:
+        path = skin / name
+        if not path.is_file():
+            continue
+        try:
+            found.add(path.read_bytes())
+        except OSError:
+            continue
+    return found
+
+
+def _seat_master(skin: Path, path: Path, boxes: dict[str, list[int]]) -> None:
+    """Put a frontal master into the front head slot. Boxes are image pixels."""
+    folder = skin / "views" / "front"
+    view = _load(folder / "view.json") or {}
+    layer = _head_layer(view)
+    image = Image.open(path).convert("RGBA")
+    if layer is None:
+        layer = {"name": "head", "url": "head.png", "x": 0, "y": 0, "w": image.width, "h": image.height, "z": 0}
+        view.setdefault("layers", []).append(layer)
+    image.save(folder / str(layer.get("url") or "head.png"))
+    if image.size == (int(layer.get("w") or -1), int(layer.get("h") or -1)):
+        ox, oy = int(layer.get("x") or 0), int(layer.get("y") or 0)
+        boxes = {
+            key: [box[0] + ox, box[1] + oy, box[2] + ox, box[3] + oy]
+            for key, box in boxes.items()
+        }
+    else:
+        layer["x"], layer["y"] = 0, 0
+        layer["w"], layer["h"] = image.size
+    (folder / "view.json").write_text(json.dumps(view, indent=2), encoding="utf-8")
+    _write_front_boxes(skin, boxes)
+
+
+def _adopt_donor(skin: Path, donors: list[Path]) -> dict[str, Any] | None:
+    """Copy another plate's front when that head is a real frontal and this one is not."""
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    for donor in donors:
+        if not isinstance(donor, Path) or _same_dir(donor, skin):
+            continue
+        if not (donor / "views" / "front" / "view.json").is_file():
+            continue
+        if heads_equal(donor):
+            continue
+        rig_doc = _load(donor / "rig_front.json") or {}
+        boxes = rig_doc.get("boxes")
+        if not isinstance(boxes, dict) or not qa_mod.front_symmetry(boxes).get("pass"):
+            continue
+        before = _symmetry((_load(skin / "rig_front.json") or {}).get("boxes"))
+        _copy_front_view(donor, skin)
+        after = _symmetry((_load(skin / "rig_front.json") or {}).get("boxes"))
+        return _report(
+            installed=True,
+            method="photo",
+            front_kind="photo",
+            photo=True,
+            equals=heads_equal(skin),
+            reason="copied a distinct frontal view",
+            before=before,
+            after=after,
+            source=str(donor),
+            reference="donor-front",
+        )
+    return None
+
+
+def _adopt_master(skin: Path) -> dict[str, Any] | None:
+    """Seat source_front / character_front when the file itself is a frontal."""
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    banned = _side_bytes(skin)
+    for name in _FRONT_MASTERS:
+        path = skin / name
+        if not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        if raw in banned:
+            continue
+        boxes = _measured_boxes(path, None)
+        if not boxes or not qa_mod.front_symmetry(boxes).get("pass"):
+            continue
+        before = _symmetry((_load(skin / "rig_front.json") or {}).get("boxes"))
+        _seat_master(skin, path, boxes)
+        after = _symmetry((_load(skin / "rig_front.json") or {}).get("boxes"))
+        return _report(
+            installed=True,
+            method="photo",
+            front_kind="photo",
+            photo=True,
+            equals=heads_equal(skin),
+            reason="seated a frontal master",
+            before=before,
+            after=after,
+            source=name,
+            reference=name,
+        )
+    return None
+
+
+def _keep_distinct_head(skin: Path) -> dict[str, Any] | None:
+    """Use the front head that is already a different picture from the left view."""
+    from . import qa as qa_mod  # noqa: PLC0415
+
+    if heads_equal(skin):
+        return None
+    before = _symmetry((_load(skin / "rig_front.json") or {}).get("boxes"))
+    if before.get("pass"):
+        return _report(
+            installed=False,
+            method="photo",
+            front_kind="photo",
+            photo=True,
+            equals=False,
+            reason="distinct frontal",
+            before=before,
+            after=before,
+            source="views/front/head",
+            reference="views/front",
+        )
+    head = _head_file(skin, "front")
+    view = _load(skin / "views" / "front" / "view.json") or {}
+    boxes = _measured_boxes(head, _head_layer(view)) if head is not None else None
+    if boxes and qa_mod.front_symmetry(boxes).get("pass"):
+        _write_front_boxes(skin, boxes)
+        after = _symmetry(boxes)
+        return _report(
+            installed=True,
+            method="photo",
+            front_kind="photo",
+            photo=True,
+            equals=heads_equal(skin),
+            reason="distinct frontal, boxes from the head",
+            before=before,
+            after=after,
+            source="views/front/head",
+            reference="views/front",
+        )
+    return None
+
+
+def install_true_front(skin: Path, donors: list[Path] | None = None) -> dict[str, Any]:
+    """Install a real frontal, or warp the left view when that is all there is.
+
+    ``front_is_true_photo`` is true only when the front head is a different
+    picture from the left and its boxes are frontal. A camera warp never sets
+    that flag. Left and right stay three-quarter. The plate file is not deleted.
     """
+    donors = list(donors or [])
     folder = skin / "views" / "front"
     view = _load(folder / "view.json")
     rig = _load(skin / "rig_front.json")
     if view is None or rig is None:
-        return {"installed": False, "reason": "no front"}
+        return _report(
+            installed=False, method="missing", front_kind="missing", photo=False,
+            equals=heads_equal(skin), reason="no front",
+        )
     boxes = rig.get("boxes") or {}
     before = _symmetry(boxes)
+    distinct = _keep_distinct_head(skin)
+    if distinct is not None:
+        return distinct
+    # A front that already passes may still be the left view copied into the
+    # slot. A donor or a master replaces that. A different picture that is not
+    # frontal is kept as a three-quarter and is not warped.
+    adopted = _adopt_donor(skin, donors)
+    if adopted is not None:
+        return adopted
+    mastered = _adopt_master(skin)
+    if mastered is not None:
+        return mastered
+    if not heads_equal(skin):
+        return _report(
+            installed=False, method="kept", front_kind="three-quarter", photo=False,
+            equals=False, reason="front head differs from the left and is not a frontal photo",
+            before=before, after=before, source="views/front/head",
+        )
     if before.get("pass"):
-        return {
-            "installed": False,
-            "reason": "already frontal",
-            "before": before.get("value"),
-            "after": before.get("value"),
-        }
+        return _report(
+            installed=False, method="kept", front_kind="same-as-left", photo=False,
+            equals=True, reason="already frontal", before=before, after=before,
+        )
     ref = _reference(skin)
     if ref is None:
         if any(key not in boxes for key in _BOXES):
@@ -438,4 +811,9 @@ def install_true_front(skin: Path) -> dict[str, Any]:
         "shift": shift + slide,
         "reference": ref_name,
         "method": "camera-warp",
+        "front_kind": "camera-warp",
+        "front_is_true_photo": False,
+        "front_equals_left": heads_equal(skin),
+        "reason": "warped the left view",
+        "source": f"views/{ref_name}",
     }
