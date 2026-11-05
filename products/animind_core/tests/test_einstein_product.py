@@ -127,7 +127,7 @@ def test_an_older_three_quarter_plate_is_reused_without_create_puppet(tmp_path, 
     """A complete cut is copied when the plate file is newer than the views.
 
     This plate's boxes already pass the front gate, so a left anchor tag is
-    copied as filed. A front that fails symmetry is mirrored on the copy.
+    copied as filed. A front that fails symmetry is warped from the left view.
     """
     _offline(monkeypatch, tmp_path)
     _refuse_image(monkeypatch)

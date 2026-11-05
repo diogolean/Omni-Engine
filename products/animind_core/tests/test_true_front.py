@@ -1,10 +1,11 @@
-"""A three-quarter Einstein front becomes a midline bust without an image call."""
+"""A three-quarter Einstein front becomes a frontal camera without an image call."""
 import json
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
-from products.animind_core import front_plate, qa, rig
+from products.animind_core import avatar, front_plate, qa, rig
 from products.animind_core.tests.test_einstein_product import _offline
 
 _KEEP = ("mouthAnchor", "mouthOpen", "doubleMouth", "skin", "landmarks")
@@ -44,11 +45,12 @@ def _shift_front(skin: Path, dx: int) -> None:
     (skin / "rig_front.json").write_text(json.dumps(rig_doc, indent=2), encoding="utf-8")
 
 
-def _paint_cheeks(skin: Path) -> tuple[int, int, int]:
-    """Blue on the near cheek, red on the far cheek, the same distance off the nose."""
-    folder = skin / "views" / "front"
+def _paint_cheeks(skin: Path, view_name: str) -> None:
+    """Blue on the viewer's left cheek, red on the right. The two sides stay distinct."""
+    folder = skin / "views" / view_name
     view = json.loads((folder / "view.json").read_text(encoding="utf-8"))
-    boxes = json.loads((skin / "rig_front.json").read_text(encoding="utf-8"))["boxes"]
+    rig_name = "rig_front.json" if view_name == "front" else "rig.json"
+    boxes = json.loads((skin / rig_name).read_text(encoding="utf-8"))["boxes"]
     axis = int(round(front_plate._axis(boxes)))
     head = next(layer for layer in view["layers"] if layer["name"] == "head")
     image = Image.open(folder / head["url"]).convert("RGBA")
@@ -59,25 +61,35 @@ def _paint_cheeks(skin: Path) -> tuple[int, int, int]:
     draw.rectangle((near, y, near + 10, y + 10), fill=(20, 40, 220, 255))
     draw.rectangle((far, y, far + 10, y + 10), fill=(220, 30, 40, 255))
     image.save(folder / head["url"])
-    return axis, int(head["y"]) + y + 5, 48
 
 
-def test_symmetrize_sprite_copies_the_near_half():
+def _colors(image: Image.Image) -> set[tuple[int, int, int]]:
+    arr = np.asarray(image.convert("RGBA"))
+    found: set[tuple[int, int, int]] = set()
+    for rgb in ((20, 40, 220), (220, 30, 40)):
+        hit = np.all(arr[..., :3] == rgb, axis=-1) & (arr[..., 3] > 200)
+        if int(hit.sum()) > 8:
+            found.add(rgb)
+    return found
+
+
+def test_frontalize_sprite_keeps_both_cheeks():
     image = Image.new("RGBA", (40, 10), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
     draw.rectangle((2, 2, 12, 8), fill=(10, 20, 200, 255))
     draw.rectangle((28, 2, 36, 8), fill=(200, 20, 10, 255))
-    out, origin = front_plate.symmetrize_sprite(image, 0, 20, keep_left=True)
+    # Stretch the right half. The red block must not become a copy of the blue one.
+    src = np.array([0.0, 20.0, 39.0])
+    dst = np.array([0.0, 16.0, 39.0])
+    out, origin, _y = front_plate.frontalize_sprite(image, 0, 0, src, dst)
+    arr = np.asarray(out)
+    blue = np.all(arr[..., :3] == (10, 20, 200), axis=-1) & (arr[..., 3] > 200)
+    red = np.all(arr[..., :3] == (200, 20, 10), axis=-1) & (arr[..., 3] > 200)
+    assert int(blue.sum()) > 8 and int(red.sum()) > 8
+    assert origin <= 0
 
-    def at(canvas_x: int) -> tuple[int, int, int]:
-        return out.getpixel((canvas_x - origin, 5))[:3]
 
-    # x=8 is the blue block. Its mirror across 20 is x=32, where the red block sat.
-    assert at(8) == (10, 20, 200)
-    assert at(32) == (10, 20, 200)
-
-
-def test_cached_three_quarter_front_becomes_a_midline_bust(tmp_path, monkeypatch):
+def test_cached_three_quarter_front_becomes_a_camera_front(tmp_path, monkeypatch):
     _offline(monkeypatch, tmp_path)
     plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
     painted = rig.build_einstein_product(plate, lambda path: path.name)
@@ -85,19 +97,21 @@ def test_cached_three_quarter_front_becomes_a_midline_bust(tmp_path, monkeypatch
     face = json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"]["face"]
     shift = -int(0.12 * (face[2] - face[0]))
     _shift_front(plate, shift)
-    _axis, sample_y, _reach = _paint_cheeks(plate)
+    _paint_cheeks(plate, "left")
     turned = qa.front_symmetry(
         json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"],
     )
     assert turned["pass"] is False and turned["value"] > 0.05
     source_head = (plate / "views" / "front" / "head.png").read_bytes()
     left_head = (plate / "views" / "left" / "head.png").read_bytes()
+    plate_png = (plate / "character.png").read_bytes()
 
     skin = tmp_path / "product"
     built = rig.build_einstein_product(
         skin, lambda path: path.name, cached=plate, searched=[],
     )
     assert (plate / "views" / "front" / "head.png").read_bytes() == source_head
+    assert (plate / "character.png").read_bytes() == plate_png
     assert (skin / "views" / "left" / "head.png").read_bytes() == left_head
     gates = built["qa"]["gates"]
     assert gates["front"]["pass"] is True
@@ -107,27 +121,52 @@ def test_cached_three_quarter_front_becomes_a_midline_bust(tmp_path, monkeypatch
         assert gates[key]["pass"], (key, gates[key])
     assert built["qa"]["score"] >= 90
     assert built["qa"]["costUsd"] == 0.0
-    assert "mirrored from the three-quarter plate" in built["note"]
+    assert "camera warped from the left view" in built["note"]
     assert built["plateFrontal"] is True
 
     view = json.loads((skin / "views" / "front" / "view.json").read_text(encoding="utf-8"))
     head = next(layer for layer in view["layers"] if layer["name"] == "head")
     image = Image.open(skin / "views" / "front" / head["url"]).convert("RGBA")
-    face_box = json.loads((skin / "rig_front.json").read_text(encoding="utf-8"))["boxes"]["face"]
-    centre = (face_box[0] + face_box[2]) / 2
-    # The install slides the old midline onto the face centre.
-    landed = centre
-    # The blue square is 10px starting 48px left of the old midline. Its centre
-    # is 43px off that line, and the install slides the line onto the face centre.
-    near_x = int(round(landed - 43)) - int(head["x"])
-    far_x = int(round(landed + 43)) - int(head["x"])
-    row = sample_y - int(head["y"])
-    near = image.getpixel((near_x, row))
-    far = image.getpixel((far_x, row))
-    assert near[:3] == (20, 40, 220)
-    assert far[:3] == (20, 40, 220)
+    # The front is the left view seen by a frontal camera. Both cheeks survive.
+    # A near-half mirror would have painted the red cheek blue.
+    assert _colors(image) == {(20, 40, 220), (220, 30, 40)}
     anchor = view["mouthQA"]["anchor"]
     assert anchor["view"] == "front"
     width = max(1, int(view["mouthQA"]["face"][2]) - int(view["mouthQA"]["face"][0]))
     mouth_centre = (int(view["mouthQA"]["face"][0]) + int(view["mouthQA"]["face"][2])) / 2
     assert abs((anchor["x"] - mouth_centre) / width) <= 0.01
+
+
+def test_rerig_of_a_three_quarter_plate_warps_without_create_puppet(tmp_path, monkeypatch):
+    _offline(monkeypatch, tmp_path)
+    calls = {"n": 0}
+
+    def create_puppet(*_args, **_kwargs):
+        calls["n"] += 1
+        raise AssertionError("create_puppet must not run on a complete plate")
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.create_puppet",
+        create_puppet,
+    )
+    plate = tmp_path / "assets" / "puppets" / rig.EINSTEIN_PLATE_ID
+    rig.build_einstein_product(plate, lambda path: path.name)
+    face = json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"]["face"]
+    _shift_front(plate, -int(0.12 * (face[2] - face[0])))
+    plate_png = (plate / "character.png").read_bytes()
+    left_head = (plate / "views" / "left" / "head.png").read_bytes()
+    built = avatar.rerig_from_plate(
+        plate,
+        description="Albert Einstein",
+        url=lambda path: path.name,
+        character_id=rig.EINSTEIN_PLATE_ID,
+        name="Albert Einstein",
+        edit=False,
+    )
+    assert calls["n"] == 0
+    assert built["qa"]["costUsd"] == 0.0
+    assert built["frontShot"] == "facing_front"
+    assert (plate / "character.png").read_bytes() == plate_png
+    assert (plate / "views" / "left" / "head.png").read_bytes() == left_head
+    gate = qa.front_symmetry(json.loads((plate / "rig_front.json").read_text(encoding="utf-8"))["boxes"])
+    assert gate["pass"] is True and gate["value"] <= 0.05

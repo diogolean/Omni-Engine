@@ -1763,9 +1763,9 @@ def build_einstein_product(
 
     A cached ``albert_einstein_ca8386e2`` folder with a complete layered cut
     (front, left, and right) is copied in, even when the plate file is newer
-    than the views. A three-quarter front is mirrored into a midline bust
-    before the gates run. Otherwise the procedural bust is painted, seated,
-    and sealed so a later re-rig does not pay ``create_puppet``.
+    than the views. A three-quarter front is warped from the left view into
+    a frontal camera before the gates run. Otherwise the procedural bust is
+    painted, seated, and sealed so a later re-rig does not pay ``create_puppet``.
     """
     import shutil  # noqa: PLC0415
 
@@ -1788,7 +1788,7 @@ def build_einstein_product(
         note = f"reused photographed plate {EINSTEIN_PLATE_ID} from {cached}"
         if turned.get("installed"):
             note += (
-                f"; front mirrored from the three-quarter plate"
+                f"; front camera warped from the {turned.get('reference') or 'left'} view"
                 f" (symmetry {turned.get('before')} -> {turned.get('after')})"
             )
         elif not frontal:

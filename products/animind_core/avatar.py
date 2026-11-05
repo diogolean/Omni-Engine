@@ -1124,10 +1124,23 @@ def rerig_from_plate(
         raise FileNotFoundError(f"no cached plate in {skin}; nothing to re-rig without an image call")
     cost = 0.0
     views: dict[str, Any] | None = None
-    # The photographed ``albert_einstein_ca8386e2`` cut stays, even when the
-    # plate file was restamped later or the front pose is three-quarter.
-    # Any other Einstein whose plate file is newer than the views is still cut.
+    # The photographed ``albert_einstein_ca8386e2`` cut stays on disk, even when
+    # the plate file was restamped later. A three-quarter front is warped from
+    # the left view. Any other Einstein whose plate file is newer than the
+    # views is still cut.
     if rig._names_the_plate(skin) and rig._einstein_views_ready(skin):
+        # A 3/4 front becomes a camera frontal from the left view. The plate
+        # png stays. This does not call create_puppet.
+        front_doc = skin / "rig_front.json"
+        if front_doc.is_file():
+            try:
+                front_boxes = json.loads(front_doc.read_text(encoding="utf-8")).get("boxes")
+            except (OSError, ValueError):
+                front_boxes = None
+            if isinstance(front_boxes, dict) and not qa.front_symmetry(front_boxes).get("pass"):
+                from . import front_plate  # noqa: PLC0415
+
+                front_plate.install_true_front(skin)
         views = _publish_saved_sides(skin, url)
         front = puppet_v3.publish_view(skin / "views" / "front", url)
         if front is not None:
