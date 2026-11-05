@@ -3,7 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from products.animind_core import mouthset, qa
 
@@ -117,14 +117,74 @@ def test_viseme_b_ink_stays_inside_the_sprite_on_a_moustache(tmp_path):
     assert "B" not in (gate.get("bad") or {})
 
 
-def test_closed_rest_is_a_lip_stroke_not_a_filled_oval():
-    rest = mouthset.south_park_rest(80, height=22)
+def test_closed_rest_is_a_short_smile_with_teeth():
+    rest = mouthset.south_park_rest(80, height=28)
     assert not mouthset.filled_dark_oval(rest)
+    assert not mouthset.thin_dark_stroke(rest)
+    assert not mouthset.lacks_teeth(rest)
     box = rest.getchannel("A").point(lambda alpha: 255 if alpha > 128 else 0).getbbox()
     assert box is not None
-    crop = np.asarray(rest.crop(box))
-    ink = crop[..., 3] > 128
-    assert float(ink.mean()) < 0.42
+    assert (box[3] - box[1]) / max(1, box[2] - box[0]) > 0.22
+
+
+def test_a_painted_smile_that_is_not_a_flat_blob_is_cleared(tmp_path):
+    """The photographed line is dark and warm, and a mirror copies it onto the head."""
+    from products.animind_core import mouth_anchor
+
+    skin = tmp_path / "plate"
+    view = skin / "views" / "front"
+    (view / "mouths").mkdir(parents=True)
+    head = Image.new("RGBA", (160, 120), (214, 168, 142, 255))
+    draw = ImageDraw.Draw(head)
+    draw.rectangle((40, 48, 120, 58), fill=(236, 232, 224, 255))
+    for x in range(48, 112, 3):
+        tone = 36 + (x % 5)
+        draw.rectangle((x, 64, x + 2, 72), fill=(tone + 55, tone, tone - 8, 255))
+    head.save(view / "head.png")
+    sprite = Image.new("RGBA", (36, 8), (0, 0, 0, 0))
+    ImageDraw.Draw(sprite).rectangle((4, 2, 32, 5), fill=(40, 18, 16, 255))
+    sprite.save(view / "mouths" / "mouth_X.png")
+    kept = np.asarray(Image.open(view / "head.png"))[48:58, 40:120, :3].copy()
+    doc = {
+        "canvas": {"w": 160, "h": 120},
+        "layers": [{"name": "head", "url": "head.png", "x": 0, "y": 0, "z": 1}],
+        "visemes": {"X": {"url": "mouths/mouth_X.png", "x": 62, "y": 62, "w": 36, "h": 8}},
+        "mouthQA": {"mouth": [62, 62, 98, 74], "mouths": "human", "mouthless": False},
+    }
+    (view / "view.json").write_text(json.dumps(doc), encoding="utf-8")
+    before = qa.double_mouth(view)
+    assert before["pass"] is False and "head" in (before.get("bad") or {})
+    assert mouth_anchor.clear_painted_smiles(skin)["front"] is True
+    after = qa.double_mouth(view)
+    assert after["pass"], after
+    moustache = np.asarray(Image.open(view / "head.png"))[48:58, 40:120, :3]
+    assert np.array_equal(moustache, kept)
+
+
+def test_a_thin_rest_and_a_solid_happy_oval_are_redrawn(tmp_path):
+    view = tmp_path / "views" / "front"
+    (view / "mouths").mkdir(parents=True)
+    (view / "expressions").mkdir()
+    stroke = Image.new("RGBA", (80, 24), (0, 0, 0, 0))
+    ImageDraw.Draw(stroke).rectangle((8, 10, 72, 13), fill=(36, 16, 14, 255))
+    stroke.save(view / "mouths" / "mouth_X.png")
+    oval = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
+    ImageDraw.Draw(oval).ellipse((8, 6, 72, 34), fill=(24, 12, 12, 255))
+    oval.save(view / "expressions" / "expression_happy.png")
+    doc = {
+        "canvas": {"w": 80, "h": 40},
+        "layers": [],
+        "visemes": {"X": {"url": "mouths/mouth_X.png", "x": 0, "y": 0, "w": 80, "h": 24}},
+        "expressions": {"happy": {"url": "expressions/expression_happy.png", "x": 0, "y": 0, "w": 80, "h": 40}},
+    }
+    (view / "view.json").write_text(json.dumps(doc), encoding="utf-8")
+    assert mouthset.repair_filled_rests(tmp_path) == ["front"]
+    rest = Image.open(view / "mouths" / "mouth_X.png")
+    happy = Image.open(view / "expressions" / "expression_happy.png")
+    assert not mouthset.thin_dark_stroke(rest)
+    assert not mouthset.lacks_teeth(rest)
+    assert not mouthset.filled_dark_oval(happy)
+    assert not mouthset.lacks_teeth(happy)
 
 
 def test_south_park_smile_ink_stays_inside_the_png():

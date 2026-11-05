@@ -832,12 +832,30 @@ def repair_collar_mouths(skin: Path) -> dict[str, Any]:
     return notes
 
 
-def clear_painted_smiles(skin: Path) -> dict[str, bool]:
-    """Blank a photographed smile so the drawn rest is the only closed mouth.
+def _gate_zone(view: dict[str, Any], height: int, width: int) -> np.ndarray | None:
+    """The ellipse ``qa.double_mouth`` treats as the lip. Same formula."""
+    meta = view.get("mouthQA") or {}
+    mouth = meta.get("mouth") or meta.get("mouthBox")
+    if not mouth or len(mouth) < 4:
+        return None
+    zx0, zy0, zx1, zy1 = (int(v) for v in mouth)
+    rest = (view.get("visemes") or {}).get("X")
+    if isinstance(rest, dict):
+        zx0, zy0 = int(rest.get("x") or zx0), int(rest.get("y") or zy0)
+        zx1, zy1 = zx0 + int(rest.get("w") or 4), zy0 + int(rest.get("h") or 4)
+    zw, zh = max(4, zx1 - zx0), max(4, zy1 - zy0)
+    yy, xx = np.mgrid[0:height, 0:width]
+    zone = ((xx - (zx0 + zx1) / 2) / (zw * 0.85)) ** 2 + ((yy - (zy0 + zy1) / 2) / (zh * 1.05 + 6)) ** 2 <= 1
+    return zone
 
-    A cheek with no flat dark lip is left alone. The moustache stays.
+
+def clear_painted_smiles(skin: Path) -> dict[str, bool]:
+    """Blank smile ink the double-mouth gate would count on the mouthless head.
+
+    The photographed smile is a dark warm line, not always one flat blob, and
+    a midline mirror paints it onto both cheeks. White moustache pixels stay.
     """
-    from . import mouthset  # noqa: PLC0415
+    from . import qa as qa_mod  # noqa: PLC0415
 
     notes: dict[str, bool] = {}
     for name in _VIEWS:
@@ -847,40 +865,67 @@ def clear_painted_smiles(skin: Path) -> dict[str, bool]:
             notes[name] = False
             continue
         view = json.loads(path.read_text(encoding="utf-8"))
-        meta = view.get("mouthQA") or {}
-        face = meta.get("face")
-        raw = meta.get("anchor") or {}
-        mouth = meta.get("mouth") or meta.get("mouthBox")
+        if qa_mod.double_mouth(folder).get("pass"):
+            notes[name] = False
+            continue
         layer = next((item for item in view.get("layers") or [] if item.get("name") == "head"), None)
-        if not face or not mouth or not isinstance(raw, dict) or "x" not in raw or layer is None:
+        if layer is None:
             notes[name] = False
             continue
         head_path = folder / str(layer.get("url") or "")
         if not head_path.is_file():
             notes[name] = False
             continue
-        head = Image.open(head_path).convert("RGBA")
+        canvas_w = int((view.get("canvas") or {}).get("w") or 0)
+        canvas_h = int((view.get("canvas") or {}).get("h") or 0)
+        if canvas_w < 2 or canvas_h < 2:
+            notes[name] = False
+            continue
+        zone = _gate_zone(view, canvas_h, canvas_w)
+        if zone is None or not zone.any():
+            notes[name] = False
+            continue
+        image = Image.open(head_path).convert("RGBA")
+        arr = np.array(image)
         ox, oy = int(layer.get("x") or 0), int(layer.get("y") or 0)
-        x0, y0 = max(0, int(mouth[0]) - ox), max(0, int(mouth[1]) - oy)
-        x1, y1 = min(head.width, int(mouth[2]) - ox), min(head.height, int(mouth[3]) - oy)
-        if x1 <= x0 + 2 or y1 <= y0 + 2:
+        local = np.zeros(zone.shape, bool)
+        y1 = min(canvas_h, oy + arr.shape[0])
+        x1 = min(canvas_w, ox + arr.shape[1])
+        if y1 <= oy or x1 <= ox:
             notes[name] = False
             continue
-        crop = np.asarray(head.crop((x0, y0, x1, y1)).convert("RGB"))
-        if not mouthset.painted_mouth_is_flat(crop):
+        local[oy:y1, ox:x1] = True
+        patch = zone & local
+        if not patch.any():
             notes[name] = False
             continue
-        nose = raw.get("nose") or [raw["x"], int(raw["y"]) - 20]
-        chin = raw.get("chin") or [raw["x"], int(raw["y"]) + 40]
-        anchor = Anchor(
-            x=int(raw["x"]),
-            y=int(raw["y"]),
-            nose=(int(nose[0]), int(nose[1])),
-            chin=(int(chin[0]), int(chin[1])),
-            view=str(raw.get("view") or name),
-            along=float(raw.get("along") or ALONG),
-            moustache_bottom=raw.get("moustacheBottom"),
-        )
-        _clear_painted_lip(folder, view, face, anchor)
+        ys, xs = np.nonzero(patch)
+        hy, hx = ys - oy, xs - ox
+        rgb = arr[hy, hx, :3]
+        tone = qa_mod.skin_of(rgb) if rgb.size else np.array([210.0, 160.0, 140.0])
+        ink = qa_mod.ink_mask(rgb.reshape(-1, 1, 3), tone).reshape(-1) & (arr[hy, hx, 3] > 128)
+        sat = (rgb.max(axis=1) - rgb.min(axis=1)) / np.maximum(rgb.max(axis=1), 1)
+        lum = rgb.astype(np.float32).mean(axis=1)
+        hair = (sat < 0.18) & (lum > 150)
+        kill = ink & ~hair
+        if int(kill.sum()) < 8:
+            notes[name] = False
+            continue
+        beside = np.zeros(arr.shape[:2], bool)
+        y0b, y1b = max(0, int(ys.min()) - oy - 6), min(arr.shape[0], int(ys.max()) - oy + 8)
+        x0b, x1b = max(0, int(xs.min()) - ox - 10), min(arr.shape[1], int(xs.max()) - ox + 10)
+        beside[y0b:y1b, x0b:x1b] = True
+        beside[hy[kill], hx[kill]] = False
+        sample = arr[beside]
+        opaque = sample[:, 3] > 128
+        sample_rgb = sample[opaque][:, :3].astype(np.int16) if opaque.any() else rgb[~kill]
+        if len(sample_rgb) < 8:
+            notes[name] = False
+            continue
+        chroma = sample_rgb.max(axis=1) - sample_rgb.min(axis=1)
+        warm = sample_rgb[chroma > 12]
+        cheek = np.median(warm if len(warm) >= 8 else sample_rgb, axis=0)
+        arr[hy[kill], hx[kill], :3] = np.clip(cheek, 0, 255).astype(np.uint8)
+        Image.fromarray(arr).save(head_path)
         notes[name] = True
     return notes

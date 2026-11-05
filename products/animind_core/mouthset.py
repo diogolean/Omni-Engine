@@ -235,6 +235,34 @@ def draw_expressions(
     return _same_canvas(sealed)
 
 
+def _ink_stats(image: Image.Image) -> tuple[np.ndarray, tuple[int, int, int, int] | None, np.ndarray]:
+    arr = np.asarray(image.convert("RGBA"))
+    alpha = arr[..., 3] > 128
+    box = image.getchannel("A").point(lambda value: 255 if value > 128 else 0).getbbox()
+    return arr, box, alpha
+
+
+def lacks_teeth(image: Image.Image) -> bool:
+    """Dark mouth ink with no teeth band. A South Park smile has a light strip."""
+    arr, box, alpha = _ink_stats(image)
+    if box is None or int(alpha.sum()) < 20:
+        return False
+    rgb = arr[alpha][:, :3].astype(np.float32)
+    light = float((rgb.mean(axis=1) > 150).mean())
+    return light < 0.04 and float(rgb.mean()) < 100
+
+
+def thin_dark_stroke(image: Image.Image) -> bool:
+    """A hairline rest. The photographed plate uses one as the closed mouth."""
+    _arr, box, alpha = _ink_stats(image)
+    if box is None or not lacks_teeth(image):
+        return False
+    width, height = box[2] - box[0], box[3] - box[1]
+    if width < 10 or height < 1:
+        return False
+    return height <= max(6, int(width * 0.22))
+
+
 def filled_dark_oval(image: Image.Image) -> bool:
     """A filled dark crescent: the closed mouth that covers the lip.
 
@@ -254,26 +282,50 @@ def filled_dark_oval(image: Image.Image) -> bool:
 
 
 def south_park_rest(width: int, height: int | None = None) -> Image.Image:
-    """Closed South Park mouth: one curved lip stroke, interior left clear."""
+    """Closed South Park smile: a short wedge and a teeth band, not a hairline.
+
+    The photographed rest is a dark stroke. This keeps the same family as the
+    happy wedge, only shorter, so the lip reads as a mouth.
+    """
     import cv2  # noqa: PLC0415
 
-    width = max(8, int(width))
-    bow = max(5, int(height) if height else max(5, int(round(width * 0.28))))
-    stroke = max(2, min(max(2, bow // 5), max(2, width // 16)))
-    pad = 3
+    width = max(12, int(width))
+    bow = max(8, int(height) if height else max(8, int(round(width * 0.36))))
+    stroke = max(2, width // 18)
+    pad = stroke + 3
     canvas_w, canvas_h = width + 2 * pad, bow + 2 * pad
     scale = 4
     canvas = np.zeros((canvas_h * scale, canvas_w * scale, 4), np.uint8)
-    pts = []
-    for step in range(21):
-        u = step / 20
-        x = pad + 1 + u * (width - 2)
-        y = pad + stroke * 0.6 + np.sin(u * np.pi) * max(1.0, bow - stroke)
-        pts.append([int(round(x * scale)), int(round(y * scale))])
-    cv2.polylines(
-        canvas, [np.array(pts, np.int32)], False, (62, 34, 32, 255),
-        max(1, stroke * scale), cv2.LINE_8,
-    )
+
+    def pt(x: float, y: float) -> list[int]:
+        return [int(round(x * scale)), int(round(y * scale))]
+
+    x0, x1 = float(pad + 1), float(pad + width - 1)
+    y0, y1 = float(pad + 1), float(pad + bow - 2)
+    span = max(1.0, x1 - x0)
+    mid = (x0 + x1) / 2
+    bot_w = span * 0.55
+    shape = np.array([
+        pt(x0, y0 + bow * 0.08),
+        pt(mid, y0),
+        pt(x1, y0 + bow * 0.1),
+        pt(mid + bot_w / 2, y1),
+        pt(mid - bot_w / 2, y1),
+    ], np.int32)
+    cv2.fillPoly(canvas, [shape], (28, 14, 16, 255))
+    band_top, band_bot = y0 + bow * 0.12, y0 + bow * 0.42
+    wall = span * 0.16
+    teeth = np.array([
+        pt(x0 + wall, band_top),
+        pt(x1 - wall, band_top + bow * 0.04),
+        pt(x1 - wall * 1.2, band_bot),
+        pt(x0 + wall * 1.2, band_bot),
+    ], np.int32)
+    cv2.fillPoly(canvas, [teeth], (246, 242, 236, 255))
+    for frac in (0.38, 0.55, 0.72):
+        x = x0 + wall + (span - 2 * wall) * frac
+        cv2.line(canvas, pt(x, band_top), pt(x, band_bot - bow * 0.04), (48, 32, 30, 255), max(1, scale // 2))
+    cv2.polylines(canvas, [shape], True, (48, 32, 30, 255), max(1, stroke * scale))
     alpha = canvas[..., 3]
     canvas[..., 3] = np.where(alpha >= _SPRITE_ALPHA, np.maximum(alpha, _SPRITE_ALPHA), 0)
     image = Image.fromarray(canvas).resize((canvas_w, canvas_h), Image.Resampling.NEAREST)
@@ -602,7 +654,10 @@ def repair_filled_rests(skin: Path) -> list[str]:
             if not path.is_file():
                 continue
             image = Image.open(path).convert("RGBA")
-            if not filled_dark_oval(image):
+            replace = (thin_dark_stroke(image) or filled_dark_oval(image)) if is_rest else (
+                filled_dark_oval(image) or (lacks_teeth(image) and not thin_dark_stroke(image))
+            )
+            if not replace:
                 continue
             box = image.getchannel("A").point(lambda alpha: 255 if alpha > 128 else 0).getbbox()
             if not box:
