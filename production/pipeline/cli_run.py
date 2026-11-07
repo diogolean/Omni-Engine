@@ -47,6 +47,9 @@ from production.pipeline.cli_parser import _together_cli_image_model
 from production.pipeline.log import _LOG
 
 def run_parsed_cli(args: argparse.Namespace) -> None:
+    from production.pipeline.local_review import validate_args
+
+    validate_args(args)
     if getattr(args, "clear_reel_checkpoints", False):
         os.environ["REEL_CHECKPOINT"] = "clear"
     elif getattr(args, "ignore_reel_checkpoints", False):
@@ -181,6 +184,10 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         app_config.bind_active_page(page_id)
     elif (page_id or "").strip():
         bind_run_channel(page_id)
+    if getattr(args, "local_review", False):
+        from production.pipeline.local_review import begin_from_args
+
+        begin_from_args(args, app_config.PAGE_OUTPUTS_DIR)
 
     # Load page config to read per-page defaults.
     _tmp_page_cfg: dict = {}
@@ -621,7 +628,12 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
     # STRICT: When publishing is active, uploads are ALWAYS Scheduled (Programado):
     #   privacyStatus = "private" + status.publishAt = staggered ISO timestamp.
     # Never upload as unlisted/public immediate when --publish-youtube is set.
-    _should_publish_yt = getattr(args, "publish_youtube", False) or app_config.ENABLE_YOUTUBE_UPLOAD
+    from production.pipeline.local_review import youtube_publish_enabled
+
+    _should_publish_yt = youtube_publish_enabled(
+        bool(getattr(args, "publish_youtube", False)),
+        bool(app_config.ENABLE_YOUTUBE_UPLOAD),
+    )
     # Force continuous schedule queue whenever publishing (CLI flag becomes redundant but honored)
     _schedule_uploads = bool(_should_publish_yt) or bool(getattr(args, "schedule_uploads", False))
     if getattr(args, "schedule_uploads", False) and not _should_publish_yt:

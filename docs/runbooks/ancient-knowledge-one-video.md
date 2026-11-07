@@ -111,31 +111,71 @@ The screenshot id `lBXQu0jPWgE` is not in this repo. Do not treat it as the
 same file as the QA stem until the QA json's `video_path` on that machine
 says so.
 
+## The command
+
+From the repository root, in PowerShell. This is the render entry.
+`--dry-run` does not apply: that flag is ECONOMIC_REEL_LOFI only.
+Do not pass `--publish-youtube`. The script does not set
+`ENABLE_YOUTUBE_UPLOAD`. `--local-review` turns YouTube off even when `.env`
+sets that variable, and it skips B2, ImgBB, Post Planner, and the content
+library. It does not write an approval file.
+
+```powershell
+.\channels_config\ancient_knowledge\tools\Invoke-DogonLocalReview.ps1 `
+  -QaJson "<path-to-the_sirius_mystery_dogon_4ed43c_v01_v01.qa.json>" `
+  -Mode render
+```
+
+The QA json `video_path` must name
+`reel_did_an_african_tribe_map_an_invi_v01.mp4`. That file is passed to
+`--protect-path`. The topic is the QA `topic` when its slug is
+`the_sirius_mystery_dogon_4ed43c`; otherwise the stem itself is the topic.
+A different slug aborts before render.
+
+`--local-review` writes under the existing `OUTPUT_PATH` (the output root
+the process already uses, including a G: root):
+
+```text
+<OUTPUT_PATH>/ancient_knowledge/clips/local_review/<UTC-stamp>/
+  reel_<hook>_v01.mp4
+  reel_<hook>_v01.qa.json
+  reel_<hook>_v01.review.json
+  assets/ep_<new>/work/
+```
+
+The first lines of the run print `output=` that directory. Nothing there
+replaces `clips/reel_did_an_african_tribe_map_an_invi_v01.mp4` or
+`assets/ep_20261104_0353`.
+
+After the render, sample the new mp4 without another render:
+
+```powershell
+.\channels_config\ancient_knowledge\tools\Invoke-DogonLocalReview.ps1 `
+  -QaJson "<same-qa-json>" `
+  -Mode sample `
+  -Video "<OUTPUT_PATH>\ancient_knowledge\clips\local_review\<stamp>\reel_<hook>_v01.mp4"
+```
+
+The sample manifest is
+`<video-directory>\local_review_samples\<stem>.sample.json`. It records flat,
+black, and unreadable frames across the timeline. It does not judge the
+narration or the facts, and it does not write `.approval.json`.
+
+Read the new `*.qa.json` in the stamp directory. `blockers` must be empty
+before anyone treats the cut as ready to watch for approval.
+`semantic_status` remains `needs_human_review`. Watch the whole file.
+Approval is `production.qa.acceptance.write_approval` on the new mp4 only,
+later, and this command does not do that.
+
 ## Preserve, then one local render
 
-1. Copy the existing mp4, the QA json, the review json if any, and
-   `act01_fallback.jpg` to a folder that this run will not write. Keep the
-   YouTube id written down next to them. Do not delete the video on YouTube.
-   YouTube will not replace the media of that id. A corrected cut is a new
-   upload with a new id, after approval.
-2. Render one Ancient Knowledge episode for this subject only. Not
-   `--quantity` above 1. Not `--publish-youtube`.
-3. Read the new `*.qa.json` and `*.review.json`. `verdict` must be pass,
-   and `blockers` must be empty. `semantic_status` will still say
-   `needs_human_review`. That is expected.
-4. Watch the whole cut. The contact sheet is a map of timestamps, not a
-   substitute for watching. Check the opening, the middle beats, the end,
-   whether any card is a flat color, whether a picture repeats, whether
-   the captions track the voice, and whether the claims are ones you are
-   willing to publish.
-5. If you accept those bytes, write an approval next to the mp4. The helper
-   is `production.qa.acceptance.write_approval`. Pass the approver name and
-   the QA report path. Do not approve a file you have not watched. If the
-   only blocker was `needs_human_review` (the judge never answered) and the
-   picture is otherwise clean, the approval's `acknowledged` list can
-   contain that string. It will not waive `static_fallback` or `frame_flat`.
-6. Only then is `distribution_ready` true for that path. Uploading is a
-   separate decision. This document does not do it.
+1. Originals stay where they are. The command refuses to write the protected
+   mp4 and the QA json path. Do not delete the YouTube video. YouTube will
+   not replace the media of that id.
+2. Run the PowerShell command once. Not `--quantity` above 1.
+3. Read the new `*.qa.json` and `*.review.json` in the stamp directory.
+4. Run the sample command on the new mp4.
+5. Watch the whole cut before any approval.
 
 ## Still only on the operator machine
 

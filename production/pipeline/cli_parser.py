@@ -572,6 +572,42 @@ def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--local-review",
+        dest="local_review",
+        action="store_true",
+        default=False,
+        help=(
+            "One ECONOMIC_REEL for the documentary channel. Requires "
+            "--quantity 1, a topic, and --expect-stem. Writes only under "
+            "OUTPUT_PATH/<page>/clips/local_review/<stamp>/. "
+            "YouTube, B2, ImgBB, Post Planner, and the content library stay "
+            "off even when ENABLE_YOUTUBE_UPLOAD is set in .env. "
+            "Does not write an approval file and does not replace --protect-path. "
+            "This is not --dry-run. --dry-run is ECONOMIC_REEL_LOFI only."
+        ),
+    )
+    parser.add_argument(
+        "--expect-stem",
+        dest="expect_stem",
+        default=None,
+        metavar="SLUG",
+        help=(
+            "With --local-review: subject_slug(topic) must equal this stem. "
+            "The Dogon retry uses the_sirius_mystery_dogon_4ed43c."
+        ),
+    )
+    parser.add_argument(
+        "--protect-path",
+        dest="protect_path",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help=(
+            "With --local-review: refuse to write this existing file. "
+            "Repeat for the original mp4 and its QA json."
+        ),
+    )
+    parser.add_argument(
         "--test-images",
         dest="test_images",
         type=int,
