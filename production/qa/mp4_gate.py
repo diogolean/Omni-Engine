@@ -162,6 +162,24 @@ def cues_from_beats(beats: list[dict[str, Any]] | None) -> list[SubtitleCue]:
     return cues
 
 
+# Local frame reads, not vision calls. Twelve Dogon beats fit under this.
+_COVERAGE_CAP = 16
+
+
+def coverage_cues(cues: list[SubtitleCue], limit: int | None = None) -> list[SubtitleCue]:
+    """Every subtitle cue, capped.
+
+    ``frame_samples()`` stays at 2 because that is the cheap-judge budget.
+    The final gate does not use it: a pass/fail that only looks at the first
+    and last cue cannot see a bad beat in the middle. Past the cap, the
+    sample still includes the first cue, the last cue, and points between.
+    """
+    cap = _COVERAGE_CAP if limit is None else max(1, int(limit))
+    if len(cues) <= cap:
+        return list(cues)
+    return select_cues(cues, cap)
+
+
 def select_cues(cues: list[SubtitleCue], limit: int | None = None) -> list[SubtitleCue]:
     cap = max(1, int(limit if limit is not None else frame_samples()))
     if len(cues) <= cap:
@@ -360,9 +378,15 @@ def decide_mp4_gate(
                 label = f"frame_{reason}"
                 if label not in reasons:
                     reasons.append(label)
+            elif reason in {"captions_missing", "captions_late", "captions_gap"}:
+                if reason not in reasons:
+                    reasons.append(reason)
             elif reason == "unjudgeable" or reason.startswith("qa_unavailable"):
-                # A timeout or broken JSON is a warning. It does not block.
-                continue
+                # No semantic verdict. Do not treat the frame as approved.
+                # A person can acknowledge this one gap; a flat or rejected
+                # frame is not this case.
+                if "needs_human_review" not in reasons:
+                    reasons.append("needs_human_review")
             else:
                 semantic = True
         if semantic:
@@ -471,6 +495,22 @@ def frame_fault(path: Path | str) -> str:
     variance = sum((value - mean) ** 2 for value in luma) / len(luma)
     if mean < 10 or (variance < 8 and mean < 18):
         return "black"
+    # A solid olive card (the static fallback is about (86, 108, 72)) has
+    # luma well above the black cutoff and variance near 0. That frame is
+    # unusable. A photograph, even a calm one, is far above this after the
+    # 32×32 box downsample.
+    if variance < 12.0:
+        return "flat"
+    # The static fallback draws a thin pale bar on a solid card. After a
+    # 32×32 box that bar is a few pixels, so the variance can look alive
+    # while the frame is still one colour. A photograph does not put
+    # nine tenths of its pixels in one 16-step bucket.
+    buckets: dict[tuple[int, int, int], int] = {}
+    for red, green, blue in pixels:
+        key = (red // 16, green // 16, blue // 16)
+        buckets[key] = buckets.get(key, 0) + 1
+    if buckets and max(buckets.values()) / len(pixels) >= 0.90:
+        return "flat"
     extremes = sum(1 for value in luma if value < 2 or value > 253)
     if extremes / len(luma) > 0.45:
         return "glitch"
@@ -479,6 +519,46 @@ def frame_fault(path: Path | str) -> str:
     if row and max(row) - min(row) < 4 and abs((sum(row) / len(row)) - mean) > 40:
         return "overlay"
     return ""
+
+
+_REJECTION_MARKERS = (
+    "documentary_fail",
+    "non_photoreal",
+    "anatomy",
+    "reject",
+    "blur",
+    "duplicate",
+    "off-topic",
+    "unreadable",
+    "missing_still",
+    "static_fallback",
+    "held_duplicate",
+    "local:",
+)
+
+
+def beat_can_skip_judge(beat: dict[str, Any] | None) -> bool:
+    """True only for a still that already earned a real relevance score.
+
+    ``passed=True`` is not enough. The Dogon seal marked fallback cards
+    passed while ``score`` was 0 and ``reason`` was ``documentary_fail``.
+    """
+    if not beat or beat.get("passed") is not True:
+        return False
+    reuse = str(beat.get("reuse") or "")
+    if reuse in {"fallback", "hold_previous"}:
+        return False
+    reason = str(beat.get("reason") or "")
+    if any(marker in reason for marker in _REJECTION_MARKERS):
+        return False
+    score = beat.get("score")
+    if score is None:
+        return False
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return False
+    return value >= 0.70
 
 
 def beat_for_cue(cue: SubtitleCue, beats: list[dict[str, Any]] | None) -> dict[str, Any] | None:
@@ -534,6 +614,130 @@ def cta_tail_cues(cues: list[SubtitleCue], cta_text: str) -> set[int]:
     return tail
 
 
+def _append_opening_frame(
+    frames: list[dict[str, Any]],
+    *,
+    video: Path,
+    grab: Callable[[Path, float, Path], Path | None],
+    folder: Path,
+    duration_s: float,
+) -> None:
+    """Technical look at the opening, even when the first subtitle is later."""
+    if duration_s < 0.4:
+        return
+    at = 0.15 if duration_s > 0.5 else 0.0
+    dest = folder / "frame_opening.jpg"
+    shot = grab(video, at, dest)
+    fault = "glitch" if shot is None else frame_fault(shot)
+    frames.append(
+        {
+            "index": len(frames),
+            "text": "",
+            "at_s": round(at, 3),
+            "passed": not fault,
+            "score": None,
+            "reason": fault or "opening",
+            "qa_status": fault or "opening",
+            "frame_path": "" if shot is None else str(shot),
+            "beat_index": None,
+        }
+    )
+
+
+def _note_caption_coverage(
+    frames: list[dict[str, Any]],
+    cues: list[SubtitleCue],
+    duration_s: float,
+) -> None:
+    """Cue timing against the clock. This is not a claim that words match audio."""
+    if duration_s < 5.0:
+        return
+    # One cue is a single-frame probe. A real cut has a run of cues.
+    if cues and len(cues) < 3:
+        return
+    if not cues:
+        frames.append(
+            {
+                "index": len(frames),
+                "text": "",
+                "at_s": 0.0,
+                "passed": False,
+                "score": None,
+                "reason": "captions_missing",
+                "qa_status": "captions_missing",
+                "frame_path": "",
+                "beat_index": None,
+            }
+        )
+        return
+    if cues[0].start_s > 3.0:
+        frames.append(
+            {
+                "index": len(frames),
+                "text": cues[0].text,
+                "at_s": 0.0,
+                "passed": False,
+                "score": None,
+                "reason": "captions_late",
+                "qa_status": "captions_late",
+                "frame_path": "",
+                "beat_index": None,
+            }
+        )
+    for prev, nxt in zip(cues, cues[1:]):
+        if nxt.start_s - prev.end_s > 12.0:
+            frames.append(
+                {
+                    "index": len(frames),
+                    "text": nxt.text,
+                    "at_s": round(prev.end_s, 3),
+                    "passed": False,
+                    "score": None,
+                    "reason": "captions_gap",
+                    "qa_status": "captions_gap",
+                    "frame_path": "",
+                    "beat_index": None,
+                }
+            )
+            break
+
+
+def _repeated_content(frames: list[dict[str, Any]]) -> bool:
+    """Two different beats whose pictures are the same, within a luma match."""
+    seen: list[tuple[Any, list[int]]] = []
+    for row in frames:
+        beat_index = row.get("beat_index")
+        path = str(row.get("frame_path") or "")
+        if beat_index is None or not path or not Path(path).is_file():
+            continue
+        if str(row.get("reason") or "") in {"cta", "cta-overlay"}:
+            continue
+        luma = _center_luma(path)
+        if luma is None:
+            continue
+        for other_index, other_luma in seen:
+            if other_index == beat_index:
+                continue
+            if _correlated(luma, other_luma) >= 0.97:
+                return True
+        seen.append((beat_index, luma))
+    return False
+
+
+def _finish_gate(
+    probe: dict[str, Any],
+    frames: list[dict[str, Any]],
+) -> dict[str, Any]:
+    decision = decide_mp4_gate(probe, frames)
+    if _repeated_content(frames):
+        reasons = list(decision.get("reasons") or [])
+        if "repeated_frame" not in reasons:
+            reasons.append("repeated_frame")
+        decision["passed"] = False
+        decision["reasons"] = reasons
+    return decision
+
+
 def gate_final_mp4(
     video_path: Path | str,
     cues: list[SubtitleCue] | None,
@@ -558,19 +762,27 @@ def gate_final_mp4(
     if narration_end_s is not None and float(narration_end_s) > 0.5:
         probe["narration_end_s"] = float(narration_end_s)
     all_cues = list(cues or [])
-    chosen = select_cues(all_cues)
+    chosen = coverage_cues(all_cues)
     tail = cta_tail_cues(all_cues, cta_text)
     cta_cues = {id(all_cues[index]) for index in tail}
     frames: list[dict[str, Any]] = []
-    if not chosen:
-        return decide_mp4_gate(probe, frames)
     judge = evaluate_fn
-    if judge is None:
+    if judge is None and chosen:
         from production.qa.relevance import evaluate_chunk_relevance
 
         judge = evaluate_chunk_relevance
     grab = frame_fn or extract_frame
     folder = Path(work_dir) if work_dir else video.parent / f"{video.stem}_qa_frames"
+    if not chosen:
+        _note_caption_coverage(frames, all_cues, float(probe.get("duration_s") or 0.0))
+        _append_opening_frame(
+            frames,
+            video=video,
+            grab=grab,
+            folder=folder,
+            duration_s=float(probe.get("duration_s") or 0.0),
+        )
+        return _finish_gate(probe, frames)
     for i, cue in enumerate(chosen):
         text = (cue.text or "").strip()
         dest = folder / f"frame_{i:02d}.jpg"
@@ -623,8 +835,7 @@ def gate_final_mp4(
         beat_index = (beat or {}).get("index")
         still = str((beat or {}).get("image_path") or "")
         approved = bool(
-            beat
-            and beat.get("passed") is True
+            beat_can_skip_judge(beat)
             and still
             and Path(still).is_file()
         )
@@ -717,7 +928,7 @@ def gate_final_mp4(
                     "index": i,
                     "text": text,
                     "at_s": round(cue.midpoint_s, 3),
-                    "passed": not fault,
+                    "passed": False,
                     "score": verdict.get("relevance_score"),
                     "reason": fault or "unjudgeable",
                     "qa_status": fault or "unjudgeable",
@@ -748,4 +959,12 @@ def gate_final_mp4(
             verdict.get("relevance_score"),
             text,
         )
-    return decide_mp4_gate(probe, frames)
+    _note_caption_coverage(frames, all_cues, float(probe.get("duration_s") or 0.0))
+    _append_opening_frame(
+        frames,
+        video=video,
+        grab=grab,
+        folder=folder,
+        duration_s=float(probe.get("duration_s") or 0.0),
+    )
+    return _finish_gate(probe, frames)

@@ -180,7 +180,13 @@ def test_frame_judge_uses_the_beat_prompt_and_drops_subtitles(tmp_path: Path) ->
     video = tmp_path / "reel.mp4"
     video.write_bytes(b"mp4")
     frame = tmp_path / "frame.jpg"
-    Image.new("RGB", (90, 160), (255, 0, 0)).save(frame, format="JPEG")
+    picture = Image.new("RGB", (90, 160), (20, 20, 20))
+    pixels = picture.load()
+    for y in range(160):
+        for x in range(90):
+            if x % 7 < 3:
+                pixels[x, y] = (220, 40, 40)
+    picture.save(frame, format="JPEG")
     seen: dict = {}
 
     def _judge(path, text, prompt, **kwargs):

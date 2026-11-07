@@ -122,10 +122,15 @@ def _stage_publish_01(state: VariantState) -> None:
                     else:
                         state._planner_media = state.imgbb_url
                     from production.qa.publish import planner_row_allowed
+                    from production.qa.acceptance import distribution_ready
                     state.planner_row_allowed = planner_row_allowed
+                    state._release_row = {'post_type': state.post_type, 'qa_verdict': (state._qa_report or {}).get('verdict') or '', 'qa_report_path': (state._qa_report or {}).get('report_path') or '', 'video_path': str(state.reel_path or state.video_path_str or ''), 'qa_blockers': list((state._qa_report or {}).get('blockers') or [])}
                     if not state.planner_row_allowed(post_type=state.post_type, report=state._qa_report):
                         _LOG.error('REEL QA blocked Post Planner | post_type=%s verdict=%s', state.post_type, (state._qa_report or {}).get('verdict'))
                         print(f'[VisualQA] Post Planner skipped | verdict={(state._qa_report or {}).get('verdict') or 'missing'}')
+                    elif not distribution_ready(state._release_row):
+                        _LOG.error('Human approval required before Post Planner | post_type=%s', state.post_type)
+                        print('[VisualQA] Post Planner skipped | human approval is not bound to this file')
                     else:
                         state.planner_row_ix = append_planner_row(app_config.POST_PLANNER_XLSX, posting_time=state.posting_slot_display, caption=state.caption, url_link='', media_url=state._planner_media, post_type_value=state._planner_type, template_path=app_config.BULK_POSTS_TEMPLATE_XLSX)
             except Exception as fin_exc:
@@ -190,8 +195,17 @@ def _stage_publish_01(state: VariantState) -> None:
         if xlsx_path:
             _LOG.info('PostPlanner XLSX row written: %s', xlsx_path.name)
     try:
-        if not state.write_postplanner_xlsx_if_allowed(post_type=state.post_type, report=state._qa_report, caption_mode=state.caption_mode_tag, write=_write_timestamped_xlsx) and state.caption_mode_tag not in ('researcher_fallback', 'skipped'):
+        from production.qa.acceptance import distribution_ready as _distribution_ready
+        from production.qa.publish import planner_row_allowed as _planner_row_allowed
+        state._xlsx_release = {'post_type': state.post_type, 'qa_verdict': (state._qa_report or {}).get('verdict') or '', 'qa_report_path': (state._qa_report or {}).get('report_path') or '', 'video_path': str(state.reel_path or state.video_path_str or ''), 'qa_blockers': list((state._qa_report or {}).get('blockers') or [])}
+        if state.caption_mode_tag in ('researcher_fallback', 'skipped'):
+            pass
+        elif not _planner_row_allowed(post_type=state.post_type, report=state._qa_report):
             _LOG.info('PostPlanner XLSX skipped | QA blocked | verdict=%s', (state._qa_report or {}).get('verdict'))
+        elif not _distribution_ready(state._xlsx_release):
+            _LOG.info('PostPlanner XLSX skipped | human approval is not bound to this file')
+        else:
+            _write_timestamped_xlsx()
     except Exception as xlsx_exc:
         state.xlsx_exc = xlsx_exc
         _LOG.warning('PostPlanner XLSX write failed (variant %s): %s', state.variant + 1, state.xlsx_exc)

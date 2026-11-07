@@ -115,7 +115,10 @@ def seal_compiled_reel(
             )
         else:
             mp4 = _fail_mp4(blocked_reason or "missing_video")
+        from production.qa.acceptance import beat_release_blockers
+
         reasons = list(still_reasons)
+        reasons.extend(beat_release_blockers(rows))
         if not mp4.get("passed"):
             reasons.extend(str(r) for r in (mp4.get("reasons") or []) if r)
         if blocked_reason:
@@ -136,6 +139,18 @@ def seal_compiled_reel(
             channel=channel,
         )
         report["first_pass"] = first_pass_summary(rows)
+        report["blockers"] = list(unique)
+        try:
+            from production.qa.acceptance import write_review_manifest
+
+            write_review_manifest(
+                report,
+                video_path=video,
+                output_dir=output_dir,
+                stem=stem,
+            )
+        except Exception as review_exc:  # noqa: BLE001
+            _LOG.warning("review manifest skipped (%s)", type(review_exc).__name__)
     except Exception as exc:  # noqa: BLE001
         _LOG.error("REEL QA seal failed (%s) — fail closed", exc)
         report = new_report(

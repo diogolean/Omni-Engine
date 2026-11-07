@@ -512,8 +512,12 @@ def _stage_sequence_render_04(state: VariantState) -> None:
             # photo rather than a flat placeholder or a site the line never names.
             _held = Path(state._sequence_image_paths[-1])
             _row['image_path'] = str(_held)
-            _row['passed'] = True
+            # The picture is held so the cut still has a frame to review.
+            # It is a repeat, so it cannot be a pass.
+            _row['passed'] = False
             _row['reuse'] = 'hold_previous'
+            if not str(_row.get('reason') or '').strip():
+                _row['reason'] = 'held_duplicate'
             state._sequence_image_paths.append(_held)
             state._ok_acts += 1
             _LOG.warning('REEL QA HOLD | act %d/%d reason=pool_exhausted — previous photo held', _idx + 1, state._seq_n)
@@ -530,8 +534,13 @@ def _stage_sequence_render_04(state: VariantState) -> None:
             _guaranteed = None
         if _guaranteed is not None and Path(_guaranteed).is_file():
             _row['image_path'] = str(_guaranteed)
-            _row['passed'] = True
+            # The substitute is a static card or an unscoped rescue. The
+            # rejection that sent us here stays on the row. passed stays false
+            # so a score of 0 cannot be sealed as a pass.
+            _row['passed'] = False
             _row['reuse'] = 'fallback'
+            if not str(_row.get('reason') or '').strip():
+                _row['reason'] = str(_gate.blocked_reason or 'static_fallback')
             state._sequence_image_paths.append(Path(_guaranteed))
             state._ok_acts += 1
             _LOG.warning('REEL QA FALLBACK | act %d/%d reason=%s — still kept, reel continues', _idx + 1, state._seq_n, _gate.blocked_reason or 'rejected')

@@ -639,18 +639,18 @@ def run_parsed_cli(args: argparse.Namespace) -> None:
         if _rand_max_m < 0:
             _rand_max_m = 0
 
-        from production.qa.publish import row_publishable
+        from production.qa.acceptance import distribution_ready
 
         _yt_candidates = [
             row for row in (envelope.get("items") or [])
             if row.get("video_path")
         ]
-        _yt_rows = [row for row in _yt_candidates if row_publishable(row)]
-        _yt_blocked = [row for row in _yt_candidates if not row_publishable(row)]
+        _yt_rows = [row for row in _yt_candidates if distribution_ready(row)]
+        _yt_blocked = [row for row in _yt_candidates if not distribution_ready(row)]
         if _yt_blocked:
             print(
-                f"[VisualQA] YouTube skipped {len(_yt_blocked)} reel(s) "
-                "without verdict=pass"
+                f"[VisualQA] YouTube skipped {len(_yt_blocked)} reel(s): "
+                "QA failed, or this file has no human approval bound to its bytes"
             )
             _LOG.error(
                 "REEL QA blocked YouTube | n=%d",

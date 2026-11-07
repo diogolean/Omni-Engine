@@ -20,6 +20,7 @@ One index. The root [README](../README.md) is the short reviewer page.
 |---|---|
 | [runbooks/google-drive.md](runbooks/google-drive.md) | Drive as the library source |
 | [runbooks/supermemory.md](runbooks/supermemory.md) | Opt-in memory service |
+| [runbooks/ancient-knowledge-one-video.md](runbooks/ancient-knowledge-one-video.md) | One Ancient Knowledge cut, human approval, no batch |
 | [elevenlabs_tts.md](elevenlabs_tts.md) | TTS speed lives inside `voice_settings` |
 
 ## Decisions

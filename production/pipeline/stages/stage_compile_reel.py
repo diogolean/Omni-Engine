@@ -524,8 +524,9 @@ def _stage_compile_reel_05(state: VariantState) -> None:
         except Exception as _amb_rs_exc:
             state._amb_rs_exc = _amb_rs_exc
             _LOG.debug('Ambient 48k resample skipped: %s', state._amb_rs_exc)
-    state._hook_slug = ''.join((c if c.isalnum() else '_' for c in state.overlay_text.lower())).strip('_')[:32] if state.overlay_text else state.stem
-    state._reel_target = state._reel_dir / f'reel_{state._hook_slug}_v{state.variant + 1:02d}.mp4'
+    from production.media.text_utils import reel_hook_slug, reel_output_name
+    state._hook_slug = reel_hook_slug(state.overlay_text, stem=state.stem)
+    state._reel_target = state._reel_dir / reel_output_name(state.overlay_text, state.variant, stem=state.stem)
     state._reel_dur = max(30.0, state.page_ctx.reel_duration if state.page_ctx else 30.0)
     try:
         _stage_compile_reel_01(state)

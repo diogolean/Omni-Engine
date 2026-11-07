@@ -42,6 +42,32 @@ def subject_slug(subject: str, *, max_len: int = _MAX_SUBJECT_SLUG_CHARS) -> str
     return _truncate_slug(slug, max_len, digest_src=raw or slug)
 
 
+def reel_hook_slug(overlay_text: str, *, stem: str = "") -> str:
+    """32-character hook slug used in the reel filename.
+
+    Non-alphanumeric characters become underscores. The cut is after the
+    trim, so two longer hooks can share one filename.
+    """
+    raw = overlay_text or ""
+    if raw:
+        return "".join(ch if ch.isalnum() else "_" for ch in raw.lower()).strip("_")[:32]
+    return stem or "reel"
+
+
+def reel_output_name(overlay_text: str, variant_index: int, *, stem: str = "") -> str:
+    """Final reel filename ``reel_<slug>_vNN.mp4``.
+
+    The version is ``variant_index + 1``. Two different hooks that share the
+    32-character slug, each from its own ``--quantity 1`` run, name the same
+    ``_v01`` file. A later ffmpeg render uses ``-y`` and replaces the bytes.
+    Runs that both end in ``_v01`` were separate executions. Variants 2 and 6
+    of one batch would be ``_v02`` and ``_v06``.
+    """
+    slug = reel_hook_slug(overlay_text, stem=stem)
+    version = int(variant_index) + 1
+    return f"reel_{slug}_v{version:02d}.mp4"
+
+
 def safe_output_stem(stem: str, *, max_len: int = _MAX_OUTPUT_STEM_CHARS) -> str:
     """Filesystem-safe, length-capped basename stem for generated image files."""
     raw = (stem or "").strip()
