@@ -300,6 +300,11 @@ never squashed into a second copy (the old "tear" in close-ups).
 
 ## One-click character: generate-then-verify
 
+The response adds `eyeControl` (`animind.eyeControl.v1`) and `eyeControlReady`.
+A view is ready only after the iris centroid moves left, right, up, and down
+while pixels outside the eye opening stay put. `POST /v1/characters/{id}/eyes`
+rewrites nothing except `eye_control.json`. See `docs/eye-control.md`.
+
 `POST /v1/characters` (one call) builds a rigged character:
 
 1. **Master** (Gemini nano-banana, closed mouth, 4:5).

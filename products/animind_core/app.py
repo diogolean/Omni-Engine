@@ -51,6 +51,17 @@ def health() -> dict:
     return out
 
 
+@app.post("/v1/characters/{character_id}/eyes", dependencies=[Depends(require_key)])
+def post_character_eyes(character_id: str) -> dict:
+    """Probe a saved rig. Writes only eye_control.json and never calls an image provider."""
+    from .eye_control import upgrade_character  # noqa: PLC0415
+
+    try:
+        return upgrade_character(character_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "unknown character") from exc
+
+
 @app.post("/v1/characters/{character_id}/front", dependencies=[Depends(require_key)])
 def post_character_front(character_id: str, request: Request) -> dict:
     """Redraw a character's front view (checked for frontality, one retry within the Gemini cap)."""
