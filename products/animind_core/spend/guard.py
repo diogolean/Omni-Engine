@@ -10,7 +10,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from . import contract, ledger, limits as limit_mod, prices
+from . import contract, ledger, prices
+from . import limits as limit_mod
 from .prices import TokenRate, UnitRate
 
 _CURRENT: ContextVar["Frame | None"] = ContextVar("animind_spend_frame", default=None)

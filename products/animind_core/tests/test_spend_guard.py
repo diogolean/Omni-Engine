@@ -10,7 +10,14 @@ import pytest
 
 from products.animind_core import image_models, llm_providers
 from products.animind_core.spend import ledger
-from products.animind_core.spend.guard import SpendDenied, billable, frame_scope, open_frame, request_id, user_hash
+from products.animind_core.spend.guard import (
+    SpendDenied,
+    billable,
+    frame_scope,
+    open_frame,
+    request_id,
+    user_hash,
+)
 from products.animind_core.spend.limits import read_limits
 
 URL = "postgresql://animind_test@127.0.0.1:5432/animind_spend_test"
@@ -331,6 +338,7 @@ def test_plan_render_and_job_poll_do_not_double_charge(schema, monkeypatch):
     calls = []
     monkeypatch.setattr(llm_providers.httpx, "post", lambda *args, **kwargs: calls.append(1))
     from fastapi.testclient import TestClient
+
     from products.animind_core.app import app
     from products.animind_core.spend.guard import frame_scope as scope
 
@@ -367,6 +375,7 @@ def test_idempotency_is_user_plus_body_and_stores_no_prompt(schema, monkeypatch)
     _limits(monkeypatch, schema)
     monkeypatch.setenv("CORE_API_KEY", "test-key")
     from fastapi.testclient import TestClient
+
     from products.animind_core import render
     from products.animind_core.app import app
 
