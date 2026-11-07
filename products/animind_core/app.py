@@ -22,6 +22,8 @@ from . import (
     stick,
     styles,
 )
+from .spend.http import protect
+from .spend.plan import build as build_plan
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
@@ -51,16 +53,31 @@ def health() -> dict:
     return out
 
 
+@app.post("/v1/plan", dependencies=[Depends(require_key)])
+def post_plan(body: dict, request: Request) -> dict:
+    """Local planner. It does not call a model. Provider calls stay inside the guard."""
+    def run() -> dict:
+        try:
+            return build_plan(body)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    return protect(request, body, "plan", run)
+
+
 @app.post("/v1/characters/{character_id}/front", dependencies=[Depends(require_key)])
 def post_character_front(character_id: str, request: Request) -> dict:
     """Redraw a character's front view (checked for frontality, one retry within the Gemini cap)."""
-    try:
-        saved = characters.regenerate_front(character_id, _base(request))
-    except NotImplementedError as exc:
-        raise HTTPException(501, str(exc)) from exc
-    if saved is None:
-        raise HTTPException(404, "unknown character")
-    return saved
+    def run() -> dict:
+        try:
+            saved = characters.regenerate_front(character_id, _base(request))
+        except NotImplementedError as exc:
+            raise HTTPException(501, str(exc)) from exc
+        if saved is None:
+            raise HTTPException(404, "unknown character")
+        return saved
+
+    return protect(request, {"characterId": character_id}, "character", run)
 
 
 @app.post("/v1/characters/{character_id}/rerig", dependencies=[Depends(require_key)])
@@ -77,26 +94,32 @@ def post_character_rerig(character_id: str, request: Request) -> dict:
 
 @app.post("/v1/characters", dependencies=[Depends(require_key)])
 def post_characters(body: dict, request: Request) -> dict:
-    try:
-        return characters.create_character(body, _base(request))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except NotImplementedError as exc:
-        raise HTTPException(501, str(exc)) from exc
+    def run() -> dict:
+        try:
+            return characters.create_character(body, _base(request))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except NotImplementedError as exc:
+            raise HTTPException(501, str(exc)) from exc
+
+    return protect(request, body, "character", run)
 
 
 @app.post("/v1/render", dependencies=[Depends(require_key)])
 def post_render(body: dict, request: Request) -> dict:
-    return render.submit(body, _base(request))
+    return protect(request, body, "render", lambda: render.submit(body, _base(request)))
 
 
 @app.post("/v1/preview", dependencies=[Depends(require_key)])
 def post_preview(body: dict, request: Request) -> dict:
     """PNG preview the app requests before the full character rig exists."""
-    try:
-        return preview.build_preview(body, _base(request))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    def run() -> dict:
+        try:
+            return preview.build_preview(body, _base(request))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    return protect(request, body, "preview", run)
 
 
 @app.post("/v1/scenarios", dependencies=[Depends(require_key)])

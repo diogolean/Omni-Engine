@@ -1306,13 +1306,16 @@ def main(argv: list[str] | None = None) -> None:
             return path.name
 
     edit = not args.no_edit
-    if rerig:
-        built = rerig_from_plate(
-            skin, description=description, url=url, character_id=folder, name=display, edit=edit,
-        )
-    else:
-        built = create_avatar(description, "cartoon", skin=skin, url=url, edit_mouth=edit)
-        write_character_json(skin, built, character_id=folder, name=display, url=url)
+    from .spend.guard import cli_scope  # noqa: PLC0415
+
+    with cli_scope():
+        if rerig:
+            built = rerig_from_plate(
+                skin, description=description, url=url, character_id=folder, name=display, edit=edit,
+            )
+        else:
+            built = create_avatar(description, "cartoon", skin=skin, url=url, edit_mouth=edit)
+            write_character_json(skin, built, character_id=folder, name=display, url=url)
     print(
         f"avatar {folder} cost US${built['qa']['costUsd']:.4f} "
         f"mouthless={built.get('frontShot')} cached={built['cached']}"
