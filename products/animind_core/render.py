@@ -10,6 +10,7 @@ placeholders from the app) are drawn as a neutral silhouette.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -103,9 +104,19 @@ async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str =
 
     attempts = _tts_attempts()
     last: BaseException | None = None
+    from .spend.guard import current, note_unbilled  # noqa: PLC0415
+
     for attempt in range(attempts):
         try:
             await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
+            if current() is not None:
+                try:
+                    note_unbilled(
+                        provider="edge-tts", model=voice, operation="speech",
+                        reason="unpriced_transport", attempt=attempt + 1,
+                    )
+                except Exception:  # noqa: BLE001 — speech must not fail because the note failed
+                    pass
             return
         except Exception as exc:  # noqa: BLE001 — only the transient audio miss is retried
             last = exc
@@ -688,14 +699,47 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
 def submit(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is not installed")
+    from .spend.guard import current  # noqa: PLC0415
+
     job_id = uuid.uuid4().hex[:12]
+    frame = current()
+    if frame is not None:
+        frame.job_id = job_id
+    job: dict[str, Any] = {"id": job_id, "status": "queued", "progress": 0.0}
+    if frame is not None:
+        job["_frame"] = frame
     with _LOCK:
-        _JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0.0}
-    threading.Thread(target=_run, args=(job_id, req, base_url), daemon=True).start()
-    return dict(_JOBS[job_id])
+        _JOBS[job_id] = job
+    ctx = contextvars.copy_context()
+    threading.Thread(target=ctx.run, args=(_run, job_id, req, base_url), daemon=True).start()
+    return {key: value for key, value in job.items() if key != "_frame"}
 
 
 def get(job_id: str) -> dict[str, Any] | None:
+    from .spend import contract, ledger  # noqa: PLC0415
+    from .spend.guard import ref_hash  # noqa: PLC0415
+
     with _LOCK:
         job = _JOBS.get(job_id)
-        return dict(job) if job else None
+        stored = dict(job) if job else None
+    if stored is not None:
+        frame = stored.pop("_frame", None)
+        if frame is not None:
+            stored["usage"] = contract.document(frame, job_id)
+        elif "usage" not in stored:
+            stored["usage"] = contract.empty("unknown", "unknown", job_id)
+        return stored
+    rows = ledger.rows_for_job(ref_hash(job_id) or "")
+    if not rows:
+        return None
+    return {
+        "id": job_id,
+        "status": "unknown",
+        "progress": 0.0,
+        "usage": contract.from_rows(
+            rows,
+            request_id=str(rows[0].get("request_id") or "unknown"),
+            user_ref=str(rows[0].get("user_id") or "unknown"),
+            job_id=job_id,
+        ),
+    }
