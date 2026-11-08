@@ -147,10 +147,16 @@ _FIXTURE_WIKI = """{{info/biografia|nome=Ada Fixture}}
 == Citações ==
 * A verdade fixture cabe nesta frase curta.
 ** Livro fixture, 1905
+* A frase so esta na pagina da wikipedia agora.
+** Revista fixture, 1910
+* A frase so esta no wikisource desta obra.
+** [[s:Obra fixture]] Livro antigo, 1890
 * Esta outra frase nao sera verificada nunca.
 ** Livro fixture, 1906
 """
 _FIXTURE_EXTRACT = "Ada Fixture escreveu: A verdade fixture cabe nesta frase curta."
+_FIXTURE_WIKIPEDIA = "Na biografia fixture: A frase so esta na pagina da wikipedia agora."
+_FIXTURE_WIKISOURCE = "Na obra fixture: A frase so esta no wikisource desta obra."
 
 
 def test_recorded_wikiquote_responses_build_a_cached_sheet(tmp_path, monkeypatch):
@@ -177,10 +183,14 @@ def test_recorded_wikiquote_responses_build_a_cached_sheet(tmp_path, monkeypatch
                 if search == "Ada Fixture"
                 else {"error": {"code": "missingtitle"}}
             )
+        elif "wikisource.org" in host:
+            body = {"query": {"pages": [{"extract": _FIXTURE_WIKISOURCE, "revisions": [{"revid": 777}]}]}}
+        elif "wikipedia.org" in host:
+            body = {"query": {"pages": [{"extract": _FIXTURE_WIKIPEDIA, "revisions": [{"revid": 99}]}]}}
         elif "wikiquote.org" in host:
             body = {"query": {"pages": [{"extract": _FIXTURE_EXTRACT, "revisions": [{"revid": 4242}]}]}}
         else:
-            body = {"query": {"pages": [{"extract": "Ada Fixture, nota fixture.", "revisions": [{"revid": 99}]}]}}
+            body = {"error": {"code": "unsupported"}}
         encoded = _json.dumps(body).encode()
 
         class _Body:
@@ -208,13 +218,24 @@ def test_recorded_wikiquote_responses_build_a_cached_sheet(tmp_path, monkeypatch
     body = found.json()
     assert body["found"] is True
     assert body["wikiquote"] == "https://pt.wikiquote.org/wiki/Ada_Fixture"
+    assert len(body["quotes"]) <= 10
     verified = [quote for quote in body["quotes"] if quote["verification"] == "verified"]
     missed = [quote for quote in body["quotes"] if quote["verification"] == "not_found"]
-    assert [quote["text"] for quote in verified] == ["A verdade fixture cabe nesta frase curta."]
-    assert verified[0]["url"] == body["wikiquote"]
-    assert verified[0]["revision"] == 4242
+    by_site = {quote["sourceSite"]: quote for quote in verified}
+    assert set(by_site) == {"Wikiquote", "Wikipedia", "Wikisource"}
+    assert by_site["Wikiquote"]["text"] == "A verdade fixture cabe nesta frase curta."
+    assert by_site["Wikiquote"]["url"] == body["wikiquote"]
+    assert by_site["Wikiquote"]["revision"] == 4242
+    assert by_site["Wikipedia"]["text"] == "A frase so esta na pagina da wikipedia agora."
+    assert by_site["Wikipedia"]["url"] == "https://pt.wikipedia.org/wiki/Ada_Fixture"
+    assert by_site["Wikipedia"]["revision"] == 99
+    assert by_site["Wikisource"]["text"] == "A frase so esta no wikisource desta obra."
+    assert by_site["Wikisource"]["url"] == "https://pt.wikisource.org/wiki/Obra_fixture"
+    assert by_site["Wikisource"]["revision"] == 777
     assert [quote["text"] for quote in missed] == ["Esta outra frase nao sera verificada nunca."]
     assert missed[0]["revision"] is None
+    assert [quote["verification"] for quote in body["quotes"] if quote["verification"] == "verified"]
+    assert body["quotes"][-1]["verification"] == "not_found"
     cached = tmp_path / "personas" / "users" / personas.accept_user("user_one") / "pt-BR" / "ada_fixture.yaml"
     assert cached.is_file()
     assert cached.is_relative_to(tmp_path)

@@ -174,7 +174,8 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   `notes` lists softer issues (the same idea picked up three lines in a row).
 - `GET /v1/personas/sheet?name=&lang=` returns the cached sheet (id, text, source, work, sourceKind, url,
   wikisource, verification, sourceSite).   `verification` is `verified` only when that text was found on the
-  Wikisource, Wikipedia, or Wikiquote page. `revision` is that page's Wikimedia id, or null.
+  linked Wikisource page, the person's Wikipedia article, or the Wikiquote page.
+  `revision` is that page's Wikimedia id, or null.
   `not_found` is kept on the sheet and is not spoken as a real line. No LLM writes the sheet.
   `X-Animind-User` stores the sheet under that user's hash; an email is refused. The same header on
   `POST /v1/render` makes the debate read that user's sheet.

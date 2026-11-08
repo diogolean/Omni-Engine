@@ -57,7 +57,7 @@ _USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 SITES = {"pt-BR": "pt", "en-US": "en"}
 MAX_QUOTES = 24
 SHEET_LIMIT = 10  # quotes kept on a freshly built sheet
-SHEET_VERSION = 5  # bump when parsing/ranking changes; older cached sheets are rebuilt
+SHEET_VERSION = 6  # bump when parsing/ranking changes; older cached sheets are rebuilt
 MIN_WORDS, MAX_WORDS = 4, 45
 NEGATIVE_TTL_S = 7 * 24 * 3600
 SKIP_SECTION = re.compile(
@@ -320,6 +320,8 @@ def build(name: str, lang: str = "pt-BR") -> dict[str, Any]:
     url = wiki_url(f"{sl}.wikiquote.org", title)
     wikipedia = wiki_url(f"{sl}.wikipedia.org", title)
     quotes = pick(parse_quotes(wikitext, site_lang=sl, page_url=url))
+    for quote in quotes:
+        quote.setdefault("wikipedia", wikipedia)
     pages, revisions = _source_pages(quotes, wikiquote=url, wikipedia=wikipedia)
     if revid is not None:
         revisions.setdefault(url, revid)
