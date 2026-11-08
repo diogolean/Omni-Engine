@@ -118,7 +118,7 @@ def test_admin_without_a_published_image_rate_stops_before_the_factory(schema, c
     assert calls == []
 
 
-def test_admin_reaches_the_aiwake_factory_when_the_rate_is_published(schema, client, monkeypatch):
+def test_admin_reaches_the_aiwake_factory_when_the_rate_is_published(schema, client, monkeypatch, tmp_path):
     _limits(monkeypatch, schema)
     monkeypatch.setenv("ANIMIND_ADMIN_TOKEN", TOKEN)
     monkeypatch.setenv("GEMINI_API_KEY", "present-but-not-used")
@@ -134,13 +134,41 @@ def test_admin_reaches_the_aiwake_factory_when_the_rate_is_published(schema, cli
             "sourceDate": "2026-11-07",
         }],
     }))
-    calls = _called(monkeypatch)
+    from PIL import Image, ImageDraw
+
+    calls: list[str] = []
+
+    def fake(prompt, destination, **kwargs):  # noqa: ARG001
+        calls.append("fixture-image")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.new("RGBA", (320, 480), (0, 0, 0, 255))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((80, 40, 240, 200), fill=(210, 170, 140, 255))
+        draw.rectangle((70, 190, 250, 470), fill=(40, 70, 120, 255))
+        image.save(destination, format="PNG")
+        return "fixture-image"
+
+    monkeypatch.setattr(
+        "products.aiwake.animator.factory.create_puppet.generate_character_image",
+        fake,
+    )
     response = client.post(
         "/v1/avatars",
         headers={**H, "X-Animind-User": "user_one", "X-Animind-Admin": TOKEN},
         json=BODY,
     )
     assert response.status_code == 200, response.text
-    assert response.json()["generator"] == "gemini"
-    assert calls == ["factory"]
+    body = response.json()
+    assert body["schema"] == "animind.puppet.v3"
+    assert body["ready"] is (body["status"] == "ready")
+    assert body["status"] in {"ready", "review_required"}
+    assert [stage["id"] for stage in body["stages"]] == ["image", "cutout", "rig", "brows", "qa"]
+    assert body["stages"][0]["source"] == "fixture"
+    assert body["scenario"]["embedded"] is False
+    assert "neck_pivot" in body["anchors"]
+    assert "target_eye_y" in body["framing"]
+    assert calls == ["fixture-image"]
+    assert body["usage"]["totals"]["estimatedMicro"] is None
+    saved = list((tmp_path / "users").rglob("puppet.json"))
+    assert saved
     assert lookup("google", "gemini-2.5-flash-image").micro_usd == micro
