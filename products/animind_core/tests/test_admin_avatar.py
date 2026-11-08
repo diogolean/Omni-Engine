@@ -160,8 +160,11 @@ def test_admin_reaches_the_aiwake_factory_when_the_rate_is_published(schema, cli
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["schema"] == "animind.puppet.v3"
-    assert body["ready"] is (body["status"] == "ready")
-    assert body["status"] in {"ready", "review_required"}
+    assert body["status"] == "review_required"
+    assert body["ready"] is False
+    assert "image_is_fixture" in body["defects"]
+    assert "views_front_and_three_quarter_absent" in body["defects"]
+    assert "brows_not_positioned_per_view" in body["defects"]
     assert [stage["id"] for stage in body["stages"]] == ["image", "cutout", "rig", "brows", "qa"]
     assert body["stages"][0]["source"] == "fixture"
     assert body["scenario"]["embedded"] is False
@@ -171,4 +174,5 @@ def test_admin_reaches_the_aiwake_factory_when_the_rate_is_published(schema, cli
     assert body["usage"]["totals"]["estimatedMicro"] is None
     saved = list((tmp_path / "users").rglob("puppet.json"))
     assert saved
+    assert list((tmp_path / "users").rglob("source_original.png"))
     assert lookup("google", "gemini-2.5-flash-image").micro_usd == micro

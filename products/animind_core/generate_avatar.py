@@ -87,7 +87,7 @@ def generate_avatar(
         "note": "parametric brow model stored on the puppet, not painted into the head plate",
     })
 
-    defects = _defects(skin, manifest)
+    defects = _defects(skin, manifest, stages)
     stages.append({"id": "qa", "seconds": 0.0, "source": "local", "defects": defects})
     status = "ready" if not defects else "review_required"
     result = {
@@ -120,10 +120,12 @@ def generate_avatar(
     return public
 
 
-def _defects(skin: Path, manifest: dict[str, Any]) -> list[str]:
+def _defects(skin: Path, manifest: dict[str, Any], stages: list[dict[str, Any]]) -> list[str]:
     defects: list[str] = []
     layers = manifest.get("layers") or {}
     anchors = manifest.get("anchors") or {}
+    if any(stage.get("source") == "fixture" for stage in stages):
+        defects.append("image_is_fixture")
     if "body" not in layers:
         defects.append("body_missing")
     if "head" not in layers:
@@ -132,28 +134,73 @@ def _defects(skin: Path, manifest: dict[str, Any]) -> list[str]:
     chin = anchors.get("chin_base")
     if not neck or not chin or neck[1] <= chin[1]:
         defects.append("neck_junction")
+    elif not _neck_narrows(skin / "body.png", int(chin[1]), int(neck[1])):
+        defects.append("neck_not_distinct")
     mouths = [name for name in layers if str(name).startswith("mouth_")]
-    if len(mouths) < 9:
+    if len(mouths) < 9 or not any(_has_ink(skin / f"{name}.png") for name in mouths):
         defects.append("mouths_missing")
-    if "eyes_open" not in layers:
-        defects.append("eyes_missing")
+    if "eyes_open" not in layers or not _has_ink(skin / "eyes_open.png"):
+        defects.append("eyes_empty")
     brows = manifest.get("brows") or {}
-    if not brows or "angles" not in brows or "neutral" not in (brows.get("angles") or {}):
+    if not brows or "neutral" not in (brows.get("angles") or {}):
         defects.append("brows_missing")
+    if not any(path.name.startswith("brow") for path in skin.glob("*.png")):
+        defects.append("brows_not_positioned_per_view")
+    if not (skin / "views" / "front").is_dir() or not any((skin / "views").glob("3q*")):
+        defects.append("views_front_and_three_quarter_absent")
     cut = skin / "character.png"
     if not cut.is_file():
         defects.append("cutout_missing")
-    else:
-        from PIL import Image  # noqa: PLC0415
-
-        with Image.open(cut) as image:
-            if "A" not in image.getbands() or image.getchannel("A").getextrema()[0] == 255:
-                defects.append("alpha_opaque")
-    if (skin / "bg.png").is_file():
-        pass
-    else:
+    elif not _true_alpha(cut):
+        defects.append("alpha_opaque")
+    if not (skin / "bg.png").is_file():
         defects.append("scenario_layer_missing")
     return defects
+
+
+def _has_ink(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    from PIL import Image  # noqa: PLC0415
+
+    with Image.open(path) as image:
+        if "A" not in image.getbands():
+            return True
+        return image.getchannel("A").getextrema()[1] > 0
+
+
+def _true_alpha(path: Path) -> bool:
+    from PIL import Image  # noqa: PLC0415
+
+    with Image.open(path) as image:
+        if "A" not in image.getbands():
+            return False
+        low, high = image.getchannel("A").getextrema()
+        return low == 0 and high == 255
+
+
+def _neck_narrows(body: Path, chin_y: int, neck_y: int) -> bool:
+    """A neck is a narrower alpha band between the chin and the shoulders."""
+    if not body.is_file():
+        return False
+    from PIL import Image  # noqa: PLC0415
+
+    with Image.open(body) as image:
+        if "A" not in image.getbands():
+            return False
+        alpha = image.getchannel("A")
+        width, height = alpha.size
+
+        def span(y: int) -> int:
+            if y < 0 or y >= height:
+                return 0
+            row = alpha.crop((0, y, width, y + 1)).getdata()
+            xs = [index for index, value in enumerate(row) if value > 16]
+            return (xs[-1] - xs[0] + 1) if xs else 0
+
+        neck_span = span(neck_y)
+        shoulder = span(min(height - 1, neck_y + max(8, (neck_y - chin_y))))
+        return neck_span > 0 and shoulder > neck_span * 1.15
 
 
 def _character_id(name: str, prompt: str) -> str:
