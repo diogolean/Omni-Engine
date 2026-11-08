@@ -26,6 +26,25 @@ from production.media.text_utils import subject_slug
 DOGON_STEM = "the_sirius_mystery_dogon_4ed43c"
 DOGON_MP4_NAME = "reel_did_an_african_tribe_map_an_invi_v01.mp4"
 DOGON_POST_TYPE = "ECONOMIC_REEL"
+# Spoken subject. The stem above is only the file identity.
+DOGON_SUBJECT = "The Sirius Mystery and the Dogon"
+# Reviewed narration for this one local sample. It is not a replacement of
+# the original QA file or the published video. Claims stay attributed.
+# No ancient-record sentence, and no calendar-to-orbit measurement.
+DOGON_NARRATION = (
+    "The Sirius Mystery is a published claim about the Dogon of Mali, "
+    "not a dated artefact. Marcel Griaule and Germaine Dieterlen recorded "
+    "Dogon star lore in the twentieth century, and their interviews mention "
+    "a companion to Sirius. Robert Temple's 1976 book treated that lore as "
+    "knowledge of Sirius B from before modern telescopes. Historians dispute "
+    "that step. Those interviews are not an ancient Dogon document, and they "
+    "are not a measurement of ceremonial calendars against the star's orbit. "
+    "The sigui is a Dogon ceremony on a long cycle. Treating that cycle as "
+    "Sirius B is an interpretation, not an observation the Dogon wrote down. "
+    "At the Bandiagara escarpment the cliff villages are a documented "
+    "community. The open question is how much of the Sirius story comes from "
+    "Dogon teachers, and how much comes from the way the interviews were asked."
+)
 
 
 def dogon_page() -> str:
@@ -198,8 +217,8 @@ def validate_args(args: argparse.Namespace) -> None:
     _require(bool(topic), "[local-review] requires a topic argument")
     _require(bool(expect), "[local-review] requires --expect-stem")
     _require(
-        subject_slug(topic) == expect,
-        f"[local-review] topic slug {subject_slug(topic)!r} is not {expect!r}",
+        _topic_identifies(topic, expect),
+        f"[local-review] topic {topic!r} is not the reviewed subject for {expect!r}",
     )
     _require(page == dogon_page(), "[local-review] requires the documentary channel")
     _require(post_type == DOGON_POST_TYPE, "[local-review] requires --post-type ECONOMIC_REEL")
@@ -221,15 +240,42 @@ def begin_from_args(args: argparse.Namespace, page_outputs: Path) -> None:
     begin(page_outputs, expect_stem=expect, protected=protected)
 
 
+def _topic_identifies(topic: str, expect: str) -> bool:
+    """The stem is the file id. The spoken subject is the human title."""
+    text = " ".join((topic or "").split())
+    if not text or not expect:
+        return False
+    if text == DOGON_SUBJECT and expect == DOGON_STEM:
+        return True
+    return subject_slug(text) == expect and not _is_stem(text)
+
+
+def _is_stem(text: str) -> bool:
+    from production.media.text_utils import is_technical_stem
+
+    return is_technical_stem(text)
+
+
+def reviewed_narration() -> str:
+    """The checked script while a local review is active. Empty otherwise.
+
+    The sequence planner uses this and does not call the script model.
+    """
+    state = current()
+    if state is None or state.expect_stem != DOGON_STEM:
+        return ""
+    return DOGON_NARRATION
+
+
 def dogon_argv(topic: str, *protected: Path | str) -> list[str]:
     """Argument vector for one Dogon local review. Distribution flags are absent."""
-    slug = subject_slug(topic)
-    if slug != DOGON_STEM:
+    text = " ".join((topic or "").split())
+    if text != DOGON_SUBJECT and subject_slug(text) != DOGON_STEM:
         raise SystemExit(
-            f"[local-review] topic slug {slug!r} is not {DOGON_STEM!r}"
+            f"[local-review] topic {text!r} is not the Dogon review"
         )
     argv = [
-        topic,
+        DOGON_SUBJECT,
         "--channel",
         dogon_page(),
         "--post-type",
@@ -268,16 +314,18 @@ def _qa_record(path: Path) -> dict[str, Any]:
 
 
 def topic_from_qa(data: dict[str, Any]) -> str:
-    raw = str(data.get("topic") or data.get("resolved_subject") or "").strip()
-    if not raw:
-        return DOGON_STEM
-    slug = subject_slug(raw)
-    if slug != DOGON_STEM:
-        raise SystemExit(
-            f"[local-review] QA topic slug {slug!r} is not {DOGON_STEM!r}. "
-            "Refusing to render a different episode."
-        )
-    return raw
+    """Human subject for this episode. The filename stem is not spoken.
+
+    An empty topic, the stem, or the reviewed title all map to the title.
+    A different episode is refused. The original QA file is not rewritten.
+    """
+    raw = " ".join(str(data.get("topic") or data.get("resolved_subject") or "").split())
+    if not raw or raw == DOGON_SUBJECT or _is_stem(raw) or subject_slug(raw) == DOGON_STEM:
+        return DOGON_SUBJECT
+    raise SystemExit(
+        f"[local-review] QA topic {raw!r} is not the Dogon review. "
+        "Refusing to render a different episode."
+    )
 
 
 def protected_video_from_qa(data: dict[str, Any], qa_path: Path) -> Path:
@@ -434,6 +482,84 @@ def sample_cli(video: Path, dest: Path | None = None) -> dict[str, Any]:
     return sample_video(video, target, duration_s=duration, grab=grab)
 
 
+def beat_evidence(data: dict[str, Any], work: Path | None = None) -> list[dict[str, Any]]:
+    """Sanitized beat rows. Filenames and text only, no image bytes, no full paths."""
+    from production.formats.economic_reel.grounding.still_cache import sidecar_path
+    from production.qa.mp4_gate import frame_fault
+
+    rows: list[dict[str, Any]] = []
+    beats = data.get("beats")
+    if not isinstance(beats, list):
+        return rows
+    for index, beat in enumerate(beats):
+        if not isinstance(beat, dict):
+            continue
+        spoken = " ".join(str(beat.get("text") or beat.get("spoken_text") or "").split())
+        prompt = " ".join(str(beat.get("prompt") or "").split())
+        image_name = Path(str(beat.get("image_path") or "")).name
+        found: Path | None = None
+        if work is not None and image_name:
+            direct = Path(work) / image_name
+            if direct.is_file():
+                found = direct
+            else:
+                matches = [p for p in Path(work).rglob(image_name) if p.is_file()]
+                found = matches[0] if matches else None
+        fault = ""
+        sidecar_spoken = ""
+        if found is not None:
+            fault = frame_fault(found) or "ok"
+            side = sidecar_path(found)
+            if side.is_file():
+                try:
+                    payload = json.loads(side.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    payload = {}
+                if isinstance(payload, dict):
+                    sidecar_spoken = " ".join(str(payload.get("spoken") or "").split())
+        rows.append(
+            {
+                "index": beat.get("index", index),
+                "passed": beat.get("passed"),
+                "score": beat.get("score"),
+                "reason": " ".join(str(beat.get("reason") or "").split())[:400],
+                "spoken": spoken[:500],
+                "prompt": prompt[:700],
+                "image_name": image_name,
+                "frame_fault": fault,
+                "sidecar_spoken": sidecar_spoken[:500],
+                "sidecar_matches_spoken": bool(sidecar_spoken) and sidecar_spoken == spoken,
+            }
+        )
+    return rows
+
+
+def evidence_cli(qa_path: Path, work: Path | None) -> dict[str, Any]:
+    data = _qa_record(qa_path)
+    report = {
+        "schema": 1,
+        "qa_name": Path(qa_path).name,
+        "topic_field": " ".join(str(data.get("topic") or "").split())[:240],
+        "spoken_subject": topic_from_qa(data) if _qa_topic_is_this_episode(data) else "",
+        "video_name": Path(str(data.get("video_path") or "")).name,
+        "beats": beat_evidence(data, work),
+        "note": (
+            "Text and filenames only. frame_fault is the local pixel check. "
+            "A rejection reason is the judge's text, not proof the picture is wrong."
+        ),
+    }
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return report
+
+
+def _qa_topic_is_this_episode(data: dict[str, Any]) -> bool:
+    try:
+        topic_from_qa(data)
+    except SystemExit:
+        return False
+    return True
+
+
 def render_from_qa(qa_path: Path) -> None:
     """Build the reviewed argv and hand it to the pipeline CLI."""
     from production.pipeline.cli_parser import parse_cli_args
@@ -452,12 +578,21 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     render = sub.add_parser("render", help="Render one Dogon reel from its QA json.")
     render.add_argument("--qa", type=Path, required=True)
+    evidence = sub.add_parser(
+        "evidence",
+        help="Print sanitized beat text from a QA json. No render and no upload.",
+    )
+    evidence.add_argument("--qa", type=Path, required=True)
+    evidence.add_argument("--work", type=Path, default=None)
     sample = sub.add_parser("sample", help="Sample an existing mp4. No upload, no approval.")
     sample.add_argument("--video", type=Path, required=True)
     sample.add_argument("--dest", type=Path, default=None)
     args = parser.parse_args(argv)
     if args.command == "render":
         render_from_qa(args.qa)
+        return 0
+    if args.command == "evidence":
+        evidence_cli(args.qa, args.work)
         return 0
     manifest = sample_cli(args.video, args.dest)
     print(f"[local-review] sample frames={len(manifest['frames'])}")

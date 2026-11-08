@@ -108,6 +108,10 @@ def repair_hook(script: str, topic: str) -> str:
     name = " ".join((topic or "").split()).strip().rstrip(".")
     if not body or not name or hook_names_topic(body, name):
         return body
+    from production.media.text_utils import is_technical_stem
+
+    if is_technical_stem(name):
+        return body
     return f"{name}. {body}"
 
 

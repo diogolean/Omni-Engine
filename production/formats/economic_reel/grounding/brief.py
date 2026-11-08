@@ -424,7 +424,12 @@ def build_episode_brief(topic: str, script: str = "") -> EpisodeBrief:
         mat = f" ({', '.join(materials[:4])})" if materials else ""
         hero = f"{_with_article(catalog[0])}{mat}"
     else:
-        hero = f"the {clean}" if clean else "the subject of this episode"
+        from production.media.text_utils import is_technical_stem
+
+        if is_technical_stem(clean) or is_technical_stem(topic):
+            hero = "the subject of this episode"
+        else:
+            hero = f"the {clean}" if clean else "the subject of this episode"
     return EpisodeBrief(
         topic=clean,
         hero_short=hero,

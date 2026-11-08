@@ -13,6 +13,7 @@ from production.pipeline.cli_parser import parse_cli_args
 from production.pipeline.local_review import (
     DOGON_MP4_NAME,
     DOGON_STEM,
+    DOGON_SUBJECT,
     active,
     begin,
     distribution_enabled,
@@ -32,7 +33,7 @@ from production.pipeline.local_review import (
 def _args(**overrides: object) -> argparse.Namespace:
     base = dict(
         local_review=True,
-        topic=DOGON_STEM,
+        topic=DOGON_SUBJECT,
         expect_stem=DOGON_STEM,
         post_type="ECONOMIC_REEL",
         page="ancient_knowledge",
@@ -64,6 +65,8 @@ def test_parser_accepts_local_review_without_a_publish_flag() -> None:
 
 def test_dogon_argv_has_no_distribution_flags() -> None:
     argv = dogon_argv(DOGON_STEM, "G:/ancient/clips/" + DOGON_MP4_NAME)
+    assert argv[0] == DOGON_SUBJECT
+    assert "4ed43c" not in argv[0]
     assert "--local-review" in argv
     assert "--quantity" in argv and argv[argv.index("--quantity") + 1] == "1"
     assert "--channel" in argv and argv[argv.index("--channel") + 1] == "ancient_knowledge"
@@ -90,9 +93,11 @@ def test_qa_json_builds_the_protected_invocation(tmp_path: Path) -> None:
     assert parsed.local_review is True
     assert parsed.quantity == 1
     assert parsed.publish_youtube is False
-    assert parsed.topic == DOGON_STEM
+    assert parsed.topic == DOGON_SUBJECT
+    assert "4ed43c" not in parsed.topic
     assert Path(parsed.protect_path[0]).name == DOGON_MP4_NAME
-    assert topic_from_qa({"topic": ""}) == DOGON_STEM
+    assert topic_from_qa({"topic": ""}) == DOGON_SUBJECT
+    assert topic_from_qa({"topic": DOGON_STEM}) == DOGON_SUBJECT
     with pytest.raises(SystemExit):
         topic_from_qa({"topic": "The pyramids at Giza"})
 

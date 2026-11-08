@@ -111,9 +111,44 @@ The screenshot id `lBXQu0jPWgE` is not in this repo. Do not treat it as the
 same file as the QA stem until the QA json's `video_path` on that machine
 says so.
 
+## The stem is not the episode
+
+`the_sirius_mystery_dogon_4ed43c` is the file identity. The f6fcf15 run
+passed that string in as the topic. The opening line became "The Sirius
+Mystery Dogon 4ed43c dates to the late nineteenth century." and the image
+prompt said `EPISODE OBJECT: the the_sirius_mystery_dogon_4ed43c.` A
+previously accepted depiction of a different sentence, "The Dogon people
+maintain their knowledge predates any European contact.", was attached to
+that beat. The still-file sidecar is still exact-line. The prompt hint
+was not: it matched the topic.
+
+Local review now speaks "The Sirius Mystery and the Dogon" and a checked
+narration. That narration attributes the Sirius B claim to Griaule,
+Dieterlen, and Temple's 1976 book, and it says the calendar-to-orbit step
+is an interpretation. It does not say ancient records show the knowledge,
+and it does not say a measurement aligns. The original QA json and the
+original mp4 are not rewritten.
+
+Do not start another full render to inspect the 21:43 run. From the
+repository root, this prints beat text, the prompt, the judge reason, the
+image filename, the pixel fault, and whether the sidecar sentence matches.
+It does not read image pixels into the output and it does not call a model:
+
+```powershell
+python -m production.pipeline.local_review evidence `
+  --qa "<OUTPUT_PATH>\ancient_knowledge\clips\local_review\20261108T004345Z\<stem>.qa.json" `
+  --work "<OUTPUT_PATH>\ancient_knowledge\clips\local_review\20261108T004345Z\assets\ep_20261107_2144\work"
+```
+
+`frame_fault` of `ok` with a rejection reason means the judge rejected a
+picture that is not a flat or black card. That is not yet proof the
+picture is the wrong subject. A `sidecar_matches_spoken` of false means
+the file was accepted for a different sentence.
+
 ## The command
 
-From the repository root, in PowerShell. This is the render entry.
+A full render is not the next step. When a render is wanted, from the
+repository root, in PowerShell. This is the render entry.
 `--dry-run` does not apply: that flag is ECONOMIC_REEL_LOFI only.
 Do not pass `--publish-youtube`. The script does not set
 `ENABLE_YOUTUBE_UPLOAD`. `--local-review` turns YouTube off even when `.env`

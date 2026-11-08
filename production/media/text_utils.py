@@ -34,6 +34,20 @@ def _truncate_slug(slug: str, max_len: int, *, digest_src: str | None = None) ->
     return out[:max_len] if len(out) > max_len else out
 
 
+_TECHNICAL_STEM = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)+_[0-9a-f]{6}$")
+
+
+def is_technical_stem(text: str) -> bool:
+    """True for a filename stem such as ``the_sirius_mystery_dogon_4ed43c``.
+
+    That string identifies an output. It is not a title and not a sentence.
+    """
+    raw = " ".join((text or "").strip().split())
+    if not raw or " " in raw:
+        return False
+    return _TECHNICAL_STEM.fullmatch(raw.lower()) is not None
+
+
 def subject_slug(subject: str, *, max_len: int = _MAX_SUBJECT_SLUG_CHARS) -> str:
     """Filesystem-safe, length-capped slug for ``outputs/.../assets/<slug>/``."""
     raw = (subject or "").strip().lower()
