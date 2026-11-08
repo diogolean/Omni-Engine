@@ -40,6 +40,8 @@ edge-tts>=6.1.9
 Babel>=2.18.0
 # Animind core HTTP API (products/animind_core/app.py).
 fastapi>=0.115
+# Spend ledger. Imported lazily; a missing package fails closed before a paid call.
+psycopg[binary]>=3.2
 PyYAML>=6.0
 # Visual critic console. The module imports rich at import time.
 rich>=13.0.0
