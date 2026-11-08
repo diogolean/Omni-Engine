@@ -9,6 +9,8 @@ from fastapi.responses import FileResponse
 
 from . import (
     API_VERSION,
+    admin_auth,
+    admin_avatar,
     avatar_request,
     casting,
     characters,
@@ -156,6 +158,16 @@ def post_avatar(body: dict, request: Request) -> dict:
         raise HTTPException(400, "user") from exc
     if not user:
         raise HTTPException(403, "login")
+    if body.get("generate") is True:
+        if not admin_auth.trusted(request.headers.get("x-animind-admin")):
+            raise HTTPException(403, "admin")
+
+        def live() -> dict:
+            return admin_avatar.run(body, user, _base(request))
+
+        result = protect(request, body, "avatar", live)
+        result["usage"] = publish_usage(result.get("usage"), job_id=result.get("id"))
+        return result
 
     def run() -> dict:
         return avatar_request.generate_avatar(

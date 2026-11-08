@@ -9,7 +9,7 @@ from fastapi import HTTPException, Request
 
 from . import contract, ledger
 from .guard import SpendDenied, frame_scope, open_frame, request_id, user_hash
-from .limits import request_over_cap
+from .limits import read_limits, request_over_cap
 
 _USER = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 _KEY = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
@@ -17,6 +17,7 @@ _REQUEST = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 
 _STATUS = {
     "disabled": 403,
+    "credential": 503,
     "user": 400,
     "conflict": 409,
     "budget": 402,
@@ -83,6 +84,8 @@ def protect(request: Request, body: dict[str, Any], operation: str, handler: Cal
         origin_ref=_client_origin(request),
     )
     frame.idempotency_key = key
+    if _trusted_admin(request) and frame.block == "disabled":
+        _lift_disabled_for_admin(frame)
     digest = body_hash(body if isinstance(body, dict) else {"_": str(type(body))})
     with frame_scope(frame):
         if operation in {"render", "character", "avatar"} and frame.block == "ledger":
@@ -108,6 +111,26 @@ def protect(request: Request, body: dict[str, Any], operation: str, handler: Cal
         if key:
             _save(user_ref, key, digest, result.get("id"))
         return result
+
+
+def _trusted_admin(request: Request) -> bool:
+    from products.animind_core.admin_auth import trusted  # noqa: PLC0415
+
+    return trusted(request.headers.get("x-animind-admin"))
+
+
+def _lift_disabled_for_admin(frame) -> None:
+    """An admin may pass the global off switch. The ledger and the cap stay."""
+    limits = read_limits()
+    if limits is None:
+        frame.block = "unavailable"
+        return
+    if not ledger.configured() or not ledger.ping():
+        frame.block = "ledger"
+        frame.limits = limits
+        return
+    frame.block = None
+    frame.limits = limits
 
 
 def _origin() -> str:
