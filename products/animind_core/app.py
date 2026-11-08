@@ -193,9 +193,10 @@ def post_render(body: dict, request: Request) -> dict:
     payload = dict(body)
     payload.pop("personaUser", None)
     payload.pop("owner", None)
-    if user:
-        payload["personaUser"] = user
-        payload["owner"] = user
+    if not user:
+        raise HTTPException(404, "job not found")
+    payload["personaUser"] = user
+    payload["owner"] = user
     result = protect(request, body, "render", lambda: render.submit(payload, _base(request)))
     if result.get("id"):
         result["usage"] = render.keep_usage(
@@ -262,6 +263,8 @@ def get_job(job_id: str, request: Request) -> dict:
         user = owner.accept_user(request.headers.get("x-animind-user"))
     except ValueError as exc:
         raise HTTPException(400, "user") from exc
+    if not user:
+        raise HTTPException(404, "job not found")
     job = render.get(job_id, user)
     if job is None:
         raise HTTPException(404, "job not found")

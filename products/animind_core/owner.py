@@ -48,8 +48,8 @@ def _allowed(target: Path, root: Path, owner: str | None) -> bool:
         return False
     rel = target.relative_to(root)
     if not rel.parts or rel.parts[0] != "users":
-        # Loose render output is not a public asset. Puppets and previews stay public.
+        # Loose render output is unreachable. Puppets and previews stay public.
         if rel.parts and rel.parts[0] == "jobs":
-            return owner is None
+            return False
         return True
     return owner is not None and len(rel.parts) > 1 and rel.parts[1] == owner

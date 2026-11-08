@@ -19,6 +19,7 @@ def client(tmp_path, monkeypatch):
 
 
 H = {"Authorization": "Bearer test-key"}
+OWN = {**H, "X-Animind-User": "user_one"}
 
 
 def test_rejects_missing_key(client):
@@ -87,9 +88,9 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
 
     monkeypatch.setattr(render, "_tts", fake_tts)
     c = _make(client)
-    job = client.post("/v1/render", headers=H, json={"characters": [c], "template": "solo", "scenario": "studio", "topic": "IA"}).json()
+    job = client.post("/v1/render", headers=OWN, json={"characters": [c], "template": "solo", "scenario": "studio", "topic": "IA"}).json()
     for _ in range(240):
-        state = client.get(f"/v1/jobs/{job['id']}", headers=H).json()
+        state = client.get(f"/v1/jobs/{job['id']}", headers=OWN).json()
         if state["status"] in {"done", "failed"}:
             break
         time.sleep(0.5)
@@ -99,15 +100,16 @@ def test_render_job_has_visemes_and_video(client, monkeypatch):
     assert all(line["visemes"] and line["view"] in {"front", "left", "right"} for line in res["script"])
     assert res["writer"] == "template" and res["personas"][0]["found"] is False
     assert res["frameQa"]["pass"] and res["frameQa"]["badFrames"] == 0
-    assert client.get("/v1/files/" + res["frameQaUrl"].split("/v1/files/")[1]).status_code == 200
+    assert client.get("/v1/files/" + res["frameQaUrl"].split("/v1/files/")[1], headers=OWN).status_code == 200
     assert {line["kind"] for line in res["script"]} == {"paraphrase"}  # no sheet offline: nothing passes as a quote
     assert [line["beat"] for line in res["script"]][0] == "gancho"
     from products.animind_core import titles
     assert res["script"][0]["startMs"] >= titles.TITLE_S * 1000 - 1  # silent cold open for the title card
     assert res["durationMs"] >= res["script"][-1]["endMs"] + titles.END_S * 1000 - 1  # and room for the end card
-    assert client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1]).status_code == 200
-    from products.animind_core import settings
-    saved = json.loads((settings.data_dir() / "jobs" / job["id"] / "script.json").read_text(encoding="utf-8"))
+    assert client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1], headers=OWN).status_code == 200
+    from products.animind_core import owner, settings
+    digest = owner.accept_user("user_one")
+    saved = json.loads((settings.data_dir() / "users" / digest / "jobs" / job["id"] / "script.json").read_text(encoding="utf-8"))
     assert [line["text"] for line in saved["lines"]] == [line["text"] for line in res["script"]]
 
 

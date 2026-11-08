@@ -200,11 +200,70 @@ def test_owner_rereads_the_preview_file_after_memory_is_cleared(client, monkeypa
     render._JOBS.clear()
 
 
+def test_loose_jobs_preview_is_unreadable_without_the_owner(client, monkeypatch, tmp_path):
+    """A legacy jobs/ file is the same 404 as a missing file. Public plates stay public."""
+    job_id = "legacyjob01"
+    planted = tmp_path / "jobs" / job_id / "preview.mp4"
+    planted.parent.mkdir(parents=True)
+    planted.write_bytes(b"legacy-preview")
+    digest = owner.accept_user("user_one")
+    owned = tmp_path / "users" / digest / "jobs" / job_id / "preview.mp4"
+    owned.parent.mkdir(parents=True)
+    owned.write_bytes(b"owner-preview")
+    for name, folder in (("fixture.png", "puppets"), ("shot.png", "previews")):
+        path = tmp_path / folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"public-" + folder.encode())
+    missing = client.get("/v1/files/jobs/missingjob1/preview.mp4", headers=H)
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "not found"}
+    for headers in (H, {**H, "X-Animind-User": "user_two"}):
+        got = client.get(f"/v1/files/jobs/{job_id}/preview.mp4", headers=headers)
+        assert got.status_code == 404
+        assert got.json() == missing.json()
+        assert got.content == missing.content
+        assert b"legacy-preview" not in got.content
+        assert "users/" not in got.text
+    own = {**H, "X-Animind-User": "user_one"}
+    fetched = client.get(f"/v1/files/users/{digest}/jobs/{job_id}/preview.mp4", headers=own)
+    assert fetched.status_code == 200
+    assert fetched.content == b"owner-preview"
+    assert client.get("/v1/files/puppets/fixture.png", headers=H).content == b"public-puppets"
+    assert client.get("/v1/files/previews/shot.png", headers=H).content == b"public-previews"
+    monkeypatch.setattr(render.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+
+    class _Stopped:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(render.threading, "Thread", _Stopped)
+    refused = client.post("/v1/render", headers=H, json={
+        "characters": [{"id": "c1", "name": SECRET_NAME}],
+        "template": "solo",
+        "scenario": "studio",
+        "topic": SECRET_PROMPT,
+    })
+    assert refused.status_code == 404
+    assert refused.json() == {"detail": "job not found"}
+    assert SECRET_NAME not in refused.text
+    assert SECRET_PROMPT not in refused.text
+    assert "users/" not in refused.text
+    hidden = client.get(f"/v1/jobs/{job_id}", headers=H)
+    assert hidden.status_code == 404
+    assert hidden.json() == {"detail": "job not found"}
+    assert b"legacy-preview" not in hidden.content
+
+
 def test_anonymous_job_is_not_readable_by_a_named_user(client):
     job_id = "anonjob0001"
     render._JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0.0, "_owner": None}
     try:
-        assert client.get(f"/v1/jobs/{job_id}", headers=H).status_code == 200
+        hidden = client.get(f"/v1/jobs/{job_id}", headers=H)
+        assert hidden.status_code == 404
+        assert hidden.json() == {"detail": "job not found"}
         named = client.get(f"/v1/jobs/{job_id}", headers={**H, "X-Animind-User": "user_one"})
         assert named.status_code == 404
         assert named.json() == {"detail": "job not found"}
