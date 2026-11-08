@@ -535,6 +535,18 @@ def _stage_sequence_render_04(state: VariantState) -> None:
             _LOG.warning('REEL QA FALLBACK failed (%s)', _fall_exc)
             _guaranteed = None
         if _guaranteed is not None and Path(_guaranteed).is_file():
+            from production.qa.mp4_gate import frame_fault as _frame_fault
+            _solid = _frame_fault(_guaranteed)
+            if _solid in {'flat', 'black'}:
+                # The olive card and the near-black PNG are not photographs.
+                # Encoding either one aborts the reel, so they are not scenes.
+                _row['passed'] = False
+                _row['reuse'] = 'fallback'
+                if not str(_row.get('reason') or '').strip():
+                    _row['reason'] = str(_gate.blocked_reason or _solid)
+                state._reel_qa_block_compile = True
+                _LOG.error('REEL QA | act %d/%d substitute is %s (%s) — not a scene', _idx + 1, state._seq_n, _solid, Path(_guaranteed).name)
+                return
             _row['image_path'] = str(_guaranteed)
             # The substitute is a static card or an unscoped rescue. The
             # rejection that sent us here stays on the row. passed stays false

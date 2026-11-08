@@ -101,6 +101,54 @@ def test_retry_prompt_puts_the_object_before_the_place() -> None:
     assert "hammer" in low
 
 
+def test_a_rejected_person_retries_as_a_place() -> None:
+    text = refine_prompt(
+        "a person representing Nommo",
+        "The Nommo taught the Dogon.",
+        rejection_reason="hoodie/mask person doesn't represent beat",
+        channel="ancient_knowledge",
+        episode_subject="Dogon knowledge of Sirius",
+    )
+    low = text.lower()
+    assert "no detailed faces" in low
+    assert "spoken line is context only" in low
+    assert "hoodie" in low
+    assert "primary subject:" not in low
+
+
+def test_a_blank_frame_retries_as_a_place() -> None:
+    text = refine_prompt(
+        "a person representing Nommo",
+        "The Nommo taught the Dogon.",
+        rejection_reason="blur:1",
+        channel="ancient_knowledge",
+    )
+    assert "spoken line is context only" in text.lower()
+
+
+def test_a_wrong_object_stays_an_object_on_this_channel() -> None:
+    text = refine_prompt(
+        "a city",
+        "This artefact from London, Texas should not exist.",
+        site="London, Texas",
+        episode_subject=_TOPIC,
+        rejection_reason="judge saw a cannon",
+        channel="ancient_knowledge",
+    )
+    assert "PRIMARY SUBJECT" in text
+    assert "hammer" in text.lower()
+
+
+def test_a_channel_without_a_face_ban_keeps_the_person_retry() -> None:
+    text = refine_prompt(
+        "the master",
+        "The master sits.",
+        rejection_reason="person doesn't represent the beat",
+        channel="not_a_real_channel",
+    )
+    assert "PRIMARY SUBJECT" in text
+
+
 def test_memory_names_a_previous_rejection(tmp_path: Path) -> None:
     remember(
         channel="ancient_knowledge",

@@ -45,6 +45,31 @@ def extract_site(*parts: str) -> str:
     return place
 
 
+def _scene_retry(reason: str) -> bool:
+    """True when another drawing of the named person will fail the same way.
+
+    A wrong object (``judge saw a cannon``) stays on the object prompt.
+    A blank frame, a modern person, or a non-photo does not.
+    """
+    low = (reason or "").lower()
+    if low.startswith("blur:"):
+        return True
+    markers = (
+        "black_still",
+        "flat_still",
+        "glitch_still",
+        "anachronism",
+        "non_photoreal",
+        "setting_contradicts",
+        "hoodie",
+        "mask",
+        "modern clothing",
+        "person doesn't",
+        "person does not",
+    )
+    return any(marker in low for marker in markers)
+
+
 def refine_prompt(
     base_prompt: str,
     sentence: str,
@@ -54,14 +79,33 @@ def refine_prompt(
     rejection_reason: str = "",
     attempt: int = 1,
     episode_subject: str = "",
+    channel: str = "",
 ) -> str:
     """Rebuild a rejected prompt with the object first and the place second.
 
     A leading ``Site: London`` made Flux draw a city alley for a hammer
     found in London, Texas. The narration sentence stays in the prompt so
     the judge and the model still see the exact line.
+
+    On a channel whose own Flux list forbids faces, a blank frame or a
+    rejected person is not asked for again. The next prompt is an allowed
+    place photograph. The judge threshold is unchanged.
     """
     spoken = (sentence or "").strip() or (base_prompt or "").strip()[:240]
+    if channel and _scene_retry(rejection_reason):
+        from production.formats.economic_reel.artefact.flux_policy import (
+            channel_bans_faces,
+            safe_flux_prompt,
+        )
+
+        if channel_bans_faces(channel):
+            return safe_flux_prompt(
+                spoken,
+                geography=(site or episode_subject or "").strip(),
+                rejection=(rejection_reason or "").strip(),
+                variant=int(attempt),
+                negatives=("hoodie", "mask", "modern clothing", "modern person"),
+            )
     names = [e for e in (entities or []) if e][:4]
     subject = spoken
     object_label = ""

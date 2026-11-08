@@ -105,3 +105,58 @@ def test_prior_review_reuses_only_a_passed_line(tmp_path: Path) -> None:
         assert meta[1]["cached_path"].is_file()
     finally:
         end()
+
+
+def test_a_missing_act_is_not_written_as_a_black_png(tmp_path: Path) -> None:
+    from production.pipeline.stills import _ensure_sequence_image
+
+    dest = tmp_path / "scene_05.png"
+    with pytest.raises(RuntimeError, match="refusing a black placeholder"):
+        _ensure_sequence_image(
+            tmp_path / "act05_missing.png",
+            fallback=None,
+            target_path=dest,
+        )
+    assert not dest.exists()
+
+
+def test_a_black_png_retries_as_a_place_before_the_judge(tmp_path: Path) -> None:
+    from production.qa.retry import generate_and_gate
+
+    prompts: list[str] = []
+    judged: list[Path] = []
+
+    def generate(prompt: str, **kwargs):
+        prompts.append(prompt)
+        dest = Path(kwargs["output_directory"]) / f"{kwargs['output_stem']}.png"
+        if len(prompts) == 1:
+            Image.new("RGB", (64, 96), (10, 10, 14)).save(dest)
+        else:
+            _pattern(dest)
+        return dest
+
+    def judge(image, text, prompt, **kwargs):
+        judged.append(Path(image))
+        return {
+            "qa_status": "scored",
+            "is_relevant": True,
+            "relevance_score": 0.91,
+            "rejection_reason": "",
+        }
+
+    result = generate_and_gate(
+        generate,
+        prompt="a person in a hoodie representing Nommo",
+        chunk_text="The Nommo taught the Dogon about Sirius.",
+        output_stem="act05",
+        output_directory=tmp_path,
+        channel="ancient_knowledge",
+        evaluate_fn=judge,
+        max_attempts_n=3,
+    )
+    assert result.publishable
+    assert len(judged) == 1
+    assert judged[0].name != "act05.png" or "r02" in judged[0].name
+    low = prompts[1].lower()
+    assert "spoken line is context only" in low
+    assert "no detailed faces" in low

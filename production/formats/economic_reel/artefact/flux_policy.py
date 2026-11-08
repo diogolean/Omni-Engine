@@ -275,6 +275,19 @@ def ak_narration_rule() -> str:
     )
 
 
+def channel_bans_faces(channel: str) -> bool:
+    """True when this channel's own Flux list forbids faces.
+
+    The built-in default is not consulted. A channel that never wrote the
+    rule keeps an object retry, so a person who is the subject is not
+    replaced with a landscape.
+    """
+    allowed, forbidden = _from_rag(channel)
+    if not allowed and not forbidden:
+        _, forbidden = _from_planner_config(channel)
+    return any("face" in item.lower() for item in forbidden)
+
+
 def load_flux_policy(channel: str) -> dict[str, tuple[str, ...]]:
     """Allowed and forbidden Flux scene types for ``channel``.
 

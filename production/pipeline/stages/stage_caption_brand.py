@@ -208,8 +208,7 @@ def _stage_caption_brand_01(state: VariantState) -> None:
                         input(f'\n [PAUSED] Images saved to episode assets folder:\n {state._assets_dir_disp}\n Press [ENTER] to approve and continue video rendering, or [Ctrl+C] to abort...\n')
                     _LOG.info('Render approval granted — continuing video compilation (variant %s | episode=%s).', state.variant + 1, state._episode_id)
     if state._reel_qa_block_compile and state._sequence_image_paths:
-        _LOG.warning('REEL QA | some beats were hard — compiling the reel anyway')
-        state._reel_qa_block_compile = False
+        _LOG.warning('REEL QA | some beats have no usable still — not compiling a partial reel')
     elif state._reel_qa_block_compile:
         _LOG.error('REEL QA | skipping compile — no stills at all')
         print('[VisualQA] compile skipped — no stills')

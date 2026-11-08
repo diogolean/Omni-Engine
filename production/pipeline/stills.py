@@ -54,15 +54,13 @@ def _ensure_sequence_image(
     target_path: "Path | None" = None,
 ) -> Path:
     """
-    Guarantee a readable act image for MoviePy/PIL.
+    Return a readable act image.
 
-    If *img_path* is missing/invalid, ``shutil.copy2`` the previous valid
-    *fallback* (Act 1 / base) into *target_path*. Never raises
-    ``FileNotFoundError`` — last resort is a solid-color placeholder so
-    API depletion never crashes compilation.
+    If *img_path* is missing, ``shutil.copy2`` the previous valid *fallback*
+    into *target_path*. A missing file is not replaced with a near-black
+    frame. That frame was exported as ``scene_NN.png`` and the encoder
+    refused it. The caller has to retry a real photograph instead.
     """
-    from PIL import Image as _PILImage
-
     fb = Path(fallback) if fallback else None
     candidate = Path(img_path) if img_path else None
 
@@ -75,9 +73,9 @@ def _ensure_sequence_image(
             else outputs_root() / "seq_act_placeholder.png"
         )
     )
-    os.makedirs(os.path.dirname(str(dest)) or ".", exist_ok=True)
 
     if fb is not None and fb.is_file() and os.path.exists(fb):
+        os.makedirs(os.path.dirname(str(dest)) or ".", exist_ok=True)
         try:
             if dest.resolve() != fb.resolve():
                 shutil.copy2(fb, dest)
@@ -91,17 +89,14 @@ def _ensure_sequence_image(
             _LOG.warning("Fallback copy failed (%s) — using prior image path %s", exc, fb)
             return fb.resolve()
 
-    # Blinded last resort — solid frame so MoviePy always completes
-    try:
-        _PILImage.new("RGB", (1080, 1920), (10, 10, 14)).save(str(dest))
-        _LOG.warning("Blinded placeholder act image written → %s", dest)
-        return dest.resolve()
-    except Exception as exc:  # noqa: BLE001
-        _LOG.error("Could not write placeholder act image (%s)", exc)
-        # Absolute last ditch: reuse any existing path we still hold
-        if fb is not None and fb.is_file():
-            return fb.resolve()
-        raise RuntimeError(f"Unable to guarantee sequence act image at {dest}") from exc
+    # A solid (10, 10, 14) PNG is what the encoder calls a black still.
+    # Do not write one. Name the missing source so the log shows provenance.
+    missing = candidate if candidate is not None else dest
+    raise RuntimeError(
+        f"no usable still for {Path(missing).name}; refusing a black placeholder"
+    )
+
+
 def _is_valid_cached_still(path: Path) -> bool:
     """True when *path* looks like a real generated PNG/JPEG, not an empty stub."""
     try:

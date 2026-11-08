@@ -151,10 +151,15 @@ Each still is copied onto the machine's local temp disk before ffmpeg.
 A read that does not finish in 30 seconds fails that beat. One beat's
 encode budget is about 20 seconds plus 0.2 seconds per frame, and never
 more than 120 seconds or `REEL_FFMPEG_TIMEOUT_S`, whichever is smaller.
-A flat card is refused before encode. A still is reused from an earlier
-`local_review` folder only when its sidecar says that exact spoken line
-already passed, and the judge scores the copy again. A static fallback
-card is not a pass.
+A flat or black card is not encoded. A missing act image is not filled
+with a near-black PNG (the old `(10, 10, 14)` placeholder, which the
+encoder reports as `refusing to encode a black still`). On this channel,
+a retry after a blank frame, a modern person, an anachronism, or a
+non-photo asks for an allowed place photograph. The spoken line stays
+context. The judge threshold is unchanged. A still is reused from an
+earlier `local_review` folder only when its sidecar says that exact
+spoken line already passed, and the judge scores the copy again. A
+static fallback card is not a scene and is not a pass.
 
 After the render, sample the new mp4 without another render:
 
