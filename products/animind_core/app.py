@@ -15,6 +15,7 @@ from . import (
     knowledge,
     languages,
     personas,
+    portrait,
     preview,
     render,
     scene,
@@ -79,10 +80,18 @@ def post_character_rerig(character_id: str, request: Request) -> dict:
 def post_characters(body: dict, request: Request) -> dict:
     try:
         return characters.create_character(body, _base(request))
+    except portrait.PortraitRefused as exc:
+        raise HTTPException(409, exc.decision) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except NotImplementedError as exc:
         raise HTTPException(501, str(exc)) from exc
+
+
+@app.post("/v1/portraits/plan", dependencies=[Depends(require_key)])
+def post_portrait_plan(body: dict) -> dict:
+    """Resolution contract. Does not generate, cut, or charge."""
+    return portrait.plan(body)
 
 
 @app.post("/v1/render", dependencies=[Depends(require_key)])

@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import avatar, casting, qa, rig, settings, sheet, stick, styles, telemetry
+from . import avatar, casting, portrait, qa, rig, settings, sheet, stick, styles, telemetry
 from .image_models import BudgetExceeded
 
 _LOG = logging.getLogger("animind_core")
@@ -165,6 +165,10 @@ def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
 
 
 def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
+    if "requestedResolution" in req or "resolution" in req:
+        decision = portrait.plan(req)
+        if not decision["consume"]:
+            raise portrait.PortraitRefused(decision)
     started = time.perf_counter()
     source = req.get("source") or {}
     kind = source.get("kind")

@@ -12,6 +12,7 @@ Rhubarb visemes).
 | `POST /v1/preview` | Lightweight PNG before the full rig. Body: `{character: {name, prompt}, characterType: "stick"\|"illustrated", artStyle, language, index}`. Response: `{id, index, name, kind, source: "core", accent, imageUrl, note}`. This is not the final cut-out; that is still `POST /v1/characters`. |
 | `POST /v1/scenarios` | `{mode: "auto", characterNames}` or `{mode: "prompt", prompt, characterNames}` -> `{scenario, source: "core", prompt?, note?}`. `scenario` is one of `studio`, `classroom`, `arena`, `space`, `agora` (classical names map to `agora`). A free-text prompt is mapped to the nearest built-in plate; the core does not paint a new set. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
+| `POST /v1/portraits/plan` | Resolution contract for a portrait master. `1k` is the default request and `4k` is the premium request. Neither consumes a provider: the reel adapter only sends `1K` or `2K`, the factory image call does not send `image_size`, and there is no 4K preset or 4K price. A client premium flag is ignored. `POST /v1/characters` with `requestedResolution` returns the same refusal and does not draw or generate. |
 
 ### Telemetry and provider comparison
 
