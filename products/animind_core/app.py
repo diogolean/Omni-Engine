@@ -22,6 +22,7 @@ from . import (
     personas,
     portrait,
     preview,
+    puppet_library,
     render,
     scene,
     settings,
@@ -108,6 +109,12 @@ def post_character_rerig(character_id: str, request: Request) -> dict:
     if saved is None:
         raise HTTPException(404, "unknown character")
     return saved
+
+
+@app.get("/v1/puppets", dependencies=[Depends(require_key)])
+def get_puppets() -> dict:
+    """Puppets already on disk. A contact sheet does not count as the original."""
+    return puppet_library.catalog()
 
 
 @app.post("/v1/characters", dependencies=[Depends(require_key)])
