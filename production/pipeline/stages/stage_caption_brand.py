@@ -208,8 +208,7 @@ def _stage_caption_brand_01(state: VariantState) -> None:
                         input(f'\n [PAUSED] Images saved to episode assets folder:\n {state._assets_dir_disp}\n Press [ENTER] to approve and continue video rendering, or [Ctrl+C] to abort...\n')
                     _LOG.info('Render approval granted — continuing video compilation (variant %s | episode=%s).', state.variant + 1, state._episode_id)
     if state._reel_qa_block_compile and state._sequence_image_paths:
-        _LOG.warning('REEL QA | some beats were hard — compiling the reel anyway')
-        state._reel_qa_block_compile = False
+        _LOG.warning('REEL QA | some beats have no usable still — not compiling a partial reel')
     elif state._reel_qa_block_compile:
         _LOG.error('REEL QA | skipping compile — no stills at all')
         print('[VisualQA] compile skipped — no stills')
@@ -222,11 +221,15 @@ def _stage_caption_brand_01(state: VariantState) -> None:
         state._qa_beats = list(state._beat_qa_rows)
         if not state._qa_beats:
             state._qa_beats = [{'index': 0, 'text': str(state.overlay_text or state.resolved_subject or ''), 'image_path': str(state.img_path_display or ''), 'passed': None}]
-        state._qa_dir = Path(app_config.PAGE_OUTPUTS_DIR) / 'qa'
+        from production.pipeline.local_review import isolate_dir
+        state._qa_dir = isolate_dir(Path(app_config.PAGE_OUTPUTS_DIR) / 'qa', '.')
         state._qa_report = state.seal_compiled_reel(video_path=state.reel_path, post_type=state.post_type, beats=state._qa_beats, word_timings=list(getattr(state, '_word_timings', None) or getattr(state, '_narr_word_timings', None) or []), output_dir=state._qa_dir, stem=f'{state.stem}_v{state.variant + 1:02d}', channel=(state.page_ctx.page_id if state.page_ctx else '') or '', blocked_reason='beat_qa_failed' if state._reel_qa_block_compile else '', cta_text=str((state.page_ctx.reel_cta_text if state.page_ctx else '') or ''))
     state.imgbb_url = ''
     state._upload_candidate = state.img_path_display
-    if isinstance(state._upload_candidate, Path) and state._upload_candidate.is_file():
+    from production.pipeline.local_review import distribution_enabled as _distribution_enabled
+    if not _distribution_enabled():
+        print('[local-review] ImgBB upload skipped')
+    elif isinstance(state._upload_candidate, Path) and state._upload_candidate.is_file():
         state.key_ib = app_config.IMGBB_API_KEY
         if state.key_ib:
             try:

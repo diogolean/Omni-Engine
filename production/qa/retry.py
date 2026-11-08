@@ -162,6 +162,7 @@ def generate_and_gate(
                 rejection_reason=str(last_verdict.get("rejection_reason") or reason),
                 attempt=attempt,
                 episode_subject=episode_subject,
+                channel=channel,
             )
         stem = output_stem if attempt == 0 else f"{output_stem}_r{attempt + 1:02d}"
         call_kwargs = dict(kwargs)
@@ -206,6 +207,28 @@ def generate_and_gate(
             )
             continue
         last_path = path
+        from production.qa.mp4_gate import frame_fault
+
+        fault = frame_fault(path)
+        if fault in {"black", "flat"}:
+            reason = f"{fault}_still"
+            last_verdict = {
+                "attempt": attempt + 1,
+                "image_name": path.name,
+                "prompt": current_prompt,
+                "qa_status": "rejected",
+                "rejection_reason": reason,
+                "relevance_score": 0.0,
+                "is_relevant": False,
+            }
+            attempts.append(last_verdict)
+            _LOG.warning(
+                "VisualQA %s | stem=%s attempt=%d — not a photograph, retrying",
+                fault,
+                output_stem,
+                attempt + 1,
+            )
+            continue
         reference_image, shape = _artefact_reference(path, kwargs)
         verdict = evaluate_with_technical_retry(
             judge,
@@ -218,6 +241,7 @@ def generate_and_gate(
         )
         verdict = dict(verdict or {})
         verdict["attempt"] = attempt + 1
+        verdict["image_name"] = path.name
         verdict["prompt"] = current_prompt
         last_verdict = verdict
         attempts.append(verdict)

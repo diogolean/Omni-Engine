@@ -178,23 +178,27 @@ def _stage_compile_reel_01(state: VariantState) -> None:
     _LOG.info('%s compiled → %s', 'WAN_REEL' if state._is_wan_reel else 'ECONOMIC_REEL', state.reel_path.name)
     state.video_path_str = str(state.reel_path)
     print(f'[reel] Video compiled -> {state.reel_path}')
-    try:
-        from production.library.asset_library import register_asset
-        state.register_asset = register_asset
-        state._lib_channel = (state.page_ctx.page_id if state.page_ctx else app_config.ACTIVE_PAGE) or sole_page("DOCUMENTARY_PIPELINE")
-        state._lib_caption = state.caption if state.caption and state.caption != '(skipped)' else getattr(state, '_early_seq_script', None) or state.overlay_text or ''
-        state._lib_audio = float(getattr(state, '_ak_total_audio', None) or getattr(state, '_narr_dur', None) or 0.0)
-        state._lib_meta = getattr(state, '_sr_act_meta', None) or {}
-        state._lib_video = str(state.reel_path)
-        for _si, _still in enumerate(state._sequence_image_paths or []):
-            state._si = _si
-            state._still = _still
-            state._meta = state._lib_meta.get(state._si) or {}
-            state.register_asset(channel=str(state._lib_channel), post_type=str(state.post_type or 'ECONOMIC_REEL'), local_path=str(state._still), prompt=str(state._meta.get('prompt') or ''), caption=str(state._lib_caption), video_path=state._lib_video if state._si == 0 else '', audio_duration_s=state._lib_audio if state._lib_audio > 0 else None, asset_kind='still', platform='facebook')
-        state.register_asset(channel=str(state._lib_channel), post_type=str(state.post_type or 'ECONOMIC_REEL'), local_path=state._lib_video, prompt='', caption=str(state._lib_caption), video_path=state._lib_video, audio_duration_s=state._lib_audio if state._lib_audio > 0 else None, asset_kind='video', platform='facebook')
-    except Exception as _lib_exc:
-        state._lib_exc = _lib_exc
-        _LOG.warning('asset_library reel register skipped (%s)', state._lib_exc)
+    from production.pipeline.local_review import distribution_enabled
+    if distribution_enabled():
+        try:
+            from production.library.asset_library import register_asset
+            state.register_asset = register_asset
+            state._lib_channel = (state.page_ctx.page_id if state.page_ctx else app_config.ACTIVE_PAGE) or sole_page("DOCUMENTARY_PIPELINE")
+            state._lib_caption = state.caption if state.caption and state.caption != '(skipped)' else getattr(state, '_early_seq_script', None) or state.overlay_text or ''
+            state._lib_audio = float(getattr(state, '_ak_total_audio', None) or getattr(state, '_narr_dur', None) or 0.0)
+            state._lib_meta = getattr(state, '_sr_act_meta', None) or {}
+            state._lib_video = str(state.reel_path)
+            for _si, _still in enumerate(state._sequence_image_paths or []):
+                state._si = _si
+                state._still = _still
+                state._meta = state._lib_meta.get(state._si) or {}
+                state.register_asset(channel=str(state._lib_channel), post_type=str(state.post_type or 'ECONOMIC_REEL'), local_path=str(state._still), prompt=str(state._meta.get('prompt') or ''), caption=str(state._lib_caption), video_path=state._lib_video if state._si == 0 else '', audio_duration_s=state._lib_audio if state._lib_audio > 0 else None, asset_kind='still', platform='facebook')
+            state.register_asset(channel=str(state._lib_channel), post_type=str(state.post_type or 'ECONOMIC_REEL'), local_path=state._lib_video, prompt='', caption=str(state._lib_caption), video_path=state._lib_video, audio_duration_s=state._lib_audio if state._lib_audio > 0 else None, asset_kind='video', platform='facebook')
+        except Exception as _lib_exc:
+            state._lib_exc = _lib_exc
+            _LOG.warning('asset_library reel register skipped (%s)', state._lib_exc)
+    else:
+        print('[local-review] asset library not modified')
 
 def _stage_compile_reel_02(state: VariantState) -> None:
     """Variant worker stage. Original lines 4471-4551."""
@@ -225,23 +229,27 @@ def _stage_compile_reel_02(state: VariantState) -> None:
     state._reel_stills = len([_still for _still in state._sequence_image_paths or [] if _still])
     _print_video_cost_summary(state.cost_tracker, image_count=state._api_imgs, reel_stills=state._reel_stills, image_model_label='FLUX Schnell', variant_index=state.variant + 1, total_variants=state.qty, batch_images_so_far=state._batch_so_far, reel_cost_usd=state._reel_cost, batch_cost_usd=state._batch_usd, post_type=state.post_type, audio_label='F5TTS' if _reel_audio_is_f5() else 'ElevenLabs')
     state._b2_video_url = ''
-    try:
-        state._b2 = B2VideoUploader()
-        state._b2_video_url = state._b2.upload(state.reel_path)
-        _LOG.info('B2 upload OK → %s', state._b2_video_url)
-        print(f'[B2] Public URL: {state._b2_video_url}')
-    except B2StorageCapError as _b2_cap:
-        state._b2_cap = _b2_cap
-        _LOG.warning('%s', state._b2_cap)
-        state._b2_video_url = ''
-    except Exception as _b2_exc:
-        state._b2_exc = _b2_exc
-        state._err_l = str(state._b2_exc).lower()
-        if 'accessdenied' in state._err_l or 'access denied' in state._err_l:
-            _LOG.warning('[B2] Storage cap / AccessDenied for %s — using local/ImgBB.', state.reel_path.name)
-        else:
-            _LOG.warning('B2 upload failed for %s (%s: %s) — postplanner will use local path.', state.reel_path.name, type(state._b2_exc).__name__, state._b2_exc)
-        state._b2_video_url = ''
+    from production.pipeline.local_review import distribution_enabled as _distribution_enabled
+    if not _distribution_enabled():
+        print('[local-review] B2 upload skipped')
+    else:
+        try:
+            state._b2 = B2VideoUploader()
+            state._b2_video_url = state._b2.upload(state.reel_path)
+            _LOG.info('B2 upload OK → %s', state._b2_video_url)
+            print(f'[B2] Public URL: {state._b2_video_url}')
+        except B2StorageCapError as _b2_cap:
+            state._b2_cap = _b2_cap
+            _LOG.warning('%s', state._b2_cap)
+            state._b2_video_url = ''
+        except Exception as _b2_exc:
+            state._b2_exc = _b2_exc
+            state._err_l = str(state._b2_exc).lower()
+            if 'accessdenied' in state._err_l or 'access denied' in state._err_l:
+                _LOG.warning('[B2] Storage cap / AccessDenied for %s — using local/ImgBB.', state.reel_path.name)
+            else:
+                _LOG.warning('B2 upload failed for %s (%s: %s) — postplanner will use local path.', state.reel_path.name, type(state._b2_exc).__name__, state._b2_exc)
+            state._b2_video_url = ''
 
 def _stage_compile_reel_03(state: VariantState) -> None:
     """Variant worker stage. Original lines 4553-4561."""
@@ -255,7 +263,8 @@ def _stage_compile_reel_04(state: VariantState) -> None:
     if not getattr(state, '_ak_voice_ready', None):
         state._voice_path = None
     state._ambient_path = None
-    state._reel_dir = Path(app_config.PAGE_OUTPUTS_DIR) / 'clips'
+    from production.pipeline.local_review import isolate_dir
+    state._reel_dir = isolate_dir(Path(app_config.PAGE_OUTPUTS_DIR) / 'clips', '.')
     os.makedirs(state._reel_dir, exist_ok=True)
     state._real_caption = state.caption if state.caption and state.caption != '(skipped)' else ''
     state._voiceover_script = state._real_caption or state.overlay_text
@@ -524,8 +533,11 @@ def _stage_compile_reel_05(state: VariantState) -> None:
         except Exception as _amb_rs_exc:
             state._amb_rs_exc = _amb_rs_exc
             _LOG.debug('Ambient 48k resample skipped: %s', state._amb_rs_exc)
-    state._hook_slug = ''.join((c if c.isalnum() else '_' for c in state.overlay_text.lower())).strip('_')[:32] if state.overlay_text else state.stem
-    state._reel_target = state._reel_dir / f'reel_{state._hook_slug}_v{state.variant + 1:02d}.mp4'
+    from production.media.text_utils import reel_hook_slug, reel_output_name
+    state._hook_slug = reel_hook_slug(state.overlay_text, stem=state.stem)
+    state._reel_target = state._reel_dir / reel_output_name(state.overlay_text, state.variant, stem=state.stem)
+    from production.pipeline.local_review import refuse_output
+    refuse_output(state._reel_target)
     state._reel_dur = max(30.0, state.page_ctx.reel_duration if state.page_ctx else 30.0)
     try:
         _stage_compile_reel_01(state)

@@ -378,7 +378,9 @@ def _stage_sequence_render_03(state: VariantState) -> None:
             state._gpu_baseline = float(getattr(state._get_rgpu().client, 'total_gpu_seconds', 0) or 0)
     except Exception:
         state._gpu_baseline = 0.0
-    _apply_still_cache_to_jobs(jobs=state._sr_act_jobs, meta=state._sr_act_meta, n_acts=state._seq_n, start=state._sr_act_start, work_dir=state._reel_img_dir, stem=state.stem, extra_dirs=[state.subject_assets] if state.subject_assets else None, spoken_by_act={i: str(state._sr_act_meta[i].get('snippet') or '') for i in state._sr_act_meta})
+    from production.pipeline.local_review import review_cache_dirs
+    state._cache_dirs = review_cache_dirs(state.subject_assets, Path(app_config.PAGE_OUTPUTS_DIR))
+    _apply_still_cache_to_jobs(jobs=state._sr_act_jobs, meta=state._sr_act_meta, n_acts=state._seq_n, start=state._sr_act_start, work_dir=state._reel_img_dir, stem=state.stem, extra_dirs=state._cache_dirs, spoken_by_act={i: str(state._sr_act_meta[i].get('snippet') or '') for i in state._sr_act_meta})
     if state._early_music_thread is None and state.page_ctx and app_config.ELEVENLABS_API_KEY:
         state._clips_early = Path(app_config.PAGE_OUTPUTS_DIR) / 'clips'
         state._clips_early.mkdir(parents=True, exist_ok=True)
@@ -512,8 +514,12 @@ def _stage_sequence_render_04(state: VariantState) -> None:
             # photo rather than a flat placeholder or a site the line never names.
             _held = Path(state._sequence_image_paths[-1])
             _row['image_path'] = str(_held)
-            _row['passed'] = True
+            # The picture is held so the cut still has a frame to review.
+            # It is a repeat, so it cannot be a pass.
+            _row['passed'] = False
             _row['reuse'] = 'hold_previous'
+            if not str(_row.get('reason') or '').strip():
+                _row['reason'] = 'held_duplicate'
             state._sequence_image_paths.append(_held)
             state._ok_acts += 1
             _LOG.warning('REEL QA HOLD | act %d/%d reason=pool_exhausted — previous photo held', _idx + 1, state._seq_n)
@@ -529,9 +535,27 @@ def _stage_sequence_render_04(state: VariantState) -> None:
             _LOG.warning('REEL QA FALLBACK failed (%s)', _fall_exc)
             _guaranteed = None
         if _guaranteed is not None and Path(_guaranteed).is_file():
+            from production.qa.mp4_gate import frame_fault as _frame_fault
+            _solid = _frame_fault(_guaranteed)
+            if _solid in {'flat', 'black'}:
+                # The bar card is not the picture the judge scored. Keep that
+                # path. The card name is recorded beside it and is not a scene.
+                from production.qa.models import preserve_judged_still as _keep_judged
+                _keep_judged(_row, _guaranteed)
+                if not str(_row.get('reason') or '').strip():
+                    _row['reason'] = str(_gate.blocked_reason or _solid)
+                state._reel_qa_block_compile = True
+                _LOG.error('REEL QA | act %d/%d substitute is %s (%s) — judged image kept', _idx + 1, state._seq_n, _solid, Path(_guaranteed).name)
+                return
+            _row['judged_image_path'] = str(_row.get('image_path') or '')
             _row['image_path'] = str(_guaranteed)
-            _row['passed'] = True
+            # The substitute is a static card or an unscoped rescue. The
+            # rejection that sent us here stays on the row. passed stays false
+            # so a score of 0 cannot be sealed as a pass.
+            _row['passed'] = False
             _row['reuse'] = 'fallback'
+            if not str(_row.get('reason') or '').strip():
+                _row['reason'] = str(_gate.blocked_reason or 'static_fallback')
             state._sequence_image_paths.append(Path(_guaranteed))
             state._ok_acts += 1
             _LOG.warning('REEL QA FALLBACK | act %d/%d reason=%s — still kept, reel continues', _idx + 1, state._seq_n, _gate.blocked_reason or 'rejected')

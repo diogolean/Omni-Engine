@@ -185,8 +185,14 @@ def _stage_sequence_plan_01(state: VariantState) -> None:
             state._seq_reject = ''
             state._hooks_for_seq = list(state.generated_hooks_cache or [])
             state._asset_captions = [str(getattr(item, 'caption', '') or '') for item in state._asset_pool if str(getattr(item, 'caption', '') or '').strip()]
+            from production.pipeline.local_review import reviewed_narration as _reviewed_narration
+            state._reviewed_narration = _reviewed_narration()
             for _seq_attempt in range(1, MAX_UNIQUENESS_RETRIES + 1):
                 state._seq_attempt = _seq_attempt
+                if state._reviewed_narration:
+                    state._early_seq_script = state._reviewed_narration
+                    _LOG.info('SEQUENCE_REEL | local-review narration (%d words) — script model not called', len(state._early_seq_script.split()))
+                    break
                 state._early_seq_script = state.caption_engine.generate_sequence_voiceover(state.resolved_subject, page_niche=state.page_ctx.content_niche, persona_voice=state.page_ctx.tts_voice_preference or ('calm, deep, highly wise, authoritative ancient master' if state._is_mm else 'investigative, neutral, immersive'), n_acts=state._seq_n, duration_s=state.page_ctx.reel_duration, total_words_target=state._seq_words, economic=state.economic, niche_disclaimer=state.page_ctx.niche_disclaimer, cta_line='', narrative_mode=state.page_ctx.narrative_mode, batch_angle_block=state._batch_angle_block, uniqueness_rejection=state._seq_reject, previously_generated_hooks=state._hooks_for_seq, asset_captions=state._asset_captions or None) or ''
                 if state._early_seq_script:
                     _LOG.info('SEQUENCE_REEL | early script drafted (%d words) — seed only, downstream measures actual TTS duration.', len(state._early_seq_script.split()))
@@ -239,6 +245,9 @@ def _stage_sequence_plan_02(state: VariantState) -> None:
             elif state._ground_why.startswith('tone'):
                 state._retry_note = "Rewrite in a National Geographic tone. Use 'some researchers suggest'. Do not say archaeology refuses, and do not say a building powered devices."
             _LOG.warning('SCRIPT GROUNDING | %s | one retry', state._ground_why)
+            from production.pipeline.local_review import reviewed_narration as _reviewed_narration
+            if _reviewed_narration():
+                raise RuntimeError('local-review narration is ungrounded — refusing a model rewrite' + (f' ({state._ground_why})' if state._ground_why else ''))
             if state.caption_engine is not None:
                 state._early_seq_script = state.caption_engine.generate_sequence_voiceover(state.resolved_subject, page_niche=state.page_ctx.content_niche, persona_voice=state.page_ctx.tts_voice_preference or 'investigative, neutral, immersive', n_acts=state._seq_n, duration_s=state.page_ctx.reel_duration, total_words_target=state._seq_words, economic=state.economic, niche_disclaimer=state.page_ctx.niche_disclaimer, cta_line='', narrative_mode=state.page_ctx.narrative_mode, batch_angle_block=state._batch_angle_block, uniqueness_rejection=state._retry_note, previously_generated_hooks=list(state.generated_hooks_cache or []), asset_captions=state._asset_captions or None) or ''
                 if state._early_seq_script:

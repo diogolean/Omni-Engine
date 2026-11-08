@@ -316,6 +316,10 @@ def ground_image_prompt(
         next_spoken=next_spoken,
         locked_object=locked_object,
     )
+    if visual.kind == "illustrative":
+        # Schnell guidance is 0. Extra sentences ("show the land", "do not
+        # depict a person") are drawn. The sentence above is the payload.
+        return visual.subject
     hints = recall(
         channel=channel,
         topic=brief.topic or topic,
@@ -328,7 +332,7 @@ def ground_image_prompt(
             f"THIS BEAT'S OBJECT: {visual.object_label}. "
             "This frame shows this object."
         )
-    elif brief.hero_short:
+    elif brief.hero_is_object and brief.hero_short:
         lines.append(
             f"EPISODE OBJECT: {brief.hero_short}. "
             "Every frame shows this same subject, not a substitute landmark."

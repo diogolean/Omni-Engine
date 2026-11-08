@@ -120,6 +120,16 @@ def recall(
         if same_topic < 0.5 and _overlap(want, have) < 0.34:
             continue
         if row.get("passed") and row.get("visual_subject"):
+            # An accepted picture belongs to the spoken line that passed.
+            # The same topic is not enough: a nineteenth-century sentence
+            # was given a depiction accepted for a different Dogon line.
+            from production.formats.economic_reel.grounding.still_cache import (
+                spoken_fingerprint,
+            )
+
+            row_spoken = str(row.get("spoken") or "")
+            if not (spoken or "").strip() or spoken_fingerprint(row_spoken) != spoken_fingerprint(spoken):
+                continue
             text = str(row["visual_subject"])
             if text not in accepted:
                 accepted.append(text)

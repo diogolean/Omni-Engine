@@ -700,8 +700,8 @@ def test_the_cta_frame_is_not_failed_for_anachronism(tmp_path: Path) -> None:
 
     still = tmp_path / "still.jpg"
     frame = tmp_path / "cta.jpg"
-    Image.new("RGB", (64, 96), (10, 10, 10)).save(still)
-    Image.new("RGB", (64, 96), (40, 70, 90)).save(frame)
+    _pattern(still, 2, (10, 10, 10))
+    _pattern(frame, 6, (40, 70, 90))
     seen = {"n": 0}
 
     def _frame(_video: Path, _at: float, dest: Path) -> Path:
@@ -1375,7 +1375,7 @@ def test_camera_directions_and_hard_claims_ask_for_a_rewrite() -> None:
     assert "golden-hour" in other.lower()
 
 
-def test_an_unjudgeable_final_frame_warns_and_does_not_block(tmp_path: Path) -> None:
+def test_an_unjudgeable_final_frame_blocks_until_a_person_reviews(tmp_path: Path) -> None:
     from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
     from production.qa.reel_visual_qa import _strip_json
 
@@ -1386,8 +1386,8 @@ def test_an_unjudgeable_final_frame_warns_and_does_not_block(tmp_path: Path) -> 
 
     still = tmp_path / "still.jpg"
     other = tmp_path / "other.jpg"
-    Image.new("RGB", (64, 96), (20, 40, 200)).save(still, format="JPEG")
-    Image.new("RGB", (64, 96), (220, 180, 20)).save(other, format="JPEG")
+    _pattern(still, 1, (20, 40, 200))
+    _pattern(other, 4, (220, 180, 20))
 
     def _frame(video: Path, at_s: float, dest: Path) -> Path:
         del video, at_s
@@ -1422,8 +1422,9 @@ def test_an_unjudgeable_final_frame_warns_and_does_not_block(tmp_path: Path) -> 
         frame_fn=_frame,
         beats=beats,
     )
-    assert warned["passed"] is True
+    assert warned["passed"] is False
     assert warned["frames"][0]["reason"] == "unjudgeable"
+    assert "needs_human_review" in warned["reasons"]
     assert "frame_subtitle_mismatch" not in warned["reasons"]
 
     scored = gate_final_mp4(

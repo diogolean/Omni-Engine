@@ -424,7 +424,12 @@ def build_episode_brief(topic: str, script: str = "") -> EpisodeBrief:
         mat = f" ({', '.join(materials[:4])})" if materials else ""
         hero = f"{_with_article(catalog[0])}{mat}"
     else:
-        hero = f"the {clean}" if clean else "the subject of this episode"
+        from production.media.text_utils import is_technical_stem
+
+        if is_technical_stem(clean) or is_technical_stem(topic):
+            hero = "the subject of this episode"
+        else:
+            hero = f"the {clean}" if clean else "the subject of this episode"
     return EpisodeBrief(
         topic=clean,
         hero_short=hero,
@@ -503,6 +508,40 @@ def _beat_visual(
         object_label=_with_article(label) if label else "",
         other_objects=[_with_article(item) for item in others if item != label],
     )
+
+
+# FLUX Schnell is posted with guidance 0, so only this sentence conditions
+# the picture. The failed frames drew the words "land" and "person" because
+# those words were in the positive prompt.
+_BANDIAGARA_VIEWS = (
+    "Documentary photograph, natural daylight, realistic color. Sandstone Cliff of Bandiagara in Mali, Sahel, cliff villages on the rock, wide view, empty foreground.",
+    "Documentary photograph, natural daylight, realistic color. Sandstone face of the Cliff of Bandiagara in Mali, Sahel, villages set into the cliff, wide view.",
+    "Documentary photograph, natural daylight, realistic color. Sahel plain below the sandstone Cliff of Bandiagara in Mali, wide view, empty foreground.",
+)
+_MASK_STILL = (
+    "Documentary photograph, natural daylight, realistic color. "
+    "A carved wooden ceremonial mask resting on sandstone, wide view."
+)
+
+
+def _bandiagara_episode(*parts: str) -> bool:
+    blob = " ".join(parts).lower()
+    return "bandiagara" in blob or "dogon" in blob or "sirius" in blob
+
+
+def place_still_prompt(spoken: str = "") -> str:
+    """One concrete Mali cliff sentence. The spoken line is not copied in."""
+    index = sum(ord(char) for char in (spoken or "")) % len(_BANDIAGARA_VIEWS)
+    return _BANDIAGARA_VIEWS[index]
+
+
+def _illustrative_subject(spoken: str, script: str, topic: str = "") -> str:
+    """Short positive photograph. No prohibition list and no generic place."""
+    if not _bandiagara_episode(spoken, script, topic):
+        return ""
+    if re.search(r"\bmasks?\b", (spoken or "").lower()):
+        return _MASK_STILL
+    return place_still_prompt(spoken)
 
 
 def visual_for_beat(
@@ -606,6 +645,9 @@ def visual_for_beat(
             "The picture is that object"
         )
         return _beat_visual("object", subject, place_clause, avoid, True, True, label, others)
+    illustrated = _illustrative_subject(text, script, brief.topic)
+    if illustrated:
+        return BeatVisual("illustrative", illustrated, "", avoid, True, True)
     literal = text[:180] or brief.hero_short
     subject = f"only what this sentence shows: {literal}"
     return BeatVisual("site", subject, "", avoid, False, False)

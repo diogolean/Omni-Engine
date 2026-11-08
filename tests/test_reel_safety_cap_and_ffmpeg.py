@@ -388,9 +388,9 @@ def test_a_short_ffmpeg_reel_writes_a_file(tmp_path: Path) -> None:
     from production.media.reel_ffmpeg_render import compile_ffmpeg_reel
 
     frames = []
-    for index, color in enumerate(((120, 80, 40), (40, 90, 140))):
+    for index in range(2):
         path = tmp_path / f"still_{index}.jpg"
-        Image.new("RGB", (320, 480), color).save(path, quality=85)
+        _jpeg(path, index + 3)
         frames.append(path)
     out = tmp_path / "sample.mp4"
     compile_ffmpeg_reel(

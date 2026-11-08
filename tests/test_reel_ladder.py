@@ -1005,7 +1005,8 @@ def test_event_cc_by_credit_is_written(tmp_path: Path) -> None:
 def test_final_frame_trusts_the_approved_still(tmp_path: Path) -> None:
     from production.qa.mp4_gate import SubtitleCue, gate_final_mp4
 
-    still = _jpeg(tmp_path / "still.jpg", (30, 80, 40))
+    still = tmp_path / "still.jpg"
+    _bar(still, horizontal=False)
 
     def _frame(video: Path, at_s: float, dest: Path) -> Path:
         del video, at_s

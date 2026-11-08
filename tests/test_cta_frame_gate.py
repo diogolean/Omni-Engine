@@ -74,7 +74,9 @@ def _cta_card_judge(seen: list[str]):
 
     def judge(_path, text, *_args, **_kwargs):
         seen.append(str(text))
-        if "mysteries" in str(text) or "Follow" in str(text):
+        # The pure CTA line is the card. A phrase that only starts the CTA
+        # still has narration in it and is judged on its own.
+        if str(text).strip().lower().startswith("for more hidden"):
             return {
                 "is_relevant": False,
                 "relevance_score": 0.2,

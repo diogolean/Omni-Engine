@@ -34,12 +34,52 @@ def _truncate_slug(slug: str, max_len: int, *, digest_src: str | None = None) ->
     return out[:max_len] if len(out) > max_len else out
 
 
+_TECHNICAL_STEM = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)+_[0-9a-f]{6}$")
+
+
+def is_technical_stem(text: str) -> bool:
+    """True for a filename stem such as ``the_sirius_mystery_dogon_4ed43c``.
+
+    That string identifies an output. It is not a title and not a sentence.
+    """
+    raw = " ".join((text or "").strip().split())
+    if not raw or " " in raw:
+        return False
+    return _TECHNICAL_STEM.fullmatch(raw.lower()) is not None
+
+
 def subject_slug(subject: str, *, max_len: int = _MAX_SUBJECT_SLUG_CHARS) -> str:
     """Filesystem-safe, length-capped slug for ``outputs/.../assets/<slug>/``."""
     raw = (subject or "").strip().lower()
     out = "".join(ch if ch.isalnum() else "_" for ch in raw)
     slug = _collapse_underscores(out) or "general"
     return _truncate_slug(slug, max_len, digest_src=raw or slug)
+
+
+def reel_hook_slug(overlay_text: str, *, stem: str = "") -> str:
+    """32-character hook slug used in the reel filename.
+
+    Non-alphanumeric characters become underscores. The cut is after the
+    trim, so two longer hooks can share one filename.
+    """
+    raw = overlay_text or ""
+    if raw:
+        return "".join(ch if ch.isalnum() else "_" for ch in raw.lower()).strip("_")[:32]
+    return stem or "reel"
+
+
+def reel_output_name(overlay_text: str, variant_index: int, *, stem: str = "") -> str:
+    """Final reel filename ``reel_<slug>_vNN.mp4``.
+
+    The version is ``variant_index + 1``. Two different hooks that share the
+    32-character slug, each from its own ``--quantity 1`` run, name the same
+    ``_v01`` file. A later ffmpeg render uses ``-y`` and replaces the bytes.
+    Runs that both end in ``_v01`` were separate executions. Variants 2 and 6
+    of one batch would be ``_v02`` and ``_v06``.
+    """
+    slug = reel_hook_slug(overlay_text, stem=stem)
+    version = int(variant_index) + 1
+    return f"reel_{slug}_v{version:02d}.mp4"
 
 
 def safe_output_stem(stem: str, *, max_len: int = _MAX_OUTPUT_STEM_CHARS) -> str:

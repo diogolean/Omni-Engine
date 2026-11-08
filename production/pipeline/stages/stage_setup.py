@@ -120,7 +120,8 @@ def _stage_setup_01(state: VariantState) -> None:
         state.resolved_subject = state._batch_angle.combined_topic
         state.slug = subject_slug(state.resolved_subject)
         state.stem = f'{state.slug}_v{state.variant + 1:02d}'
-        state.subject_assets = app_config.ASSETS_DIR / state.slug
+        from production.pipeline.local_review import isolate_dir
+        state.subject_assets = isolate_dir(app_config.ASSETS_DIR / state.slug, "subject_assets")
         state.subject_assets.mkdir(parents=True, exist_ok=True)
         _LOG.info('Variant %d/%d | BATCH ANGLE → %r | hook_style=%s | global=%r', state.variant + 1, state._batch_angle.total, state._batch_angle.angle_title, state._batch_angle.hook_style, state._batch_angle.global_topic)
     elif state.per_variant_topics and state.variant < len(state.per_variant_topics):
@@ -129,7 +130,8 @@ def _stage_setup_01(state: VariantState) -> None:
             state.resolved_subject = state._vt
             state.slug = subject_slug(state.resolved_subject)
             state.stem = f'{state.slug}_v{state.variant + 1:02d}'
-            state.subject_assets = app_config.ASSETS_DIR / state.slug
+            from production.pipeline.local_review import isolate_dir
+            state.subject_assets = isolate_dir(app_config.ASSETS_DIR / state.slug, "subject_assets")
             state.subject_assets.mkdir(parents=True, exist_ok=True)
             _LOG.info('Variant %d | per-variant topic override → %r', state.variant + 1, state.resolved_subject)
     if state.page_ctx and _channel_enabled(state.page_ctx, 'DOCUMENTARY_PIPELINE'):
@@ -182,7 +184,8 @@ def _stage_setup_01(state: VariantState) -> None:
             _LOG.error('Smart bait generation failed variant %s: %s', state.variant + 1, state.exc, exc_info=True)
             logging.error('VARIANT_FAIL | smart_bait | variant=%s | err=%s', state.variant + 1, state.exc)
             raise
-        if state.overlay_text and state.hooks_cache_lock is not None and (state.generated_hooks_cache is not None):
+        from production.pipeline.local_review import distribution_enabled
+        if distribution_enabled() and state.overlay_text and state.hooks_cache_lock is not None and (state.generated_hooks_cache is not None):
             with state.hooks_cache_lock:
                 if state.overlay_text not in state.generated_hooks_cache:
                     state.generated_hooks_cache.append(state.overlay_text)
@@ -414,7 +417,8 @@ def _stage_setup_02(state: VariantState) -> None:
     state._episode_id = f'ep_{datetime.now().strftime('%Y%m%d_%H%M')}'
     state._episode_assets_dir = None
     if state.post_type in ('ECONOMIC_REEL', 'WAN_REEL'):
-        state._episode_assets_dir = Path(app_config.ASSETS_DIR) / state._episode_id
+        from production.pipeline.local_review import isolate_dir
+        state._episode_assets_dir = isolate_dir(Path(app_config.ASSETS_DIR) / state._episode_id, f'assets/{state._episode_id}')
         state._episode_assets_dir.mkdir(parents=True, exist_ok=True)
         Path(app_config.PAGE_OUTPUTS_DIR, 'clips').mkdir(parents=True, exist_ok=True)
         _LOG.info('Episode assets directory → %s', state._episode_assets_dir.resolve())
