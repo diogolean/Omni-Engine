@@ -174,6 +174,8 @@ def test_admin_adapter_runs_the_canonical_fixture_pipeline(schema, client, monke
         assert view["eyeRig"]["maxShift"]
         assert view["browModel"]
     assert body["stages"]["pipeline"] == "products.animind_core.characters.create_character"
+    assert "products.animind_core.rig.build_rig" in body["stages"]["actualModules"]
+    assert body["qa"]["costUsd"] is None
     assert body["callPlan"]["image"]["maximum"] == 18
     assert body["callPlan"]["detectFeatures"]["maximum"] == 6
     assert body["callPlan"]["providerInternalRetries"] == 0

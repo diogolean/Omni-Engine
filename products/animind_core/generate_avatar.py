@@ -103,9 +103,24 @@ def generate_avatar(
         "frontIsTruePhoto": result.get("frontIsTruePhoto"),
         "opaqueHeadViews": opaque_heads,
     }
+    if isinstance(result.get("qa"), dict):
+        result["qa"]["costUsd"] = None
     result["stages"] = {
         "pipeline": "products.animind_core.characters.create_character",
-        "reusedModules": list(characters.AIWAKE_AVATAR_SOURCES),
+        "actualModules": [
+            "products.animind_core.characters.create_character",
+            "products.animind_core.rig.build_rig",
+            "products.aiwake.animator.factory.create_puppet.generate_character_image",
+            "products.animind_core.rig.detect_features",
+            "products.animind_core.rig.BiRefNetMatte",
+            "products.animind_core.rig.assemble",
+            "products.animind_core.mouthset",
+            "products.animind_core.brow_draw",
+            "products.animind_core.qa.finalize",
+            "products.animind_core.sheet",
+            "products.animind_core.eye_control.assess_skin",
+        ],
+        "architecturalSources": list(characters.AIWAKE_AVATAR_SOURCES),
         "qa": "products.animind_core.qa.finalize",
         "eyeControl": "products.animind_core.eye_control.assess_skin",
     }

@@ -420,7 +420,7 @@ def create_character(
     character = _with_eye_control(character, skin)
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     qa_report = character.get("qa") or {}
-    if character_type == "rig" and mode not in {"procedural", "mock"}:
+    if puppets_root is None and character_type == "rig" and mode not in {"procedural", "mock"}:
         record_image_spend(
             name, art_style, float(qa_report.get("costUsd") or 0),
             character_id, int(qa_report.get("score") or 0),

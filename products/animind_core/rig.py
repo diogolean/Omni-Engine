@@ -134,6 +134,7 @@ def detect_features(image_path: Path) -> dict[str, Box]:
             kind="text",
             source="animind_core.rig.detect",
             max_attempts=1,
+            enforce_budget=False,
         )
         usage = getattr(response, "usage_metadata", None)
         attempt.observe(
@@ -159,6 +160,10 @@ def _png(src: Path, dest: Path, size: tuple[int, int] | None = None) -> Path:
 
 
 def _budget_left() -> float:
+    from .spend.guard import current  # noqa: PLC0415
+
+    if current() is not None:
+        return float("inf")
     from production.cost.google_guardrail import get_google_cost_tracker, max_google_cost_usd  # noqa: PLC0415
     return max_google_cost_usd() - get_google_cost_tracker().total_usd()
 
@@ -178,7 +183,12 @@ def _paid_image(prompt: str, destination: Path, **kwargs: Any) -> str:
         provider="google", model="gemini-2.5-flash-image", operation="image", prompt=prompt, images=1,
     ) as attempt:
         attempt.mark_sent()
-        return generate_character_image(prompt, destination, **kwargs)
+        return generate_character_image(
+            prompt,
+            destination,
+            external_spend_guard=True,
+            **kwargs,
+        )
 
 
 def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict[str, int], notes: dict[str, str],
