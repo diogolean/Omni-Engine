@@ -22,6 +22,11 @@ the local artifact path. Prompts, generated text and key values are never
 written to telemetry. Unit/integration runs set `ANIMIND_DATA_DIR` to their
 temporary test folder, so test telemetry also stays outside git.
 
+Provider calls made while a request is in flight are also on the `usage` field
+of `POST /v1/plan`, `POST /v1/render`, and `GET /v1/jobs/{id}`. The field is
+`animind.usage.v1` (see `docs/spend-contract.md`). Null estimated or reported
+cost means unknown. Job polls and file downloads do not open a new reservation.
+
 ```bash
 # Aggregate all rows by operation/provider/model as a Markdown table.
 python -m products.animind_core.telemetry summary

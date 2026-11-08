@@ -242,7 +242,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--budget-usd", type=float, default=None)
     args = parser.parse_args(argv)
-    report = run([part.strip() for part in args.providers.split(",")], args.output, budget_usd=args.budget_usd)
+    report = None
+    from .spend.guard import cli_scope  # noqa: PLC0415
+
+    with cli_scope():
+        report = run([part.strip() for part in args.providers.split(",")], args.output, budget_usd=args.budget_usd)
     print((Path(report["output"]) / "report.md").read_text(encoding="utf-8"))
     return 0
 
