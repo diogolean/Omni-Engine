@@ -123,10 +123,14 @@ def generate_avatar(
             existing["retries"] = int(existing.get("retries") or 0) + 1
             return _public(existing)
         job_id = hashlib.sha256(key.encode()).hexdigest()[:12]
+        attempt = hashlib.sha256(f"{job_id}:attempt".encode()).hexdigest()[:16]
         job = {
             "id": job_id,
+            "requestId": job_id,
+            "attempt": attempt,
             "status": "blocked",
-            "progress": 0.0,
+            "progress": None,
+            "story": None,
             "execution": "background",
             "plan": plan,
             "charged": False,
@@ -140,11 +144,21 @@ def generate_avatar(
                 {"name": name, "status": "blocked", "idempotency": _participant_key(key, name)}
                 for name in plan["personas"]
             ],
+            "events": [],
         }
+        _note(job, "plan", "ready")
+        _note(job, "queued", "ready")
         if plates:
             _cut_fixtures(job, plates)
+        else:
+            _note(
+                job, "fail", "fail",
+                blocked_before="image generation",
+                error={"code": "generation_not_authorized", "recoverable": True},
+            )
         _JOBS[key] = job
         _save(job)
+        _admin(job)
         return _public(job)
 
 
@@ -165,23 +179,30 @@ def _cut_fixtures(job: dict[str, Any], plates: dict[str, Image.Image]) -> None:
         if plate is None:
             person["status"] = "blocked"
             continue
-        result = portrait.extract(plate, root / person["idempotency"][:8])
-        person["status"] = "ready" if result["ready"] else "rejected"
-        person["qaReady"] = result["ready"]
+        who = person["idempotency"]
+        result = portrait.extract(plate, root / who[:8])
+        _note(job, "cutout", "ready", participant=who)
+        passed = bool(result["ready"])
+        _note(job, "QA", "ready" if passed else "fail", participant=who, error=None if passed else {
+            "code": "qa_rejected", "recoverable": True,
+        })
+        _note(job, "save", "ready", participant=who)
+        person["status"] = "ready" if passed else "rejected"
+        person["qaReady"] = passed
         person["cutout"] = "real"
         person["liveImage"] = False
-        if result["ready"]:
+        _note(job, "ready" if passed else "fail", "ready" if passed else "fail", participant=who)
+        if passed:
             ready += 1
     job["cutout"] = "real"
     job["fixture"] = "plate"
+    job["progress"] = None
     if ready == len(job["participants"]):
         job["status"] = "ready"
-        job["progress"] = 1.0
     elif ready == 0:
         job["status"] = "rejected"
     else:
         job["status"] = "partial"
-        job["progress"] = ready / len(job["participants"])
     job["providerCalls"] = 0
     job["charged"] = False
 
@@ -227,6 +248,45 @@ def _idempotency(user: str, plan: dict[str, Any]) -> str:
 
 def _participant_key(plan_key: str, name: str) -> str:
     return hashlib.sha256(f"{plan_key}:{name}".encode()).hexdigest()[:16]
+
+
+def _note(
+    job: dict[str, Any],
+    stage: str,
+    status: str,
+    *,
+    participant: str | None = None,
+    blocked_before: str | None = None,
+    error: dict[str, Any] | None = None,
+) -> None:
+    """One poll event for a step that actually ran. No percent."""
+    row: dict[str, Any] = {
+        "stage": stage,
+        "status": status,
+        "participant": participant,
+        "attempt": job["attempt"],
+        "requestId": job["requestId"],
+    }
+    if blocked_before:
+        row["blockedBefore"] = blocked_before
+    if error:
+        row["error"] = {"code": error["code"], "recoverable": bool(error["recoverable"])}
+    job["events"].append(row)
+
+
+def _admin(job: dict[str, Any]) -> None:
+    """Cost row for an operator. It is not part of the user poll payload."""
+    path = settings.data_dir() / "telemetry" / "avatar_admin.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "requestId": job["requestId"],
+        "providerCalls": job["providerCalls"],
+        "charged": False,
+        "costUsd": None,
+        "tokens": None,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
 
 
 def _public_plan(plan: dict[str, Any]) -> dict[str, Any]:

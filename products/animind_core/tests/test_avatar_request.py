@@ -39,7 +39,7 @@ def test_intents_do_not_invent_a_second_person_or_a_chair():
     assert styled["style"] == "anime"
 
 
-def test_retry_is_the_same_job_and_the_other_user_cannot_read_it(client, monkeypatch):
+def test_retry_is_the_same_job_and_the_other_user_cannot_read_it(client, monkeypatch, tmp_path):
     monkeypatch.setattr(
         "products.aiwake.animator.factory.create_puppet.generate_character_image",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("paid image call")),
@@ -51,11 +51,24 @@ def test_retry_is_the_same_job_and_the_other_user_cannot_read_it(client, monkeyp
     job = first.json()
     assert job["status"] == "blocked" and job["charged"] is False and job["providerCalls"] == 0
     assert job["execution"] == "background" and job["liveImage"] is False
+    assert job["progress"] is None and job["story"] is None
+    assert [item["stage"] for item in job["events"]] == ["plan", "queued", "fail"]
+    assert job["events"][-1]["blockedBefore"] == "image generation"
+    assert job["events"][-1]["error"] == {"code": "generation_not_authorized", "recoverable": True}
+    assert "image generation" not in [item["stage"] for item in job["events"]]
     assert job["plan"]["resolution"]["consume"] is False
     second = client.post("/v1/avatars", headers=own, json=body)
     assert second.json()["id"] == job["id"]
     assert second.json()["retries"] == 1
     assert second.json()["providerCalls"] == 0
+    assert second.json()["events"] == job["events"]
+    assert "costUsd" not in second.text and "tokens" not in second.text
+    seen = client.get(f"/v1/avatars/{job['id']}", headers=own)
+    assert seen.status_code == 200 and seen.json()["events"] == job["events"]
+    admin = (tmp_path / "telemetry" / "avatar_admin.jsonl").read_text(encoding="utf-8")
+    assert admin.count("\n") == 1
+    assert '"costUsd": null' in admin and '"tokens": null' in admin
+    assert "Ada" not in admin and "mar" not in admin
     assert "mar" not in second.text
     hidden = client.get(f"/v1/avatars/{job['id']}", headers={**H, "X-Animind-User": "user_two"})
     assert hidden.status_code == 404
@@ -106,6 +119,10 @@ def test_fixture_plates_show_partial_qa_without_a_model(tmp_path, monkeypatch):
     assert job["fixture"] == "plate"
     by_name = {item["name"]: item["status"] for item in job["participants"]}
     assert by_name == {"Ada": "ready", "Bento": "rejected"}
+    stages = [item["stage"] for item in job["events"]]
+    assert "image generation" not in stages and "rig" not in stages
+    assert stages.count("QA") == 2 and stages.count("cutout") == 2
+    assert job["progress"] is None and job["story"] is None
     again = avatar_request.generate_avatar(
         {"prompt": "Debate entre Ada e Bento", "language": "pt"}, user,
     )
