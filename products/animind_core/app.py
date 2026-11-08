@@ -9,12 +9,14 @@ from fastapi.responses import FileResponse
 
 from . import (
     API_VERSION,
+    avatar_request,
     casting,
     characters,
     illustrated_scene,
     knowledge,
     languages,
     personas,
+    portrait,
     preview,
     render,
     scene,
@@ -79,10 +81,55 @@ def post_character_rerig(character_id: str, request: Request) -> dict:
 def post_characters(body: dict, request: Request) -> dict:
     try:
         return characters.create_character(body, _base(request))
+    except portrait.PortraitRefused as exc:
+        raise HTTPException(409, exc.decision) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except NotImplementedError as exc:
         raise HTTPException(501, str(exc)) from exc
+
+
+@app.post("/v1/portraits/plan", dependencies=[Depends(require_key)])
+def post_portrait_plan(body: dict) -> dict:
+    """Resolution contract. Does not generate, cut, or charge."""
+    return portrait.plan(body)
+
+
+@app.post("/v1/avatars/plan", dependencies=[Depends(require_key)])
+def post_avatar_plan(body: dict) -> dict:
+    """Infer one or two people. Does not generate or start a job."""
+    return avatar_request.infer(
+        str(body.get("prompt") or ""),
+        language=str(body.get("language") or body.get("lang") or "pt"),
+        requested_resolution=str(body.get("requestedResolution") or "1k"),
+    )
+
+
+@app.post("/v1/avatars", dependencies=[Depends(require_key)])
+def post_avatar(body: dict, request: Request) -> dict:
+    """Background job after a logged-in click. No user, no spend."""
+    try:
+        user = avatar_request.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    try:
+        return avatar_request.generate_avatar(
+            body, user, login=request.headers.get("x-animind-user"),
+        )
+    except avatar_request.AvatarRefused as exc:
+        raise HTTPException(403, exc.code) from exc
+
+
+@app.get("/v1/avatars/{job_id}", dependencies=[Depends(require_key)])
+def get_avatar(job_id: str, request: Request) -> dict:
+    try:
+        user = avatar_request.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    found = avatar_request.get(job_id, user)
+    if found is None:
+        raise HTTPException(404, "avatar not found")
+    return found
 
 
 @app.post("/v1/render", dependencies=[Depends(require_key)])
