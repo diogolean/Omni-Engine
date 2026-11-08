@@ -13,6 +13,7 @@ Rhubarb visemes).
 | `POST /v1/scenarios` | `{mode: "auto", characterNames}` or `{mode: "prompt", prompt, characterNames}` -> `{scenario, source: "core", prompt?, note?}`. `scenario` is one of `studio`, `classroom`, `arena`, `space`, `agora` (classical names map to `agora`). A free-text prompt is mapped to the nearest built-in plate; the core does not paint a new set. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
 | `POST /v1/portraits/plan` | Resolution contract for a portrait master. `1k` is the default request and `4k` is the premium request. Neither consumes a provider: the reel adapter only sends `1K` or `2K`, the factory image call does not send `image_size`, and there is no 4K preset or 4K price. A client premium flag is ignored. `POST /v1/characters` with `requestedResolution` returns the same refusal and does not draw or generate. |
+| `POST /v1/avatars/plan`, `POST /v1/avatars`, `GET /v1/avatars/{id}` | Minimum contract for the Generate character button. The plan reads intent (monologue/presentation/speech = 1 person, debate = 2), named people, a style word only when present, and `1k`/`4k`. Scenery is not a persona, and a missing person is a choice, not an invented name. `POST /v1/avatars` requires `X-Animind-User`; without it there is no job and no spend. The same user, plan and participant retry returns the same job. There is no `generate_avatar` in the factory; this facade does not call `avatar.create_avatar` and does not run a live debate. |
 
 ### Telemetry and provider comparison
 
