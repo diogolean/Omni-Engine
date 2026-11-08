@@ -21,6 +21,7 @@ from products.aiwake.room import DebateAborted, DebateRoom, Participant
 from products.aiwake.settings import AiwakeSettings, MemoryConfig, ModelSpec
 
 from . import languages, personas, script, settings
+from .spend.contract import publish as publish_usage
 
 _LOCK = threading.Lock()
 _DEBATES: dict[str, dict[str, Any]] = {}
@@ -34,6 +35,10 @@ _LOOSE = RoomConstraints(
     pacing_directive="",
 )
 _ROLES = (SpeakerRole.ORCHESTRATOR, SpeakerRole.TARGET)
+
+
+class SheetDenied(LookupError):
+    """This caller has no sheet for a named participant."""
 
 
 class FixtureProvider(LLMProvider):
@@ -54,7 +59,10 @@ def create(body: dict[str, Any], owner_id: str | None) -> dict[str, Any]:
     """Run one fixture debate and keep it for this owner."""
     names, theme, tag = _request(body)
     public_lang = "pt" if tag == "pt-BR" else "en"
-    sheets = [personas.load(name, tag, fetch=settings.personas_online()) for name in names]
+    with personas.user_scope(owner_id):
+        sheets = [personas.load(name, tag, fetch=settings.personas_online()) for name in names]
+    if any(sheet.get("found") is False for sheet in sheets):
+        raise SheetDenied()
     spoken = _room(theme, len(names))
     lines = _lines(names, sheets, theme)
     debate_id = uuid.uuid4().hex[:12]
@@ -68,6 +76,7 @@ def create(body: dict[str, Any], owner_id: str | None) -> dict[str, Any]:
         "lines": lines,
         "_owner": owner_id,
         "_engine": {"room": "products.aiwake.room.DebateRoom", "provider": "fixture", "spoken": spoken},
+        "usage": _usage(owner_id, debate_id),
     }
     _write(record)
     with _LOCK:
@@ -191,8 +200,19 @@ def _rel(owner_id: str | None, debate_id: str) -> str:
     return f"debates/{debate_id}.json"
 
 
+def _usage(owner_id: str | None, debate_id: str) -> dict[str, Any]:
+    """No provider call. Unknown cost stays null."""
+    usage = publish_usage(None, job_id=debate_id)
+    if owner_id:
+        usage["userRef"] = owner_id
+    return usage
+
+
 def _public(record: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in record.items() if not str(key).startswith("_")}
+    body = {key: value for key, value in record.items() if not str(key).startswith("_")}
+    if "usage" not in body:
+        body["usage"] = _usage(record.get("_owner"), record["id"])
+    return body
 
 
 def file_rel(owner_id: str | None, debate_id: str) -> str:

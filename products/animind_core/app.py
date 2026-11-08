@@ -210,6 +210,8 @@ def post_debate(body: dict, request: Request) -> dict:
     payload.pop("owner", None)
     try:
         return debate.create(payload, user)
+    except debate.SheetDenied as exc:
+        raise HTTPException(404, "not found") from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:

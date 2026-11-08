@@ -8,9 +8,11 @@ for the core to start metering those calls.
 ## Response field
 
 `POST /v1/plan`, `POST /v1/render`, `POST /v1/avatars/plan`, `POST /v1/avatars`,
-`POST /v1/portraits/plan`, and `GET /v1/avatars/{id}` add `usage`.
-`GET /v1/jobs/{id}` adds it too. A blocked avatar still returns the document:
-`estimatedMicro` and `reportedMicro` are null, and public `model` is null.
+`POST /v1/portraits/plan`, `POST /v1/debates`, `GET /v1/avatars/{id}`, and
+`GET /v1/debates/{id}` add `usage`. `GET /v1/jobs/{id}` adds it too. A blocked
+avatar, and a fixture debate that never calls a provider, still return the
+document: `estimatedMicro` and `reportedMicro` are null, and public `model`
+on a call is null.
 
 ```json
 {

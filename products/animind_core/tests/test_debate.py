@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
-from products.animind_core import debate, owner
+from products.animind_core import debate, owner, personas
 
 SECRET_NAME = "Albertina Segredo"
 OTHER_NAME = "Bento Oculto"
@@ -130,6 +132,80 @@ def test_anonymous_debate_is_not_readable_by_a_named_user(client):
         assert named.json() == {"detail": "debate not found"}
     finally:
         debate._DEBATES.pop(debate_id, None)
+
+
+def _sheet(user: str, name: str, quotes: list[dict]) -> None:
+    path = personas.cache_path(name, "pt-BR", user)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump({
+        "name": name,
+        "lang": "pt-BR",
+        "found": True,
+        "version": personas.SHEET_VERSION,
+        "fetchedAt": int(time.time()),
+        "quotes": quotes,
+    }, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def test_fixture_debate_speaks_the_owner_sheet(tmp_path, monkeypatch):
+    """The owner's verified quote is the line. Another account cannot borrow that sheet."""
+    monkeypatch.setenv("CORE_API_KEY", "test-key")
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ANIMIND_FORCE_MOCK", "1")
+    monkeypatch.setenv("ANIMIND_PERSONAS_OFFLINE", "1")
+    user = owner.accept_user("user_one")
+    _sheet(user, SECRET_NAME, [{
+        "id": "q1", "text": VERIFIED, "source": "Livro", "sourceKind": "primary",
+        "url": "https://pt.wikiquote.org/wiki/Albertina", "verification": "verified",
+    }])
+    _sheet(user, OTHER_NAME, [{
+        "id": "q1", "text": "O mar nao entra neste tema.", "source": "Carta",
+        "sourceKind": "primary", "url": "https://pt.wikiquote.org/wiki/Bento",
+        "verification": "verified",
+    }])
+    from products.animind_core.app import app
+
+    client = TestClient(app)
+    own = {**H, "X-Animind-User": "user_one"}
+    other = {**H, "X-Animind-User": "user_two"}
+    body = {"personas": [SECRET_NAME, OTHER_NAME], "theme": SECRET_THEME, "language": "pt"}
+    created = client.post("/v1/debates", headers=own, json=body)
+    assert created.status_code == 200, created.text
+    payload = created.json()
+    assert payload["writer"] == "fixture"
+    assert payload["llm"] == {"provider": "fixture", "model": "fixture", "live": False}
+    spoken = payload["lines"][0]
+    assert spoken["text"] == VERIFIED
+    assert spoken["quote"]["source"] == "Livro"
+    assert spoken["quote"]["url"] == "https://pt.wikiquote.org/wiki/Albertina"
+    assert spoken["quote"]["verification"] == "verified"
+    assert payload["lines"][1]["text"] is None
+    assert payload["lines"][1]["kind"] == "fixture"
+    usage = payload["usage"]
+    assert usage["schema"] == "animind.usage.v1"
+    assert usage["totals"]["estimatedMicro"] is None
+    assert usage["totals"]["reportedMicro"] is None
+    assert "production/cost" not in created.text
+    assert "usdPerImage" not in created.text
+    seen = client.get(f"/v1/debates/{payload['id']}", headers=own)
+    assert seen.status_code == 200
+    assert seen.json()["lines"] == payload["lines"]
+    assert seen.json()["usage"]["schema"] == "animind.usage.v1"
+    assert seen.json()["usage"]["totals"]["estimatedMicro"] is None
+    borrowed = client.post("/v1/debates", headers=other, json=body)
+    assert borrowed.status_code == 404
+    assert borrowed.json() == {"detail": "not found"}
+    assert SECRET_NAME not in borrowed.text
+    assert OTHER_NAME not in borrowed.text
+    assert VERIFIED not in borrowed.text
+    assert "users/" not in borrowed.text
+    denied = client.get(f"/v1/debates/{payload['id']}", headers=other)
+    assert denied.status_code == 404
+    assert denied.json() == {"detail": "debate not found"}
+    assert SECRET_NAME not in denied.text
+    assert VERIFIED not in denied.text
+    assert "users/" not in denied.text
+    debate._DEBATES.pop(payload["id"], None)
 
 
 def test_one_persona_is_refused(client):
