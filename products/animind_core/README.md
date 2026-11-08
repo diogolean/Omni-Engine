@@ -12,6 +12,7 @@ Rhubarb visemes).
 | `POST /v1/preview` | Lightweight PNG before the full rig. Body: `{character: {name, prompt}, characterType: "stick"\|"illustrated", artStyle, language, index}`. Response: `{id, index, name, kind, source: "core", accent, imageUrl, note}`. This is not the final cut-out; that is still `POST /v1/characters`. |
 | `POST /v1/scenarios` | `{mode: "auto", characterNames}` or `{mode: "prompt", prompt, characterNames}` -> `{scenario, source: "core", prompt?, note?}`. `scenario` is one of `studio`, `classroom`, `arena`, `space`, `agora` (classical names map to `agora`). A free-text prompt is mapped to the nearest built-in plate; the core does not paint a new set. |
 | `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. A render with `X-Animind-User` is stored under `users/<hash>/jobs/<id>` and is not served to anyone else. |
+| `POST /v1/debates`, `GET /v1/debates/{id}` | Two to six persona names, a theme, and `pt` or `en`. The Aiwake debate room takes one turn per persona. Paid generation stays off, so the seated model is the fixture stub and the response says `writer: "fixture"` and `llm.live: false`. A line is a sheet quote only when that quote is primary, on the theme, and verified; otherwise the line is `kind: "fixture"` with `text: null`. The same opaque `X-Animind-User` owns the script. Another account, or a request without that header, gets the same 404 as a missing debate. The JSON file is `users/<hash>/debates/<id>.json`. |
 
 ### Telemetry and provider comparison
 
