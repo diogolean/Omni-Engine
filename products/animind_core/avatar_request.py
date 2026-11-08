@@ -18,6 +18,7 @@ from PIL import Image
 from . import portrait, settings
 
 _USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+_JOB_ID = re.compile(r"^[a-f0-9]{12}$")
 _NAME = re.compile(r"\b[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’.-]+(?:\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇ][\w'’.-]+){0,2}\b")
 _ONE = ("monologue", "monólogo", "monologo", "presentation", "apresentação", "apresentacao", "speech", "discurso", "palestra")
 _TWO = ("debate",)
@@ -119,10 +120,15 @@ def generate_avatar(
     key = _idempotency(user, plan)
     with _LOCK:
         existing = _JOBS.get(key)
+        if existing is None:
+            existing = _read_owned(user, _job_id(key))
+            if existing is not None:
+                _JOBS[key] = existing
         if existing is not None:
             existing["retries"] = int(existing.get("retries") or 0) + 1
+            _save(existing)
             return _public(existing)
-        job_id = hashlib.sha256(key.encode()).hexdigest()[:12]
+        job_id = _job_id(key)
         attempt = hashlib.sha256(f"{job_id}:attempt".encode()).hexdigest()[:16]
         job = {
             "id": job_id,
@@ -163,11 +169,18 @@ def generate_avatar(
 
 
 def get(job_id: str, user: str | None) -> dict[str, Any] | None:
+    """The owner's poll. Memory is a cache; the file under that owner is the record."""
+    if not user:
+        return None
     with _LOCK:
         for job in _JOBS.values():
             if job["id"] == job_id and job.get("_owner") == user:
                 return _public(job)
-    return None
+        loaded = _read_owned(user, job_id)
+        if loaded is None:
+            return None
+        _JOBS[loaded["_key"]] = loaded
+        return _public(loaded)
 
 
 def _cut_fixtures(job: dict[str, Any], plates: dict[str, Image.Image]) -> None:
@@ -232,6 +245,37 @@ def _style(folded: str) -> str | None:
 
 def _has(text: str, words: tuple[str, ...]) -> bool:
     return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text) for word in words)
+
+
+def _job_id(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+def _read_owned(owner: str, job_id: str) -> dict[str, Any] | None:
+    """Load one job.json that already sits under this owner. No other directory is opened."""
+    if not _USER_ID.fullmatch(owner) or not _JOB_ID.fullmatch(job_id or ""):
+        return None
+    path = settings.data_dir() / "users" / owner / "avatars" / job_id / "job.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("id") != job_id:
+        return None
+    plan = data.get("plan")
+    if not isinstance(plan, dict):
+        return None
+    try:
+        key = _idempotency(owner, plan)
+    except (KeyError, TypeError):
+        return None
+    if _job_id(key) != job_id:
+        return None
+    data["_owner"] = owner
+    data["_key"] = key
+    return data
 
 
 def _idempotency(user: str, plan: dict[str, Any]) -> str:

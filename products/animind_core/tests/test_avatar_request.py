@@ -80,6 +80,32 @@ def test_retry_is_the_same_job_and_the_other_user_cannot_read_it(client, monkeyp
     avatar_request._JOBS.clear()
 
 
+def test_poll_reloads_the_owner_file_after_memory_is_cleared(client):
+    own = {**H, "X-Animind-User": "user_one"}
+    other = {**H, "X-Animind-User": "user_two"}
+    body = {"prompt": "Discurso de Ada sobre o mar", "language": "pt", "requestedResolution": "1k"}
+    first = client.post("/v1/avatars", headers=own, json=body)
+    assert first.status_code == 200
+    job = first.json()
+    avatar_request._JOBS.clear()
+    seen = client.get(f"/v1/avatars/{job['id']}", headers=own)
+    assert seen.status_code == 200
+    assert seen.json()["events"] == job["events"]
+    hidden = client.get(f"/v1/avatars/{job['id']}", headers=other)
+    assert hidden.status_code == 404
+    assert hidden.json() == {"detail": "avatar not found"}
+    assert "Ada" not in hidden.text
+    assert "mar" not in hidden.text
+    assert "users/" not in hidden.text
+    avatar_request._JOBS.clear()
+    again = client.post("/v1/avatars", headers=own, json=body)
+    assert again.status_code == 200
+    assert again.json()["id"] == job["id"]
+    assert again.json()["events"] == job["events"]
+    assert again.json()["providerCalls"] == 0
+    avatar_request._JOBS.clear()
+
+
 def test_premium_4k_still_does_not_spend(client, monkeypatch):
     monkeypatch.setenv("ANIMIND_PREMIUM_USERS", "user_one")
     body = {"prompt": "Speech by Ada", "language": "en", "requestedResolution": "4k", "premium": True}
