@@ -56,30 +56,6 @@ def _called(monkeypatch) -> list[str]:
     return calls
 
 
-def test_labeled_image_stub_is_cut_without_a_provider(tmp_path, monkeypatch):
-    """The only stand-in is the image socket. Cutout is the factory function."""
-    from PIL import Image, ImageDraw
-
-    from products.aiwake.animator.factory import create_puppet
-
-    def fake(prompt, destination, **kwargs):  # noqa: ARG001
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        image = Image.new("RGBA", (128, 192), (0, 0, 0, 255))
-        ImageDraw.Draw(image).rectangle((24, 36, 104, 180), fill=(210, 170, 140, 255))
-        image.save(destination, format="PNG")
-        return "fixture-image"
-
-    monkeypatch.setattr(create_puppet, "generate_character_image", fake)
-    source = tmp_path / "plate.png"
-    assert fake("labeled", source) == "fixture-image"
-    cut = tmp_path / "cut.png"
-    backend = create_puppet.remove_background(source, cut)
-    assert backend
-    with Image.open(cut) as opened:
-        assert opened.mode == "RGBA"
-        assert opened.getchannel("A").getextrema()[0] == 0
-
-
 def test_a_browser_role_does_not_open_the_factory(client, monkeypatch):
     calls = _called(monkeypatch)
     response = client.post("/v1/avatars", headers={**H, "X-Animind-User": "user_one", "X-Animind-Role": "admin"}, json=BODY)
@@ -118,40 +94,63 @@ def test_admin_without_a_published_image_rate_stops_before_the_factory(schema, c
     assert calls == []
 
 
-def test_admin_reaches_the_aiwake_factory_when_the_rate_is_published(schema, client, monkeypatch, tmp_path):
+def test_admin_without_detect_price_stops_before_the_factory(schema, client, monkeypatch):
     _limits(monkeypatch, schema)
+    monkeypatch.setenv("ANIMIND_ADMIN_TOKEN", TOKEN)
+    monkeypatch.setenv("GEMINI_API_KEY", "present-but-not-used")
+    monkeypatch.setenv("ANIMIND_PRICE_TABLE_JSON", json.dumps({
+        "version": "image-only",
+        "entries": [{
+            "provider": "google",
+            "model": "gemini-2.5-flash-image",
+            "unit": "image",
+            "microUsd": 39_000,
+            "source": "test-only image rate",
+            "sourceDate": "2026-11-07",
+        }],
+    }))
+    response = client.post(
+        "/v1/avatars",
+        headers={**H, "X-Animind-User": "user_one", "X-Animind-Admin": TOKEN},
+        json=BODY,
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "spend:price_unavailable"
+
+
+def test_admin_adapter_runs_the_canonical_fixture_pipeline(schema, client, monkeypatch, tmp_path):
+    _limits(
+        monkeypatch,
+        schema,
+        ANIMIND_SPEND_MAX_IMAGES="18",
+        ANIMIND_SPEND_MAX_RETRIES="2",
+    )
     monkeypatch.setenv("ANIMIND_ADMIN_TOKEN", TOKEN)
     monkeypatch.setenv("GEMINI_API_KEY", "present-but-not-used")
     micro = int(round(GEMINI_FLASH_IMAGE_1K_USD * 1_000_000))
     monkeypatch.setenv("ANIMIND_PRICE_TABLE_JSON", json.dumps({
         "version": "gemini-flash-image-1k",
-        "entries": [{
-            "provider": "google",
-            "model": "gemini-2.5-flash-image",
-            "unit": "image",
-            "microUsd": micro,
-            "source": "production.cost.pricing.GEMINI_FLASH_IMAGE_1K_USD",
-            "sourceDate": "2026-11-07",
-        }],
+        "entries": [
+            {
+                "provider": "google",
+                "model": "gemini-2.5-flash-image",
+                "unit": "image",
+                "microUsd": micro,
+                "source": "production.cost.pricing.GEMINI_FLASH_IMAGE_1K_USD",
+                "sourceDate": "2026-11-07",
+            },
+            {
+                "provider": "google",
+                "model": "gemini-2.5-flash",
+                "unit": "tokens",
+                "inputMissMicroPerMillion": 1,
+                "inputHitMicroPerMillion": 1,
+                "outputMicroPerMillion": 1,
+                "source": "test-only fixture rate",
+                "sourceDate": "2026-11-07",
+            },
+        ],
     }))
-    from PIL import Image, ImageDraw
-
-    calls: list[str] = []
-
-    def fake(prompt, destination, **kwargs):  # noqa: ARG001
-        calls.append("fixture-image")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        image = Image.new("RGBA", (320, 480), (0, 0, 0, 255))
-        draw = ImageDraw.Draw(image)
-        draw.ellipse((80, 40, 240, 200), fill=(210, 170, 140, 255))
-        draw.rectangle((70, 190, 250, 470), fill=(40, 70, 120, 255))
-        image.save(destination, format="PNG")
-        return "fixture-image"
-
-    monkeypatch.setattr(
-        "products.aiwake.animator.factory.create_puppet.generate_character_image",
-        fake,
-    )
     response = client.post(
         "/v1/avatars",
         headers={**H, "X-Animind-User": "user_one", "X-Animind-Admin": TOKEN},
@@ -162,17 +161,25 @@ def test_admin_reaches_the_aiwake_factory_when_the_rate_is_published(schema, cli
     assert body["schema"] == "animind.puppet.v3"
     assert body["status"] == "review_required"
     assert body["ready"] is False
-    assert "image_is_fixture" in body["defects"]
-    assert "views_front_and_three_quarter_absent" in body["defects"]
-    assert "brows_not_positioned_per_view" in body["defects"]
-    assert [stage["id"] for stage in body["stages"]] == ["image", "cutout", "rig", "brows", "qa"]
-    assert body["stages"][0]["source"] == "fixture"
+    assert "provider_fixture" in body["defects"]
+    assert "view_profile_missing" in body["defects"]
+    assert set(body["views"]) == {"front", "left", "right"}
+    for view in body["views"].values():
+        layers = {layer["name"] for layer in view["layers"]}
+        assert {"torso", "neck", "head", "eyes", "eyes_half", "eyes_closed", "brows"} <= layers
+        assert set(view["visemes"]) == set("XABCDEFGH")
+        assert set(view["expressions"]) == {
+            "neutral", "happy", "angry", "sad", "surprised", "thoughtful", "ironic",
+        }
+        assert view["eyeRig"]["maxShift"]
+        assert view["browModel"]
+    assert body["stages"]["pipeline"] == "products.animind_core.characters.create_character"
+    assert body["callPlan"]["image"]["maximum"] == 18
+    assert body["callPlan"]["detectFeatures"]["maximum"] == 6
+    assert body["callPlan"]["providerInternalRetries"] == 0
     assert body["scenario"]["embedded"] is False
-    assert "neck_pivot" in body["anchors"]
-    assert "target_eye_y" in body["framing"]
-    assert calls == ["fixture-image"]
+    assert body["provenance"]["realImage"] is False
     assert body["usage"]["totals"]["estimatedMicro"] is None
-    saved = list((tmp_path / "users").rglob("puppet.json"))
-    assert saved
-    assert list((tmp_path / "users").rglob("source_original.png"))
+    assert list((tmp_path / "users").rglob("character.json"))
+    assert list((tmp_path / "users").rglob("rig.json"))
     assert lookup("google", "gemini-2.5-flash-image").micro_usd == micro

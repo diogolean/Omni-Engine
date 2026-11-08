@@ -11,6 +11,7 @@ from typing import Any
 from .spend.prices import lookup
 
 FACTORY_MODEL = "gemini-2.5-flash-image"
+DETECT_MODEL = "gemini-2.5-flash"
 
 
 def image_key_present() -> bool:
@@ -19,6 +20,11 @@ def image_key_present() -> bool:
 
 def published_image_rate() -> Any:
     return lookup("google", FACTORY_MODEL)
+
+
+def published_rates() -> bool:
+    """The complete factory needs image and feature-detection prices."""
+    return all(lookup("google", model) is not None for model in (FACTORY_MODEL, DETECT_MODEL))
 
 
 def run(body: dict[str, Any], owner: str, base_url: str) -> dict[str, Any]:

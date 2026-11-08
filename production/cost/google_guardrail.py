@@ -679,6 +679,7 @@ def guarded_generate_content(
     *,
     kind: str | None = None,
     source: str = "",
+    max_attempts: int | None = None,
     **kwargs: Any,
 ) -> Any:
     """
@@ -704,7 +705,7 @@ def guarded_generate_content(
         kind=resolved_kind,
     )
     last_exc: BaseException | None = None
-    attempts = max_google_attempts()
+    attempts = max(1, int(max_attempts)) if max_attempts is not None else max_google_attempts()
     for attempt in range(attempts):
         tracker.preflight(est, model=model_id, source=src, kind=resolved_kind)
         try:

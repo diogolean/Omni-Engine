@@ -282,6 +282,7 @@ def generate_character_image(
         config=config,
         kind="image",
         source="factory.create_puppet",
+        max_attempts=1,
     )
     if not _save_generated_response(response, destination):
         raise RuntimeError(f"{model} response contained no image payload")

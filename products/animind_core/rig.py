@@ -25,6 +25,7 @@ touches git. ``build_mock_rig`` draws the same layer set with PIL, no network.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -68,6 +69,18 @@ FRONT_PROMPT = (
     "closed, lips together, eyes open, neutral friendly expression. Solid flat pure magenta #FF00FF background. "
     "No text."
 )
+RIGHT_PROMPT = (
+    "Redraw this exact same character, identity, art style, colors, outfit, hair and outlines in a "
+    "three-quarter view turned 25 degrees toward the right of the image. Keep the same camera distance, "
+    "eye line, head scale and shoulder framing. Mouth closed, eyes open, neutral expression. "
+    "Solid flat pure magenta #FF00FF background. No text."
+)
+PROFILE_PROMPT = (
+    "Redraw this exact same character, identity, art style, colors, outfit, hair and outlines in a strict "
+    "90 degree left profile. Keep the same camera distance, eye line, head scale and shoulder framing. "
+    "Show one clean facial silhouette. Mouth closed, visible eye open, neutral expression. "
+    "Solid flat pure magenta #FF00FF background. No text."
+)
 MOUTHLESS_PROMPT = (
     "Edit this image: the same character, identical pose, framing, scale, lighting, colours, outlines and art "
     "style, but remove the mouth and lips completely: smooth clean skin where the mouth was, no mouth, no lips, "
@@ -100,17 +113,33 @@ def detect_features(image_path: Path) -> dict[str, Box]:
         make_guarded_gemini_client,
     )
 
+    from .spend.guard import billable  # noqa: PLC0415
+
     with Image.open(image_path) as im:
         w, h = im.size
     client = make_guarded_gemini_client(_gemini_key())
-    response = guarded_generate_content(
-        client,
+    prompt_ref = f"{DETECT_PROMPT}\nimage-sha256:{hashlib.sha256(image_path.read_bytes()).hexdigest()}"
+    with billable(
+        provider="google",
         model=DETECT_MODEL,
-        contents=[types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/png"), DETECT_PROMPT],
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
-        kind="text",
-        source="animind_core.rig.detect",
-    )
+        operation="detect_features",
+        prompt=prompt_ref,
+    ) as attempt:
+        attempt.mark_sent()
+        response = guarded_generate_content(
+            client,
+            model=DETECT_MODEL,
+            contents=[types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/png"), DETECT_PROMPT],
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
+            kind="text",
+            source="animind_core.rig.detect",
+            max_attempts=1,
+        )
+        usage = getattr(response, "usage_metadata", None)
+        attempt.observe(
+            input_tokens=getattr(usage, "prompt_token_count", None),
+            output_tokens=getattr(usage, "candidates_token_count", None),
+        )
     raw = response.text or ""
     data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
     out: dict[str, Box] = {}
@@ -293,7 +322,35 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
         shots["sheet"] = sheet
     if fs is not None:
         shots["sheet_front"] = fs
-    return {"shots": shots, "notes": notes, "frontBoxes": front_boxes, "boxes": boxes}
+    extra_boxes: dict[str, dict[str, Box]] = {}
+    for name, prompt in (("right_3q", RIGHT_PROMPT), ("profile", PROFILE_PROMPT)):
+        if _budget_left() < 0.039:
+            notes[name] = "missing (budget ceiling)"
+            continue
+        raw_extra = work / f"_gen_{name}"
+        attempts[name] = attempts.get(name, 0) + 1
+        try:
+            _paid_image(prompt, raw_extra, aspect_ratio="4:5", reference_path=closed)
+            extra = _png(raw_extra, work / f"source_{name}.png", size)
+            extra_boxes[name] = detect_features(extra)
+            shots[name] = extra
+            mouthless_extra = _mouthless_shot(
+                extra, work, extra_boxes[name], f"{name}_mouthless", attempts, notes, tries=1,
+            )
+            if mouthless_extra is not None:
+                shots[f"{name}_mouthless"] = mouthless_extra
+            notes[name] = "gemini (identity reference from left master)"
+        except (Exception, SystemExit) as exc:  # noqa: BLE001
+            notes[name] = f"missing ({str(exc)[:160]})"
+        finally:
+            raw_extra.unlink(missing_ok=True)
+    return {
+        "shots": shots,
+        "notes": notes,
+        "frontBoxes": front_boxes,
+        "boxes": boxes,
+        "extraBoxes": extra_boxes,
+    }
 
 
 FRONT_RETRY = (
@@ -306,8 +363,36 @@ FRONT_LANDMARKS = (
     "(same proportions, same muzzle/jaw length)."
 )
 MAX_RETRIES = 3  # per asset (sheet, front); each retry still needs budget left under the cap
+MAX_IMAGE_CALLS = 18
+MAX_DETECT_CALLS = 6
 FRONT_MAX_OFFSET = 0.04  # eyes/mouth centre off the face centre, as a share of face width (3/4 views: >= 0.065)
 FRONT_MIN_EYE_RATIO = 0.8  # narrower eye / wider eye
+
+
+def call_plan() -> dict[str, Any]:
+    """Worst-case logical calls; provider-internal retries are disabled."""
+    return {
+        "image": {
+            "model": "gemini-2.5-flash-image",
+            "maximum": MAX_IMAGE_CALLS,
+            "stages": {
+                "master": 1,
+                "mouthless": 2,
+                "front": 3,
+                "frontMouthless": 2,
+                "sideSheet": 3,
+                "frontSheet": 2,
+                "mouthRedraw": 1,
+                "rightThreeQuarter": 2,
+                "profile": 2,
+            },
+        },
+        "detectFeatures": {
+            "model": DETECT_MODEL,
+            "maximum": MAX_DETECT_CALLS,
+        },
+        "providerInternalRetries": 0,
+    }
 
 
 def frontality(boxes: dict[str, Box]) -> dict[str, float | bool]:
@@ -1352,7 +1437,8 @@ def _drop_front_slot(skin: Path) -> None:
 
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
              matte: Callable[[Image.Image], Image.Image], front: bool = False,
-             sheet: Path | None = None, mouthless: bool = False) -> dict[str, Any]:
+             sheet: Path | None = None, mouthless: bool = False,
+             view_name: str | None = None) -> dict[str, Any]:
     """Build view parts from mattes + boxes: left/right from the side art, or ``views/front`` when ``front``."""
     with Image.open(shots["closed"]) as im:
         base = _despill(matte(im).convert("RGBA"))
@@ -1521,6 +1607,13 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         base.save(skin / "character_front.png", format="PNG", optimize=True)
         (skin / "rig_front.json").write_text(json.dumps({"size": size, "boxes": boxes, "mouthBox": mbox}, indent=2), encoding="utf-8")
         return {"front": _write_view(parts, skin / "views" / "front", url, mirror=False)}
+    if view_name is not None:
+        base.save(skin / f"character_{view_name}.png", format="PNG", optimize=True)
+        (skin / f"rig_{view_name}.json").write_text(
+            json.dumps({"size": size, "boxes": boxes, "mouthBox": mbox}, indent=2),
+            encoding="utf-8",
+        )
+        return {view_name: _write_view(parts, skin / "views" / view_name, url, mirror=False)}
     base.save(skin / "character.png", format="PNG", optimize=True)
     left = _write_view(parts, skin / "views" / "left", url, mirror=False)
     right = _write_view(parts, skin / "views" / "right", url, mirror=True)
@@ -1644,6 +1737,7 @@ def einstein_plate_candidates() -> list[Path]:
     for base in bases:
         add(base / "assets" / "puppets" / EINSTEIN_PLATE_ID)
         add(base / "puppets" / EINSTEIN_PLATE_ID)
+        add(base / "recovered" / EINSTEIN_PLATE_ID)
         add(base / EINSTEIN_PLATE_ID)
     data = settings.data_dir()
     cache = data / "avatar_cache"
@@ -1937,6 +2031,30 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
                 status["front"] = "missing (plate is not frontal)"
 
         _use_front(gen["shots"].get("sheet_front") or sheet)
+        def _use_extra_views() -> None:
+            for source_name, public_name in (("right_3q", "right"), ("profile", "profile")):
+                source = gen["shots"].get(source_name)
+                boxes_for_view = (gen.get("extraBoxes") or {}).get(source_name)
+                if source is None or boxes_for_view is None:
+                    status[public_name] = gen["notes"].get(source_name, "missing")
+                    continue
+                extra_shots = {"closed": source}
+                mouthless_extra = gen["shots"].get(f"{source_name}_mouthless")
+                if mouthless_extra is not None:
+                    extra_shots["mouthless"] = mouthless_extra
+                try:
+                    views.update(assemble(
+                        skin,
+                        extra_shots,
+                        boxes_for_view,
+                        url,
+                        matte=matte,
+                        mouthless=mouthless_extra is not None,
+                        view_name=public_name,
+                    ))
+                    status[public_name] = "ready (independent identity-referenced view)"
+                except Exception as exc:  # noqa: BLE001
+                    status[public_name] = f"missing (view rig failed: {str(exc)[:120]})"
         report = qa.finalize(skin, spent_usd(), attempts)
         if sheet is not None and not (report["gates"]["skin"]["pass"] and report["gates"]["edges"]["pass"]):
             attempts["sheetFallback"] = 1  # free retry: deterministic mouths/lids instead of the sheet
@@ -1958,6 +2076,8 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
                     _use_front(gen["shots"].get("sheet_front") or sheet)
                     report = qa.finalize(skin, spent_usd(), attempts)
                     views, report = _settle_mouths(skin, views, report, attempts)
+        _use_extra_views()
+        report = qa.finalize(skin, spent_usd(), attempts)
     finally:
         matte.close()
     return {"views": views, "viewStatus": status, "mouthShots": {"sheet": gen["notes"].get("sheet", "none"), "sheetFront": gen["notes"].get("sheet_front", "none")},

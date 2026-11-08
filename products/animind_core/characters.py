@@ -47,7 +47,12 @@ AIWAKE_AVATAR_SOURCES = (
 def avatar_pipeline() -> dict[str, Any]:
     return {
         "sources": list(AIWAKE_AVATAR_SOURCES),
-        "views": {"front": "layered", "left": "layered", "right": "mirror:left"},
+        "views": {
+            "front": "layered",
+            "left": "layered",
+            "right": "independent when generated; mirror:left fallback",
+            "profile": "independent when generated",
+        },
         "parts": ["torso", "neck", "head", "eyes", "lids", "brows", "mouths:X,A-H", "emotions"],
     }
 
@@ -183,7 +188,18 @@ def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
     return reused | {"reused": True, **({"qaWarning": warning} if warning else {})}
 
 
-def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
+def create_character(
+    req: dict[str, Any],
+    base_url: str,
+    *,
+    puppets_root: Path | None = None,
+) -> dict[str, Any]:
+    """Run the canonical Aiwake character path.
+
+    ``puppets_root`` is an ownership boundary for server-created puppets.  It
+    changes storage only; generation, rigging, expressions, QA and publishing
+    remain this module's existing pipeline.
+    """
     if "requestedResolution" in req or "resolution" in req:
         decision = portrait.plan(req)
         if not decision["consume"]:
@@ -211,6 +227,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
 
     name = (str(req.get("name") or "").strip() or subject)[:40]
     assets = settings.data_dir() / "assets"
+    root = Path(puppets_root) if puppets_root is not None else puppets_dir()
     art_style = styles.pick(req.get("artStyle"))
     image_model = avatar.configured_model()
     stick_options: dict[str, Any] = {}
@@ -243,11 +260,15 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         character_id = f"stick_{preset}_{fingerprint}"
     else:
         character_id = f"{_slug(name)}_{uuid.uuid4().hex[:8]}"
-    skin = assets / "puppets" / character_id
+    skin = root / character_id
     files_base = f"{base_url}/v1/files"
 
     def url(path: Path) -> str:
-        return f"{files_base}/{path.relative_to(assets).as_posix()}"
+        try:
+            relative = path.relative_to(assets)
+        except ValueError:
+            relative = path.relative_to(settings.data_dir())
+        return f"{files_base}/{relative.as_posix()}"
 
     reuse_art = req.get("reuse", True) is not False
     if character_type == "stick" and reuse_art and (skin / "character.json").is_file():
@@ -269,7 +290,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             status="cached", metadata={"views": sorted((reused.get("views") or {}).keys())},
         )
         return reused
-    if character_type == "rig" and not req.get("rawPrompt") and (
+    if puppets_root is None and character_type == "rig" and not req.get("rawPrompt") and (
         req.get("reuse", True) is not False or image_cap_blocks(name, art_style)
     ):
         found = reusable(name, art_style, base_url)
@@ -380,6 +401,11 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "mouthShots": built["mouthShots"],
         "artStyle": art_style,
         "frontShot": built.get("frontShot", "mock"),
+        **({
+            key: built.get(key)
+            for key in ("plateId", "frontKind", "frontEqualsLeft", "frontIsTruePhoto")
+            if key in built
+        }),
         **({"preset": built["preset"], "customization": built["customization"]} if character_type == "stick" else {}),
         # generate-then-verify QA: score 0-100, Gemini cost, attempts, failed gates; sheet stored with the character
         "qa": built.get("qa"),

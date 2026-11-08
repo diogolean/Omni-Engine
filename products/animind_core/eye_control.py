@@ -118,7 +118,7 @@ def fit_travel(
 def assess_skin(skin: Path) -> dict[str, Any]:
     """Probe views that were actually drawn. A missing file is not a fake view."""
     views: dict[str, Any] = {}
-    for name in ("front", "left", "right"):
+    for name in ("front", "left", "right", "profile"):
         path = skin / "views" / name / "view.json"
         if not path.is_file():
             continue
