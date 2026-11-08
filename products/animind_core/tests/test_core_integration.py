@@ -266,3 +266,153 @@ def test_labeled_fixture_walks_sheet_plan_and_render_for_one_owner(monkeypatch, 
             assert "users/" not in response.text
     assert calls == []
     render._JOBS.clear()
+
+
+def _fixture_sheet(user: str, name: str, verified: str, invented: str, page: str) -> None:
+    url = f"https://pt.wikiquote.org/wiki/{name}"
+    raw = [
+        {"text": verified, "source": "Livro fixture", "sourceKind": "primary", "url": url},
+        {"text": invented, "source": "Livro fixture", "sourceKind": "primary", "url": url},
+    ]
+    checked = personas._limit(personas.verify_quotes(raw, {url: page}))
+    path = personas.cache_path(name, "pt-BR", user)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump({
+        "name": name,
+        "lang": "pt-BR",
+        "found": True,
+        "version": personas.SHEET_VERSION,
+        "fetchedAt": int(time.time()),
+        "fixture": "labeled",
+        "sourcePage": page,
+        "quotes": checked,
+    }, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def test_labeled_fixture_debate_alternates_two_sheets(schema, monkeypatch, tmp_path):
+    """Offline template debate. Not a live model, and not a production render."""
+    _limits(monkeypatch, schema, ANIMIND_SPEND_RATE_PER_MIN="60", ANIMIND_SPEND_CONCURRENCY="4")
+    monkeypatch.setenv("CORE_API_KEY", "test-key")
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ANIMIND_FORCE_MOCK", "1")
+    monkeypatch.setenv("ANIMIND_PERSONAS_OFFLINE", "1")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    ada = "A verdade secreta sustenta o que penso."
+    bento = "A verdade secreta tambem cabe na replica."
+    ada_miss = "Uma frase inventada da Ada sem pagina."
+    bento_miss = "Uma frase inventada do Bento sem pagina."
+    user = owner.accept_user("user_one")
+    _fixture_sheet(user, "Ada", ada, ada_miss, f"Pagina fixture de Ada. {ada} Fim.")
+    _fixture_sheet(user, "Bento", bento, bento_miss, f"Pagina fixture de Bento. {bento} Fim.")
+    from products.animind_core import render
+
+    monkeypatch.setattr(render.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+
+    class _Speak:
+        def __init__(self, text, voice, rate="+0%", pitch="+0Hz") -> None:
+            del text, voice, rate, pitch
+
+        async def save(self, path) -> None:
+            from pathlib import Path
+            Path(path).write_bytes(b"fixture-tts")
+
+    def to_wav(mp3, clip) -> None:  # noqa: ARG001
+        import wave
+        clip.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(clip), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(render.SAMPLE_RATE)
+            handle.writeframes(b"\x00\x00" * (render.SAMPLE_RATE // 5))
+
+    def encode(self, frame_iter=None, audio_path=None, output_path=None, **_kwargs):  # noqa: ARG002
+        from pathlib import Path
+        Path(output_path).write_bytes(b"fixture-mp4")
+
+    import sys
+    import types
+
+    fake_tts = types.ModuleType("edge_tts")
+    fake_tts.Communicate = _Speak
+    monkeypatch.setitem(sys.modules, "edge_tts", fake_tts)
+    monkeypatch.setattr(render, "_to_wav", to_wav)
+    monkeypatch.setattr(render.frameqa, "check", lambda *_a, **_k: {"pass": True, "badFrames": 0, "warnings": []})
+    monkeypatch.setattr("animation.parametric.renderer.AnimationRenderer.render", encode)
+    from products.animind_core.app import app
+
+    client = TestClient(app)
+    own = {**H, "X-Animind-User": "user_one"}
+    other = {**H, "X-Animind-User": "user_two"}
+    made = client.post("/v1/render", headers=own, json={
+        "characters": [
+            {"id": "ada-fixture", "name": "Ada", "type": "stick"},
+            {"id": "bento-fixture", "name": "Bento", "type": "stick"},
+        ],
+        "template": "debate",
+        "scenario": "studio",
+        "topic": "verdade secreta",
+        "language": "pt-BR",
+        "duration": 45,
+    })
+    assert made.status_code == 200, made.text
+    job_id = made.json()["id"]
+    state: dict = {}
+    for _ in range(120):
+        state = client.get(f"/v1/jobs/{job_id}", headers=own).json()
+        if state.get("status") in {"done", "failed"}:
+            break
+        time.sleep(0.05)
+    assert state.get("status") == "done", state
+    result = state["result"]
+    assert result["writer"] == "template"
+    assert result["template"] == "debate"
+    lines = result["script"]
+    speakers = [line["speaker"] for line in lines]
+    assert len(speakers) >= 4
+    assert speakers == [index % 2 for index in range(len(speakers))]
+    assert set(speakers) == {0, 1}
+    spoken = " ".join(line["text"] for line in lines)
+    assert ada_miss not in spoken and bento_miss not in spoken
+    quoted = [line["text"] for line in lines if line.get("kind") == "quote"]
+    assert quoted
+    assert set(quoted) <= {ada, bento}
+    video = result["videoUrl"]
+    assert f"users/{user}/jobs/{job_id}/preview.mp4" in video
+    relative = video.split("/v1/files/", 1)[1]
+    assert (tmp_path / relative).is_file()
+    assert client.get(f"/v1/files/{relative}", headers=own).content == b"fixture-mp4"
+    for headers in (other, H):
+        denied = client.get(f"/v1/jobs/{job_id}", headers=headers)
+        assert denied.status_code == 404
+        assert denied.json() == {"detail": "job not found"}
+        hidden = client.get(f"/v1/files/{relative}", headers=headers)
+        assert hidden.status_code == 404
+        for response in (denied, hidden):
+            assert ada_miss not in response.text
+            assert bento_miss not in response.text
+            assert "users/" not in response.text
+    with psycopg.connect(URL) as conn:
+        conn.execute(f"SET search_path TO {schema}")
+        rows = conn.execute(
+            "SELECT attempt, estimated_micro, reported_micro, status FROM animind_core_spend_entries "
+            "WHERE user_id = %s AND operation = 'speech' ORDER BY attempt",
+            (user,),
+        ).fetchall()
+    assert len(rows) >= len(lines)
+    assert all(row[1] is None and row[1] != 0 and row[2] is None for row in rows)
+    from dataclasses import replace
+
+    from products.animind_core.spend import ledger
+    from products.animind_core.spend.limits import read_limits
+
+    tight = replace(read_limits(), rate_per_min=1)
+    blocked = ledger.reserve({
+        "id": "spd_debate_over", "request_id": "req_debate_over", "attempt": 1, "job_ref": None,
+        "user_id": user, "operation": "speech", "provider": "edge-tts", "model": "fixture",
+        "status": "reserved", "block": None, "reason": None, "origin": "test",
+        "idempotency_key": None, "currency": "USD", "price_version": "test",
+    }, 1, tight)
+    assert blocked == "rate"
+    render._JOBS.clear()
