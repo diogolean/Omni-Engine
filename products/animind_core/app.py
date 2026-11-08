@@ -196,7 +196,12 @@ def post_render(body: dict, request: Request) -> dict:
     if user:
         payload["personaUser"] = user
         payload["owner"] = user
-    return protect(request, body, "render", lambda: render.submit(payload, _base(request)))
+    result = protect(request, body, "render", lambda: render.submit(payload, _base(request)))
+    if result.get("id"):
+        result["usage"] = render.keep_usage(
+            user, str(result["id"]), publish_usage(result.get("usage"), job_id=str(result["id"])),
+        )
+    return result
 
 
 @app.post("/v1/debates", dependencies=[Depends(require_key)])

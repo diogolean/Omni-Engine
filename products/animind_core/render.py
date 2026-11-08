@@ -14,6 +14,7 @@ import contextvars
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -48,6 +49,7 @@ SAMPLE_RATE = 24000
 GAP_S = 0.3
 ENV_FPS = 100
 _JOBS: dict[str, dict[str, Any]] = {}
+_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 _LOCK = threading.Lock()
 _RENDER_LOCK = threading.Lock()
 
@@ -400,6 +402,7 @@ def smooth_visemes(cues: list[dict[str, Any]], frame_s: float = 1 / 24) -> list[
 def _set(job_id: str, **kw: Any) -> None:
     with _LOCK:
         _JOBS[job_id].update(kw)
+        _save(_JOBS[job_id])
 
 
 def settle_frame_qa(video: Path, report: dict[str, Any], *, repaired: list[str] | None = None) -> dict[str, Any]:
@@ -708,6 +711,7 @@ def submit(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         job["_frame"] = frame
     with _LOCK:
         _JOBS[job_id] = job
+        _save(job)
     ctx = contextvars.copy_context()
     threading.Thread(target=ctx.run, args=(_run, job_id, req, base_url), daemon=True).start()
     return _public_job(job)
@@ -720,17 +724,21 @@ def get(job_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
 
     with _LOCK:
         job = _JOBS.get(job_id)
-        if job is None or job.get("_owner") != owner_id:
-            stored = None
-        else:
-            stored = dict(job)
+        if job is not None and job.get("_owner") != owner_id:
+            job = None
+        if job is None:
+            job = _load(owner_id, job_id)
+            if job is not None:
+                _JOBS[job_id] = job
+        stored = None if job is None else dict(job)
     if stored is not None:
         frame = stored.pop("_frame", None)
         public = _public_job(stored)
         if frame is not None:
             public["usage"] = contract.document(frame, job_id)
         elif "usage" not in public:
-            public["usage"] = contract.empty("unknown", "unknown", job_id)
+            public["usage"] = contract.empty("unknown", owner_id or "unknown", job_id)
+        _hide_missing_preview(public, _job_dir(owner_id, job_id))
         return public
     rows = ledger.rows_for_job(ref_hash(job_id) or "")
     if not rows:
@@ -755,6 +763,73 @@ def _public(job_id: str) -> dict[str, Any]:
     with _LOCK:
         job = _JOBS.get(job_id) or {}
         return _public_job(job)
+
+
+def keep_usage(owner_id: str | None, job_id: str, usage: dict[str, Any]) -> dict[str, Any]:
+    """Store usage once, on the owner's job file."""
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if job is None or job.get("_owner") != owner_id:
+            job = _load(owner_id, job_id)
+            if job is None:
+                return usage
+            _JOBS[job_id] = job
+        if not isinstance(job.get("usage"), dict):
+            job["usage"] = usage
+            _save(job)
+        return job["usage"]
+
+
+def _job_dir(owner_id: str | None, job_id: str) -> Path | None:
+    if not isinstance(job_id, str) or not _JOB_ID.match(job_id):
+        return None
+    return settings.data_dir() / owner.job_rel(owner_id, job_id)
+
+
+def _save(job: dict[str, Any]) -> None:
+    owner_id = job.get("_owner") if isinstance(job.get("_owner"), str) else None
+    directory = _job_dir(owner_id, str(job.get("id") or ""))
+    if directory is None:
+        return
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "job.json").write_text(
+        json.dumps(_public_job(job), ensure_ascii=False), encoding="utf-8",
+    )
+
+
+def _load(owner_id: str | None, job_id: str) -> dict[str, Any] | None:
+    directory = _job_dir(owner_id, job_id)
+    if directory is None:
+        return None
+    path = directory / "job.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("id") != job_id:
+        return None
+    data["_owner"] = owner_id
+    _hide_missing_preview(data, directory)
+    return data
+
+
+def _hide_missing_preview(job: dict[str, Any], directory: Path | None) -> None:
+    """A poll with no MP4 is not a finished preview."""
+    if directory is None:
+        return
+    video = directory / "preview.mp4"
+    if video.is_file() and video.stat().st_size > 0:
+        return
+    result = job.get("result")
+    if isinstance(result, dict):
+        result.pop("videoUrl", None)
+        result.pop("audioUrl", None)
+        result.pop("frameQaUrl", None)
+    if job.get("status") == "done":
+        job["status"] = "failed"
+        job["error"] = "preview missing"
 
 
 def _public_job(job: dict[str, Any]) -> dict[str, Any]:

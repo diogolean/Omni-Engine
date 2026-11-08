@@ -76,6 +76,55 @@ def test_owned_job_and_file_are_invisible_to_everyone_else(client, tmp_path):
         render._JOBS.pop(job_id, None)
 
 
+def test_owner_poll_reloads_the_job_file_after_memory_is_cleared(client, monkeypatch):
+    """A queued fixture stays on disk. No video file, so the poll is not a ready preview."""
+    monkeypatch.setattr(render.shutil, "which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+
+    class _Stopped:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(render.threading, "Thread", _Stopped)
+    own = {**H, "X-Animind-User": "user_one"}
+    other = {**H, "X-Animind-User": "user_two"}
+    created = client.post("/v1/render", headers=own, json={
+        "characters": [{"id": "c1", "name": SECRET_NAME}],
+        "template": "solo",
+        "scenario": "studio",
+        "topic": SECRET_PROMPT,
+    })
+    assert created.status_code == 200, created.text
+    job = created.json()
+    assert job["status"] == "queued"
+    assert "videoUrl" not in created.text
+    assert job["usage"]["schema"] == "animind.usage.v1"
+    assert job["usage"]["totals"]["estimatedMicro"] is None
+    assert job["usage"]["totals"]["reportedMicro"] is None
+    assert job["usage"]["totals"]["estimatedMicro"] != 0
+    render._JOBS.clear()
+    seen = client.get(f"/v1/jobs/{job['id']}", headers=own)
+    assert seen.status_code == 200, seen.text
+    assert seen.json()["status"] == "queued"
+    assert seen.json()["id"] == job["id"]
+    assert "videoUrl" not in seen.text
+    assert seen.json()["usage"]["schema"] == "animind.usage.v1"
+    assert seen.json()["usage"]["totals"]["estimatedMicro"] is None
+    assert seen.json()["usage"]["totals"]["reportedMicro"] is None
+    for headers in (other, H):
+        denied = client.get(f"/v1/jobs/{job['id']}", headers=headers)
+        assert denied.status_code == 404
+        assert denied.json() == {"detail": "job not found"}
+        assert SECRET_NAME not in denied.text
+        assert SECRET_PROMPT not in denied.text
+        assert "users/" not in denied.text
+        assert "usage" not in denied.text
+        assert job["usage"]["userRef"] not in denied.text
+    render._JOBS.clear()
+
+
 def test_anonymous_job_is_not_readable_by_a_named_user(client):
     job_id = "anonjob0001"
     render._JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0.0, "_owner": None}
