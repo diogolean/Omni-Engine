@@ -322,13 +322,86 @@ def test_concurrency_limit_is_atomic(schema, monkeypatch):
     assert sorted(results) == ["busy", "ok"]
 
 
-def _entry(entry_id: str, user: str) -> dict:
+def test_two_connections_share_the_origin_limit(schema, monkeypatch):
+    _limits(monkeypatch, schema, ANIMIND_SPEND_RATE_PER_MIN="1", ANIMIND_SPEND_CONCURRENCY="4")
+    limits = read_limits()
+    assert limits is not None
+    first = _entry("spd_origin_a", "user-a")
+    second = _entry("spd_origin_b", "user-b")
+    first["origin_ref"] = "shared-origin"
+    second["origin_ref"] = "shared-origin"
+    results: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def once(entry: dict) -> None:
+        barrier.wait()
+        results.append(ledger.reserve(entry, 1, limits))
+
+    threads = [threading.Thread(target=once, args=(entry,)) for entry in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(results) == ["ok", "rate"]
+
+
+def test_same_request_id_does_not_reserve_twice(schema, monkeypatch):
+    _limits(monkeypatch, schema)
+    limits = read_limits()
+    assert limits is not None
+    entry = _entry("spd_replay", "user-a", request_id="req_same")
+    assert ledger.reserve(entry, 10, limits) == "ok"
+    again = _entry("spd_replay_2", "user-a", request_id="req_same")
+    assert ledger.reserve(again, 10, limits) == "replay"
+    with __import__("psycopg").connect(URL) as conn:
+        conn.execute(f"SET search_path TO {schema}")
+        rows = conn.execute(
+            "SELECT estimated_micro, reserved_cents, status FROM animind_core_spend_entries "
+            "WHERE request_id = 'req_same'"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][2] == "reserved"
+    assert rows[0][0] is None
+
+
+def _entry(entry_id: str, user: str, request_id: str | None = None) -> dict:
     return {
-        "id": entry_id, "request_id": "req_test", "attempt": 1, "job_ref": None,
+        "id": entry_id, "request_id": request_id or entry_id, "attempt": 1, "job_ref": None,
         "user_id": user_hash(user), "operation": "text", "provider": "deepseek",
         "model": "deepseek-flash", "status": "reserved", "block": None, "reason": None,
         "origin": "test", "idempotency_key": None, "currency": "USD", "price_version": "test",
     }
+
+
+def test_a_spending_route_without_a_ledger_is_labeled_closed(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANIMIND_GENERATION", "1")
+    monkeypatch.setenv("ANIMIND_SPEND_BUDGET_CENTS", "100")
+    monkeypatch.setenv("ANIMIND_SPEND_USER_CENTS", "100")
+    monkeypatch.setenv("ANIMIND_SPEND_TIMEOUT_MS", "5000")
+    monkeypatch.setenv("ANIMIND_SPEND_MAX_RETRIES", "1")
+    monkeypatch.setenv("ANIMIND_SPEND_RATE_PER_MIN", "30")
+    monkeypatch.setenv("ANIMIND_SPEND_CONCURRENCY", "2")
+    monkeypatch.setenv("ANIMIND_SPEND_MAX_INPUT_TOKENS", "2000")
+    monkeypatch.setenv("ANIMIND_SPEND_MAX_OUTPUT_TOKENS", "2000")
+    monkeypatch.setenv("ANIMIND_SPEND_MAX_TOTAL_TOKENS", "4000")
+    monkeypatch.setenv("ANIMIND_SPEND_MAX_IMAGES", "4")
+    monkeypatch.setenv("ANIMIND_SPEND_MAX_AUDIO_SEC", "180")
+    monkeypatch.setenv("ANIMIND_SPEND_MAX_VIDEO_SEC", "180")
+    monkeypatch.delenv("ANIMIND_SPEND_DATABASE_URL", raising=False)
+    monkeypatch.setenv("CORE_API_KEY", "test-key")
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ANIMIND_FORCE_MOCK", "1")
+    from fastapi.testclient import TestClient
+
+    from products.animind_core.app import app
+
+    response = TestClient(app).post(
+        "/v1/avatars",
+        headers={"Authorization": "Bearer test-key", "X-Animind-User": "user_one"},
+        json={"prompt": "Discurso de Ada", "language": "pt"},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "spend:ledger"
 
 
 def test_plan_render_and_job_poll_do_not_double_charge(schema, monkeypatch):

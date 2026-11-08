@@ -294,13 +294,16 @@ def _plate(
     from products.aiwake.animator.factory import create_puppet  # noqa: PLC0415
 
     from . import telemetry  # noqa: PLC0415
+    from .spend.guard import billable  # noqa: PLC0415
 
     spec = image_models.selected(_FLASH_MODEL_ID)
     _reserve(spec, budget, spent)
     before = budget.spent_usd
-    model = create_puppet.generate_character_image(
-        prompt, dest, aspect_ratio="9:16", reference_path=reference,
-    )
+    with billable(provider="google", model=spec.model, operation="image", prompt=prompt, images=1) as attempt:
+        attempt.mark_sent()
+        model = create_puppet.generate_character_image(
+            prompt, dest, aspect_ratio="9:16", reference_path=reference,
+        )
     cost = float(spec.usdPerImage)
     if budget.spent_usd == before:
         budget.charge(cost)

@@ -104,21 +104,14 @@ def _tts_retryable(exc: BaseException) -> bool:
 async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str = "+0Hz") -> None:
     import edge_tts  # noqa: PLC0415
 
+    from .spend.guard import admit_unpriced  # noqa: PLC0415
+
     attempts = _tts_attempts()
     last: BaseException | None = None
-    from .spend.guard import current, note_unbilled  # noqa: PLC0415
-
     for attempt in range(attempts):
         try:
-            await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
-            if current() is not None:
-                try:
-                    note_unbilled(
-                        provider="edge-tts", model=voice, operation="speech",
-                        reason="unpriced_transport", attempt=attempt + 1,
-                    )
-                except Exception:  # noqa: BLE001 — speech must not fail because the note failed
-                    pass
+            with admit_unpriced(provider="edge-tts", model=voice, operation="speech", attempt=attempt + 1):
+                await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
             return
         except Exception as exc:  # noqa: BLE001 — only the transient audio miss is retried
             last = exc

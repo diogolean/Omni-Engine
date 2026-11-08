@@ -220,9 +220,15 @@ class GeminiProvider(LLMProvider):
     def complete(self, prompt: str) -> LLMResult:
         from production.cost.google_guardrail import get_google_cost_tracker
 
+        from .spend.guard import billable  # noqa: PLC0415
+
         tracker = get_google_cost_tracker()
         before = tracker.snapshot()
-        lines = self._generate(prompt)
+        with billable(
+            provider=self.id, model=self.model, operation="text", prompt=prompt, stream=False,
+        ) as attempt:
+            attempt.mark_sent()
+            lines = self._generate(prompt)
         input_tokens, output_tokens, cost = self._usage(before, tracker.snapshot())
         return LLMResult(lines, self.id, self.model, input_tokens, output_tokens, cost)
 

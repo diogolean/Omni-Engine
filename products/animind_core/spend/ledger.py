@@ -108,6 +108,7 @@ def _bootstrap(conn) -> None:
           currency text,
           price_version text,
           origin text NOT NULL,
+          origin_ref text,
           idempotency_key text,
           created_at timestamptz NOT NULL,
           updated_at timestamptz NOT NULL
@@ -161,31 +162,78 @@ def _bootstrap(conn) -> None:
         )
         """
     )
+    conn.execute(
+        "ALTER TABLE animind_core_spend_entries ADD COLUMN IF NOT EXISTS origin_ref text"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS animind_core_spend_slots (
+          scope text PRIMARY KEY,
+          slots integer NOT NULL
+        )
+        """
+    )
+    conn.execute("DROP FUNCTION IF EXISTS animind_core_spend_reserve(bigint, bigint, bigint, text, text, integer, integer, timestamptz)")
     conn.execute(_RESERVE_SQL)
 
 
 _RESERVE_SQL = r"""
 CREATE OR REPLACE FUNCTION animind_core_spend_reserve(
   p_cents bigint, p_global bigint, p_user bigint, p_user_scope text, p_user_id text,
-  p_rate integer, p_concurrency integer, p_now timestamptz
+  p_origin_scope text, p_origin_id text, p_rate integer, p_concurrency integer,
+  p_now timestamptz, p_request text, p_operation text
 ) RETURNS text LANGUAGE plpgsql AS $fn$
 DECLARE
-  v_count integer;
-  v_window timestamptz;
-  v_slots integer;
+  v_user_count integer;
+  v_user_window timestamptz;
+  v_origin_count integer;
+  v_origin_window timestamptz;
+  v_global integer;
+  v_user_slots integer;
+  v_origin_slots integer;
   v_global_used bigint;
   v_user_used bigint;
+  v_first text;
+  v_second text;
 BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext(p_request || ':' || p_user_id || ':' || p_operation));
   INSERT INTO animind_core_spend_rates (user_id, window_start, count)
   VALUES (p_user_id, p_now, 0)
   ON CONFLICT (user_id) DO NOTHING;
-  SELECT count, window_start INTO v_count, v_window
-  FROM animind_core_spend_rates WHERE user_id = p_user_id FOR UPDATE;
-  IF v_window <= p_now - interval '60 seconds' THEN
-    v_count := 0;
-    v_window := p_now;
+  INSERT INTO animind_core_spend_rates (user_id, window_start, count)
+  VALUES (p_origin_id, p_now, 0)
+  ON CONFLICT (user_id) DO NOTHING;
+  IF p_user_id <= p_origin_id THEN
+    v_first := p_user_id;
+    v_second := p_origin_id;
+  ELSE
+    v_first := p_origin_id;
+    v_second := p_user_id;
   END IF;
-  IF v_count >= p_rate THEN
+  PERFORM 1 FROM animind_core_spend_rates WHERE user_id = v_first FOR UPDATE;
+  IF v_second <> v_first THEN
+    PERFORM 1 FROM animind_core_spend_rates WHERE user_id = v_second FOR UPDATE;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM animind_core_spend_entries
+    WHERE request_id = p_request AND user_id = p_user_id AND operation = p_operation
+      AND status IN ('reserved', 'succeeded', 'not_charged')
+  ) THEN
+    RETURN 'replay';
+  END IF;
+  SELECT count, window_start INTO v_user_count, v_user_window
+  FROM animind_core_spend_rates WHERE user_id = p_user_id;
+  SELECT count, window_start INTO v_origin_count, v_origin_window
+  FROM animind_core_spend_rates WHERE user_id = p_origin_id;
+  IF v_user_window <= p_now - interval '60 seconds' THEN
+    v_user_count := 0;
+    v_user_window := p_now;
+  END IF;
+  IF v_origin_window <= p_now - interval '60 seconds' THEN
+    v_origin_count := 0;
+    v_origin_window := p_now;
+  END IF;
+  IF v_user_count >= p_rate OR v_origin_count >= p_rate THEN
     RETURN 'rate';
   END IF;
   INSERT INTO animind_core_spend_holds (scope, currency, limit_cents, reserved_cents, settled_cents)
@@ -194,21 +242,42 @@ BEGIN
   INSERT INTO animind_core_spend_holds (scope, currency, limit_cents, reserved_cents, settled_cents)
   VALUES (p_user_scope, 'USD', p_user, 0, 0)
   ON CONFLICT (scope) DO UPDATE SET limit_cents = EXCLUDED.limit_cents;
+  INSERT INTO animind_core_spend_slots (scope, slots) VALUES ('global', 0) ON CONFLICT (scope) DO NOTHING;
+  INSERT INTO animind_core_spend_slots (scope, slots) VALUES (p_user_scope, 0) ON CONFLICT (scope) DO NOTHING;
+  INSERT INTO animind_core_spend_slots (scope, slots) VALUES (p_origin_scope, 0) ON CONFLICT (scope) DO NOTHING;
   PERFORM 1 FROM animind_core_spend_holds WHERE scope = 'global' FOR UPDATE;
   PERFORM 1 FROM animind_core_spend_holds WHERE scope = p_user_scope FOR UPDATE;
-  SELECT slots INTO v_slots FROM animind_core_spend_inflight WHERE id = 1 FOR UPDATE;
-  SELECT settled_cents + reserved_cents INTO v_global_used FROM animind_core_spend_holds WHERE scope = 'global';
-  SELECT settled_cents + reserved_cents INTO v_user_used FROM animind_core_spend_holds WHERE scope = p_user_scope;
-  IF v_slots + 1 > p_concurrency THEN
+  PERFORM 1 FROM animind_core_spend_inflight WHERE id = 1 FOR UPDATE;
+  IF p_user_scope <= p_origin_scope THEN
+    PERFORM 1 FROM animind_core_spend_slots WHERE scope = p_user_scope FOR UPDATE;
+    IF p_origin_scope <> p_user_scope THEN
+      PERFORM 1 FROM animind_core_spend_slots WHERE scope = p_origin_scope FOR UPDATE;
+    END IF;
+  ELSE
+    PERFORM 1 FROM animind_core_spend_slots WHERE scope = p_origin_scope FOR UPDATE;
+    PERFORM 1 FROM animind_core_spend_slots WHERE scope = p_user_scope FOR UPDATE;
+  END IF;
+  PERFORM 1 FROM animind_core_spend_slots WHERE scope = 'global' FOR UPDATE;
+  SELECT slots INTO v_global FROM animind_core_spend_inflight WHERE id = 1;
+  SELECT slots INTO v_user_slots FROM animind_core_spend_slots WHERE scope = p_user_scope;
+  SELECT slots INTO v_origin_slots FROM animind_core_spend_slots WHERE scope = p_origin_scope;
+  IF v_global + 1 > p_concurrency OR v_user_slots + 1 > p_concurrency
+     OR v_origin_slots + 1 > p_concurrency THEN
     RETURN 'busy';
   END IF;
+  SELECT settled_cents + reserved_cents INTO v_global_used FROM animind_core_spend_holds WHERE scope = 'global';
+  SELECT settled_cents + reserved_cents INTO v_user_used FROM animind_core_spend_holds WHERE scope = p_user_scope;
   IF v_global_used + p_cents > p_global OR v_user_used + p_cents > p_user THEN
     RETURN 'budget';
   END IF;
-  UPDATE animind_core_spend_rates SET count = v_count + 1, window_start = v_window WHERE user_id = p_user_id;
+  UPDATE animind_core_spend_rates SET count = v_user_count + 1, window_start = v_user_window
+  WHERE user_id = p_user_id;
+  UPDATE animind_core_spend_rates SET count = v_origin_count + 1, window_start = v_origin_window
+  WHERE user_id = p_origin_id;
   UPDATE animind_core_spend_holds SET reserved_cents = reserved_cents + p_cents WHERE scope = 'global';
   UPDATE animind_core_spend_holds SET reserved_cents = reserved_cents + p_cents WHERE scope = p_user_scope;
   UPDATE animind_core_spend_inflight SET slots = slots + 1 WHERE id = 1;
+  UPDATE animind_core_spend_slots SET slots = slots + 1 WHERE scope IN (p_user_scope, p_origin_scope);
   RETURN 'ok';
 END
 $fn$
@@ -219,28 +288,39 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _hash(raw: str) -> str:
+    import hashlib
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
 def reserve(entry: dict[str, Any], cents: int, limits: Any) -> str:
-    """Return ``ok`` or a block code. The entry is inserted only on ``ok``."""
+    """Return ``ok``, ``replay``, or a block code. The entry is inserted only on ``ok``."""
     ensure()
     user_scope = f"user:{entry['user_id']}"
+    origin_ref = str(entry.get("origin_ref") or _hash(str(entry.get("origin") or "unknown")))
+    origin_scope = f"origin:{origin_ref}"
     try:
         with _connect() as conn:
             row = conn.execute(
                 """
                 SELECT animind_core_spend_reserve(
-                  %s, %s, %s, %s, %s, %s, %s, %s
+                  %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
                     cents, limits.budget_cents, limits.user_cents, user_scope, entry["user_id"],
-                    limits.rate_per_min, limits.concurrency, _now(),
+                    origin_scope, origin_ref, limits.rate_per_min, limits.concurrency, _now(),
+                    entry.get("request_id") or "", entry.get("operation") or "",
                 ),
             ).fetchone()
             result = str(row[0] if row else "budget")
+            if result == "replay":
+                conn.rollback()
+                return "replay"
             if result != "ok":
                 conn.rollback()
                 return result if result in {"rate", "busy", "budget"} else "budget"
-            _insert(conn, entry | {"reserved_cents": cents, "status": "reserved"})
+            _insert(conn, entry | {"reserved_cents": cents, "status": "reserved", "origin_ref": origin_ref})
             conn.commit()
             return "ok"
     except LedgerUnavailable:
@@ -272,12 +352,12 @@ def _insert(conn, entry: dict[str, Any]) -> None:
           id, request_id, attempt, job_ref, user_id, operation, provider, model, status, block, reason,
           latency_ms, input_tokens, output_tokens, cached_tokens, thinking_tokens, image_count,
           audio_seconds, video_seconds, estimated_micro, reported_micro, reserved_cents, currency,
-          price_version, origin, idempotency_key, created_at, updated_at
+          price_version, origin, origin_ref, idempotency_key, created_at, updated_at
         ) VALUES (
           %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
           %s, %s, %s, %s, %s, %s,
           %s, %s, %s, %s, %s, %s,
-          %s, %s, %s, %s, %s
+          %s, %s, %s, %s, %s, %s
         )
         """,
         (
@@ -287,7 +367,8 @@ def _insert(conn, entry: dict[str, Any]) -> None:
             entry.get("cached_tokens"), entry.get("thinking_tokens"), entry.get("image_count"),
             entry.get("audio_seconds"), entry.get("video_seconds"), entry.get("estimated_micro"),
             entry.get("reported_micro"), entry.get("reserved_cents"), entry.get("currency"),
-            entry.get("price_version"), entry.get("origin") or "live", entry.get("idempotency_key"),
+            entry.get("price_version"), entry.get("origin") or "live", entry.get("origin_ref"),
+            entry.get("idempotency_key"),
             now, now,
         ),
     )
@@ -299,15 +380,25 @@ def settle(entry_id: str, status: str, patch: dict[str, Any]) -> None:
     try:
         with _connect() as conn:
             row = conn.execute(
-                "SELECT reserved_cents, user_id, status FROM animind_core_spend_entries WHERE id = %s FOR UPDATE",
+                "SELECT reserved_cents, user_id, status, origin_ref FROM animind_core_spend_entries WHERE id = %s FOR UPDATE",
                 (entry_id,),
             ).fetchone()
             if row and row[2] == "reserved":
                 cents = int(row[0] or 0)
                 scope = f"user:{row[1]}"
+                origin_scope = f"origin:{row[3]}" if row[3] else None
                 conn.execute(
                     "UPDATE animind_core_spend_inflight SET slots = GREATEST(slots - 1, 0) WHERE id = 1"
                 )
+                conn.execute(
+                    "UPDATE animind_core_spend_slots SET slots = GREATEST(slots - 1, 0) WHERE scope = %s",
+                    (scope,),
+                )
+                if origin_scope:
+                    conn.execute(
+                        "UPDATE animind_core_spend_slots SET slots = GREATEST(slots - 1, 0) WHERE scope = %s",
+                        (origin_scope,),
+                    )
                 for held in ("global", scope):
                     conn.execute(
                         """

@@ -139,12 +139,23 @@ def spent_usd() -> float:
     return get_google_cost_tracker().total_usd()
 
 
+def _paid_image(prompt: str, destination: Path, **kwargs: Any) -> str:
+    """Gemini image call. The guard runs before the factory, and records null when unpriced."""
+    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    from .spend.guard import billable  # noqa: PLC0415
+
+    with billable(
+        provider="google", model="gemini-2.5-flash-image", operation="image", prompt=prompt, images=1,
+    ) as attempt:
+        attempt.mark_sent()
+        return generate_character_image(prompt, destination, **kwargs)
+
+
 def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict[str, int], notes: dict[str, str],
                  tries: int = 2, tag: str = "sheet") -> Path | None:
     """Draw the 4x3 parts sheet (9 mouths + 3 eye states) and gate it: 12 cells must slice out and
     the closed-mouth and open-eye cells must register on the master (NCC). Re-drawn while the cap allows."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     from . import partsheet, qa  # noqa: PLC0415
 
     with Image.open(closed) as im:
@@ -157,7 +168,7 @@ def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict
         attempts[tag] = attempts.get(tag, 0) + 1
         raw = work / f"_gen_{tag}"
         try:
-            generate_character_image(partsheet.SHEET_PROMPT, raw, aspect_ratio="4:3", reference_path=closed)
+            _paid_image(partsheet.SHEET_PROMPT, raw, aspect_ratio="4:3", reference_path=closed)
             out = _png(raw, work / f"source_{tag}.png")
             got = partsheet.load(out, base, boxes)
         except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stop / bad image
@@ -190,8 +201,6 @@ def _mouthless_shot(src: Path, work: Path, boxes: dict[str, Box], tag: str, atte
                     notes: dict[str, str], tries: int = 2) -> Path | None:
     """Gemini edit of ``src`` with the mouth removed (the head is drawn mouthless instead of inpainted).
     Gated: no lip/cavity ink may remain around the mouth; re-drawn once while the cap allows."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     from . import qa  # noqa: PLC0415
 
     size = Image.open(src).size
@@ -208,7 +217,7 @@ def _mouthless_shot(src: Path, work: Path, boxes: dict[str, Box], tag: str, atte
         attempts[tag] = attempts.get(tag, 0) + 1
         raw = work / f"_gen_{tag}"
         try:
-            generate_character_image(MOUTHLESS_PROMPT, raw, aspect_ratio="4:5", reference_path=src)
+            _paid_image(MOUTHLESS_PROMPT, raw, aspect_ratio="4:5", reference_path=src)
             out = _png(raw, work / f"source_{tag}_{attempts[tag]}.png", size)
             with Image.open(out) as im, Image.open(src) as ref:
                 left = qa.ink_share(np.asarray(im.convert("RGB")), np.asarray(ref.convert("RGB")), boxes["mouth"])
@@ -237,15 +246,13 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
     """Generate-then-verify: master (closed mouth) -> parts sheet (all mouths + lids, gated) -> front view
     (gated for symmetry). Order is priority under the cap; a gate failure re-draws only while budget remains,
     otherwise that asset falls back to the deterministic path (warped mouths, drawn lids, side art)."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     from . import styles  # noqa: PLC0415
 
     attempts = attempts if attempts is not None else {}
     work.mkdir(parents=True, exist_ok=True)
     raw = work / "_gen_closed"
     attempts["master"] = 1
-    generate_character_image(raw_prompt or STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style)), raw, aspect_ratio="4:5")
+    _paid_image(raw_prompt or STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style)), raw, aspect_ratio="4:5")
     closed = _png(raw, work / "source_closed.png")
     raw.unlink(missing_ok=True)
     size = Image.open(closed).size
@@ -324,8 +331,6 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
 
     Runs before the mouth edits so the retry spends the budget the open mouth would have used (that
     mouth then falls back to a warp). A 3/4 result that still fails keeps the best attempt, flagged."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     best: tuple[float, Path, dict[str, Box], dict[str, Any]] | None = None
     from . import qa  # noqa: PLC0415
 
@@ -339,7 +344,7 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
         raw = work / "_gen_front"
         try:
             prompt = FRONT_PROMPT + (FRONT_RETRY if attempt else "") + (FRONT_LANDMARKS if drift_bad else "")
-            generate_character_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
+            _paid_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
             out = _png(raw, work / f"source_front{'' if not attempt else f'_{attempt + 1}'}.png", size)
             boxes = detect_features(out)
             check = frontality(boxes)

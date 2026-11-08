@@ -180,11 +180,14 @@ def extract(
 
     The scene is not baked in. A thumb is a smaller copy for UI only.
     """
+    from .spend.guard import admit_unpriced  # noqa: PLC0415
+
     dest.mkdir(parents=True, exist_ok=True)
     original = dest / "source.png"
     source.convert("RGBA").save(original, format="PNG")
     source_bytes = original.read_bytes()
-    cut = chroma_key_cutout(source)
+    with admit_unpriced(provider="local", model="chroma_key_cutout", operation="cutout"):
+        cut = chroma_key_cutout(source)
     # Softness parameter was not found. Leave the cutout alpha alone.
     alpha = np.asarray(cut.getchannel("A"))
     cutout_path = dest / "cutout.png"

@@ -36,6 +36,7 @@ class Frame:
     seen: dict[tuple, int] = field(default_factory=dict)
     images: int = 0
     origin: str = "live"
+    origin_ref: str = ""
     idempotency_key: str | None = None
 
     def job_ref(self) -> str | None:
@@ -78,10 +79,11 @@ def assess() -> tuple[str | None, limit_mod.Limits | None]:
     return None, found
 
 
-def open_frame(*, user_ref: str, role: str, request: str, origin: str = "live") -> Frame:
+def open_frame(*, user_ref: str, role: str, request: str, origin: str = "live", origin_ref: str = "") -> Frame:
     block, found = assess()
     return Frame(
         request_id=request, user_ref=user_ref, role=role, block=block, limits=found, origin=origin,
+        origin_ref=origin_ref or user_hash(origin or "unknown"),
     )
 
 
@@ -188,6 +190,58 @@ def _reported_micro(obs: dict[str, Any]) -> int | None:
 
 
 @contextmanager
+def admit_unpriced(
+    *,
+    provider: str,
+    model: str | None,
+    operation: str,
+    attempt: int = 1,
+):
+    """Record an unpriced call before it runs. Unknown cost stays null.
+
+    A missing ledger while generation is on refuses the call. With generation
+    off, the call is still noted and not priced as zero.
+    """
+    frame = current()
+    if frame is None and os.getenv("ANIMIND_GENERATION") is None:
+        yield None
+        return
+    if frame is None:
+        origin = "test" if os.getenv("ANIMIND_SPEND_ORIGIN") == "test" else "live"
+        frame = open_frame(user_ref=user_hash("library"), role="user", request=request_id(), origin=origin)
+    if frame.block in {"ledger", "unavailable"}:
+        raise SpendDenied(frame.block)
+    if frame.block == "disabled" or not frame.enforce:
+        note_unbilled(provider=provider, model=model, operation=operation, reason="unpriced", attempt=attempt)
+        yield None
+        return
+    price = None
+    cents = 0
+    entry_id = new_id()
+    entry = _entry(frame, entry_id, provider, model, operation, attempt, "reserved", None, price, cents, {})
+    entry["estimated_micro"] = None
+    entry["reported_micro"] = None
+    try:
+        result = ledger.reserve(entry, cents, frame.limits)
+    except ledger.LedgerUnavailable:
+        raise SpendDenied("ledger") from None
+    if result == "replay":
+        note_unbilled(provider=provider, model=model, operation=operation, reason="replay", attempt=attempt)
+        yield None
+        return
+    if result != "ok":
+        _remember(frame, provider, model, operation, attempt, "blocked", result, None, None, {})
+        raise SpendDenied(result)
+    try:
+        yield entry_id
+    finally:
+        try:
+            ledger.settle(entry_id, "not_charged", {"estimated_micro": None, "reported_micro": None, "reason": "unpriced"})
+        except ledger.LedgerUnavailable:
+            return None
+
+
+@contextmanager
 def billable(
     *,
     provider: str,
@@ -239,6 +293,8 @@ def billable(
     except ledger.LedgerUnavailable:
         _remember(frame, provider, model, operation, attempt_n, "blocked", "ledger", price, None, {})
         raise SpendDenied("ledger") from None
+    if result == "replay":
+        raise SpendDenied("replay")
     if result != "ok":
         _remember(frame, provider, model, operation, attempt_n, "blocked", result, price, None, {})
         raise SpendDenied(result)
@@ -305,6 +361,7 @@ def _entry(
         "currency": "USD" if hold_cents else None,
         "price_version": getattr(price, "version", None) if price is not None else None,
         "origin": frame.origin,
+        "origin_ref": frame.origin_ref,
         "idempotency_key": frame.idempotency_key,
     }
 

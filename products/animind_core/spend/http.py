@@ -28,6 +28,7 @@ _STATUS = {
     "ledger": 503,
     "timeout": 504,
     "stream": 503,
+    "replay": 409,
 }
 
 
@@ -67,13 +68,25 @@ def body_hash(body: dict[str, Any]) -> str:
     return user_hash(encoded)
 
 
+def _client_origin(request: Request) -> str:
+    """Hash of the caller address. The raw address is not stored."""
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    host = request.client.host if request.client is not None else ""
+    return user_hash(forwarded or host or "unknown")
+
+
 def protect(request: Request, body: dict[str, Any], operation: str, handler: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     user_ref, role = parse_user(request)
     key = parse_key(request)
-    frame = open_frame(user_ref=user_ref, role=role, request=parse_request_id(request), origin=_origin())
+    frame = open_frame(
+        user_ref=user_ref, role=role, request=parse_request_id(request), origin=_origin(),
+        origin_ref=_client_origin(request),
+    )
     frame.idempotency_key = key
     digest = body_hash(body if isinstance(body, dict) else {"_": str(type(body))})
     with frame_scope(frame):
+        if operation in {"render", "character", "avatar"} and frame.block == "ledger":
+            raise http_error("ledger")
         replay = None
         if key:
             replay = _replay(frame, user_ref, key, digest, operation, body)
