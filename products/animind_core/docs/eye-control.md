@@ -1,40 +1,28 @@
 # Eye control contract
 
-`eyeControl` is additive on a character response and on `POST /v1/characters/{id}/eyes`.
-Older clients ignore it. A missing field means the same as `ready: false`.
+The web already checks this shape in `docs/EYE_RIG.md` and `lib/eye-rig.ts`
+on `feat/mvp-ui`. The core uses the same names so that app can read a rig
+without a second adapter.
 
-```json
-{
-  "schema": "animind.eyeControl.v1",
-  "version": 1,
-  "ready": false,
-  "views": {
-    "front": {"status": "unavailable", "reason": "layers-missing", "probes": {}},
-    "left": {"status": "unavailable", "reason": "view-missing", "probes": {}},
-    "right": {"status": "ready", "reason": null, "probes": {
-      "center": {"pass": true, "delta": 0},
-      "left": {"pass": true, "delta": -6},
-      "right": {"pass": true, "delta": 6},
-      "up": {"pass": true, "delta": -4},
-      "down": {"pass": true, "delta": 4}
-    }}
-  }
-}
-```
+Per supplied view, the layers stay `eye_white` (sclera; a baked pupil is not
+rewritten), `iris`, and `eye_socket`. Opaque socket pixels with alpha above 32
+are the occlusion. `eyeRig.maxShift` and `eyeRig.irises` stay in canvas pixels,
+`+x` viewer-right and `+y` down. A view that was not drawn is omitted.
 
-`ready` is true only when front, left, and right each moved the iris centroid
-center to left, right, up, and down, and the pixels outside the eye opening
-stayed identical. The character field `eyeControlReady` mirrors that boolean.
-Do not treat a rig as gaze-ready from `eyeRig` alone.
+The proof travel starts at `[8, 4]`, which is what `reportSeparable` runs, and
+shrinks until 75% of the iris alpha stays inside the socket in both directions.
+The published `maxShift` is left for the existing renderer. The markdown also
+mentions starting from that published shift; the app code does not, so the core
+follows the code.
 
-`reason` is `layers-missing`, `view-missing`, `no-travel`, `repeated-image`,
-`identity-lost`, `off-axis`, `probe-error`, or `upgrade-aborted`.
+`eyeControl.views[name]` is `{gaze, travel?, sockets?, reason?}`. `gaze` is
+`separable` only after the pupil centroid moves left, right, up, and down and
+the pixels outside the socket stay put. `eyeControl.ready` is that result for
+every supplied face view. The offline stick presets pass. The procedural
+Einstein bust has the three layers, but the dark pixels inside the socket do
+not travel, so it stays `unavailable` and is not rewritten. `recovered` is
+reserved for a flattened plate; this core does not repaint one. The web still
+recovers those plates on import.
 
-`POST /v1/characters/{id}/eyes` writes only `eye_control.json` next to the
-saved character. View PNGs, visemes, and expressions are not rewritten. If the
-saved layers cannot pass the probe, the response is `ready: false` and the
-original files stay as they were. No image provider is called.
-
-The web viewer can read `eyeControl.views[name].status` before applying gaze.
-`products/aiwake/animator/factory/create_puppet.py` and `one_shot_factory.py`
-are unchanged; the proof runs on the layered view the core already saved.
+`POST /v1/characters/{id}/eyes` writes only `eye_control.json`.
+`create_puppet.py` and `one_shot_factory.py` are unchanged.

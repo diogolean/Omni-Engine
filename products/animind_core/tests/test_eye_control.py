@@ -44,8 +44,9 @@ def _view(root: Path, *, shift: tuple[int, int] = (8, 6), iris_at: tuple[int, in
 
 def test_movable_iris_is_ready_only_after_four_directions(tmp_path: Path):
     report = eye_control.probe_view(_view(tmp_path / "good"))
-    assert report["status"] == "ready"
+    assert report["gaze"] == "separable"
     assert report["reason"] is None
+    assert report["travel"][0] >= 1 and report["travel"][1] >= 1
     for name in ("left", "right", "up", "down"):
         assert report["probes"][name]["pass"] is True
     assert report["probes"]["left"]["delta"] < 0
@@ -54,10 +55,26 @@ def test_movable_iris_is_ready_only_after_four_directions(tmp_path: Path):
     assert report["probes"]["down"]["delta"] > 0
 
 
-def test_repeated_image_is_not_marked_ready(tmp_path: Path):
-    report = eye_control.probe_view(_view(tmp_path / "still", shift=(0, 0)))
-    assert report["status"] == "unavailable"
-    assert report["reason"] == "no-travel"
+def test_socket_that_cannot_hold_a_shift_is_not_ready(tmp_path: Path):
+    root = tmp_path / "tight"
+    root.mkdir()
+    for name, color in (
+        ("eye_white", (250, 250, 250, 255)),
+        ("eye_socket", (255, 255, 255, 255)),
+        ("iris", (20, 40, 80, 255)),
+    ):
+        Image.new("RGBA", (3, 3), color).save(root / f"{name}.png")
+    view = {
+        "canvas": {"w": 3, "h": 3},
+        "eyeRig": {"maxShift": [8, 4], "irises": [[1, 1, 1]]},
+        "layers": [
+            {"name": name, "url": str(root / f"{name}.png"), "x": 0, "y": 0, "w": 3, "h": 3, "z": index}
+            for index, name in enumerate(("eye_white", "iris", "eye_socket"))
+        ],
+    }
+    report = eye_control.probe_view(view)
+    assert report["gaze"] == "unavailable"
+    assert report["reason"] == "the socket cannot hold a visible iris shift"
 
 
 def test_identical_frames_are_rejected_as_repeated(tmp_path: Path):
@@ -65,9 +82,9 @@ def test_identical_frames_are_rejected_as_repeated(tmp_path: Path):
     samples = {name: (image.copy(), (4.0, 4.0)) for name in eye_control.GAZES}
     socket_image = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
     ImageDraw.Draw(socket_image).rectangle((2, 2, 5, 5), fill=(255, 255, 255, 255))
-    report = eye_control.judge(samples, ("eye_socket", socket_image, (0, 0), 1), (8, 6))
-    assert report["status"] == "unavailable"
-    assert report["reason"] == "repeated-image"
+    report = eye_control.judge(samples, {"image": socket_image, "x": 0, "y": 0})
+    assert report["gaze"] == "unavailable"
+    assert report["reason"] == "directions repeated the same pixels"
 
 
 def test_shifted_head_is_not_eye_control(tmp_path: Path):
@@ -79,9 +96,9 @@ def test_shifted_head_is_not_eye_control(tmp_path: Path):
         frame = Image.new("RGBA", (12, 12), (0, 0, 0, 0))
         frame.paste(base, (index, 0))
         samples[name] = (frame, (3.0 + index, 3.0))
-    report = eye_control.judge(samples, ("eye_socket", socket_image, (4, 4), 1), (8, 6))
-    assert report["status"] == "unavailable"
-    assert report["reason"] == "identity-lost"
+    report = eye_control.judge(samples, {"image": socket_image, "x": 4, "y": 4})
+    assert report["gaze"] == "unavailable"
+    assert report["reason"] == "pixels outside the eyes moved"
     assert report["probes"]["left"]["pass"] is False
 
 
@@ -92,14 +109,21 @@ def test_offline_stick_rig_passes_the_same_probe(tmp_path: Path):
     stick.build(skin, lambda path: path.name)
     report = eye_control.assess_skin(skin)
     assert report["ready"] is True
+    assert set(report["views"]) == {"front", "left", "right"}
     for view in report["views"].values():
+        assert view["gaze"] == "separable"
         assert view["probes"]["left"]["delta"] < 0
         assert view["probes"]["right"]["delta"] > 0
         assert view["probes"]["up"]["delta"] < 0
         assert view["probes"]["down"]["delta"] > 0
 
 
-def test_procedural_einstein_bust_moves_without_rewriting_assets(tmp_path: Path):
+def test_procedural_einstein_bust_is_not_marked_ready_and_is_not_rewritten(tmp_path: Path):
+    """The bust has iris layers, but the dark pixels in the socket do not travel.
+
+    The web's pupil centroid is that dark mass. Marking the bust separable would
+    disagree with it. The files stay as the painter wrote them.
+    """
     from products.animind_core import rig
 
     skin = tmp_path / "einstein"
@@ -108,10 +132,11 @@ def test_procedural_einstein_bust_moves_without_rewriting_assets(tmp_path: Path)
     report = eye_control.assess_skin(skin)
     after = {path.relative_to(skin).as_posix(): path.read_bytes() for path in skin.rglob("*") if path.is_file()}
     assert after == before
-    assert report["ready"] is True
+    assert report["ready"] is False
+    assert set(report["views"]) == {"front", "left", "right"}
     for view in report["views"].values():
-        assert view["probes"]["left"]["delta"] < 0
-        assert view["probes"]["right"]["delta"] > 0
+        assert view["gaze"] == "unavailable"
+        assert "pupil" in view["reason"]
 
 
 def test_upgrade_keeps_original_bytes_and_reports_missing_layers(tmp_path, monkeypatch):
@@ -128,8 +153,9 @@ def test_upgrade_keeps_original_bytes_and_reports_missing_layers(tmp_path, monke
     before = {path.relative_to(skin).as_posix(): path.read_bytes() for path in skin.rglob("*") if path.is_file()}
     report = eye_control.upgrade_character("einstein_saved")
     assert report["ready"] is False
-    assert report["views"]["front"]["reason"] == "layers-missing"
-    assert report["views"]["left"]["reason"] == "view-missing"
+    assert report["reason"] == "no supplied face view"
+    assert "front" not in report["views"]
+    assert "left" not in report["views"]
     after = {path.relative_to(skin).as_posix(): path.read_bytes() for path in skin.rglob("*") if path.is_file() and path.name != "eye_control.json"}
     assert after == before
     assert (skin / "eye_control.json").is_file()
