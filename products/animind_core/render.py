@@ -29,6 +29,7 @@ from . import (
     characters,
     frameqa,
     languages,
+    owner,
     rig,
     scene,
     settings,
@@ -462,7 +463,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             else "AI"
         )
         topic = (req.get("topic") or default_topic).strip()[:200]
-        work = settings.data_dir() / "jobs" / job_id
+        owner_id = req.get("owner") if isinstance(req.get("owner"), str) else None
+        work = settings.data_dir() / owner.job_rel(owner_id, job_id)
         work.mkdir(parents=True, exist_ok=True)
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
         art = styles.pick(req.get("style") or (chars[0].get("artStyle") if chars else None))
@@ -629,7 +631,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                 frame_qa = frameqa.check(video, trace)
         frame_qa = settle_frame_qa(video, frame_qa, repaired=qa_warnings)
         (work / "frame_qa.json").write_text(json.dumps(frame_qa, indent=2))
-        files = f"{base_url}/v1/files/jobs/{job_id}"
+        files = f"{base_url}/v1/files/{owner.job_rel(owner_id, job_id)}"
         result = {
             "template": template, "scenario": scenario, "characters": chars,
             "script": script, "durationMs": int(duration * 1000), "audioUrl": f"{files}/voice.wav",
@@ -689,13 +691,27 @@ def submit(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is not installed")
     job_id = uuid.uuid4().hex[:12]
+    owner_id = req.get("owner") if isinstance(req.get("owner"), str) else None
     with _LOCK:
-        _JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0.0}
+        _JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0.0, "_owner": owner_id}
     threading.Thread(target=_run, args=(job_id, req, base_url), daemon=True).start()
-    return dict(_JOBS[job_id])
+    return _public(job_id)
 
 
-def get(job_id: str) -> dict[str, Any] | None:
+def get(job_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
+    """The job for this owner. A different owner looks the same as a missing job."""
     with _LOCK:
         job = _JOBS.get(job_id)
-        return dict(job) if job else None
+        if job is None or job.get("_owner") != owner_id:
+            return None
+        return _public_job(job)
+
+
+def _public(job_id: str) -> dict[str, Any]:
+    with _LOCK:
+        job = _JOBS.get(job_id) or {}
+        return _public_job(job)
+
+
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in job.items() if not str(key).startswith("_")}
