@@ -141,8 +141,15 @@ def _tokens(text: str) -> set[str]:
 
 
 def _quotable(sheet: dict[str, Any]) -> list[dict[str, Any]]:
-    """Quotes that may appear as "Citação real": primary sources only."""
-    return [q for q in sheet.get("quotes") or [] if personas.is_primary(q)]
+    """Quotes that may appear as "Citação real": primary and, when checked, verified."""
+    chosen = []
+    for quote in sheet.get("quotes") or []:
+        if not personas.is_primary(quote):
+            continue
+        if not personas.is_verified(quote):
+            continue
+        chosen.append(quote)
+    return chosen
 
 
 def _eligible(sheet: dict[str, Any], max_words: int) -> list[dict[str, Any]]:
@@ -2505,6 +2512,8 @@ def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], topic: str 
                 continue
             if not personas.is_primary(own):
                 errors.append(f"line {i}: quote comes from a secondary source")
+            if not personas.is_verified(own):
+                errors.append(f"line {i}: quote was not found on its source page")
             if not str(q.get("source") or "").strip():
                 errors.append(f"line {i}: quote has no source")
             elif q.get("source") != own.get("source", ""):
