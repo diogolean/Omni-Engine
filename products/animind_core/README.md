@@ -300,6 +300,12 @@ never squashed into a second copy (the old "tear" in close-ups).
 
 ## One-click character: generate-then-verify
 
+The response adds `eyeControl` (`animind.eyeControl.v1`) and `eyeControlReady`.
+A supplied view is `gaze: "separable"` only after the pupil centroid moves
+left, right, up, and down while pixels outside the socket stay put. A view
+that was not drawn is omitted. `eyeRig.maxShift` stays the published travel;
+the proof uses the web's `[8, 4]` fit. See `docs/eye-control.md`.
+
 `POST /v1/characters` (one call) builds a rigged character:
 
 1. **Master** (Gemini nano-banana, closed mouth, 4:5).

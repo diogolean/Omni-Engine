@@ -69,6 +69,25 @@ def load(character_id: str) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
+def _with_eye_control(character: dict[str, Any], skin: Path) -> dict[str, Any]:
+    """Attach the gaze probe. A failed probe is unavailable, never ready."""
+    from .eye_control import SCHEMA, assess_skin  # noqa: PLC0415
+
+    try:
+        report = assess_skin(skin) if skin.is_dir() else {
+            "schema": SCHEMA, "version": 1, "ready": False, "reason": "view-missing", "views": {},
+        }
+    except Exception as exc:  # noqa: BLE001 — character creation must not die on the probe
+        report = {
+            "schema": SCHEMA, "version": 1, "ready": False, "reason": "probe-error",
+            "errorType": type(exc).__name__, "views": {},
+        }
+    out = dict(character)
+    out["eyeControl"] = report
+    out["eyeControlReady"] = bool(report.get("ready"))
+    return out
+
+
 REUSE_MIN_SCORE = 80
 CHARACTER_SET_CAP_USD = 0.30
 
@@ -238,6 +257,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         saved.setdefault("avatarPipeline", avatar_pipeline())
         text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(saved))
         reused = json.loads(text) | {"reused": True}
+        reused = _with_eye_control(reused, skin)
         telemetry.record(
             "avatar", provider="procedural", model=f"stick:{preset}",
             latency_ms=(time.perf_counter() - started) * 1000,
@@ -253,6 +273,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             found["gender"] = casting.public_gender({**found, **req, "name": name, "prompt": subject})
             if req.get("voiceId"):
                 found["voiceId"] = str(req["voiceId"])
+            found = _with_eye_control(found, puppets_dir() / str(found.get("id") or ""))
             if image_cap_blocks(name, art_style):
                 found["qaWarning"] = (
                     found.get("qaWarning")
@@ -366,6 +387,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "viewsContactSheetUrl": url(sheet.build_views(skin, name)),
         "avatarPipeline": avatar_pipeline(),
     }
+    character = _with_eye_control(character, skin)
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     qa_report = character.get("qa") or {}
     if character_type == "rig" and mode not in {"procedural", "mock"}:
