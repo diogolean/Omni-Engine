@@ -29,6 +29,7 @@ from . import (
     characters,
     frameqa,
     languages,
+    personas,
     rig,
     scene,
     settings,
@@ -483,10 +484,11 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             probe, voices[0], work / "probe.mp3", work / "probe.wav", 8.0, 0,
         )
         words_per_s = scripts.measured_rate(probe, len(probe_pcm) / SAMPLE_RATE)
-        written = scripts.write(
-            template, topic, [str(c.get("name") or "") for c in chars], language.script, mode=mode,
-            tone=tone, objective=objective, duration=target_duration, words_per_s=words_per_s,
-        )
+        with personas.user_scope(req.get("personaUser") if isinstance(req.get("personaUser"), str) else None):
+            written = scripts.write(
+                template, topic, [str(c.get("name") or "") for c in chars], language.script, mode=mode,
+                tone=tone, objective=objective, duration=target_duration, words_per_s=words_per_s,
+            )
         lines = written["lines"]
         script_dump = {
             "lines": lines,

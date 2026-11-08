@@ -87,7 +87,15 @@ def post_characters(body: dict, request: Request) -> dict:
 
 @app.post("/v1/render", dependencies=[Depends(require_key)])
 def post_render(body: dict, request: Request) -> dict:
-    return render.submit(body, _base(request))
+    try:
+        user = personas.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    payload = dict(body)
+    payload.pop("personaUser", None)
+    if user:
+        payload["personaUser"] = user
+    return render.submit(payload, _base(request))
 
 
 @app.post("/v1/preview", dependencies=[Depends(require_key)])
@@ -181,15 +189,20 @@ def get_stick_presets() -> dict:
 
 
 @app.get("/v1/personas/sheet", dependencies=[Depends(require_key)])
-def get_sheet(name: str, lang: str = "pt-BR") -> dict:
-    """The persona's quote sheet (Wikiquote, cached): every "Citação real" in a script is one of these, verbatim."""
+def get_sheet(name: str, request: Request, lang: str = "pt-BR") -> dict:
+    """The persona's quote sheet. A quote is verified only when its text is on the source page."""
     nm = personas.persona_name(name)
     if not nm:
         raise HTTPException(400, "name required")
-    sheet = personas.load(nm, lang, fetch=settings.personas_online())
-    keep = ("id", "text", "source", "work", "sourceKind", "url", "wikisource")
+    try:
+        user = personas.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    with personas.user_scope(user):
+        sheet = personas.load(nm, lang, fetch=settings.personas_online())
+    keep = ("id", "text", "source", "work", "sourceKind", "url", "wikisource", "verification", "sourceSite")
     return {"name": nm, "lang": lang, "found": bool(sheet.get("found")), "wikiquote": sheet.get("wikiquote"),
-            "license": sheet.get("license"),
+            "license": sheet.get("license"), "owner": user,
             "quotes": [{k: q[k] for k in keep if k in q} for q in sheet.get("quotes") or []]}
 
 
