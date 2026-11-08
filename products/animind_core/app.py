@@ -11,6 +11,7 @@ from . import (
     API_VERSION,
     casting,
     characters,
+    debate,
     illustrated_scene,
     knowledge,
     languages,
@@ -97,6 +98,35 @@ def post_render(body: dict, request: Request) -> dict:
     if user:
         payload["owner"] = user
     return render.submit(payload, _base(request))
+
+
+@app.post("/v1/debates", dependencies=[Depends(require_key)])
+def post_debate(body: dict, request: Request) -> dict:
+    """A fixture debate script. Paid generation stays off, so the writer is never a live model."""
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    payload = dict(body)
+    payload.pop("owner", None)
+    try:
+        return debate.create(payload, user)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(500, "debate") from exc
+
+
+@app.get("/v1/debates/{debate_id}", dependencies=[Depends(require_key)])
+def get_debate(debate_id: str, request: Request) -> dict:
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    found = debate.get(debate_id, user)
+    if found is None:
+        raise HTTPException(404, "debate not found")
+    return found
 
 
 @app.post("/v1/preview", dependencies=[Depends(require_key)])
