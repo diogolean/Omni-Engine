@@ -738,6 +738,7 @@ def get(job_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
             public["usage"] = contract.document(frame, job_id)
         elif "usage" not in public:
             public["usage"] = contract.empty("unknown", owner_id or "unknown", job_id)
+        _point_at_owner(public, owner_id)
         _hide_missing_preview(public, _job_dir(owner_id, job_id))
         return public
     rows = ledger.rows_for_job(ref_hash(job_id) or "")
@@ -813,6 +814,26 @@ def _load(owner_id: str | None, job_id: str) -> dict[str, Any] | None:
     data["_owner"] = owner_id
     _hide_missing_preview(data, directory)
     return data
+
+
+def _point_at_owner(job: dict[str, Any], owner_id: str | None) -> None:
+    """An owned preview URL stays under that user's tree, never loose ``jobs/``."""
+    if not isinstance(owner_id, str) or not owner_id:
+        return
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return
+    rel = owner.job_rel(owner_id, str(job.get("id") or ""))
+    for key in ("videoUrl", "audioUrl", "frameQaUrl"):
+        url = result.get(key)
+        if not isinstance(url, str) or "/v1/files/" not in url:
+            continue
+        head, tail = url.split("/v1/files/", 1)
+        name = tail.rsplit("/", 1)[-1]
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            result.pop(key, None)
+            continue
+        result[key] = f"{head}/v1/files/{rel}/{name}"
 
 
 def _hide_missing_preview(job: dict[str, Any], directory: Path | None) -> None:
