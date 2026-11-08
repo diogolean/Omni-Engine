@@ -146,12 +146,20 @@ def post_avatar(body: dict, request: Request) -> dict:
         user = avatar_request.accept_user(request.headers.get("x-animind-user"))
     except ValueError as exc:
         raise HTTPException(400, "user") from exc
-    try:
+    if not user:
+        raise HTTPException(403, "login")
+
+    def run() -> dict:
         return avatar_request.generate_avatar(
             body, user, login=request.headers.get("x-animind-user"),
         )
+
+    try:
+        result = protect(request, body, "avatar", run)
     except avatar_request.AvatarRefused as exc:
         raise HTTPException(403, exc.code) from exc
+    result.pop("usage", None)
+    return result
 
 
 @app.get("/v1/avatars/{job_id}", dependencies=[Depends(require_key)])

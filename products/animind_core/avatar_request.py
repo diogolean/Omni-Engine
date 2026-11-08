@@ -160,7 +160,7 @@ def generate_avatar(
             _note(
                 job, "fail", "fail",
                 blocked_before="image generation",
-                error={"code": "generation_not_authorized", "recoverable": True},
+                error={"code": _stop_before_image(), "recoverable": True},
             )
         _JOBS[key] = job
         _save(job)
@@ -245,6 +245,21 @@ def _style(folded: str) -> str | None:
 
 def _has(text: str, words: tuple[str, ...]) -> bool:
     return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text) for word in words)
+
+
+def _stop_before_image() -> str:
+    """Ask the spend guard before any image provider. The body of the guard never calls one."""
+    from .spend.guard import SpendDenied, billable, current
+
+    if current() is None:
+        return "generation_not_authorized"
+    try:
+        with billable(provider="together", model="Qwen/Qwen-Image", operation="image", images=1):
+            raise RuntimeError("provider")
+    except SpendDenied as exc:
+        if exc.block in {None, "disabled"}:
+            return "generation_not_authorized"
+        return exc.block or "generation_not_authorized"
 
 
 def _job_id(key: str) -> str:

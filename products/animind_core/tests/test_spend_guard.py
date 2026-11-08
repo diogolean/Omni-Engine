@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 
@@ -20,7 +21,7 @@ from products.animind_core.spend.guard import (
 )
 from products.animind_core.spend.limits import read_limits
 
-URL = "postgresql://animind_test@127.0.0.1:5432/animind_spend_test"
+URL = os.getenv("ANIMIND_SPEND_DATABASE_URL", "postgresql://animind_test@127.0.0.1:5432/animind_spend_test")
 PROMPT = "PROMPT-SHOULD-NOT-LEAK-99"
 
 
