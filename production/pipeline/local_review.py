@@ -32,18 +32,15 @@ DOGON_SUBJECT = "The Sirius Mystery and the Dogon"
 # the original QA file or the published video. Claims stay attributed.
 # No ancient-record sentence, and no calendar-to-orbit measurement.
 DOGON_NARRATION = (
-    "The Sirius Mystery is a published claim about the Dogon of Mali, "
-    "not a dated artefact. Marcel Griaule and Germaine Dieterlen recorded "
-    "Dogon star lore in the twentieth century, and their interviews mention "
-    "a companion to Sirius. Robert Temple's 1976 book treated that lore as "
-    "knowledge of Sirius B from before modern telescopes. Historians dispute "
-    "that step. Those interviews are not an ancient Dogon document, and they "
-    "are not a measurement of ceremonial calendars against the star's orbit. "
-    "The sigui is a Dogon ceremony on a long cycle. Treating that cycle as "
-    "Sirius B is an interpretation, not an observation the Dogon wrote down. "
-    "At the Bandiagara escarpment the cliff villages are a documented "
-    "community. The open question is how much of the Sirius story comes from "
-    "Dogon teachers, and how much comes from the way the interviews were asked."
+    "The Sirius Mystery is Robert Temple's 1976 book about published accounts "
+    "of Dogon star lore. Griaule and Dieterlen published accounts of that lore "
+    "in the twentieth century. Temple interpreted those accounts as evidence "
+    "of earlier knowledge of Sirius B. Later researchers challenged that "
+    "interpretation and raised questions about outside contact and the "
+    "interviews themselves. UNESCO lists the Cliff of Bandiagara and describes "
+    "the Sigui as a ceremony held every sixty years. That cycle is not, by "
+    "itself, evidence of a measured stellar orbit. It does not establish "
+    "independently documented, pre-contact knowledge of Sirius B."
 )
 
 

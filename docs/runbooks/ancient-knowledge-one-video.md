@@ -163,9 +163,20 @@ library. It does not write an approval file.
 
 The QA json `video_path` must name
 `reel_did_an_african_tribe_map_an_invi_v01.mp4`. That file is passed to
-`--protect-path`. The topic is the QA `topic` when its slug is
-`the_sirius_mystery_dogon_4ed43c`; otherwise the stem itself is the topic.
-A different slug aborts before render.
+`--protect-path`. The spoken subject is always "The Sirius Mystery and the
+Dogon". The stem `the_sirius_mystery_dogon_4ed43c` is only `--expect-stem`.
+An empty QA topic, or a topic that is the stem, still speaks that title.
+A different episode aborts before render.
+
+The narration cites published accounts, Temple's 1976 book, later
+researchers, and two UNESCO pages: the Cliff of Bandiagara listing
+(https://whc.unesco.org/en/list/516/) and decision 8303, which describes
+the Sigui as a ceremony held every sixty years
+(https://whc.unesco.org/en/decisions/8303/). Van Beek's 1991 Current
+Anthropology article (DOI 10.1086/203932) and Temple's own note are the
+controversy sources. Those papers were not read in full for this script.
+The script does not say the accounts are direct recordings, and it does
+not say a ceremonial cycle measures a stellar orbit.
 
 `--local-review` writes under the existing `OUTPUT_PATH` (the output root
 the process already uses, including a G: root):

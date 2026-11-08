@@ -214,6 +214,7 @@ def generate_and_gate(
             reason = f"{fault}_still"
             last_verdict = {
                 "attempt": attempt + 1,
+                "image_name": path.name,
                 "prompt": current_prompt,
                 "qa_status": "rejected",
                 "rejection_reason": reason,
@@ -240,6 +241,7 @@ def generate_and_gate(
         )
         verdict = dict(verdict or {})
         verdict["attempt"] = attempt + 1
+        verdict["image_name"] = path.name
         verdict["prompt"] = current_prompt
         last_verdict = verdict
         attempts.append(verdict)

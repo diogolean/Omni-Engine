@@ -510,6 +510,52 @@ def _beat_visual(
     )
 
 
+def _place_phrase(text: str) -> str:
+    low = (text or "").lower()
+    if "bandiagara" in low:
+        return "the Cliff of Bandiagara"
+    if "escarpment" in low:
+        return "the escarpment"
+    if "sahel" in low:
+        return "the Sahel"
+    return ""
+
+
+def _claim_line(text: str) -> bool:
+    low = (text or "").lower()
+    markers = (
+        "debate", "theory", "suggest", "legend", "records", "dates to",
+        "researcher", "measurement", "puzzling", "believe", "interpret",
+        "orbit", "sigui", "published", "pre-contact", "ancient",
+    )
+    return any(marker in low for marker in markers)
+
+
+def _illustrative_subject(spoken: str, script: str) -> str:
+    """A place or an object, with an explicit illustration label.
+
+    A claim is not staged as a person. A generated frame is not described
+    as a verified photograph of the community.
+    """
+    low = (spoken or "").lower()
+    if re.search(r"\bmasks?\b", low):
+        return (
+            "a ceremonial mask filling the frame as an object, with no wearer. "
+            "Illustrative. Not a verified photograph of the community, and not a person."
+        )
+    here = _place_phrase(spoken)
+    episode = _place_phrase(script)
+    where = here or episode
+    if not where and not _claim_line(spoken):
+        return ""
+    land = where or "the place already named in this episode"
+    return (
+        f"an illustrative view of {land}. "
+        "Show the land. Do not depict a person acting out the sentence. "
+        "This is not a verified photograph of the community and it does not prove the spoken claim."
+    )
+
+
 def visual_for_beat(
     brief: EpisodeBrief,
     spoken: str,
@@ -611,6 +657,9 @@ def visual_for_beat(
             "The picture is that object"
         )
         return _beat_visual("object", subject, place_clause, avoid, True, True, label, others)
+    illustrated = _illustrative_subject(text, script)
+    if illustrated:
+        return BeatVisual("illustrative", illustrated, "", avoid, True, True)
     literal = text[:180] or brief.hero_short
     subject = f"only what this sentence shows: {literal}"
     return BeatVisual("site", subject, "", avoid, False, False)

@@ -110,10 +110,10 @@ def test_a_rejected_person_retries_as_a_place() -> None:
         episode_subject="Dogon knowledge of Sirius",
     )
     low = text.lower()
-    assert "no detailed faces" in low
-    assert "spoken line is context only" in low
+    assert "the nommo taught the dogon" in low
     assert "hoodie" in low
-    assert "primary subject:" not in low
+    assert "do not draw a person" in low
+    assert "do not switch the story" in low
 
 
 def test_a_blank_frame_retries_as_a_place() -> None:
@@ -123,7 +123,9 @@ def test_a_blank_frame_retries_as_a_place() -> None:
         rejection_reason="blur:1",
         channel="ancient_knowledge",
     )
-    assert "spoken line is context only" in text.lower()
+    low = text.lower()
+    assert "the nommo taught the dogon" in low
+    assert "do not switch the story" in low
 
 
 def test_a_wrong_object_stays_an_object_on_this_channel() -> None:

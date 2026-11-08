@@ -511,6 +511,22 @@ def frame_fault(path: Path | str) -> str:
         buckets[key] = buckets.get(key, 0) + 1
     if buckets and max(buckets.values()) / len(pixels) >= 0.90:
         return "flat"
+    # The fallback card is one field colour plus a pale bar. A box downsample
+    # averages a noisy photograph toward one colour, so this check samples
+    # the original pixels. JPEG still leaves the card's field in one family.
+    sampled = list(image.resize((32, 32), Image.Resampling.NEAREST).getdata())
+    near_buckets: dict[tuple[int, int, int], int] = {}
+    for red, green, blue in sampled:
+        key = (red // 16, green // 16, blue // 16)
+        near_buckets[key] = near_buckets.get(key, 0) + 1
+    mode = max(near_buckets, key=near_buckets.get)
+    family = sum(
+        count
+        for key, count in near_buckets.items()
+        if all(abs(key[i] - mode[i]) <= 1 for i in range(3))
+    )
+    if family / len(sampled) >= 0.85:
+        return "flat"
     extremes = sum(1 for value in luma if value < 2 or value > 253)
     if extremes / len(luma) > 0.45:
         return "glitch"

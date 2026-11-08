@@ -88,23 +88,31 @@ def refine_prompt(
     the judge and the model still see the exact line.
 
     On a channel whose own Flux list forbids faces, a blank frame or a
-    rejected person is not asked for again. The next prompt is an allowed
-    place photograph. The judge threshold is unchanged.
+    rejected person is retried for this same sentence. The picture stays
+    the place or the object the sentence names. It does not become a
+    different story. The judge threshold is unchanged.
     """
     spoken = (sentence or "").strip() or (base_prompt or "").strip()[:240]
     if channel and _scene_retry(rejection_reason):
         from production.formats.economic_reel.artefact.flux_policy import (
             channel_bans_faces,
-            safe_flux_prompt,
         )
 
         if channel_bans_faces(channel):
-            return safe_flux_prompt(
-                spoken,
-                geography=(site or episode_subject or "").strip(),
-                rejection=(rejection_reason or "").strip(),
-                variant=int(attempt),
-                negatives=("hoodie", "mask", "modern clothing", "modern person"),
+            from production.formats.economic_reel.grounding.brief import (
+                build_episode_brief,
+                visual_for_beat,
+            )
+
+            brief = build_episode_brief(episode_subject or "", spoken)
+            visual = visual_for_beat(brief, spoken, script=episode_subject or spoken)
+            reason = (rejection_reason or "").strip()
+            return (
+                f"PRIMARY SUBJECT: {visual.subject} "
+                f'SPOKEN BEAT: "{spoken}". '
+                f"The previous image was rejected: {reason}. "
+                "Do not draw a person, a hoodie, or a mask worn as a costume. "
+                "Keep this same sentence. Do not switch the story to a different picture."
             )
     names = [e for e in (entities or []) if e][:4]
     subject = spoken

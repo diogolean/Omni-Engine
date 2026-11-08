@@ -31,7 +31,93 @@ from production.pipeline.local_review import (
 )
 
 _OTHER_LINE = "The Dogon people maintain their knowledge predates any European contact."
-_THIS_LINE = "The Sirius Mystery is a published claim about the Dogon of Mali, not a dated artefact."
+_THIS_LINE = (
+    "The Sirius Mystery is Robert Temple's 1976 book about published accounts "
+    "of Dogon star lore."
+)
+
+
+def test_the_bar_card_is_flat_and_a_textured_frame_is_not(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from production.formats.economic_reel.artefact.reuse import _plain_fallback
+    from production.qa.mp4_gate import frame_fault
+
+    for index in (2, 3, 5, 9, 10, 11, 13):
+        path = _plain_fallback(tmp_path / f"beat{index:02d}.jpg", index)
+        assert frame_fault(path) == "flat"
+    photo = tmp_path / "land.jpg"
+    image = Image.new("RGB", (96, 160))
+    pixels = image.load()
+    for y in range(160):
+        for x in range(96):
+            pixels[x, y] = ((x * 7 + y) % 256, (y * 5) % 200, (x * 3) % 180)
+    image.save(photo, format="JPEG", quality=90)
+    assert frame_fault(photo) == ""
+
+
+def test_a_fallback_card_does_not_replace_the_judged_image(tmp_path: Path) -> None:
+    from production.qa.models import StillGateResult, preserve_judged_still
+
+    judged = tmp_path / "attempt_03.png"
+    judged.write_bytes(b"png")
+    card = tmp_path / "act03_fallback.jpg"
+    card.write_bytes(b"jpg")
+    result = StillGateResult(
+        path=judged,
+        extra_generations=2,
+        publishable=False,
+        blocked_reason="documentary_fail:anachronism",
+        attempts=[
+            {
+                "attempt": 1,
+                "image_name": "attempt_01.png",
+                "prompt": "SPOKEN BEAT: the sentence under test.",
+                "rejection_reason": "anachronism",
+                "relevance_score": 0.1,
+                "qa_status": "scored",
+            },
+            {
+                "attempt": 3,
+                "image_name": "attempt_03.png",
+                "prompt": "SPOKEN BEAT: the sentence under test.",
+                "rejection_reason": "anachronism",
+                "relevance_score": 0.0,
+                "qa_status": "scored",
+            },
+        ],
+    )
+    row = result.beat_row(index=2, text="They encountered a people with detailed knowledge of invisible stars.")
+    preserve_judged_still(row, card)
+    assert row["image_path"].endswith("attempt_03.png")
+    assert row["judged_image_path"].endswith("attempt_03.png")
+    assert row["substitute_name"] == "act03_fallback.jpg"
+    assert [item["image_name"] for item in row["attempt_log"]] == [
+        "attempt_01.png",
+        "attempt_03.png",
+    ]
+
+
+def test_a_claim_is_an_illustrative_place_not_a_person() -> None:
+    from production.formats.economic_reel.grounding.prompt import ground_image_prompt
+
+    script = (
+        "French anthropologists arrived in the Bandiagara Escarpment of Mali. "
+        "Historians debate whether oral traditions preserved data from millennia past."
+    )
+    prompt = ground_image_prompt(
+        topic=DOGON_SUBJECT,
+        script=script,
+        spoken="Historians debate whether oral traditions preserved data from millennia past.",
+        channel="ancient_knowledge",
+    )
+    low = prompt.lower()
+    assert "cliff of bandiagara" in low
+    assert "do not depict a person" in low
+    assert "not a verified photograph" in low
+    assert "only what this sentence shows" not in low
+    assert "4ed43c" not in low
+    assert "episode object:" not in low
 
 
 def test_the_stem_is_not_a_spoken_subject() -> None:
@@ -53,9 +139,14 @@ def test_reviewed_narration_does_not_invent_records_or_speak_the_stem() -> None:
     assert "nineteenth century" not in low
     assert "align" not in low
     assert "griaule" in low
-    assert "temple" in low
-    assert "dispute" in low
-    assert "interpretation" in low
+    assert "1976" in text
+    assert "later researchers" in low
+    assert "published accounts" in low
+    assert "sixty years" in low
+    assert "not, by itself" in low
+    assert "does not establish" in low
+    assert "historians" not in low
+    assert "wrote down" not in low
     assert len(text.split()) <= soft_word_ceiling(AK_NARRATION_S)
     assert grounding_problem(text, DOGON_SUBJECT) == ""
 

@@ -7,6 +7,36 @@ from pathlib import Path
 from typing import Any
 
 
+def _attempt_log(attempts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per generation. The image name is the file the judge saw."""
+    rows: list[dict[str, Any]] = []
+    for item in attempts:
+        if not isinstance(item, dict):
+            continue
+        rows.append(
+            {
+                "attempt": item.get("attempt"),
+                "image_name": str(item.get("image_name") or ""),
+                "prompt": " ".join(str(item.get("prompt") or "").split())[:1500],
+                "rejection_reason": " ".join(str(item.get("rejection_reason") or "").split())[:400],
+                "relevance_score": item.get("relevance_score"),
+                "qa_status": str(item.get("qa_status") or ""),
+            }
+        )
+    return rows
+
+
+def preserve_judged_still(row: dict[str, Any], substitute: Path | str) -> None:
+    """Keep the picture the judge scored when a card is offered instead.
+
+    ``image_path`` stays the judged file. The card is named apart from it.
+    """
+    row["judged_image_path"] = str(row.get("image_path") or "")
+    row["substitute_name"] = Path(substitute).name
+    row["passed"] = False
+    row["reuse"] = "fallback"
+
+
 @dataclass
 class StillGateResult:
     """Outcome of generate → score → retry.
@@ -44,5 +74,6 @@ class StillGateResult:
             "model_id": last.get("model_id"),
             "qa_status": last.get("qa_status") or "",
             "attempts": len(self.attempts),
+            "attempt_log": _attempt_log(self.attempts),
             "first_pass": self.first_pass,
         }

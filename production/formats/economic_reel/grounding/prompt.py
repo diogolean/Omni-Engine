@@ -328,7 +328,7 @@ def ground_image_prompt(
             f"THIS BEAT'S OBJECT: {visual.object_label}. "
             "This frame shows this object."
         )
-    elif brief.hero_short:
+    elif brief.hero_is_object and brief.hero_short:
         lines.append(
             f"EPISODE OBJECT: {brief.hero_short}. "
             "Every frame shows this same subject, not a substitute landmark."
@@ -342,15 +342,31 @@ def ground_image_prompt(
         lines.append(f"SETTING CONTEXT: {anchors}.")
     if visual.place_clause:
         lines.append(visual.place_clause)
-    lines.append(_camera(visual.kind, shot_text, visual.suppress_wide))
-    light = _lighting(visual.kind, lighting_text, visual.suppress_fire)
-    if light:
-        lines.append(light)
+    if visual.kind == "illustrative":
+        lines.append(
+            "CAMERA: wide view of the land or the object named above. "
+            "No person in the foreground."
+        )
+        lines.append(
+            "ILLUSTRATIVE: not a verified photograph of the community, "
+            "and not proof of the spoken sentence."
+        )
+    else:
+        lines.append(_camera(visual.kind, shot_text, visual.suppress_wide))
+        light = _lighting(visual.kind, lighting_text, visual.suppress_fire)
+        if light:
+            lines.append(light)
     if hints.accepted:
         lines.append(f"PREVIOUSLY ACCEPTED DEPICTION: {hints.accepted[0]}")
-    lines.append(
-        "STYLE LOCK: photoreal documentary photograph from a real camera, "
-        "natural materials and dust, 35mm film grain, full-bleed, "
-        "no text, no watermark, no border."
-    )
+    if visual.kind == "illustrative":
+        lines.append(
+            "STYLE: illustrative frame, natural land or the named object, "
+            "no text, no watermark, no portrait."
+        )
+    else:
+        lines.append(
+            "STYLE LOCK: photoreal documentary photograph from a real camera, "
+            "natural materials and dust, 35mm film grain, full-bleed, "
+            "no text, no watermark, no border."
+        )
     return " ".join(lines)
