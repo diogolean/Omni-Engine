@@ -14,6 +14,7 @@ from . import (
     illustrated_scene,
     knowledge,
     languages,
+    owner,
     personas,
     preview,
     render,
@@ -119,13 +120,15 @@ def post_characters(body: dict, request: Request) -> dict:
 @app.post("/v1/render", dependencies=[Depends(require_key)])
 def post_render(body: dict, request: Request) -> dict:
     try:
-        user = personas.accept_user(request.headers.get("x-animind-user"))
+        user = owner.accept_user(request.headers.get("x-animind-user"))
     except ValueError as exc:
         raise HTTPException(400, "user") from exc
     payload = dict(body)
     payload.pop("personaUser", None)
+    payload.pop("owner", None)
     if user:
         payload["personaUser"] = user
+        payload["owner"] = user
     return protect(request, body, "render", lambda: render.submit(payload, _base(request)))
 
 
@@ -151,8 +154,12 @@ def post_scenarios(body: dict) -> dict:
 
 
 @app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_key)])
-def get_job(job_id: str) -> dict:
-    job = render.get(job_id)
+def get_job(job_id: str, request: Request) -> dict:
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    job = render.get(job_id, user)
     if job is None:
         raise HTTPException(404, "job not found")
     return job
@@ -264,11 +271,13 @@ def get_deep_job(job_id: str) -> dict:
 
 
 @app.get("/v1/files/{path:path}")
-def get_file(path: str) -> FileResponse:
-    """Generated art and media. Ids are random; paths are confined to the data dir."""
-    root = settings.data_dir().resolve()
-    for sub in ("assets", ""):
-        target = (root / sub / path).resolve()
-        if target.is_relative_to(root) and target.is_file() and target.suffix in {".png", ".json", ".wav", ".mp4", ".mp3"}:
-            return FileResponse(target)
-    raise HTTPException(404, "not found")
+def get_file(path: str, request: Request) -> FileResponse:
+    """Generated media. Files under a user hash are readable only by that user."""
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    target = owner.readable_file(path, user)
+    if target is None:
+        raise HTTPException(404, "not found")
+    return FileResponse(target)

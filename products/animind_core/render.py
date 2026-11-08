@@ -30,6 +30,7 @@ from . import (
     characters,
     frameqa,
     languages,
+    owner,
     personas,
     rig,
     scene,
@@ -474,7 +475,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             else "AI"
         )
         topic = (req.get("topic") or default_topic).strip()[:200]
-        work = settings.data_dir() / "jobs" / job_id
+        owner_id = req.get("owner") if isinstance(req.get("owner"), str) else None
+        work = settings.data_dir() / owner.job_rel(owner_id, job_id)
         work.mkdir(parents=True, exist_ok=True)
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
         art = styles.pick(req.get("style") or (chars[0].get("artStyle") if chars else None))
@@ -642,7 +644,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                 frame_qa = frameqa.check(video, trace)
         frame_qa = settle_frame_qa(video, frame_qa, repaired=qa_warnings)
         (work / "frame_qa.json").write_text(json.dumps(frame_qa, indent=2))
-        files = f"{base_url}/v1/files/jobs/{job_id}"
+        files = f"{base_url}/v1/files/{owner.job_rel(owner_id, job_id)}"
         result = {
             "template": template, "scenario": scenario, "characters": chars,
             "script": script, "durationMs": int(duration * 1000), "audioUrl": f"{files}/voice.wav",
@@ -707,32 +709,41 @@ def submit(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     frame = current()
     if frame is not None:
         frame.job_id = job_id
-    job: dict[str, Any] = {"id": job_id, "status": "queued", "progress": 0.0}
+    owner_id = req.get("owner") if isinstance(req.get("owner"), str) else None
+    job: dict[str, Any] = {"id": job_id, "status": "queued", "progress": 0.0, "_owner": owner_id}
     if frame is not None:
         job["_frame"] = frame
     with _LOCK:
         _JOBS[job_id] = job
     ctx = contextvars.copy_context()
     threading.Thread(target=ctx.run, args=(_run, job_id, req, base_url), daemon=True).start()
-    return {key: value for key, value in job.items() if key != "_frame"}
+    return _public_job(job)
 
 
-def get(job_id: str) -> dict[str, Any] | None:
+def get(job_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
+    """The job for this owner, including usage when a spend frame or ledger row exists."""
     from .spend import contract, ledger  # noqa: PLC0415
-    from .spend.guard import ref_hash  # noqa: PLC0415
+    from .spend.guard import ref_hash, user_hash  # noqa: PLC0415
 
     with _LOCK:
         job = _JOBS.get(job_id)
-        stored = dict(job) if job else None
+        if job is None or job.get("_owner") != owner_id:
+            stored = None
+        else:
+            stored = dict(job)
     if stored is not None:
         frame = stored.pop("_frame", None)
+        public = _public_job(stored)
         if frame is not None:
-            stored["usage"] = contract.document(frame, job_id)
-        elif "usage" not in stored:
-            stored["usage"] = contract.empty("unknown", "unknown", job_id)
-        return stored
+            public["usage"] = contract.document(frame, job_id)
+        elif "usage" not in public:
+            public["usage"] = contract.empty("unknown", "unknown", job_id)
+        return public
     rows = ledger.rows_for_job(ref_hash(job_id) or "")
     if not rows:
+        return None
+    expected = owner_id if owner_id is not None else user_hash("anonymous")
+    if str(rows[0].get("user_id") or "") != expected:
         return None
     return {
         "id": job_id,
@@ -745,3 +756,13 @@ def get(job_id: str) -> dict[str, Any] | None:
             job_id=job_id,
         ),
     }
+
+
+def _public(job_id: str) -> dict[str, Any]:
+    with _LOCK:
+        job = _JOBS.get(job_id) or {}
+        return _public_job(job)
+
+
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in job.items() if not str(key).startswith("_")}
