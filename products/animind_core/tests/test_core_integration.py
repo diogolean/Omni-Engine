@@ -72,8 +72,20 @@ def test_verified_persona_avatar_and_spend_stay_with_the_owner(schema, monkeypat
     own = {**H, "X-Animind-User": "user_one", "X-Request-Id": "req_integration1"}
     sheet = client.get("/v1/personas/sheet", params={"name": "Ada", "lang": "pt-BR"}, headers=own)
     assert sheet.status_code == 200
+    assert "owner" not in sheet.json()
+    assert user not in sheet.text
+    assert sheet.json()["fixture"] == "labeled"
     assert sheet.json()["quotes"][0]["verification"] == "verified"
     assert sheet.json()["quotes"][0]["source"] == "labeled fixture"
+    hidden_sheet = client.get(
+        "/v1/personas/sheet", params={"name": "Ada", "lang": "pt-BR"},
+        headers={**H, "X-Animind-User": "user_two"},
+    )
+    assert hidden_sheet.status_code == 404
+    assert hidden_sheet.json() == {"detail": "not found"}
+    assert user not in hidden_sheet.text
+    assert "labeled fixture" not in hidden_sheet.text
+    assert "users/" not in hidden_sheet.text
     plan = client.post("/v1/avatars/plan", headers=own, json={"prompt": "Discurso de Ada", "language": "pt"})
     assert plan.status_code == 200
     assert plan.json()["intent"] == "monologue"
@@ -89,6 +101,11 @@ def test_verified_persona_avatar_and_spend_stay_with_the_owner(schema, monkeypat
     assert job["events"][-1]["error"]["recoverable"] is True
     assert job["providerCalls"] == 0
     assert "usage" not in job
+    published = plan.text + made.text
+    assert "production/cost" not in published
+    assert "usdPerImage" not in published
+    assert "gemini" not in published.lower()
+    assert "deepseek" not in published.lower()
     assert calls == []
     seen = client.get(f"/v1/avatars/{job['id']}", headers=own)
     assert seen.status_code == 200

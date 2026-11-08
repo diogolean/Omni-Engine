@@ -327,10 +327,20 @@ def get_sheet(name: str, request: Request, lang: str = "pt-BR") -> dict:
         raise HTTPException(400, "user") from exc
     with personas.user_scope(user):
         sheet = personas.load(nm, lang, fetch=settings.personas_online())
+    if not sheet.get("found"):
+        raise HTTPException(404, "not found")
     keep = ("id", "text", "source", "work", "sourceKind", "url", "wikisource", "verification", "sourceSite")
-    return {"name": nm, "lang": lang, "found": bool(sheet.get("found")), "wikiquote": sheet.get("wikiquote"),
-            "license": sheet.get("license"), "owner": user,
-            "quotes": [{k: q[k] for k in keep if k in q} for q in sheet.get("quotes") or []]}
+    body = {
+        "name": nm,
+        "lang": lang,
+        "found": True,
+        "wikiquote": sheet.get("wikiquote"),
+        "license": sheet.get("license"),
+        "quotes": [{k: q[k] for k in keep if k in q} for q in sheet.get("quotes") or []],
+    }
+    if "fixture" in sheet:
+        body["fixture"] = sheet["fixture"]
+    return body
 
 
 @app.post("/v1/personas/deep", dependencies=[Depends(require_key)])

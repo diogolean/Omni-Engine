@@ -98,7 +98,6 @@ def plan(body: dict[str, Any] | None = None, *, user: str | None = None) -> dict
         "clientPremiumIgnored": True,
         "entitlement": "server" if entitled else "absent",
         "reasons": reasons,
-        "prices": KNOWN_PRICES,
         "outputContract": {
             "minWidth": MIN_NATIVE_WIDTH,
             "heightGreaterThanWidth": True,

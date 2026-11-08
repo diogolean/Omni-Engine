@@ -127,14 +127,20 @@ def test_resolution_request_does_not_generate(client, monkeypatch):
     assert decision["entitlement"] == "absent"
     assert decision["clientPremiumIgnored"] is True
     assert "adapter_has_no_4k_preset" in decision["reasons"]
-    assert decision["prices"]["4K"] is None
+    assert "prices" not in decision
     assert decision["upscale"] == "refused"
-    plan = client.post("/v1/portraits/plan", headers=H, json={"requestedResolution": "1k"}).json()
-    assert plan["productPreset"] == "1k"
-    assert plan["mappedPreset"] == "1K"
-    assert plan["consume"] is False
-    assert plan["actualPixels"] is None
-    assert "factory_call_omits_image_size" in plan["reasons"]
+    plan = client.post("/v1/portraits/plan", headers=H, json={"requestedResolution": "1k"})
+    assert plan.status_code == 200
+    published = plan.text + refused.text
+    assert "production/cost" not in published
+    assert "usdPerImage" not in published
+    assert "gemini" not in published.lower()
+    plan_body = plan.json()
+    assert plan_body["productPreset"] == "1k"
+    assert plan_body["mappedPreset"] == "1K"
+    assert plan_body["consume"] is False
+    assert plan_body["actualPixels"] is None
+    assert "factory_call_omits_image_size" in plan_body["reasons"]
     with pytest.raises(portrait.PortraitRefused):
         characters.create_character({"requestedResolution": "1k", "name": "Ada"}, "http://test")
 
