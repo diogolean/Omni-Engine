@@ -145,9 +145,24 @@ picture that is not a flat or black card. That is not yet proof the
 picture is the wrong subject. A `sidecar_matches_spoken` of false means
 the file was accepted for a different sentence.
 
-## The command
+## One still before another video
 
-A full render is not the next step. When a render is wanted, from the
+The 01:05 run drew a hooded figure and the word LAND. The stored attempt
+prompts said "Show the land" and "Do not depict a person". FLUX Schnell is
+posted with `guidance_scale` 0, so that positive prompt is the conditioner
+and the negative list does not steer the frame. The retry also replaced
+"Cliff of Bandiagara" with "the place already named in this episode".
+
+The still command prints the prompt that would be sent. It does not render
+a video and it does not upload. Add `--generate` only when this machine
+has the image API key, for one image:
+
+```powershell
+python -m production.pipeline.local_review still
+```
+
+A full render is not the next step until that still is a Mali cliff
+without a figure and without lettering. When a render is wanted, from the
 repository root, in PowerShell. This is the render entry.
 `--dry-run` does not apply: that flag is ECONOMIC_REEL_LOFI only.
 Do not pass `--publish-youtube`. The script does not set

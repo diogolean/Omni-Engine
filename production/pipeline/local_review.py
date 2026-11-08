@@ -557,6 +557,67 @@ def _qa_topic_is_this_episode(data: dict[str, Any]) -> bool:
     return True
 
 
+def still_payload() -> dict[str, Any]:
+    """The positive prompt FLUX Schnell would receive for one Dogon beat.
+
+    Schnell is posted with guidance 0, so a negative list does not steer the
+    picture. This is the string to inspect before any video render.
+    """
+    from production.formats.economic_reel.grounding.prompt import ground_image_prompt
+    from production.providers.image.together_image import sanitize_prompt_for_flux
+
+    spoken = DOGON_NARRATION.split(".", 1)[0].strip() + "."
+    raw = ground_image_prompt(
+        topic=DOGON_SUBJECT,
+        script=DOGON_NARRATION,
+        spoken=spoken,
+    )
+    sent = sanitize_prompt_for_flux(raw, visual_role="documentary")
+    return {
+        "schema": 1,
+        "model": "black-forest-labs/FLUX.1-schnell",
+        "guidance_scale": 0.0,
+        "negative_conditions_this_model": False,
+        "spoken": spoken,
+        "prompt_sent": sent,
+        "distribution": "off",
+        "note": (
+            "One still only. guidance_scale 0 means the positive prompt is the "
+            "conditioner. No video and no upload."
+        ),
+    }
+
+
+def still_cli(*, generate: bool = False, dest: Path | None = None) -> dict[str, Any]:
+    """Print the payload. Generate one image only when asked and a key exists."""
+    import os
+
+    payload = still_payload()
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if not generate:
+        print("[local-review] payload only. Pass --generate for one image.")
+        return payload
+    if not (os.getenv("DEEPINFRA_API_KEY") or os.getenv("TOGETHER_API_KEY")):
+        raise SystemExit(
+            "[local-review] no image API key in this process. Payload printed. Not generating."
+        )
+    from production.providers.image.image_provider import get_image_adapter
+
+    folder = dest or Path("outputs") / "still_smoke"
+    folder.mkdir(parents=True, exist_ok=True)
+    adapter = get_image_adapter()
+    image = adapter.generate(
+        payload["prompt_sent"],
+        output_stem="bandiagara_smoke",
+        output_directory=folder,
+        avatar_mode="OFF",
+        visual_role="documentary",
+    )
+    payload["image_name"] = Path(image).name
+    print(f"[local-review] still {payload['image_name']}")
+    return payload
+
+
 def render_from_qa(qa_path: Path) -> None:
     """Build the reviewed argv and hand it to the pipeline CLI."""
     from production.pipeline.cli_parser import parse_cli_args
@@ -581,6 +642,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     evidence.add_argument("--qa", type=Path, required=True)
     evidence.add_argument("--work", type=Path, default=None)
+    still = sub.add_parser(
+        "still",
+        help="Print one FLUX prompt. Optional single image. No video and no upload.",
+    )
+    still.add_argument("--generate", action="store_true")
+    still.add_argument("--dest", type=Path, default=None)
     sample = sub.add_parser("sample", help="Sample an existing mp4. No upload, no approval.")
     sample.add_argument("--video", type=Path, required=True)
     sample.add_argument("--dest", type=Path, default=None)
@@ -590,6 +657,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "evidence":
         evidence_cli(args.qa, args.work)
+        return 0
+    if args.command == "still":
+        still_cli(generate=bool(args.generate), dest=args.dest)
         return 0
     manifest = sample_cli(args.video, args.dest)
     print(f"[local-review] sample frames={len(manifest['frames'])}")

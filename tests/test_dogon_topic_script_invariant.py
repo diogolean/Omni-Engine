@@ -113,11 +113,30 @@ def test_a_claim_is_an_illustrative_place_not_a_person() -> None:
     )
     low = prompt.lower()
     assert "cliff of bandiagara" in low
-    assert "do not depict a person" in low
-    assert "not a verified photograph" in low
-    assert "only what this sentence shows" not in low
+    assert "mali" in low
+    assert "sandstone" in low
+    assert "person" not in low
+    assert "hoodie" not in low
+    assert "show the land" not in low
+    assert "illustrative" not in low
+    assert "place already named" not in low
     assert "4ed43c" not in low
-    assert "episode object:" not in low
+
+
+def test_the_sent_flux_prompt_keeps_mali_and_drops_the_drawn_words() -> None:
+    from production.pipeline.local_review import still_payload
+    from production.providers.image.together_image import sanitize_prompt_for_flux
+
+    payload = still_payload()
+    sent = sanitize_prompt_for_flux(payload["prompt_sent"], visual_role="documentary")
+    low = sent.lower()
+    assert payload["guidance_scale"] == 0.0
+    assert payload["negative_conditions_this_model"] is False
+    assert "cliff of bandiagara" in low
+    assert "mali" in low
+    assert "sandstone" in low
+    for banned in ("person", "hoodie", "illustrative", "do not", "show the land", "place already named"):
+        assert banned not in low
 
 
 def test_the_stem_is_not_a_spoken_subject() -> None:

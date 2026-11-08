@@ -158,5 +158,7 @@ def test_a_black_png_retries_as_a_place_before_the_judge(tmp_path: Path) -> None
     assert len(judged) == 1
     assert judged[0].name != "act05.png" or "r02" in judged[0].name
     low = prompts[1].lower()
-    assert "the nommo taught the dogon about sirius" in low
-    assert "do not draw a person" in low
+    assert "cliff of bandiagara" in low
+    assert "mali" in low
+    assert "person" not in low
+    assert "hoodie" not in low

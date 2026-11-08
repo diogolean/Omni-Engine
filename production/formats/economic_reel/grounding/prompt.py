@@ -316,6 +316,10 @@ def ground_image_prompt(
         next_spoken=next_spoken,
         locked_object=locked_object,
     )
+    if visual.kind == "illustrative":
+        # Schnell guidance is 0. Extra sentences ("show the land", "do not
+        # depict a person") are drawn. The sentence above is the payload.
+        return visual.subject
     hints = recall(
         channel=channel,
         topic=brief.topic or topic,
@@ -342,31 +346,15 @@ def ground_image_prompt(
         lines.append(f"SETTING CONTEXT: {anchors}.")
     if visual.place_clause:
         lines.append(visual.place_clause)
-    if visual.kind == "illustrative":
-        lines.append(
-            "CAMERA: wide view of the land or the object named above. "
-            "No person in the foreground."
-        )
-        lines.append(
-            "ILLUSTRATIVE: not a verified photograph of the community, "
-            "and not proof of the spoken sentence."
-        )
-    else:
-        lines.append(_camera(visual.kind, shot_text, visual.suppress_wide))
-        light = _lighting(visual.kind, lighting_text, visual.suppress_fire)
-        if light:
-            lines.append(light)
+    lines.append(_camera(visual.kind, shot_text, visual.suppress_wide))
+    light = _lighting(visual.kind, lighting_text, visual.suppress_fire)
+    if light:
+        lines.append(light)
     if hints.accepted:
         lines.append(f"PREVIOUSLY ACCEPTED DEPICTION: {hints.accepted[0]}")
-    if visual.kind == "illustrative":
-        lines.append(
-            "STYLE: illustrative frame, natural land or the named object, "
-            "no text, no watermark, no portrait."
-        )
-    else:
-        lines.append(
-            "STYLE LOCK: photoreal documentary photograph from a real camera, "
-            "natural materials and dust, 35mm film grain, full-bleed, "
-            "no text, no watermark, no border."
-        )
+    lines.append(
+        "STYLE LOCK: photoreal documentary photograph from a real camera, "
+        "natural materials and dust, 35mm film grain, full-bleed, "
+        "no text, no watermark, no border."
+    )
     return " ".join(lines)

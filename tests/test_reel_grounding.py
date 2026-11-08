@@ -110,10 +110,11 @@ def test_a_rejected_person_retries_as_a_place() -> None:
         episode_subject="Dogon knowledge of Sirius",
     )
     low = text.lower()
-    assert "the nommo taught the dogon" in low
-    assert "hoodie" in low
-    assert "do not draw a person" in low
-    assert "do not switch the story" in low
+    assert "cliff of bandiagara" in low
+    assert "mali" in low
+    assert "person" not in low
+    assert "hoodie" not in low
+    assert "place already named" not in low
 
 
 def test_a_blank_frame_retries_as_a_place() -> None:
@@ -122,10 +123,12 @@ def test_a_blank_frame_retries_as_a_place() -> None:
         "The Nommo taught the Dogon.",
         rejection_reason="blur:1",
         channel="ancient_knowledge",
+        episode_subject="The Sirius Mystery and the Dogon",
     )
     low = text.lower()
-    assert "the nommo taught the dogon" in low
-    assert "do not switch the story" in low
+    assert "cliff of bandiagara" in low
+    assert "mali" in low
+    assert "place already named" not in low
 
 
 def test_a_wrong_object_stays_an_object_on_this_channel() -> None:

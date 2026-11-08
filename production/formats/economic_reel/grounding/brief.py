@@ -510,50 +510,38 @@ def _beat_visual(
     )
 
 
-def _place_phrase(text: str) -> str:
-    low = (text or "").lower()
-    if "bandiagara" in low:
-        return "the Cliff of Bandiagara"
-    if "escarpment" in low:
-        return "the escarpment"
-    if "sahel" in low:
-        return "the Sahel"
-    return ""
+# FLUX Schnell is posted with guidance 0, so only this sentence conditions
+# the picture. The failed frames drew the words "land" and "person" because
+# those words were in the positive prompt.
+_BANDIAGARA_VIEWS = (
+    "Documentary photograph, natural daylight, realistic color. Sandstone Cliff of Bandiagara in Mali, Sahel, cliff villages on the rock, wide view, empty foreground.",
+    "Documentary photograph, natural daylight, realistic color. Sandstone face of the Cliff of Bandiagara in Mali, Sahel, villages set into the cliff, wide view.",
+    "Documentary photograph, natural daylight, realistic color. Sahel plain below the sandstone Cliff of Bandiagara in Mali, wide view, empty foreground.",
+)
+_MASK_STILL = (
+    "Documentary photograph, natural daylight, realistic color. "
+    "A carved wooden ceremonial mask resting on sandstone, wide view."
+)
 
 
-def _claim_line(text: str) -> bool:
-    low = (text or "").lower()
-    markers = (
-        "debate", "theory", "suggest", "legend", "records", "dates to",
-        "researcher", "measurement", "puzzling", "believe", "interpret",
-        "orbit", "sigui", "published", "pre-contact", "ancient",
-    )
-    return any(marker in low for marker in markers)
+def _bandiagara_episode(*parts: str) -> bool:
+    blob = " ".join(parts).lower()
+    return "bandiagara" in blob or "dogon" in blob or "sirius" in blob
 
 
-def _illustrative_subject(spoken: str, script: str) -> str:
-    """A place or an object, with an explicit illustration label.
+def place_still_prompt(spoken: str = "") -> str:
+    """One concrete Mali cliff sentence. The spoken line is not copied in."""
+    index = sum(ord(char) for char in (spoken or "")) % len(_BANDIAGARA_VIEWS)
+    return _BANDIAGARA_VIEWS[index]
 
-    A claim is not staged as a person. A generated frame is not described
-    as a verified photograph of the community.
-    """
-    low = (spoken or "").lower()
-    if re.search(r"\bmasks?\b", low):
-        return (
-            "a ceremonial mask filling the frame as an object, with no wearer. "
-            "Illustrative. Not a verified photograph of the community, and not a person."
-        )
-    here = _place_phrase(spoken)
-    episode = _place_phrase(script)
-    where = here or episode
-    if not where and not _claim_line(spoken):
+
+def _illustrative_subject(spoken: str, script: str, topic: str = "") -> str:
+    """Short positive photograph. No prohibition list and no generic place."""
+    if not _bandiagara_episode(spoken, script, topic):
         return ""
-    land = where or "the place already named in this episode"
-    return (
-        f"an illustrative view of {land}. "
-        "Show the land. Do not depict a person acting out the sentence. "
-        "This is not a verified photograph of the community and it does not prove the spoken claim."
-    )
+    if re.search(r"\bmasks?\b", (spoken or "").lower()):
+        return _MASK_STILL
+    return place_still_prompt(spoken)
 
 
 def visual_for_beat(
@@ -657,7 +645,7 @@ def visual_for_beat(
             "The picture is that object"
         )
         return _beat_visual("object", subject, place_clause, avoid, True, True, label, others)
-    illustrated = _illustrative_subject(text, script)
+    illustrated = _illustrative_subject(text, script, brief.topic)
     if illustrated:
         return BeatVisual("illustrative", illustrated, "", avoid, True, True)
     literal = text[:180] or brief.hero_short

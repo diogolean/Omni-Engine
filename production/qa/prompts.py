@@ -106,14 +106,8 @@ def refine_prompt(
 
             brief = build_episode_brief(episode_subject or "", spoken)
             visual = visual_for_beat(brief, spoken, script=episode_subject or spoken)
-            reason = (rejection_reason or "").strip()
-            return (
-                f"PRIMARY SUBJECT: {visual.subject} "
-                f'SPOKEN BEAT: "{spoken}". '
-                f"The previous image was rejected: {reason}. "
-                "Do not draw a person, a hoodie, or a mask worn as a costume. "
-                "Keep this same sentence. Do not switch the story to a different picture."
-            )
+            if visual.kind == "illustrative":
+                return visual.subject
     names = [e for e in (entities or []) if e][:4]
     subject = spoken
     object_label = ""
