@@ -57,7 +57,7 @@ _USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 SITES = {"pt-BR": "pt", "en-US": "en"}
 MAX_QUOTES = 24
 SHEET_LIMIT = 10  # quotes kept on a freshly built sheet
-SHEET_VERSION = 4  # bump when parsing/ranking changes; older cached sheets are rebuilt
+SHEET_VERSION = 5  # bump when parsing/ranking changes; older cached sheets are rebuilt
 MIN_WORDS, MAX_WORDS = 4, 45
 NEGATIVE_TTL_S = 7 * 24 * 3600
 SKIP_SECTION = re.compile(
@@ -253,11 +253,13 @@ def _api(site: str, **params: Any) -> dict[str, Any]:
             return json.load(response)
 
 
-def _page(site: str, title: str) -> tuple[str, str] | None:
+def _page(site: str, title: str) -> tuple[str, str, int | None] | None:
     data = _api(site, action="parse", page=title, prop="wikitext", redirects=1)
-    if "parse" not in data:
+    parsed = data.get("parse")
+    if not isinstance(parsed, dict) or "wikitext" not in parsed:
         return None
-    return data["parse"]["title"], data["parse"]["wikitext"]
+    revid = parsed.get("revid")
+    return parsed.get("title") or title, parsed["wikitext"], revid if isinstance(revid, int) else None
 
 
 def title_matches(query: str, title: str) -> bool:
@@ -282,8 +284,8 @@ def title_matches(query: str, title: str) -> bool:
     return got[-1] == word
 
 
-def find_page(name: str, lang: str) -> tuple[str, str] | None:
-    """(title, wikitext) of the person's Wikiquote page, or None."""
+def find_page(name: str, lang: str) -> tuple[str, str, int | None] | None:
+    """(title, wikitext, revision) of the person's Wikiquote page, or None."""
     site = f"{SITES.get(lang, 'pt')}.wikiquote.org"
     want = fold(name)
     if len(want) < 3:
@@ -314,12 +316,14 @@ def build(name: str, lang: str = "pt-BR") -> dict[str, Any]:
     page = find_page(name, lang)
     if not page:
         return sheet
-    title, wikitext = page
+    title, wikitext, revid = page
     url = wiki_url(f"{sl}.wikiquote.org", title)
     wikipedia = wiki_url(f"{sl}.wikipedia.org", title)
     quotes = pick(parse_quotes(wikitext, site_lang=sl, page_url=url))
-    pages = _source_pages(quotes, wikiquote=url, wikipedia=wikipedia)
-    quotes = _limit(verify_quotes(quotes, pages))
+    pages, revisions = _source_pages(quotes, wikiquote=url, wikipedia=wikipedia)
+    if revid is not None:
+        revisions.setdefault(url, revid)
+    quotes = _limit(verify_quotes(quotes, pages, revisions))
     sheet.update(found=bool(quotes), title=title, wikiquote=url, wikipedia=wikipedia, quotes=quotes,
                  license="Textos da Wikiquote, CC BY-SA 4.0")
     return sheet
@@ -347,20 +351,29 @@ def text_on_page(quote: str, page: str) -> bool:
     return folded in fold(page)
 
 
-def verify_quotes(quotes: list[dict[str, Any]], pages: dict[str, str]) -> list[dict[str, Any]]:
+def verify_quotes(
+    quotes: list[dict[str, Any]],
+    pages: dict[str, str],
+    revisions: dict[str, int | None] | None = None,
+) -> list[dict[str, Any]]:
     """Mark each quote from the page that actually contains it.
 
     ``pages`` maps a source URL to that page's plain text. A missing page is
-    ``not_found``. Nothing is verified from the quote text alone.
+    ``not_found``. Nothing is verified from the quote text alone. ``revision``
+    is the Wikimedia revision id of the page that matched, or null.
     """
+    marks = revisions or {}
     marked = []
     for quote in quotes:
         found = _matching_source(quote, pages)
         if found is None:
-            marked.append({**quote, "verification": "not_found", "sourceSite": None})
+            marked.append({**quote, "verification": "not_found", "sourceSite": None, "revision": None})
             continue
         site, url = found
-        marked.append({**quote, "verification": "verified", "sourceSite": site, "url": url})
+        marked.append({
+            **quote, "verification": "verified", "sourceSite": site, "url": url,
+            "revision": marks.get(url),
+        })
     return marked
 
 
@@ -386,7 +399,9 @@ def _limit(quotes: list[dict[str, Any]], n: int = SHEET_LIMIT) -> list[dict[str,
     return [{**quote, "id": f"q{index + 1}"} for index, quote in enumerate(chosen)]
 
 
-def _source_pages(quotes: list[dict[str, Any]], *, wikiquote: str, wikipedia: str) -> dict[str, str]:
+def _source_pages(
+    quotes: list[dict[str, Any]], *, wikiquote: str, wikipedia: str,
+) -> tuple[dict[str, str], dict[str, int | None]]:
     urls = [wikiquote, wikipedia]
     for quote in quotes:
         link = quote.get("wikisource")
@@ -395,32 +410,45 @@ def _source_pages(quotes: list[dict[str, Any]], *, wikiquote: str, wikipedia: st
         if len(urls) >= 12:
             break
     pages: dict[str, str] = {}
+    revisions: dict[str, int | None] = {}
     for url in urls:
         try:
-            plain = page_plain(url)
+            plain, revid = page_record(url)
         except Exception:  # noqa: BLE001 — that source stays unverified
             _LOG.warning("persona source %s could not be read", url.split("?", 1)[0])
             continue
         if plain:
             pages[url] = plain
-    return pages
+            revisions[url] = revid
+    return pages, revisions
 
 
 def page_plain(url: str) -> str:
     """Plain text of one Wikimedia page. Other hosts are refused."""
+    return page_record(url)[0]
+
+
+def page_record(url: str) -> tuple[str, int | None]:
+    """Plain text and the current revision id. Other hosts are refused."""
     parsed = urllib.parse.urlparse(url)
     match = _WIKI_HOST.match(parsed.netloc)
     if parsed.scheme != "https" or not match:
         raise ValueError("unsupported source")
     title = urllib.parse.unquote(parsed.path.split("/wiki/", 1)[-1]).replace("_", " ")
     site = parsed.netloc
-    data = _api(site, action="query", prop="extracts", explaintext=1, redirects=1, titles=title)
+    data = _api(
+        site, action="query", prop="extracts|revisions", explaintext=1, redirects=1,
+        rvprop="ids", rvlimit=1, titles=title,
+    )
     pages = (data.get("query") or {}).get("pages") or []
     if isinstance(pages, dict):
         pages = list(pages.values())
     if not pages:
-        return ""
-    return str(pages[0].get("extract") or "")
+        return "", None
+    page = pages[0]
+    revs = page.get("revisions") or []
+    revid = revs[0].get("revid") if revs and isinstance(revs[0], dict) else None
+    return str(page.get("extract") or ""), revid if isinstance(revid, int) else None
 
 
 def accept_user(header: str | None) -> str | None:

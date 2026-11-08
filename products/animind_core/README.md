@@ -173,8 +173,9 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   words) on the topic; a memorable close (a quote with punch or <= 14 words, or a written line <= 16 words);
   `notes` lists softer issues (the same idea picked up three lines in a row).
 - `GET /v1/personas/sheet?name=&lang=` returns the cached sheet (id, text, source, work, sourceKind, url,
-  wikisource, verification, sourceSite). `verification` is `verified` only when that text was found on the
-  Wikisource, Wikipedia, or Wikiquote page. `not_found` is kept on the sheet and is not spoken as a real line.
+  wikisource, verification, sourceSite).   `verification` is `verified` only when that text was found on the
+  Wikisource, Wikipedia, or Wikiquote page. `revision` is that page's Wikimedia id, or null.
+  `not_found` is kept on the sheet and is not spoken as a real line. No LLM writes the sheet.
   `X-Animind-User` stores the sheet under that user's hash; an email is refused. The same header on
   `POST /v1/render` makes the debate read that user's sheet.
 - Rhythm: each beat has a word budget (`maxS` = words / (2.6 × pace) + 0.8 s), a pause after it (0–0.6 s: longer

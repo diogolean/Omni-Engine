@@ -349,7 +349,10 @@ def get_sheet(name: str, request: Request, lang: str = "pt-BR") -> dict:
         sheet = personas.load(nm, lang, fetch=settings.personas_online())
     if not sheet.get("found"):
         raise HTTPException(404, "not found")
-    keep = ("id", "text", "source", "work", "sourceKind", "url", "wikisource", "verification", "sourceSite")
+    keep = (
+        "id", "text", "source", "work", "sourceKind", "url", "wikisource",
+        "verification", "sourceSite", "revision",
+    )
     body = {
         "name": nm,
         "lang": lang,

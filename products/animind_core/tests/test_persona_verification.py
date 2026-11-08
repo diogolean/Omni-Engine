@@ -142,6 +142,91 @@ def test_wikimedia_request_sends_the_user_agent_and_waits(monkeypatch):
     assert waits == [5.0]
 
 
+# Labeled HTTP fixture. These bodies are not a live Wikimedia response.
+_FIXTURE_WIKI = """{{info/biografia|nome=Ada Fixture}}
+== Citações ==
+* A verdade fixture cabe nesta frase curta.
+** Livro fixture, 1905
+* Esta outra frase nao sera verificada nunca.
+** Livro fixture, 1906
+"""
+_FIXTURE_EXTRACT = "Ada Fixture escreveu: A verdade fixture cabe nesta frase curta."
+
+
+def test_recorded_wikiquote_responses_build_a_cached_sheet(tmp_path, monkeypatch):
+    """CI replay. No network. The sheet is a labeled fixture, not a live page."""
+    monkeypatch.setenv("ANIMIND_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ANIMIND_PERSONAS_OFFLINE", "0")
+    monkeypatch.setenv("ANIMIND_WIKI_MIN_INTERVAL_S", "0")
+    personas._NEXT_API = 0.0
+    calls: list[str] = []
+
+    def urlopen(request, timeout=0):  # noqa: ARG001
+        import json as _json
+        from urllib.parse import parse_qs, urlparse
+        calls.append(request.full_url)
+        query = parse_qs(urlparse(request.full_url).query)
+        action = (query.get("action") or [""])[0]
+        search = (query.get("search") or query.get("page") or query.get("titles") or [""])[0]
+        host = urlparse(request.full_url).netloc
+        if action == "opensearch":
+            body = [search, ["Ada Fixture"], [""], ["https://pt.wikiquote.org/wiki/Ada_Fixture"]] if search == "Ada Fixture" else [search, [], [], []]
+        elif action == "parse":
+            body = (
+                {"parse": {"title": "Ada Fixture", "wikitext": _FIXTURE_WIKI, "revid": 4242}}
+                if search == "Ada Fixture"
+                else {"error": {"code": "missingtitle"}}
+            )
+        elif "wikiquote.org" in host:
+            body = {"query": {"pages": [{"extract": _FIXTURE_EXTRACT, "revisions": [{"revid": 4242}]}]}}
+        else:
+            body = {"query": {"pages": [{"extract": "Ada Fixture, nota fixture.", "revisions": [{"revid": 99}]}]}}
+        encoded = _json.dumps(body).encode()
+
+        class _Body:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return encoded
+
+        return _Body()
+
+    monkeypatch.setattr(personas.urllib.request, "urlopen", urlopen)
+    from fastapi.testclient import TestClient
+
+    from products.animind_core.app import app
+
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer test-key", "X-Animind-User": "user_one"}
+    monkeypatch.setenv("CORE_API_KEY", "test-key")
+    found = client.get("/v1/personas/sheet", params={"name": "Ada Fixture", "lang": "pt-BR"}, headers=headers)
+    assert found.status_code == 200, found.text
+    body = found.json()
+    assert body["found"] is True
+    assert body["wikiquote"] == "https://pt.wikiquote.org/wiki/Ada_Fixture"
+    verified = [quote for quote in body["quotes"] if quote["verification"] == "verified"]
+    missed = [quote for quote in body["quotes"] if quote["verification"] == "not_found"]
+    assert [quote["text"] for quote in verified] == ["A verdade fixture cabe nesta frase curta."]
+    assert verified[0]["url"] == body["wikiquote"]
+    assert verified[0]["revision"] == 4242
+    assert [quote["text"] for quote in missed] == ["Esta outra frase nao sera verificada nunca."]
+    assert missed[0]["revision"] is None
+    cached = tmp_path / "personas" / "users" / personas.accept_user("user_one") / "pt-BR" / "ada_fixture.yaml"
+    assert cached.is_file()
+    assert cached.is_relative_to(tmp_path)
+    missing = client.get(
+        "/v1/personas/sheet", params={"name": "Ninguem Inexistente Xy", "lang": "pt-BR"}, headers=headers,
+    )
+    assert missing.status_code == 404
+    assert missing.json() == {"detail": "not found"}
+    assert all(call.startswith("https://") for call in calls)
+    assert "api.openai.com" not in "".join(calls)
+
+
 @pytest.mark.skipif(os.getenv("ANIMIND_PERSONA_NETWORK") != "1", reason="live Wikimedia is opt-in")
 def test_live_socrates_page_contains_a_real_quote():
     plain = personas.page_plain("https://pt.wikiquote.org/wiki/S%C3%B3crates")
