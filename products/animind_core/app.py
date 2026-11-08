@@ -112,8 +112,14 @@ def post_character_rerig(character_id: str, request: Request) -> dict:
 
 
 @app.get("/v1/puppets", dependencies=[Depends(require_key)])
-def get_puppets() -> dict:
-    """Puppets already on disk. A contact sheet does not count as the original."""
+def get_puppets(request: Request) -> dict:
+    """Recovered puppets for a logged-in owner. Anonymous gets the same 404 as a miss."""
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    if not user:
+        raise HTTPException(404, "not found")
     return puppet_library.catalog()
 
 

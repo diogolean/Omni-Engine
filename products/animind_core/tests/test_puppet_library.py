@@ -31,7 +31,10 @@ def test_opaque_board_does_not_count_as_the_original(tmp_path, monkeypatch):
     from products.animind_core.app import app
 
     client = TestClient(app)
-    listed = client.get("/v1/puppets", headers=H)
+    hidden = client.get("/v1/puppets", headers=H)
+    assert hidden.status_code == 404
+    assert hidden.json() == {"detail": "not found"}
+    listed = client.get("/v1/puppets", headers={**H, "X-Animind-User": "user_one"})
     assert listed.status_code == 200, listed.text
     body = listed.json()
     by_id = {row["id"]: row for row in body["puppets"]}
@@ -43,3 +46,27 @@ def test_opaque_board_does_not_count_as_the_original(tmp_path, monkeypatch):
     assert by_id["board_only"]["sourceOriginal"]["present"] is False
     assert by_id["board_only"]["ready"] is False
     assert any(row["path"].endswith("albert_einstein_ca8386e2") and row["exists"] is False for row in body["searched"])
+    assert body["scenario"] == {"embedded": False, "control": "shared", "states": ["on", "off"]}
+    charge = tmp_path / "recovered" / "einstein_v1"
+    charge.mkdir(parents=True)
+    head = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+    head.putpixel((2, 2), (20, 30, 40, 255))
+    head.save(charge / "head_front.png")
+    (charge / "manifest.json").write_text(json.dumps({
+        "id": "einstein_v1",
+        "family": "charge",
+        "artStyle": "charge",
+        "body": "absent",
+        "profile": "head-only",
+        "ready": False,
+        "missing": ["raw plates", "eyes", "mouths", "body"],
+        "heads": ["head_front.png"],
+        "views": {"front": True, "3q_left": False, "3q_right": False},
+    }), encoding="utf-8")
+    again = client.get("/v1/puppets", headers={**H, "X-Animind-User": "user_one"})
+    row = {item["id"]: item for item in again.json()["puppets"]}["einstein_v1"]
+    assert row["family"] == "charge"
+    assert row["body"] == "absent"
+    assert row["heads"][0]["role"] == "head"
+    assert row["heads"][0]["transparent"] is True
+    assert "raw plates" in row["missing"]

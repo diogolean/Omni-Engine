@@ -38,6 +38,7 @@ def search_roots() -> list[Path]:
     data = settings.data_dir()
     add(data / "assets" / "puppets")
     add(data / "puppets")
+    add(data / "recovered")
     add(data / "users")
     return roots
 
@@ -58,6 +59,8 @@ def catalog() -> dict[str, Any]:
         else:
             folders.extend(path for path in root.glob("*/*/*") if path.is_dir())
         for folder in folders:
+            if (folder / "manifest.json").is_file():
+                continue
             key = str(folder.resolve()) if folder.exists() else str(folder)
             if key in seen:
                 continue
@@ -65,7 +68,69 @@ def catalog() -> dict[str, Any]:
             row = _puppet(folder)
             if row is not None:
                 puppets.append(row)
-    return {"searched": searched, "puppets": puppets, "recovered": len(puppets)}
+    for folder in _recovered_folders():
+        row = _recovered(folder)
+        if row is not None:
+            puppets.append(row)
+    return {
+        "searched": searched,
+        "puppets": puppets,
+        "recovered": len(puppets),
+        "scenario": {"embedded": False, "control": "shared", "states": ["on", "off"]},
+    }
+
+
+def _recovered_folders() -> list[Path]:
+    root = settings.data_dir() / "recovered"
+    if not root.is_dir():
+        return []
+    return [path for path in root.iterdir() if path.is_dir()]
+
+
+def _recovered(folder: Path) -> dict[str, Any] | None:
+    manifest = _read(folder / "manifest.json")
+    if not manifest:
+        return None
+    proofs = []
+    for item in manifest.get("heads") or []:
+        path = folder / str(item)
+        if not path.is_file():
+            proofs.append({"file": str(item), "present": False})
+            continue
+        proofs.append({
+            "file": str(item),
+            "present": True,
+            "sha256": _sha(path),
+            "size": _size(path),
+            "transparent": _has_transparency(path) is True,
+            "role": "head",
+        })
+    original = folder / "source_original.png"
+    return {
+        "id": str(manifest.get("id") or folder.name),
+        "family": manifest.get("family") or "unknown",
+        "artStyle": manifest.get("artStyle") or "unknown",
+        "storedArtStyle": manifest.get("storedArtStyle"),
+        "approved": manifest.get("approved"),
+        "sourceOriginal": {
+            "present": original.is_file() and _has_transparency(original) is True,
+            "transparent": _has_transparency(original) is True,
+            "role": "head" if manifest.get("family") == "charge" else "plate",
+        },
+        "heads": proofs,
+        "body": manifest.get("body") or "absent",
+        "profile": manifest.get("profile") or "absent",
+        "missing": manifest.get("missing") or [],
+        "views": manifest.get("views") or {},
+        "qa": manifest.get("qa"),
+        "ready": bool(manifest.get("ready")),
+        "scenario": {"embedded": False},
+    }
+
+
+def _sha(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _puppet(folder: Path) -> dict[str, Any] | None:

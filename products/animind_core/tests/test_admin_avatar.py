@@ -56,6 +56,30 @@ def _called(monkeypatch) -> list[str]:
     return calls
 
 
+def test_labeled_image_stub_is_cut_without_a_provider(tmp_path, monkeypatch):
+    """The only stand-in is the image socket. Cutout is the factory function."""
+    from PIL import Image, ImageDraw
+
+    from products.aiwake.animator.factory import create_puppet
+
+    def fake(prompt, destination, **kwargs):  # noqa: ARG001
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.new("RGBA", (128, 192), (0, 0, 0, 255))
+        ImageDraw.Draw(image).rectangle((24, 36, 104, 180), fill=(210, 170, 140, 255))
+        image.save(destination, format="PNG")
+        return "fixture-image"
+
+    monkeypatch.setattr(create_puppet, "generate_character_image", fake)
+    source = tmp_path / "plate.png"
+    assert fake("labeled", source) == "fixture-image"
+    cut = tmp_path / "cut.png"
+    backend = create_puppet.remove_background(source, cut)
+    assert backend
+    with Image.open(cut) as opened:
+        assert opened.mode == "RGBA"
+        assert opened.getchannel("A").getextrema()[0] == 0
+
+
 def test_a_browser_role_does_not_open_the_factory(client, monkeypatch):
     calls = _called(monkeypatch)
     response = client.post("/v1/avatars", headers={**H, "X-Animind-User": "user_one", "X-Animind-Role": "admin"}, json=BODY)

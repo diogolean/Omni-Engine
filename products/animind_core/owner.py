@@ -51,5 +51,7 @@ def _allowed(target: Path, root: Path, owner: str | None) -> bool:
         # Loose render output is unreachable. Puppets and previews stay public.
         if rel.parts and rel.parts[0] == "jobs":
             return False
+        if rel.parts and rel.parts[0] == "recovered":
+            return owner is not None
         return True
     return owner is not None and len(rel.parts) > 1 and rel.parts[1] == owner
