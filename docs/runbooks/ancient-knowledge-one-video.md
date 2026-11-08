@@ -147,6 +147,15 @@ The first lines of the run print `output=` that directory. Nothing there
 replaces `clips/reel_did_an_african_tribe_map_an_invi_v01.mp4` or
 `assets/ep_20261104_0353`.
 
+Each still is copied onto the machine's local temp disk before ffmpeg.
+A read that does not finish in 30 seconds fails that beat. One beat's
+encode budget is about 20 seconds plus 0.2 seconds per frame, and never
+more than 120 seconds or `REEL_FFMPEG_TIMEOUT_S`, whichever is smaller.
+A flat card is refused before encode. A still is reused from an earlier
+`local_review` folder only when its sidecar says that exact spoken line
+already passed, and the judge scores the copy again. A static fallback
+card is not a pass.
+
 After the render, sample the new mp4 without another render:
 
 ```powershell

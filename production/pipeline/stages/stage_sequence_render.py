@@ -378,7 +378,9 @@ def _stage_sequence_render_03(state: VariantState) -> None:
             state._gpu_baseline = float(getattr(state._get_rgpu().client, 'total_gpu_seconds', 0) or 0)
     except Exception:
         state._gpu_baseline = 0.0
-    _apply_still_cache_to_jobs(jobs=state._sr_act_jobs, meta=state._sr_act_meta, n_acts=state._seq_n, start=state._sr_act_start, work_dir=state._reel_img_dir, stem=state.stem, extra_dirs=[state.subject_assets] if state.subject_assets else None, spoken_by_act={i: str(state._sr_act_meta[i].get('snippet') or '') for i in state._sr_act_meta})
+    from production.pipeline.local_review import review_cache_dirs
+    state._cache_dirs = review_cache_dirs(state.subject_assets, Path(app_config.PAGE_OUTPUTS_DIR))
+    _apply_still_cache_to_jobs(jobs=state._sr_act_jobs, meta=state._sr_act_meta, n_acts=state._seq_n, start=state._sr_act_start, work_dir=state._reel_img_dir, stem=state.stem, extra_dirs=state._cache_dirs, spoken_by_act={i: str(state._sr_act_meta[i].get('snippet') or '') for i in state._sr_act_meta})
     if state._early_music_thread is None and state.page_ctx and app_config.ELEVENLABS_API_KEY:
         state._clips_early = Path(app_config.PAGE_OUTPUTS_DIR) / 'clips'
         state._clips_early.mkdir(parents=True, exist_ok=True)

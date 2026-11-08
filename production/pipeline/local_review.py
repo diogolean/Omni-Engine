@@ -65,6 +65,63 @@ def youtube_publish_enabled(cli_flag: bool, env_flag: bool) -> bool:
     return bool(cli_flag) or bool(env_flag)
 
 
+def prior_review_still_dirs(page_outputs: Path) -> list[Path]:
+    """Earlier local-review work folders. The current stamp is excluded.
+
+    Callers still require a passed spoken sidecar and judge the copy again.
+    This only avoids paying for a still that already passed the same line.
+    """
+    root = Path(page_outputs) / "clips" / "local_review"
+    if not root.is_dir():
+        return []
+    state = current()
+    current_root = None
+    if state is not None:
+        try:
+            current_root = state.root.resolve()
+        except OSError:
+            current_root = state.root
+    found: list[Path] = []
+    try:
+        stamps = list(root.iterdir())
+    except OSError:
+        return []
+    for stamp in stamps:
+        if not stamp.is_dir():
+            continue
+        try:
+            if current_root is not None and stamp.resolve() == current_root:
+                continue
+        except OSError:
+            continue
+        assets = stamp / "assets"
+        if assets.is_dir():
+            try:
+                episodes = list(assets.iterdir())
+            except OSError:
+                episodes = []
+            for episode in episodes:
+                work = episode / "work"
+                if work.is_dir():
+                    found.append(work)
+        subject = stamp / "subject_assets"
+        if subject.is_dir():
+            found.append(subject)
+        if len(found) >= 24:
+            break
+    return found
+
+
+def review_cache_dirs(subject_assets: Path | None, page_outputs: Path) -> list[Path]:
+    """Subject folder, plus earlier review work dirs when a review is active."""
+    dirs: list[Path] = []
+    if subject_assets:
+        dirs.append(Path(subject_assets))
+    if active():
+        dirs.extend(prior_review_still_dirs(page_outputs))
+    return dirs
+
+
 def isolate_dir(legacy: Path, relative: str) -> Path:
     """Legacy path, or a directory inside the review root when review is on."""
     state = current()

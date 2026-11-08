@@ -383,7 +383,65 @@ def _ffmpeg_timeout_s() -> float:
         return 600.0
 
 
-def _run(cmd: list[str]) -> None:
+def beat_timeout_s(frames: int) -> float:
+    """Bound one still encode. The 600s default is a ceiling, not the budget.
+
+    A 187-frame beat is about six seconds of picture. Waiting the full
+    ceiling on a Drive-backed jpeg is what stalled ``seg_01.mp4``.
+    """
+    budget = min(120.0, 20.0 + 0.2 * max(1, int(frames)))
+    return max(20.0, min(_ffmpeg_timeout_s(), budget))
+
+
+def refuse_flat_still(path: Path, source_name: str) -> None:
+    """Do not spend an encode on a card the gate will reject."""
+    from production.qa.mp4_gate import frame_fault
+
+    fault = frame_fault(path)
+    if fault in {"flat", "black", "glitch"}:
+        raise RuntimeError(f"refusing to encode a {fault} still: {source_name}")
+
+
+def stage_still(image: Path, dest: Path, *, read_timeout_s: float = 30.0) -> Path:
+    """Read a still once onto local temp before ffmpeg.
+
+    ``OUTPUT_PATH`` on this factory is often a Drive letter. zoompan then
+    rereads that file for every frame and can sit until the encode ceiling.
+    A stalled read fails here, once, instead of inside the encode.
+    """
+    import threading
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    error: list[BaseException] = []
+
+    def _read() -> None:
+        try:
+            from PIL import Image
+
+            with Image.open(image) as opened:
+                frame = opened.convert("RGB")
+                frame.thumbnail((2160, 3840))
+                frame.save(dest, format="JPEG", quality=92)
+        except Exception as exc:  # noqa: BLE001
+            error.append(exc)
+
+    worker = threading.Thread(target=_read, name="reel-still-stage", daemon=True)
+    worker.start()
+    worker.join(read_timeout_s)
+    if worker.is_alive():
+        raise RuntimeError(
+            f"still read timed out after {read_timeout_s:.0f}s: {image.name}"
+        )
+    if error:
+        raise RuntimeError(
+            f"still unreadable ({type(error[0]).__name__}): {image.name}"
+        ) from error[0]
+    if not dest.is_file() or dest.stat().st_size < 32:
+        raise RuntimeError(f"still unreadable: {image.name}")
+    return dest
+
+
+def _run(cmd: list[str], *, timeout: float | None = None, label: str = "") -> None:
     # s23d: one beat's ffmpeg sat at near-zero CPU for 27 minutes and held the
     # whole reel. A stuck encode now fails the beat instead of the machine.
     # capture_output leaves stdin as a pipe. ffmpeg reads that pipe and waits.
@@ -392,10 +450,14 @@ def _run(cmd: list[str]) -> None:
     # The timeout kills the process tree. An unbounded mix must not outlive it.
     from shared.ffmpeg import run_ffmpeg
 
+    limit = _ffmpeg_timeout_s() if timeout is None else float(timeout)
     try:
-        proc = run_ffmpeg(cmd, text=True, timeout=_ffmpeg_timeout_s())
+        proc = run_ffmpeg(cmd, text=True, timeout=limit)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"ffmpeg timed out after {exc.timeout:.0f}s") from exc
+        detail = f" processing {label}" if label else ""
+        raise RuntimeError(
+            f"ffmpeg timed out after {float(exc.timeout or limit):.0f}s{detail}"
+        ) from exc
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-800:]
         raise RuntimeError(tail or f"ffmpeg exit {proc.returncode}")
@@ -472,7 +534,11 @@ def _render_beat(
         *encode,
         str(out),
     ]
-    _run(cmd)
+    _run(
+        cmd,
+        timeout=beat_timeout_s(frames),
+        label=f"{image.name} into {out.name} ({frames} frames)",
+    )
 
 
 def _audio_filter(
@@ -706,8 +772,10 @@ def compile_ffmpeg_reel(
 
         def _one(job: tuple) -> None:
             index, image, video, dur, ass_path, seg = job
+            staged = stage_still(image, tmp / f"still_{index:02d}.jpg")
+            refuse_flat_still(staged, image.name)
             _render_beat(
-                index, image, video, dur, ass_path, logo_path, grade, encode, seg,
+                index, staged, video, dur, ass_path, logo_path, grade, encode, seg,
                 flicker=bool(enable_flicker),
                 fps=int(fps),
             )
