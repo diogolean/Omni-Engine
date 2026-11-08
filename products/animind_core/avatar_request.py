@@ -183,6 +183,25 @@ def get(job_id: str, user: str | None) -> dict[str, Any] | None:
         return _public(loaded)
 
 
+def keep_usage(owner: str, job_id: str, usage: dict[str, Any]) -> dict[str, Any]:
+    """Store usage once. A retry keeps the first document."""
+    with _LOCK:
+        for job in _JOBS.values():
+            if job["id"] == job_id and job.get("_owner") == owner:
+                if not isinstance(job.get("usage"), dict):
+                    job["usage"] = usage
+                    _save(job)
+                return job["usage"]
+        loaded = _read_owned(owner, job_id)
+        if loaded is None:
+            return usage
+        if not isinstance(loaded.get("usage"), dict):
+            loaded["usage"] = usage
+            _JOBS[loaded["_key"]] = loaded
+            _save(loaded)
+        return loaded["usage"]
+
+
 def _cut_fixtures(job: dict[str, Any], plates: dict[str, Image.Image]) -> None:
     """Real cutout of a labeled plate. Still not a model image."""
     root = settings.data_dir() / "users" / job["_owner"] / "avatars" / job["id"]

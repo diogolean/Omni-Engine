@@ -62,9 +62,15 @@ def test_retry_is_the_same_job_and_the_other_user_cannot_read_it(client, monkeyp
     assert second.json()["retries"] == 1
     assert second.json()["providerCalls"] == 0
     assert second.json()["events"] == job["events"]
-    assert "costUsd" not in second.text and "tokens" not in second.text
+    assert second.json()["usage"]["schema"] == "animind.usage.v1"
+    assert second.json()["usage"]["totals"]["estimatedMicro"] is None
+    assert second.json()["usage"]["totals"]["reportedMicro"] is None
+    assert "costUsd" not in second.text
+    assert "usdPerImage" not in second.text
+    assert "production/cost" not in second.text
     seen = client.get(f"/v1/avatars/{job['id']}", headers=own)
     assert seen.status_code == 200 and seen.json()["events"] == job["events"]
+    assert seen.json()["usage"]["schema"] == "animind.usage.v1"
     admin = (tmp_path / "telemetry" / "avatar_admin.jsonl").read_text(encoding="utf-8")
     assert admin.count("\n") == 1
     assert '"costUsd": null' in admin and '"tokens": null' in admin
@@ -91,6 +97,8 @@ def test_poll_reloads_the_owner_file_after_memory_is_cleared(client):
     seen = client.get(f"/v1/avatars/{job['id']}", headers=own)
     assert seen.status_code == 200
     assert seen.json()["events"] == job["events"]
+    assert seen.json()["usage"] == job["usage"]
+    assert job["usage"]["totals"]["estimatedMicro"] is None
     hidden = client.get(f"/v1/avatars/{job['id']}", headers=other)
     assert hidden.status_code == 404
     assert hidden.json() == {"detail": "avatar not found"}

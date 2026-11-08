@@ -91,6 +91,13 @@ def test_verified_persona_avatar_and_spend_stay_with_the_owner(schema, monkeypat
     assert plan.json()["intent"] == "monologue"
     assert plan.json()["personas"] == ["Ada"]
     assert plan.json()["needsChoice"] is False
+    assert plan.json()["usage"]["schema"] == "animind.usage.v1"
+    assert plan.json()["usage"]["totals"]["estimatedMicro"] is None
+    portrait = client.post("/v1/portraits/plan", headers=own, json={"requestedResolution": "1k"})
+    assert portrait.status_code == 200
+    assert portrait.json()["usage"]["schema"] == "animind.usage.v1"
+    assert portrait.json()["usage"]["totals"]["reportedMicro"] is None
+    assert "usdPerImage" not in portrait.text
     made = client.post("/v1/avatars", headers=own, json={
         "prompt": "Discurso de Ada", "language": "pt", "requestedResolution": "1k",
     })
@@ -100,7 +107,11 @@ def test_verified_persona_avatar_and_spend_stay_with_the_owner(schema, monkeypat
     assert job["events"][-1]["error"]["code"] == "price_unavailable"
     assert job["events"][-1]["error"]["recoverable"] is True
     assert job["providerCalls"] == 0
-    assert "usage" not in job
+    usage = job["usage"]
+    assert usage["schema"] == "animind.usage.v1"
+    assert usage["totals"]["estimatedMicro"] is None
+    assert usage["totals"]["reportedMicro"] is None
+    assert all(call.get("model") is None for call in usage["calls"])
     published = plan.text + made.text
     assert "production/cost" not in published
     assert "usdPerImage" not in published
@@ -110,6 +121,7 @@ def test_verified_persona_avatar_and_spend_stay_with_the_owner(schema, monkeypat
     seen = client.get(f"/v1/avatars/{job['id']}", headers=own)
     assert seen.status_code == 200
     assert seen.json()["events"] == job["events"]
+    assert seen.json()["usage"] == usage
     hidden = client.get(f"/v1/avatars/{job['id']}", headers={**H, "X-Animind-User": "user_two"})
     assert hidden.status_code == 404
     assert hidden.json() == {"detail": "avatar not found"}

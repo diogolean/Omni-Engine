@@ -1,6 +1,7 @@
 """Public usage document. Null cost is unknown. It is not zero."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 SCHEMA = "animind.usage.v1"
@@ -102,6 +103,39 @@ def document(frame: Any, job_id: str | None = None) -> dict[str, Any]:
         "calls": calls,
         "totals": totals(calls),
     }
+
+
+def publish(usage: dict[str, Any] | None, *, job_id: str | None = None) -> dict[str, Any]:
+    """Public usage. Model names and file paths stay out. Unknown money is null."""
+    if not isinstance(usage, dict) or usage.get("schema") != SCHEMA:
+        usage = empty("unknown", "unknown", job_id)
+    else:
+        usage = json.loads(json.dumps(usage))
+    usage["jobId"] = usage.get("jobId") or job_id
+    for call in usage.get("calls") or []:
+        call["model"] = None
+        cost = call.get("cost")
+        if isinstance(cost, dict):
+            _null_unknown(cost)
+    totals_block = usage.get("totals")
+    if isinstance(totals_block, dict):
+        if totals_block.get("estimatedMicro") == 0:
+            totals_block["estimatedMicro"] = None
+        if totals_block.get("reportedMicro") == 0:
+            totals_block["reportedMicro"] = None
+    return usage
+
+
+def _null_unknown(cost: dict[str, Any]) -> None:
+    if cost.get("status") in {"estimated", "reported"}:
+        return
+    if cost.get("estimatedMicro") in (None, 0):
+        cost["estimatedMicro"] = None
+    if cost.get("reportedMicro") in (None, 0):
+        cost["reportedMicro"] = None
+    version = cost.get("priceVersion")
+    if isinstance(version, str) and ("/" in version or "production" in version):
+        cost["priceVersion"] = None
 
 
 def empty(request_id: str, user_ref: str, job_id: str | None = None) -> dict[str, Any]:

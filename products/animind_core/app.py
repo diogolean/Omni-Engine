@@ -26,6 +26,7 @@ from . import (
     stick,
     styles,
 )
+from .spend.contract import publish as publish_usage
 from .spend.http import protect
 from .spend.plan import build as build_plan
 
@@ -124,19 +125,26 @@ def post_characters(body: dict, request: Request) -> dict:
 
 
 @app.post("/v1/portraits/plan", dependencies=[Depends(require_key)])
-def post_portrait_plan(body: dict) -> dict:
-    """Resolution contract. Does not generate, cut, or charge."""
-    return portrait.plan(body)
+def post_portrait_plan(body: dict, request: Request) -> dict:
+    """Resolution contract. It does not generate. Usage cost stays null."""
+    result = protect(request, body, "portrait", lambda: portrait.plan(body))
+    result["usage"] = publish_usage(result.get("usage"))
+    return result
 
 
 @app.post("/v1/avatars/plan", dependencies=[Depends(require_key)])
-def post_avatar_plan(body: dict) -> dict:
+def post_avatar_plan(body: dict, request: Request) -> dict:
     """Infer one or two people. Does not generate or start a job."""
-    return avatar_request.infer(
-        str(body.get("prompt") or ""),
-        language=str(body.get("language") or body.get("lang") or "pt"),
-        requested_resolution=str(body.get("requestedResolution") or "1k"),
-    )
+    def run() -> dict:
+        return avatar_request.infer(
+            str(body.get("prompt") or ""),
+            language=str(body.get("language") or body.get("lang") or "pt"),
+            requested_resolution=str(body.get("requestedResolution") or "1k"),
+        )
+
+    result = protect(request, body, "avatar-plan", run)
+    result["usage"] = publish_usage(result.get("usage"))
+    return result
 
 
 @app.post("/v1/avatars", dependencies=[Depends(require_key)])
@@ -158,7 +166,9 @@ def post_avatar(body: dict, request: Request) -> dict:
         result = protect(request, body, "avatar", run)
     except avatar_request.AvatarRefused as exc:
         raise HTTPException(403, exc.code) from exc
-    result.pop("usage", None)
+    result["usage"] = publish_usage(result.get("usage"), job_id=result.get("id"))
+    if result.get("id") and user:
+        result["usage"] = avatar_request.keep_usage(user, result["id"], result["usage"])
     return result
 
 
