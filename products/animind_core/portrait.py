@@ -1,188 +1,259 @@
-"""Procedural Einstein bust for the product path. No image call.
+"""Portrait cutout contract. No paid call, no invented size, no invented matte.
 
-The plate is a shaded head: warm skin, white hair, a moustache, and a blank
-mouth. Drawn lips composite on that skin. ``mouth_fit`` then paints the soft
-fringe with the cheek under it, so the skin gate measures a real match.
-Landmark boxes stay the illustrated face so the nose–chin anchor still lands
-under the moustache.
+What this tree actually contains:
+
+* Gemini image sizes the reel adapter will send are ``1K`` and ``2K``
+  (``production/providers/settings.py``). Anything else there is collapsed
+  to ``1K``. This contract refuses that collapse.
+* ``4K`` is not in that allowlist, and there is no 4K list price beside the
+  coded 1K/2K constants in ``production/cost/pricing.py``.
+* ``create_puppet.generate_character_image`` sends ``aspect_ratio`` only.
+  It does not send ``image_size``, so a 1K request is not a verified pixel
+  preset on the Animind rig path. Exact 1K and 4K pixel sizes are not in
+  this code and are not guessed.
+* Factory prompts ask for a solid black stage. ``navy-blue`` in those
+  prompts is armor paint, not a backdrop RGB. No navy backdrop tuple and
+  no post-cutout softness value were found, so those stages stay
+  unconfigured. The cutout is the existing chroma key (the offline path of
+  ``create_puppet.remove_background``). Its in-key feather is left untouched.
 """
 from __future__ import annotations
 
-from typing import Any, Sequence
+import hashlib
+from pathlib import Path
+from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
-CANVAS = (640, 800)
-FACE = [190, 78, 450, 372]
-SKIN = (214, 166, 134)
-HAIR = (232, 228, 220, 255)
-HAIR_MID = (206, 202, 194, 255)
-HAIR_SHADOW = (168, 164, 156, 255)
-LIP = {
-    "outline": (92, 48, 44, 255),
-    "cavity": (48, 24, 26, 255),
-    "teeth": (246, 240, 232, 255),
-    "tongue": (176, 84, 86, 255),
-    "lip": (158, 86, 80, 255),
+from animation.parametric.factory.rigger import chroma_key_cutout
+from production.cost.pricing import (
+    GEMINI_FLASH_IMAGE_1K_USD,
+    GEMINI_PRO_IMAGE_1K_USD,
+    GEMINI_PRO_IMAGE_2K_USD,
+)
+
+# Sizes the existing Gemini image adapter agrees to send. Not pixel dimensions.
+ADAPTER_IMAGE_SIZES = ("1K", "2K")
+FACTORY_CALL = "products.aiwake.animator.factory.create_puppet.generate_character_image"
+CUTOUT_TOOL = "animation.parametric.factory.rigger.chroma_key_cutout"
+PRODUCTION_CUTOUT = "products.aiwake.animator.factory.create_puppet.remove_background"
+MIN_NATIVE_WIDTH = 1024
+THUMB_EDGE = 256
+
+# Coded list prices already in the repo. Not a budget, and not a 4K price.
+KNOWN_PRICES = {
+    "1K": {
+        "usdPerImage": GEMINI_FLASH_IMAGE_1K_USD,
+        "model": "gemini-2.5-flash-image",
+        "where": "production/cost/pricing.py GEMINI_FLASH_IMAGE_1K_USD",
+        "alsoProUsd": GEMINI_PRO_IMAGE_1K_USD,
+    },
+    "2K": {
+        "usdPerImage": GEMINI_PRO_IMAGE_2K_USD,
+        "model": "gemini-pro-image",
+        "where": "production/cost/pricing.py GEMINI_PRO_IMAGE_2K_USD",
+    },
+    "4K": None,
 }
 
 
-def _shade_head(canvas: np.ndarray) -> None:
-    """Warm head, a soft nose, and shoulders. The mouth band stays plain skin."""
-    height, width = canvas.shape[:2]
-    x0, y0, x1, y1 = FACE
-    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
-    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
-    nx = (xx - cx) / rx
-    ny = (yy - cy) / ry
-    inside = nx * nx + ny * ny <= 1.0
-    z = np.sqrt(np.clip(1.0 - np.clip(nx * nx + ny * ny, 0, 1), 0, 1))
-    light = np.clip(nx * -0.28 + ny * -0.48 + z * 0.82, 0, 1)
-    shadow = np.array([132, 90, 72], np.float32)
-    base = np.array(SKIN, np.float32)
-    lit = np.array([236, 198, 168], np.float32)
-    tone = shadow + (base - shadow) * light[..., None]
-    peak = np.clip((light - 0.58) / 0.42, 0, 1)[..., None]
-    tone = tone + (lit - tone) * peak
-    cheek = np.exp(-(((xx - 262) / 34) ** 2 + ((yy - 246) / 28) ** 2))
-    cheek = cheek + np.exp(-(((xx - 378) / 34) ** 2 + ((yy - 246) / 28) ** 2))
-    blush = np.array([176, 104, 96], np.float32)
-    cheek_w = np.clip(cheek, 0, 1)[..., None]
-    tone = tone * (1 - 0.22 * cheek_w) + blush * (0.22 * cheek_w)
-    chin = np.clip((ny - 0.42) / 0.5, 0, 1)[..., None]
-    tone = tone * (1 - 0.18 * chin) + shadow * (0.18 * chin)
-    # Nose: a narrow lit ridge and two soft nostrils, above the moustache.
-    ridge = np.exp(-((xx - 320) / 16) ** 2 - ((yy - 250) / 48) ** 2)
-    tone = tone + np.array([18, 12, 8], np.float32) * ridge[..., None]
-    for nostril_x in (304, 336):
-        well = np.exp(-((xx - nostril_x) / 7) ** 2 - ((yy - 294) / 5) ** 2)
-        tone = tone * (1 - 0.55 * well[..., None]) + np.array([96, 58, 52], np.float32) * (0.55 * well[..., None])
-    grain = np.random.default_rng(4).normal(0, 2.2, tone.shape)
-    tone = np.clip(tone + grain, 0, 255)
-    canvas[inside, :3] = tone[inside]
-    canvas[inside, 3] = 255
-    # Neck into shoulders that stay inside the jacket, then the same suit colour.
-    half = np.clip(36 + np.clip(yy - 350, 0, None) * 0.72, 36, 145)
-    neck = (np.abs(xx - 320) < half) & (yy >= 340) & (yy <= 500)
-    suit = (np.abs(xx - 320) < 168) & (yy >= 488) & (yy <= 680)
-    shirt = (np.abs(xx - 320) < 28 + np.clip(yy - 450, 0, None) * 0.15) & (yy >= 445) & (yy <= 560)
-    body = neck | suit
-    shade = np.clip((xx - 200) / 240, 0, 1)
-    dark = np.array([150, 104, 84], np.float32)
-    mid = np.array([198, 148, 120], np.float32)
-    skin = dark + (mid - dark) * shade[..., None]
-    canvas[body, :3] = skin[body]
-    canvas[body, 3] = 255
-    canvas[suit, :3] = (28, 30, 36)
-    canvas[suit, 3] = 255
-    canvas[shirt, :3] = (236, 234, 228)
-    canvas[shirt, 3] = 255
-    # The face oval wins where it overlaps the neck.
-    canvas[inside, :3] = tone[inside]
-    canvas[inside, 3] = 255
+class PortraitRefused(Exception):
+    """The request asked for a resolution this process will not generate."""
+
+    def __init__(self, decision: dict[str, Any]) -> None:
+        super().__init__("resolution")
+        self.decision = decision
 
 
-def _curve(
-    start: tuple[float, float],
-    end: tuple[float, float],
-    bend: tuple[float, float],
-    steps: int = 9,
-) -> list[tuple[float, float]]:
-    points = []
-    for step in range(steps):
-        t = step / (steps - 1)
-        x = (1 - t) ** 2 * start[0] + 2 * (1 - t) * t * bend[0] + t ** 2 * end[0]
-        y = (1 - t) ** 2 * start[1] + 2 * (1 - t) * t * bend[1] + t ** 2 * end[1]
-        points.append((x, y))
-    return points
+def plan(body: dict[str, Any] | None = None, *, user: str | None = None) -> dict[str, Any]:
+    """Resolution decision. Never calls a provider and never upscales."""
+    raw = _requested(body or {})
+    product = _product_preset(raw)
+    mapped = {"1k": "1K", "4k": None}.get(product)
+    entitled = server_premium(user)
+    reasons: list[str] = []
+    if product == "4k":
+        reasons.append("adapter_has_no_4k_preset")
+        reasons.append("no_4k_list_price")
+    if product == "1k":
+        reasons.append("factory_call_omits_image_size")
+    if product == "unsupported":
+        reasons.append("unsupported_preset")
+    if not entitled and product == "4k":
+        reasons.append("premium_not_granted_by_server")
+    reasons.append("generation_not_authorized")
+    return {
+        "requestedResolution": raw,
+        "productPreset": product,
+        "adapterPresets": list(ADAPTER_IMAGE_SIZES),
+        "mappedPreset": mapped,
+        "actualPixels": None,
+        "provenance": "unverified",
+        "native": False,
+        "consume": False,
+        "charged": False,
+        "upscale": "refused",
+        "silentFallback": "refused",
+        "clientPremiumIgnored": True,
+        "entitlement": "server" if entitled else "absent",
+        "reasons": reasons,
+        "prices": KNOWN_PRICES,
+        "outputContract": {
+            "minWidth": MIN_NATIVE_WIDTH,
+            "heightGreaterThanWidth": True,
+            "exactRatio": None,
+        },
+        "stages": stages(),
+    }
 
 
-def _hair(draw: ImageDraw.ImageDraw) -> None:
-    """Strands off the scalp. The brow, the eyes, and the mouth stay clear."""
-    rng = np.random.default_rng(11)
-    for index in range(72):
-        frac = index / 71
-        # Upper fan only. Strands that point down land on the eyes.
-        angle = -np.pi * (0.08 + 0.84 * frac)
-        length = 34 + int(rng.integers(0, 26))
-        if abs(np.cos(angle)) > 0.72:
-            length += 18
-        origin_x = 320 + np.cos(angle) * (78 + rng.random() * 18)
-        origin_y = 118 + np.sin(angle) * (28 + rng.random() * 10)
-        end_x = origin_x + np.cos(angle) * length
-        end_y = origin_y + np.sin(angle) * length * 0.85 - 8
-        bend = (
-            (origin_x + end_x) / 2 + float(rng.normal(0, 10)),
-            (origin_y + end_y) / 2 + float(rng.normal(0, 6)),
-        )
-        colour = HAIR if index % 3 else HAIR_MID if index % 2 else HAIR_SHADOW
-        width = 3 if index % 4 else 4
-        draw.line(_curve((origin_x, origin_y), (end_x, end_y), bend), fill=colour, width=width, joint="curve")
-    # Side locks, outside the eyes.
-    for side in (-1, 1):
-        for index in range(8):
-            x0 = 320 + side * (132 + index * 3)
-            y0 = 150 + index * 8
-            end = (x0 + side * 16, y0 + 70 + index * 4)
-            bend = (x0 + side * 28, y0 + 30)
-            draw.line(_curve((x0, y0), end, bend), fill=HAIR if index % 2 == 0 else HAIR_SHADOW, width=4, joint="curve")
+def server_premium(user: str | None) -> bool:
+    """Server allowlist only. A client flag is not read."""
+    import os
+
+    raw = os.getenv("ANIMIND_PREMIUM_USERS") or ""
+    allowed = {part.strip() for part in raw.split(",") if part.strip()}
+    return bool(user) and user in allowed
 
 
-def _moustache(draw: ImageDraw.ImageDraw) -> None:
-    """Short pale strokes under the nose. Nothing crosses the blank mouth."""
-    rng = np.random.default_rng(3)
-    for index in range(18):
-        x = 258 + index * 7
-        y = 304 + (4 if index % 2 else 0)
-        end_y = 314 + int(rng.integers(0, 4))
-        colour = HAIR if index % 3 else HAIR_MID
-        draw.line(_curve((x, y), (x + 10, end_y), (x + 4, y - 2)), fill=colour, width=3, joint="curve")
-    draw.polygon(
-        [(262, 308), (292, 302), (320, 306), (348, 302), (378, 308), (368, 316), (320, 314), (272, 316)],
-        fill=(228, 224, 216, 255),
-    )
+def stages() -> list[dict[str, Any]]:
+    """Navy, then the existing cutout, then softness. Missing knobs stay off."""
+    return [
+        {
+            "id": "backdrop",
+            "role": "temporary extraction stage",
+            "found": "factory prompts request a solid black background",
+            "navyRgb": None,
+            "status": "unconfigured",
+            "note": "navy-blue in the factory prompts is armor, not a backdrop color",
+        },
+        {
+            "id": "cutout",
+            "tool": CUTOUT_TOOL,
+            "production": PRODUCTION_CUTOUT,
+            "status": "ready",
+        },
+        {
+            "id": "softness",
+            "applied": False,
+            "parameter": None,
+            "status": "parameter_absent",
+            "note": "the chroma key's own feather is not a later softness pass and is not retuned",
+        },
+    ]
 
 
-def _forehead(draw: ImageDraw.ImageDraw) -> None:
-    tone = (156, 110, 92, 140)
-    for y, x0, x1 in ((132, 256, 384), (146, 268, 372)):
-        draw.arc((x0, y, x1, y + 14), 200, 340, fill=tone, width=1)
+def measure(image: Image.Image, *, provenance: str = "source") -> dict[str, Any]:
+    """Pixel facts. An upscaled raster does not pass the native portrait gate."""
+    width, height = image.size
+    native = provenance != "upscaled" and width >= MIN_NATIVE_WIDTH and height > width
+    return {
+        "width": width,
+        "height": height,
+        "portrait": height > width,
+        "provenance": provenance,
+        "meetsNativePortrait1k": native,
+        "upscaled": provenance == "upscaled",
+    }
 
 
-def paint(
-    eyes: Sequence[dict[str, Any]],
-    brows: Sequence[Sequence[tuple[int, int]]],
-) -> Image.Image:
-    """Shaded bust. ``eyes`` and ``brows`` are the contours the cutter will lift."""
-    canvas = np.zeros((CANVAS[1], CANVAS[0], 4), np.float32)
-    _shade_head(canvas)
-    image = Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8), "RGBA")
-    draw = ImageDraw.Draw(image)
-    for cx, cy in ((172, 240), (468, 240)):
-        draw.ellipse((cx - 18, cy - 28, cx + 18, cy + 32), fill=(190, 140, 114, 255))
-        draw.ellipse((cx - 8, cy - 12, cx + 10, cy + 16), fill=(158, 108, 90, 255))
-    for eye in eyes:
-        upper, lower = eye["upper"], eye["lower"]
-        draw.polygon(list(upper) + list(lower)[::-1], fill=(244, 240, 234, 255))
-        # A soft lid crease just above the opening.
-        draw.line(list(upper), fill=(120, 78, 68, 180), width=2)
-        iris_x, iris_y = eye["iris"]
-        radius = int(eye["radius"])
-        draw.ellipse(
-            (iris_x - radius, iris_y - radius, iris_x + radius, iris_y + radius),
-            fill=(58, 72, 54, 255),
-        )
-        pupil = max(2, radius // 2)
-        draw.ellipse(
-            (iris_x - pupil, iris_y - pupil + 1, iris_x + pupil, iris_y + pupil + 1),
-            fill=(16, 12, 10, 255),
-        )
-        draw.ellipse((iris_x - radius + 2, iris_y - radius + 2, iris_x - 1, iris_y - 1), fill=(250, 248, 242, 220))
-    _moustache(draw)
-    _hair(draw)
-    _forehead(draw)
-    for poly in brows:
-        draw.polygon(list(poly), fill=(72, 64, 58, 255))
-    return image
+def describe_legacy(image: Image.Image) -> dict[str, Any]:
+    """Smaller plates stay as they are. The upgrade is a new generation, not a resize."""
+    facts = measure(image, provenance="legacy")
+    if facts["meetsNativePortrait1k"]:
+        return facts | {"limitation": None, "upgrade": None, "rewritten": False}
+    return facts | {
+        "limitation": "below_native_portrait_1k",
+        "upgrade": "regenerate",
+        "rewritten": False,
+    }
+
+
+def extract(
+    source: Image.Image,
+    dest: Path,
+    *,
+    probes: dict[str, tuple[int, int]] | None = None,
+) -> dict[str, Any]:
+    """Keep the source, cut with the existing key, and do not soften afterwards.
+
+    The scene is not baked in. A thumb is a smaller copy for UI only.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    original = dest / "source.png"
+    source.convert("RGBA").save(original, format="PNG")
+    source_bytes = original.read_bytes()
+    cut = chroma_key_cutout(source)
+    # Softness parameter was not found. Leave the cutout alpha alone.
+    alpha = np.asarray(cut.getchannel("A"))
+    cutout_path = dest / "cutout.png"
+    cut.save(cutout_path, format="PNG")
+    if original.read_bytes() != source_bytes:
+        raise RuntimeError("source was rewritten")
+    if not np.array_equal(alpha, np.asarray(Image.open(cutout_path).getchannel("A"))):
+        raise RuntimeError("softness changed the cutout")
+    thumb = cut.copy()
+    thumb.thumbnail((THUMB_EDGE, THUMB_EDGE))
+    thumb.save(dest / "thumb.png", format="PNG")
+    qa = _qa(source, cut, probes or {})
+    native = measure(source)
+    ready = bool(qa["pass"] and native["meetsNativePortrait1k"])
+    return {
+        "source": native,
+        "cutout": measure(cut, provenance="cutout"),
+        "useful": _useful(cut),
+        "thumb": {"width": thumb.size[0], "height": thumb.size[1], "role": "ui"},
+        "scenario": "separate",
+        "stages": stages(),
+        "qa": qa,
+        "ready": ready,
+        "status": "ready" if ready else "rejected",
+        "sourceSha256": hashlib.sha256(source_bytes).hexdigest(),
+        "factoryCall": FACTORY_CALL,
+    }
+
+
+def _requested(body: dict[str, Any]) -> str:
+    raw = body.get("requestedResolution", body.get("resolution", "1k"))
+    return str(raw or "1k").strip()
+
+
+def _product_preset(raw: str) -> str:
+    token = raw.strip().lower()
+    if token in {"1k", "1"}:
+        return "1k"
+    if token in {"4k", "4"}:
+        return "4k"
+    return "unsupported"
+
+
+def _useful(image: Image.Image) -> dict[str, int]:
+    alpha = np.asarray(image.convert("RGBA"))[..., 3]
+    ys, xs = np.nonzero(alpha > 16)
+    if len(xs) == 0:
+        return {"width": 0, "height": 0}
+    return {"width": int(xs.max() - xs.min() + 1), "height": int(ys.max() - ys.min() + 1)}
+
+
+def _qa(source: Image.Image, cut: Image.Image, probes: dict[str, tuple[int, int]]) -> dict[str, Any]:
+    """Backdrop left on the matte fails. Probe pixels (hair, moustache) must survive."""
+    src = np.asarray(source.convert("RGBA"))
+    out = np.asarray(cut.convert("RGBA"))
+    corner = src[0, 0, :3].astype(np.int16)
+    dist = np.abs(src[:, :, :3].astype(np.int16) - corner).sum(axis=2)
+    backdrop = dist <= 12
+    residue = int(np.count_nonzero(backdrop & (out[:, :, 3] > 32)))
+    backdrop_n = int(np.count_nonzero(backdrop))
+    residue_frac = residue / backdrop_n if backdrop_n else 1.0
+    kept = {}
+    for name, (x, y) in probes.items():
+        kept[name] = int(out[y, x, 3])
+    probes_ok = all(value > 200 for value in kept.values()) if kept else True
+    passed = residue_frac < 0.02 and probes_ok
+    return {
+        "pass": passed,
+        "residueFraction": round(residue_frac, 4),
+        "probes": kept,
+        "nativeSize": True,
+    }
