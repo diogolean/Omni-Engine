@@ -51,7 +51,35 @@ class UnitRate:
     version: str
 
 
-Rate = TokenRate | UnitRate
+@dataclass(frozen=True)
+class ImageRate:
+    """Image output plus the input-token charge from the same official row."""
+
+    provider: str
+    model: str
+    input_per_million: int
+    output_per_image: int
+    source: str
+    source_date: str
+    version: str
+    unit: str = "image_with_input"
+
+    @property
+    def micro_usd(self) -> int:
+        """Compatibility name for callers displaying the output-image component."""
+        return self.output_per_image
+
+    def ceiling_micro(self, input_tokens: int, images: int) -> int:
+        return _ceil(max(0, int(input_tokens)), self.input_per_million) + (
+            self.output_per_image * max(1, int(images))
+        )
+
+
+Rate = TokenRate | UnitRate | ImageRate
+
+_GOOGLE_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
+_GOOGLE_DATE = "2026-11-08"
+_GOOGLE_VERSION = "google-standard-2026-11-08"
 
 PUBLISHED: dict[tuple[str, str], Rate] = {
     ("deepseek", "deepseek-flash"): TokenRate(
@@ -67,6 +95,23 @@ PUBLISHED: dict[tuple[str, str], Rate] = {
         input_hit_per_million=44_000,  # $0.044 / 1M peak cache hit
         output_per_million=3_960_000,  # $3.96 / 1M peak output
         source=_DEEPSEEK_SOURCE, source_date=_DEEPSEEK_DATE, version=_DEEPSEEK_VERSION,
+    ),
+    # Standard paid tier. The official page says Gemini 2.5 Flash input is
+    # $0.30/1M and output (including thinking) is $2.50/1M.
+    ("google", "gemini-2.5-flash"): TokenRate(
+        "google", "gemini-2.5-flash",
+        input_miss_per_million=300_000,
+        input_hit_per_million=30_000,
+        output_per_million=2_500_000,
+        source=_GOOGLE_SOURCE, source_date=_GOOGLE_DATE, version=_GOOGLE_VERSION,
+    ),
+    # The image row also charges text/image input at $0.30/1M. Images up to
+    # 1024x1024 consume 1290 output tokens, stated as $0.039 per image.
+    ("google", "gemini-2.5-flash-image"): ImageRate(
+        "google", "gemini-2.5-flash-image",
+        input_per_million=300_000,
+        output_per_image=39_000,
+        source=_GOOGLE_SOURCE, source_date=_GOOGLE_DATE, version=_GOOGLE_VERSION,
     ),
 }
 

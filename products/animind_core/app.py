@@ -29,8 +29,9 @@ from . import (
     stick,
     styles,
 )
+from .spend import ledger
 from .spend.contract import publish as publish_usage
-from .spend.http import protect
+from .spend.http import protect, require_explicit_identity
 from .spend.plan import build as build_plan
 
 app = FastAPI(title="Animind core", version="1.0.0")
@@ -174,13 +175,14 @@ def post_avatar(body: dict, request: Request) -> dict:
     if body.get("generate") is True:
         if not admin_auth.trusted(request.headers.get("x-animind-admin")):
             raise HTTPException(403, "admin")
+        require_explicit_identity(request)
 
         def live() -> dict:
             return admin_avatar.run(body, user, _base(request))
 
         result = protect(request, body, "avatar", live)
         result["usage"] = publish_usage(result.get("usage"), job_id=result.get("id"))
-        return result
+        return admin_avatar.keep(user, result)
 
     def run() -> dict:
         return avatar_request.generate_avatar(
@@ -203,10 +205,26 @@ def get_avatar(job_id: str, request: Request) -> dict:
         user = avatar_request.accept_user(request.headers.get("x-animind-user"))
     except ValueError as exc:
         raise HTTPException(400, "user") from exc
-    found = avatar_request.get(job_id, user)
+    found = avatar_request.get(job_id, user) or admin_avatar.get(user, job_id)
     if found is None:
         raise HTTPException(404, "avatar not found")
     return found
+
+
+@app.post("/v1/admin/avatars/preflight", dependencies=[Depends(require_key)])
+def avatar_preflight(request: Request) -> dict:
+    """Validate one-character proof prerequisites without calling a provider."""
+    if not admin_auth.trusted(request.headers.get(admin_auth.HEADER)):
+        raise HTTPException(403, "admin")
+    return admin_avatar.preflight()
+
+
+@app.get("/v1/admin/spend", dependencies=[Depends(require_key)])
+def admin_spend(request: Request) -> dict:
+    """Sanitized spend book; only the separate super-admin credential may read it."""
+    if not admin_auth.trusted_super(request.headers.get(admin_auth.HEADER)):
+        raise HTTPException(403, "super_admin")
+    return ledger.admin_summary()
 
 
 @app.post("/v1/render", dependencies=[Depends(require_key)])

@@ -12,7 +12,7 @@ from typing import Any, Iterator
 
 from . import contract, ledger, prices
 from . import limits as limit_mod
-from .prices import TokenRate, UnitRate
+from .prices import ImageRate, TokenRate, UnitRate
 
 _CURRENT: ContextVar["Frame | None"] = ContextVar("animind_spend_frame", default=None)
 
@@ -35,6 +35,7 @@ class Frame:
     events: list[dict[str, Any]] = field(default_factory=list)
     seen: dict[tuple, int] = field(default_factory=dict)
     images: int = 0
+    request_reserved_cents: int = 0
     origin: str = "live"
     origin_ref: str = ""
     idempotency_key: str | None = None
@@ -143,9 +144,26 @@ def _prompt_hash(prompt: str | None) -> str | None:
     return hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
 
+def _attempt_ref(
+    frame: Frame,
+    provider: str,
+    model: str | None,
+    operation: str,
+    prompt: str | None,
+    attempt: int,
+) -> str:
+    logical_request = frame.idempotency_key or frame.request_id
+    raw = ":".join(
+        (logical_request, provider, model or "", operation, _prompt_hash(prompt) or "", str(attempt))
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
 def _ceiling(price: Any, found: limit_mod.Limits, images: int) -> int | None:
     if isinstance(price, TokenRate):
         micro = price.ceiling_micro(found.max_input_tokens, found.max_output_tokens)
+    elif isinstance(price, ImageRate):
+        micro = price.ceiling_micro(found.max_input_tokens, images or 1)
     elif isinstance(price, UnitRate) and price.unit == "image":
         micro = price.micro_usd * max(1, images)
     elif isinstance(price, UnitRate) and price.unit == "audio_second":
@@ -168,6 +186,12 @@ def _actual_micro(price: Any, obs: dict[str, Any]) -> int | None:
         return prices.estimate_micro(
             price, int(obs.get("input_tokens") or 0), int(obs.get("output_tokens") or 0), obs.get("cached_tokens"),
         )
+    if isinstance(price, ImageRate):
+        count = obs.get("images")
+        incoming = obs.get("input_tokens")
+        if count is None or incoming is None:
+            return None
+        return price.ceiling_micro(int(incoming), int(count))
     if isinstance(price, UnitRate) and price.unit == "image":
         count = obs.get("images")
         if count is None:
@@ -219,6 +243,7 @@ def admit_unpriced(
     cents = 0
     entry_id = new_id()
     entry = _entry(frame, entry_id, provider, model, operation, attempt, "reserved", None, price, cents, {})
+    entry["attempt_ref"] = _attempt_ref(frame, provider, model, operation, None, attempt)
     entry["estimated_micro"] = None
     entry["reported_micro"] = None
     try:
@@ -286,8 +311,17 @@ def billable(
     if cents is None:
         _remember(frame, provider, model, operation, attempt_n, "blocked", "price_unavailable", price, None, {})
         raise SpendDenied("price_unavailable")
+    if frame.request_reserved_cents + cents > found.request_cents:
+        _remember(
+            frame, provider, model, operation, attempt_n,
+            "blocked", "request_budget", price, None, {},
+        )
+        raise SpendDenied("request_budget")
     entry_id = new_id()
     entry = _entry(frame, entry_id, provider, model, operation, attempt_n, "reserved", None, price, cents, {})
+    entry["attempt_ref"] = _attempt_ref(
+        frame, provider, model, operation, prompt, attempt_n
+    )
     try:
         result = ledger.reserve(entry, cents, found)
     except ledger.LedgerUnavailable:
@@ -298,6 +332,7 @@ def billable(
     if result != "ok":
         _remember(frame, provider, model, operation, attempt_n, "blocked", result, price, None, {})
         raise SpendDenied(result)
+    frame.request_reserved_cents += cents
     if images:
         frame.images += images
     attempt = Attempt(

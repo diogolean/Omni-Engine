@@ -8,9 +8,32 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
-from products.animind_core import characters, portrait
+from products.animind_core import characters, portrait, rig
 
 H = {"Authorization": "Bearer test-key"}
+
+
+def test_birefnet_backend_is_explicit_and_never_describes_chroma_fallback(monkeypatch):
+    class Runtime:
+        @staticmethod
+        def get_available_providers():
+            return ["CPUExecutionProvider", "CUDAExecutionProvider"]
+
+    assert rig._matte_providers(Runtime, "cpu") == ["CPUExecutionProvider"]
+    assert rig._matte_providers(Runtime, "cuda") == [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    with pytest.raises(RuntimeError, match="must be cpu, cuda, rocm, or auto"):
+        rig._matte_providers(Runtime, "chroma")
+    worker = type("Worker", (), {"exitcode": -9})()
+    failure = rig._matte_failure(worker)
+    assert "OOM/SIGKILL" in failure
+    assert "no chroma fallback was used" in failure
+    assert "16 GiB" in failure
+    monkeypatch.setenv("ANIMIND_MATTE_MODE", "chroma")
+    with pytest.raises(RuntimeError, match="must be isolated or in_process"):
+        rig.BiRefNetMatte()(Image.new("RGB", (1, 1)))
 
 
 @pytest.fixture()

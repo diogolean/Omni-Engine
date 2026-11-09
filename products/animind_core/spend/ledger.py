@@ -110,6 +110,8 @@ def _bootstrap(conn) -> None:
           origin text NOT NULL,
           origin_ref text,
           idempotency_key text,
+          hold_scope text,
+          attempt_ref text,
           created_at timestamptz NOT NULL,
           updated_at timestamptz NOT NULL
         )
@@ -166,6 +168,12 @@ def _bootstrap(conn) -> None:
         "ALTER TABLE animind_core_spend_entries ADD COLUMN IF NOT EXISTS origin_ref text"
     )
     conn.execute(
+        "ALTER TABLE animind_core_spend_entries ADD COLUMN IF NOT EXISTS hold_scope text"
+    )
+    conn.execute(
+        "ALTER TABLE animind_core_spend_entries ADD COLUMN IF NOT EXISTS attempt_ref text"
+    )
+    conn.execute(
         """
         CREATE TABLE IF NOT EXISTS animind_core_spend_slots (
           scope text PRIMARY KEY,
@@ -174,6 +182,10 @@ def _bootstrap(conn) -> None:
         """
     )
     conn.execute("DROP FUNCTION IF EXISTS animind_core_spend_reserve(bigint, bigint, bigint, text, text, integer, integer, timestamptz)")
+    conn.execute(
+        "DROP FUNCTION IF EXISTS animind_core_spend_reserve("
+        "bigint, bigint, bigint, text, text, text, text, integer, integer, timestamptz, text, text)"
+    )
     conn.execute(_RESERVE_SQL)
 
 
@@ -181,7 +193,7 @@ _RESERVE_SQL = r"""
 CREATE OR REPLACE FUNCTION animind_core_spend_reserve(
   p_cents bigint, p_global bigint, p_user bigint, p_user_scope text, p_user_id text,
   p_origin_scope text, p_origin_id text, p_rate integer, p_concurrency integer,
-  p_now timestamptz, p_request text, p_operation text
+  p_now timestamptz, p_request text, p_operation text, p_attempt_ref text
 ) RETURNS text LANGUAGE plpgsql AS $fn$
 DECLARE
   v_user_count integer;
@@ -196,7 +208,7 @@ DECLARE
   v_first text;
   v_second text;
 BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext(p_request || ':' || p_user_id || ':' || p_operation));
+  PERFORM pg_advisory_xact_lock(hashtext(p_request || ':' || p_user_id || ':' || p_attempt_ref));
   INSERT INTO animind_core_spend_rates (user_id, window_start, count)
   VALUES (p_user_id, p_now, 0)
   ON CONFLICT (user_id) DO NOTHING;
@@ -216,8 +228,8 @@ BEGIN
   END IF;
   IF EXISTS (
     SELECT 1 FROM animind_core_spend_entries
-    WHERE request_id = p_request AND user_id = p_user_id AND operation = p_operation
-      AND status IN ('reserved', 'succeeded', 'not_charged')
+    WHERE request_id = p_request AND user_id = p_user_id AND attempt_ref = p_attempt_ref
+      AND status IN ('reserved', 'succeeded', 'uncertain', 'not_charged')
   ) THEN
     RETURN 'replay';
   END IF;
@@ -296,7 +308,8 @@ def _hash(raw: str) -> str:
 def reserve(entry: dict[str, Any], cents: int, limits: Any) -> str:
     """Return ``ok``, ``replay``, or a block code. The entry is inserted only on ``ok``."""
     ensure()
-    user_scope = f"user:{entry['user_id']}"
+    now = _now()
+    user_scope = f"user:{entry['user_id']}:day:{now.date().isoformat()}"
     origin_ref = str(entry.get("origin_ref") or _hash(str(entry.get("origin") or "unknown")))
     origin_scope = f"origin:{origin_ref}"
     try:
@@ -304,13 +317,14 @@ def reserve(entry: dict[str, Any], cents: int, limits: Any) -> str:
             row = conn.execute(
                 """
                 SELECT animind_core_spend_reserve(
-                  %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                  %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
                     cents, limits.budget_cents, limits.user_cents, user_scope, entry["user_id"],
-                    origin_scope, origin_ref, limits.rate_per_min, limits.concurrency, _now(),
+                    origin_scope, origin_ref, limits.rate_per_min, limits.concurrency, now,
                     entry.get("request_id") or "", entry.get("operation") or "",
+                    entry.get("attempt_ref") or entry["id"],
                 ),
             ).fetchone()
             result = str(row[0] if row else "budget")
@@ -320,7 +334,12 @@ def reserve(entry: dict[str, Any], cents: int, limits: Any) -> str:
             if result != "ok":
                 conn.rollback()
                 return result if result in {"rate", "busy", "budget"} else "budget"
-            _insert(conn, entry | {"reserved_cents": cents, "status": "reserved", "origin_ref": origin_ref})
+            _insert(conn, entry | {
+                "reserved_cents": cents,
+                "status": "reserved",
+                "origin_ref": origin_ref,
+                "hold_scope": user_scope,
+            })
             conn.commit()
             return "ok"
     except LedgerUnavailable:
@@ -352,12 +371,13 @@ def _insert(conn, entry: dict[str, Any]) -> None:
           id, request_id, attempt, job_ref, user_id, operation, provider, model, status, block, reason,
           latency_ms, input_tokens, output_tokens, cached_tokens, thinking_tokens, image_count,
           audio_seconds, video_seconds, estimated_micro, reported_micro, reserved_cents, currency,
-          price_version, origin, origin_ref, idempotency_key, created_at, updated_at
+          price_version, origin, origin_ref, idempotency_key, hold_scope, attempt_ref,
+          created_at, updated_at
         ) VALUES (
           %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
           %s, %s, %s, %s, %s, %s,
           %s, %s, %s, %s, %s, %s,
-          %s, %s, %s, %s, %s, %s
+          %s, %s, %s, %s, %s, %s, %s, %s
         )
         """,
         (
@@ -368,7 +388,7 @@ def _insert(conn, entry: dict[str, Any]) -> None:
             entry.get("audio_seconds"), entry.get("video_seconds"), entry.get("estimated_micro"),
             entry.get("reported_micro"), entry.get("reserved_cents"), entry.get("currency"),
             entry.get("price_version"), entry.get("origin") or "live", entry.get("origin_ref"),
-            entry.get("idempotency_key"),
+            entry.get("idempotency_key"), entry.get("hold_scope"), entry.get("attempt_ref"),
             now, now,
         ),
     )
@@ -380,13 +400,14 @@ def settle(entry_id: str, status: str, patch: dict[str, Any]) -> None:
     try:
         with _connect() as conn:
             row = conn.execute(
-                "SELECT reserved_cents, user_id, status, origin_ref FROM animind_core_spend_entries WHERE id = %s FOR UPDATE",
+                "SELECT reserved_cents, user_id, hold_scope, status, origin_ref "
+                "FROM animind_core_spend_entries WHERE id = %s FOR UPDATE",
                 (entry_id,),
             ).fetchone()
-            if row and row[2] == "reserved":
+            if row and row[3] == "reserved":
                 cents = int(row[0] or 0)
-                scope = f"user:{row[1]}"
-                origin_scope = f"origin:{row[3]}" if row[3] else None
+                scope = str(row[2] or f"user:{row[1]}")
+                origin_scope = f"origin:{row[4]}" if row[4] else None
                 conn.execute(
                     "UPDATE animind_core_spend_inflight SET slots = GREATEST(slots - 1, 0) WHERE id = 1"
                 )
@@ -468,6 +489,49 @@ def rows_for_job(job_ref: str) -> list[dict[str, Any]]:
             return found
     except LedgerUnavailable:
         return []
+
+
+def admin_summary() -> dict[str, Any]:
+    """Sanitized operational spend book. The HTTP layer enforces super-admin."""
+    ensure()
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                """
+                SELECT created_at::date AS day, user_id, operation, provider, model, status,
+                       count(*) AS calls,
+                       sum(estimated_micro) AS estimated_micro,
+                       sum(reported_micro) AS reported_micro,
+                       sum(reserved_cents) AS reserved_cents
+                FROM animind_core_spend_entries
+                GROUP BY 1, 2, 3, 4, 5, 6
+                ORDER BY 1 DESC, 2, 3, 4, 5, 6
+                """
+            )
+            columns = [desc.name for desc in cur.description]
+            groups = [dict(zip(columns, row)) for row in cur.fetchall()]
+            for group in groups:
+                group["day"] = group["day"].isoformat()
+            hold_cur = conn.execute(
+                """
+                SELECT scope, currency, limit_cents, reserved_cents, settled_cents
+                FROM animind_core_spend_holds ORDER BY scope
+                """
+            )
+            hold_columns = [desc.name for desc in hold_cur.description]
+            holds = [dict(zip(hold_columns, row)) for row in hold_cur.fetchall()]
+            conn.rollback()
+            return {
+                "schema": "animind.spendBook.v1",
+                "currency": "USD",
+                "authority": "animind_core",
+                "groups": groups,
+                "holds": holds,
+            }
+    except LedgerUnavailable:
+        raise
+    except Exception as exc:
+        raise LedgerUnavailable() from exc
 
 
 def count_entries() -> int:

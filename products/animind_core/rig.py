@@ -26,9 +26,11 @@ touches git. ``build_mock_rig`` draws the same layer set with PIL, no network.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import math
+import multiprocessing
 import os
 import re
 from pathlib import Path
@@ -1165,6 +1167,7 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
 
         model = parts["browModel"]
         view["browModel"] = brow_draw.mirror_model(model, W) if mirror else json.loads(json.dumps(model))
+    view["anchors"] = _view_anchors(view)
     # Same geometry with file names instead of URLs, for the server renderer.
     local = json.loads(json.dumps(view))
     for layer in local["layers"]:
@@ -1175,6 +1178,37 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
         layer["url"] = f"expressions/{emotion}.png"
     (out / "view.json").write_text(json.dumps(local, indent=2), encoding="utf-8")
     return view
+
+
+def _view_anchors(view: dict[str, Any]) -> dict[str, Any]:
+    """Stable pixel-space anchors derived from the final per-view layers."""
+    layers = {layer["name"]: layer for layer in view["layers"]}
+
+    def center(layer: dict[str, Any] | None) -> list[float] | None:
+        if layer is None:
+            return None
+        return [layer["x"] + layer["w"] / 2, layer["y"] + layer["h"] / 2]
+
+    mouth = (view.get("visemes") or {}).get("X")
+    eye_points = (view.get("mouthQA") or {}).get("eyes") or []
+    anchors: dict[str, Any] = {
+        "coordinateSpace": "canvas_px",
+        "head": center(layers.get("head")),
+        "neck": center(layers.get("neck")),
+        "torso": center(layers.get("torso") or layers.get("body")),
+        "mouth": center(mouth),
+        "eyes": [
+            [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]
+            for box in eye_points
+        ],
+        "brows": center(layers.get("brows")),
+    }
+    anchors["eyeLineY"] = (
+        sum(point[1] for point in anchors["eyes"]) / len(anchors["eyes"])
+        if anchors["eyes"]
+        else None
+    )
+    return anchors
 
 
 def load_view(skin: Path, view: str) -> dict[str, Any]:
@@ -1632,17 +1666,23 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
 
 
 class BiRefNetMatte:
-    """BiRefNet (rembg ``birefnet-general``) with the ONNX memory arena off.
+    """BiRefNet with explicit device selection and no chroma fallback.
 
-    The engine's cached session keeps growing past 9 GB on CPU after a few
-    1024px passes; with the arena off it stays near 8 GB and is freed by
-    :meth:`close` once the character is built, so the API does not hold it.
+    The default isolated process contains CPU memory growth and turns an OS
+    OOM kill into a reviewable API error instead of killing the parent.
     """
 
     def __init__(self) -> None:
         self._session: Any = None
+        self._worker: Any = None
+        self._pipe: Any = None
 
     def __call__(self, image: Image.Image) -> Image.Image:
+        mode = (os.getenv("ANIMIND_MATTE_MODE") or "isolated").strip().lower()
+        if mode == "isolated":
+            return self._isolated(image)
+        if mode != "in_process":
+            raise RuntimeError("ANIMIND_MATTE_MODE must be isolated or in_process")
         from rembg import remove  # noqa: PLC0415
 
         if self._session is None:
@@ -1653,15 +1693,128 @@ class BiRefNetMatte:
             opts.enable_cpu_mem_arena = False
             opts.enable_mem_pattern = False
             cls = next(c for c in sessions_class if c.name() == "birefnet-general")
-            self._session = cls("birefnet-general", opts)
+            self._session = cls(
+                "birefnet-general",
+                opts,
+                providers=_matte_providers(ort),
+            )
         out = remove(image.convert("RGB"), session=self._session, alpha_matting=False)
         return out.convert("RGBA")
+
+    def _isolated(self, image: Image.Image) -> Image.Image:
+        timeout = float((os.getenv("ANIMIND_MATTE_TIMEOUT_S") or "180").strip())
+        if timeout <= 0:
+            raise RuntimeError("ANIMIND_MATTE_TIMEOUT_S must be positive")
+        if self._worker is None:
+            ctx = multiprocessing.get_context("spawn")
+            parent, child = ctx.Pipe()
+            self._worker = ctx.Process(
+                target=_birefnet_worker,
+                args=(child, (os.getenv("ANIMIND_MATTE_DEVICE") or "cpu").strip().lower()),
+                daemon=True,
+            )
+            self._worker.start()
+            child.close()
+            self._pipe = parent
+        payload = io.BytesIO()
+        image.convert("RGB").save(payload, format="PNG")
+        try:
+            self._pipe.send_bytes(payload.getvalue())
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            raise RuntimeError(_matte_failure(self._worker)) from exc
+        if not self._pipe.poll(timeout):
+            if not self._worker.is_alive():
+                raise RuntimeError(_matte_failure(self._worker))
+            raise RuntimeError(
+                f"BiRefNet timed out after {timeout:g}s; set ANIMIND_MATTE_TIMEOUT_S "
+                "or provision the documented matte worker memory"
+            )
+        try:
+            result = self._pipe.recv()
+        except (EOFError, OSError) as exc:
+            raise RuntimeError(_matte_failure(self._worker)) from exc
+        if result.get("error"):
+            raise RuntimeError(f"BiRefNet worker failed: {result['error']}")
+        return Image.open(io.BytesIO(result["png"])).convert("RGBA")
 
     def close(self) -> None:
         import gc  # noqa: PLC0415
 
+        if self._pipe is not None:
+            try:
+                self._pipe.send_bytes(b"")
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+        if self._worker is not None:
+            self._worker.join(timeout=5)
+            if self._worker.is_alive():
+                self._worker.terminate()
+                self._worker.join(timeout=5)
+        if self._pipe is not None:
+            self._pipe.close()
+        self._worker = None
+        self._pipe = None
         self._session = None
         gc.collect()
+
+
+def _matte_providers(ort: Any, device: str | None = None) -> list[str]:
+    selected = (device or os.getenv("ANIMIND_MATTE_DEVICE") or "cpu").strip().lower()
+    available = set(ort.get_available_providers())
+    choices = {
+        "cpu": "CPUExecutionProvider",
+        "cuda": "CUDAExecutionProvider",
+        "rocm": "ROCMExecutionProvider",
+    }
+    if selected == "auto":
+        for provider in ("CUDAExecutionProvider", "ROCMExecutionProvider", "CPUExecutionProvider"):
+            if provider in available:
+                return [provider, *(["CPUExecutionProvider"] if provider != "CPUExecutionProvider" else [])]
+    provider = choices.get(selected)
+    if provider is None:
+        raise RuntimeError("ANIMIND_MATTE_DEVICE must be cpu, cuda, rocm, or auto")
+    if provider not in available:
+        raise RuntimeError(f"BiRefNet device {selected} is unavailable; providers={sorted(available)}")
+    return [provider, *(["CPUExecutionProvider"] if provider != "CPUExecutionProvider" else [])]
+
+
+def _birefnet_worker(pipe: Any, device: str) -> None:
+    try:
+        import onnxruntime as ort
+        from rembg import remove
+        from rembg.sessions import sessions_class
+
+        opts = ort.SessionOptions()
+        opts.enable_cpu_mem_arena = False
+        opts.enable_mem_pattern = False
+        cls = next(candidate for candidate in sessions_class if candidate.name() == "birefnet-general")
+        session = cls("birefnet-general", opts, providers=_matte_providers(ort, device))
+        while True:
+            raw = pipe.recv_bytes()
+            if not raw:
+                break
+            image = Image.open(io.BytesIO(raw)).convert("RGB")
+            out = remove(image, session=session, alpha_matting=False).convert("RGBA")
+            encoded = io.BytesIO()
+            out.save(encoded, format="PNG", compress_level=1)
+            pipe.send({"png": encoded.getvalue()})
+    except BaseException as exc:  # noqa: BLE001
+        try:
+            pipe.send({"error": f"{type(exc).__name__}: {str(exc)[:240]}"})
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        pipe.close()
+
+
+def _matte_failure(worker: Any) -> str:
+    code = getattr(worker, "exitcode", None)
+    suffix = " (likely OOM/SIGKILL)" if code in {-9, 137} else ""
+    return (
+        f"BiRefNet worker exited with code {code}{suffix}; no chroma fallback was used. "
+        "CPU mode requires a dedicated worker with at least 16 GiB available memory, "
+        "or set ANIMIND_MATTE_DEVICE=cuda/rocm on a supported host"
+    )
 
 
 def reset_budget() -> None:

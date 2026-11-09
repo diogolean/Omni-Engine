@@ -55,6 +55,7 @@ def _limits(monkeypatch, schema_name: str, **overrides: str) -> None:
         "ANIMIND_SPEND_SCHEMA": schema_name,
         "ANIMIND_SPEND_BUDGET_CENTS": "100",
         "ANIMIND_SPEND_USER_CENTS": "100",
+        "ANIMIND_SPEND_REQUEST_CENTS": "100",
         "ANIMIND_SPEND_TIMEOUT_MS": "5000",
         "ANIMIND_SPEND_MAX_RETRIES": "1",
         "ANIMIND_SPEND_RATE_PER_MIN": "30",
@@ -127,6 +128,7 @@ def test_missing_ledger_makes_zero_provider_calls(monkeypatch):
     monkeypatch.setenv("ANIMIND_SPEND_DATABASE_URL", "postgresql://animind_test@127.0.0.1:1/none")
     monkeypatch.setenv("ANIMIND_SPEND_BUDGET_CENTS", "100")
     monkeypatch.setenv("ANIMIND_SPEND_USER_CENTS", "100")
+    monkeypatch.setenv("ANIMIND_SPEND_REQUEST_CENTS", "100")
     monkeypatch.setenv("ANIMIND_SPEND_TIMEOUT_MS", "5000")
     monkeypatch.setenv("ANIMIND_SPEND_MAX_RETRIES", "0")
     monkeypatch.setenv("ANIMIND_SPEND_RATE_PER_MIN", "10")
@@ -284,6 +286,32 @@ def test_gemini_text_and_disabled_image_adapter_make_zero_provider_calls(schema,
     assert calls == []
 
 
+def test_request_money_ceiling_is_independent_of_user_day_budget(schema, monkeypatch):
+    _limits(
+        monkeypatch,
+        schema,
+        ANIMIND_SPEND_REQUEST_CENTS="1",
+        ANIMIND_SPEND_USER_CENTS="100",
+    )
+    with frame_scope(_frame()):
+        with billable(
+            provider="deepseek",
+            model="deepseek-flash",
+            operation="text",
+            prompt="first stage",
+        ):
+            pass
+        with pytest.raises(SpendDenied) as caught:
+            with billable(
+                provider="deepseek",
+                model="deepseek-flash",
+                operation="text",
+                prompt="second stage",
+            ):
+                pass
+    assert caught.value.block == "request_budget"
+
+
 def test_stream_flag_never_opens_the_socket(schema, monkeypatch):
     _limits(monkeypatch, schema)
     entered = []
@@ -345,21 +373,26 @@ def test_two_connections_share_the_origin_limit(schema, monkeypatch):
     assert sorted(results) == ["ok", "rate"]
 
 
-def test_same_request_id_does_not_reserve_twice(schema, monkeypatch):
+def test_attempt_identity_dedupes_replay_but_allows_next_factory_stage(schema, monkeypatch):
     _limits(monkeypatch, schema)
     limits = read_limits()
     assert limits is not None
     entry = _entry("spd_replay", "user-a", request_id="req_same")
+    entry["attempt_ref"] = "logical-stage-a-attempt-1"
     assert ledger.reserve(entry, 10, limits) == "ok"
     again = _entry("spd_replay_2", "user-a", request_id="req_same")
+    again["attempt_ref"] = "logical-stage-a-attempt-1"
     assert ledger.reserve(again, 10, limits) == "replay"
+    next_stage = _entry("spd_stage_2", "user-a", request_id="req_same")
+    next_stage["attempt_ref"] = "logical-stage-b-attempt-1"
+    assert ledger.reserve(next_stage, 10, limits) == "ok"
     with __import__("psycopg").connect(URL) as conn:
         conn.execute(f"SET search_path TO {schema}")
         rows = conn.execute(
             "SELECT estimated_micro, reserved_cents, status FROM animind_core_spend_entries "
             "WHERE request_id = 'req_same'"
         ).fetchall()
-    assert len(rows) == 1
+    assert len(rows) == 2
     assert rows[0][2] == "reserved"
     assert rows[0][0] is None
 
@@ -377,6 +410,7 @@ def test_a_spending_route_without_a_ledger_is_labeled_closed(monkeypatch, tmp_pa
     monkeypatch.setenv("ANIMIND_GENERATION", "1")
     monkeypatch.setenv("ANIMIND_SPEND_BUDGET_CENTS", "100")
     monkeypatch.setenv("ANIMIND_SPEND_USER_CENTS", "100")
+    monkeypatch.setenv("ANIMIND_SPEND_REQUEST_CENTS", "100")
     monkeypatch.setenv("ANIMIND_SPEND_TIMEOUT_MS", "5000")
     monkeypatch.setenv("ANIMIND_SPEND_MAX_RETRIES", "1")
     monkeypatch.setenv("ANIMIND_SPEND_RATE_PER_MIN", "30")

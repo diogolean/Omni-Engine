@@ -1,9 +1,8 @@
 """Animindly spend contract for the web app.
 
-The Next.js app (github.com/diogolean/animind, `feat/mvp-ui`) reserves one
-outer call per route. It does not see provider calls made inside this core.
-This document is the compatibility report. The web repo does not need a change
-for the core to start metering those calls.
+The Next.js app does not reserve, estimate, or charge an outer call. CORE sees
+and records real provider attempts and is the sole ledger authority. The web
+displays the returned `usage` document and must remove any local charge.
 
 ## Response field
 
@@ -58,14 +57,12 @@ already stored for that job. A job that exists only in the ledger after a
 restart returns `status: "unknown"` plus `usage`. The MP4 itself is still in
 process memory.
 
-## What the web should do later
+## What the web must do
 
-Map `estimatedMicro` with `ceil(micro / 10000)` cents if it attaches usage to
-its own ledger. Do not add a second reservation when `calls` is empty or when
-the request is a job poll or a file download. `scriptCost.costUsd` on the
-legacy render result is not this contract. Offline template rows still say
-`0.0` there; `usage` is the source of truth and uses null when no provider
-priced the call.
+Display CORE `usage`; never attach it to another ledger or add a reservation.
+Polling and file downloads add no charge. `scriptCost.costUsd` on a legacy
+render result is not this contract. `usage` is the source of truth and uses
+null when no provider priced the call.
 
 Send `X-Animind-User` as an opaque id (`[A-Za-z0-9_-]{1,80}`). An email is
 rejected and not stored. Without the header every caller shares the
@@ -85,16 +82,26 @@ because off-peak is half and the page says prices can change.
 | `deepseek-flash` | $0.30 / 1M | $0.006 / 1M | $1.20 / 1M |
 | `deepseek-v4-pro` | $1.32 / 1M | $0.044 / 1M | $3.96 / 1M |
 
-No other provider has a rate in this tree from a page fetched for this change.
-Gemini, Together, OpenRouter, DashScope, and fal calls are refused until
-`ANIMIND_PRICE_TABLE_JSON` supplies a sourced row. A zero price is rejected.
-Prices from `production/cost` and from other products are not copied.
+Gemini standard paid-tier prices were checked 2026-11-08 at
+<https://ai.google.dev/gemini-api/docs/pricing>:
+
+| Model | Input | Cache input | Output |
+| --- | --- | --- | --- |
+| `gemini-2.5-flash` | $0.30 / 1M | $0.03 / 1M | $2.50 / 1M including thinking |
+| `gemini-2.5-flash-image` | $0.30 / 1M text/image tokens | — | $0.039 / image up to 1024×1024 |
+
+The image row is composite: $0.039 is not all-in because input is charged too.
+If input tokens are not observed, actual image cost remains null. Together,
+OpenRouter, DashScope, and fal calls are refused until the operator table has
+a sourced row. A zero price is rejected.
 
 ## Limits
 
 `ANIMIND_GENERATION` must be exactly `1`. Any other value, or a missing limit
 or database URL, refuses the provider call before the socket opens. The global
-budget includes admin. The ledger is Postgres (`ANIMIND_SPEND_DATABASE_URL`),
+budget includes admin; the user budget resets by UTC day, and
+`ANIMIND_SPEND_REQUEST_CENTS` caps one request. The ledger is Postgres
+(`ANIMIND_SPEND_DATABASE_URL`),
 with one transaction around the row lock, the hold, and the insert. There is
 no in-memory fallback.
 
@@ -103,9 +110,10 @@ no in-memory fallback.
 | Path | Meter | Price |
 | --- | --- | --- |
 | DeepSeek chat (`llm_providers.DeepSeekProvider`) | input, output, cache when the response has `prompt_cache_hit_tokens` | verified peak |
-| Gemini text (`script._gemini_call`) | tokens when `usage_metadata` is present, else null | unavailable, blocked |
+| Gemini text (`script._gemini_call`, `detect_features`) | tokens when `usage_metadata` is present, else null | official standard tier |
 | OpenRouter text | tokens; `usage.cost` is reported only | unavailable unless the operator table has the model |
-| Together / OpenRouter / Gemini images | image count | unavailable unless the operator table has the model |
+| Gemini image | image count plus input tokens when observed | official composite rate; incomplete observation stays null |
+| Together / OpenRouter images | image count | unavailable unless the operator table has the model |
 | DashScope and fal adapters | no socket; the guard refuses when a request frame is active | unavailable |
 | edge-tts retries | attempt count, cost null, reason `unpriced_transport` | not a keyed API |
 | Local script cache | `not_charged`, tokens null, reason `cache` | no provider call |

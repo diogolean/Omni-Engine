@@ -17,10 +17,12 @@ _REQUEST = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 
 _STATUS = {
     "disabled": 403,
+    "approval": 403,
     "credential": 503,
     "user": 400,
     "conflict": 409,
     "budget": 402,
+    "request_budget": 402,
     "rate": 429,
     "busy": 429,
     "over_cap": 400,
@@ -62,6 +64,15 @@ def parse_request_id(request: Request) -> str:
     if _REQUEST.match(raw):
         return raw
     return request_id()
+
+
+def require_explicit_identity(request: Request) -> None:
+    """Paid avatar execution must be replayable across process boundaries."""
+    if parse_key(request) is None:
+        raise HTTPException(400, "spend:idempotency_required")
+    raw = (request.headers.get("x-request-id") or "").strip()
+    if not _REQUEST.match(raw):
+        raise HTTPException(400, "spend:request_id_required")
 
 
 def body_hash(body: dict[str, Any]) -> str:
@@ -164,6 +175,14 @@ def _replay(frame, user_ref: str, key: str, digest: str, operation: str, body: d
         if saved is not None:
             return saved
         return {"id": found.get("resource_id"), "replay": True}
+    if operation == "avatar":
+        from products.animind_core import admin_avatar, avatar_request
+
+        avatar_id = str(found.get("resource_id") or "")
+        saved = admin_avatar.get(user_ref, avatar_id) or avatar_request.get(avatar_id, user_ref)
+        if saved is not None:
+            return saved
+        return {"id": avatar_id, "status": "unknown", "replay": True}
     return {"id": found.get("resource_id"), "replay": True}
 
 

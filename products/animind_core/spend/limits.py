@@ -12,6 +12,7 @@ _INT = re.compile(r"^\d+$")
 class Limits:
     budget_cents: int
     user_cents: int
+    request_cents: int
     timeout_ms: int
     max_retries: int
     rate_per_min: int
@@ -47,6 +48,7 @@ def generation_block() -> str | None:
 def read_limits() -> Limits | None:
     budget = _integer("ANIMIND_SPEND_BUDGET_CENTS", 0, 1_000_000_000)
     user = _integer("ANIMIND_SPEND_USER_CENTS", 0, 1_000_000_000)
+    request = _integer("ANIMIND_SPEND_REQUEST_CENTS", 0, 1_000_000_000)
     timeout = _integer("ANIMIND_SPEND_TIMEOUT_MS", 1, 120_000)
     retries = _integer("ANIMIND_SPEND_MAX_RETRIES", 0, 8)
     rate = _integer("ANIMIND_SPEND_RATE_PER_MIN", 1, 600)
@@ -57,13 +59,17 @@ def read_limits() -> Limits | None:
     images = _integer("ANIMIND_SPEND_MAX_IMAGES", 0, 100)
     audio = _integer("ANIMIND_SPEND_MAX_AUDIO_SEC", 0, 3_600)
     video = _integer("ANIMIND_SPEND_MAX_VIDEO_SEC", 0, 3_600)
-    values = (budget, user, timeout, retries, rate, concurrency, max_in, max_out, max_total, images, audio, video)
+    values = (
+        budget, user, request, timeout, retries, rate, concurrency,
+        max_in, max_out, max_total, images, audio, video,
+    )
     if any(item is None for item in values):
         return None
     if max_in + max_out > max_total:  # type: ignore[operator]
         return None
     return Limits(
-        budget_cents=budget, user_cents=user, timeout_ms=timeout, max_retries=retries,
+        budget_cents=budget, user_cents=user, request_cents=request,
+        timeout_ms=timeout, max_retries=retries,
         rate_per_min=rate, concurrency=concurrency, max_input_tokens=max_in,
         max_output_tokens=max_out, max_total_tokens=max_total, max_images=images,
         max_audio_seconds=audio, max_video_seconds=video,
