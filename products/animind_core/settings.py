@@ -30,6 +30,18 @@ def force_mock() -> bool:
     return (os.getenv("ANIMIND_FORCE_MOCK") or "").strip().lower() in {"1", "true", "yes"}
 
 
+def dry_run() -> bool:
+    """Unpaid mock generation for hosting checks. Never opens a paid socket."""
+    return (os.getenv("ANIMIND_DRY_RUN") or "").strip().lower() in {"1", "true", "yes"}
+
+
+def cors_origins() -> list[str]:
+    raw = (os.getenv("ANIMIND_CORS_ORIGINS") or "").strip()
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
 def gemini_available() -> bool:
     if force_mock():
         return False

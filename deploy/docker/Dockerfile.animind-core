@@ -1,0 +1,44 @@
+# Animind CORE API image for hosted generation.
+# Build from the repository root:
+#   docker build -f deploy/docker/Dockerfile.animind-core -t animind-core .
+# GPU is optional. BiRefNet on CPU needs >=16 GiB available RAM.
+
+FROM python:3.12-slim-bookworm
+
+LABEL org.opencontainers.image.source="https://github.com/diogolean/Omni-Engine" \
+      org.opencontainers.image.title="animind-core" \
+      org.opencontainers.image.description="Animind CORE avatar and spend API"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUTF8=1 \
+    ANIMIND_DATA_DIR=/var/lib/animind-core \
+    PORT=8787
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libgl1 \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/omni-engine
+
+COPY requirements-ci.txt products/animind_core/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements-ci.txt \
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+RUN mkdir -p /var/lib/animind-core \
+    && useradd --create-home --uid 10001 animind \
+    && chown -R animind:animind /var/lib/animind-core /opt/omni-engine
+
+USER animind
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD curl -fsS "http://127.0.0.1:${PORT}/v1/health" || exit 1
+
+CMD ["sh", "-c", "uvicorn products.animind_core.app:app --host 0.0.0.0 --port ${PORT}"]

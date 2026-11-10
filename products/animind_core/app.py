@@ -5,6 +5,7 @@ import hmac
 import os
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from . import (
@@ -36,6 +37,19 @@ from .spend.plan import build as build_plan
 
 app = FastAPI(title="Animind core", version="1.0.0")
 
+_CORS = settings.cors_origins()
+if _CORS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_CORS,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Authorization", "Content-Type", "Idempotency-Key", "X-Request-Id",
+            "X-Animind-User", "X-Animind-Admin", "X-API-Key",
+        ],
+    )
+
 
 def require_key(request: Request) -> None:
     key = settings.api_key()
@@ -56,7 +70,10 @@ def health() -> dict:
     out = {"ok": True, "version": API_VERSION, "generator": gen,
            # what this process can render: a stale server (older checkout) is visible before a render falls back
            "scenarios": list(scene.SCENARIOS), "templates": list(scene.PLACES),
-           "futureModes": [illustrated_scene.capability()]}
+           "futureModes": [illustrated_scene.capability()],
+           "dryRun": settings.dry_run(),
+           "matteMode": (os.getenv("ANIMIND_MATTE_MODE") or "isolated"),
+           "matteDevice": (os.getenv("ANIMIND_MATTE_DEVICE") or "cpu")}
     if settings.gemini_dead_reason():  # a 402 / depleted credit seen in this process: art falls back to mock
         out["generatorNote"] = f"Gemini indisponível: {settings.gemini_dead_reason()[:200]}"
     return out
@@ -176,6 +193,19 @@ def post_avatar(body: dict, request: Request) -> dict:
         if not admin_auth.trusted(request.headers.get("x-animind-admin")):
             raise HTTPException(403, "admin")
         require_explicit_identity(request)
+        if body.get("dryRun") is True:
+            from . import dry_run  # noqa: PLC0415
+            from .spend.guard import SpendDenied  # noqa: PLC0415
+            from .spend.http import http_error  # noqa: PLC0415
+
+            if not settings.dry_run():
+                raise HTTPException(403, "dry_run_disabled")
+            try:
+                result = dry_run.run(body, user, _base(request))
+            except SpendDenied as exc:
+                raise http_error(exc.block) from exc
+            result["usage"] = publish_usage(result.get("usage"), job_id=result.get("id"))
+            return admin_avatar.keep(user, result)
 
         def live() -> dict:
             return admin_avatar.run(body, user, _base(request))

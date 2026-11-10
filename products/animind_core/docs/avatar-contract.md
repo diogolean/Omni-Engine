@@ -128,3 +128,14 @@ both image count and input-token usage are observed. Detection and retries are
 separate calls. Unknown estimated or reported cost is `null`, never zero.
 The official page marks these models deprecated; model replacement and its
 official price must be approved and published before execution.
+
+
+## Dry-run
+
+Set `ANIMIND_DRY_RUN=1` on the server. An admin may then call
+`POST /v1/avatars` with `{"generate":true,"dryRun":true}`. CORE forces the
+mock provider, skips paid spend admission, persists `animind.puppet.v3`, and
+returns the same document from `GET /v1/avatars/{id}`. No Gemini socket opens.
+
+Hosting, CORS, healthcheck, and env names:
+`products/animind_core/docs/deploy.md`.

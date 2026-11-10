@@ -178,7 +178,8 @@ def test_admin_adapter_runs_the_canonical_fixture_pipeline(schema, client, monke
         assert view["anchors"]["mouth"]
     assert all(report["pass"] for report in body["alignment"].values())
     assert body["stages"]["pipeline"] == "products.animind_core.characters.create_character"
-    assert "products.animind_core.rig.build_rig" in body["stages"]["actualModules"]
+    assert "products.animind_core.rig.build_mock_rig" in body["stages"]["actualModules"]
+    assert "products.animind_core.rig.build_rig" not in body["stages"]["actualModules"]
     assert body["qa"]["costUsd"] is None
     assert body["callPlan"]["image"]["maximum"] == 18
     assert body["callPlan"]["detectFeatures"]["maximum"] == 6
@@ -246,3 +247,43 @@ def test_spend_book_is_super_admin_only(schema, client, monkeypatch):
     )
     assert allowed.status_code == 200
     assert allowed.json()["authority"] == "animind_core"
+
+
+def test_dry_run_post_get_returns_puppet_v3(client, monkeypatch, tmp_path):
+    monkeypatch.setenv("ANIMIND_ADMIN_TOKEN", TOKEN)
+    monkeypatch.setenv("ANIMIND_DRY_RUN", "1")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("ANIMIND_AVATAR_SPEND_APPROVED", raising=False)
+    response = client.post(
+        "/v1/avatars",
+        headers={**H, **EXEC, "X-Animind-User": "user_one", "X-Animind-Admin": TOKEN},
+        json={**BODY, "dryRun": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["schema"] == "animind.puppet.v3"
+    assert body["dryRun"] is True
+    assert body["providerCall"] is False
+    assert body["generator"] == "mock"
+    assert "products.animind_core.rig.build_mock_rig" in body["stages"]["actualModules"]
+    for view in body["views"].values():
+        layers = {layer["name"] for layer in view["layers"]}
+        assert {"torso", "neck", "head", "eyes", "brows"} <= layers
+    loaded = client.get(
+        f"/v1/avatars/{body['id']}",
+        headers={**H, "X-Animind-User": "user_one"},
+    )
+    assert loaded.status_code == 200
+    assert loaded.json() == body
+
+
+def test_dry_run_body_without_server_flag_is_refused(client, monkeypatch):
+    monkeypatch.setenv("ANIMIND_ADMIN_TOKEN", TOKEN)
+    monkeypatch.delenv("ANIMIND_DRY_RUN", raising=False)
+    response = client.post(
+        "/v1/avatars",
+        headers={**H, **EXEC, "X-Animind-User": "user_one", "X-Animind-Admin": TOKEN},
+        json={**BODY, "dryRun": True},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "dry_run_disabled"

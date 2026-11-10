@@ -23,7 +23,11 @@ def generate_avatar(
 
     name = str(body.get("name") or "person")[:40]
     prompt = str(body.get("prompt") or name)[:400]
-    paid = not rig.is_einstein(name, prompt)
+    request_dry = body.get("dryRun") is True
+    if request_dry and not settings.dry_run():
+        raise SpendDenied("disabled")
+    dry = request_dry and settings.dry_run()
+    paid = not rig.is_einstein(name, prompt) and not dry
     if paid:
         if not image_key_present():
             raise SpendDenied("credential")
@@ -46,11 +50,21 @@ def generate_avatar(
         "rawPrompt": body.get("rawPrompt"),
     }
     root = settings.data_dir() / "users" / owner / "puppets"
-    result = characters.create_character(
-        request,
-        base_url,
-        puppets_root=root,
-    )
+    previous_mock = os.environ.get("ANIMIND_FORCE_MOCK")
+    if dry:
+        os.environ["ANIMIND_FORCE_MOCK"] = "1"
+    try:
+        result = characters.create_character(
+            request,
+            base_url,
+            puppets_root=root,
+        )
+    finally:
+        if dry:
+            if previous_mock is None:
+                os.environ.pop("ANIMIND_FORCE_MOCK", None)
+            else:
+                os.environ["ANIMIND_FORCE_MOCK"] = previous_mock
     failed = list((result.get("qa") or {}).get("failed") or [])
     if result.get("generator") == "mock":
         failed.append("provider_fixture")
@@ -132,9 +146,19 @@ def generate_avatar(
     }
     if isinstance(result.get("qa"), dict):
         result["qa"]["costUsd"] = None
-    result["stages"] = {
-        "pipeline": "products.animind_core.characters.create_character",
-        "actualModules": [
+    if result.get("generator") == "mock" or dry:
+        actual = [
+            "products.animind_core.characters.create_character",
+            "products.animind_core.rig.build_mock_rig",
+            "products.animind_core.rig.assemble",
+            "products.animind_core.mouthset",
+            "products.animind_core.brow_draw",
+            "products.animind_core.qa.finalize",
+            "products.animind_core.sheet",
+            "products.animind_core.eye_control.assess_skin",
+        ]
+    else:
+        actual = [
             "products.animind_core.characters.create_character",
             "products.animind_core.rig.build_rig",
             "products.aiwake.animator.factory.create_puppet.generate_character_image",
@@ -146,10 +170,14 @@ def generate_avatar(
             "products.animind_core.qa.finalize",
             "products.animind_core.sheet",
             "products.animind_core.eye_control.assess_skin",
-        ],
+        ]
+    result["stages"] = {
+        "pipeline": "products.animind_core.characters.create_character",
+        "actualModules": actual,
         "architecturalSources": list(characters.AIWAKE_AVATAR_SOURCES),
         "qa": "products.animind_core.qa.finalize",
         "eyeControl": "products.animind_core.eye_control.assess_skin",
+        "dryRun": bool(dry),
     }
     result["callPlan"] = rig.call_plan()
     return result
