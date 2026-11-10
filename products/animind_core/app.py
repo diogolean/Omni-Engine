@@ -5,25 +5,50 @@ import hmac
 import os
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from . import (
     API_VERSION,
+    admin_auth,
+    admin_avatar,
+    avatar_request,
     casting,
     characters,
+    debate,
     illustrated_scene,
     knowledge,
     languages,
+    owner,
     personas,
+    portrait,
     preview,
+    puppet_library,
     render,
     scene,
     settings,
     stick,
     styles,
 )
+from .spend import ledger
+from .spend.contract import publish as publish_usage
+from .spend.http import protect, require_explicit_identity
+from .spend.plan import build as build_plan
 
 app = FastAPI(title="Animind core", version="1.0.0")
+
+_CORS = settings.cors_origins()
+if _CORS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_CORS,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=[
+            "Authorization", "Content-Type", "Idempotency-Key", "X-Request-Id",
+            "X-Animind-User", "X-Animind-Admin", "X-API-Key",
+        ],
+    )
 
 
 def require_key(request: Request) -> None:
@@ -45,22 +70,51 @@ def health() -> dict:
     out = {"ok": True, "version": API_VERSION, "generator": gen,
            # what this process can render: a stale server (older checkout) is visible before a render falls back
            "scenarios": list(scene.SCENARIOS), "templates": list(scene.PLACES),
-           "futureModes": [illustrated_scene.capability()]}
+           "futureModes": [illustrated_scene.capability()],
+           "dryRun": settings.dry_run(),
+           "matteMode": (os.getenv("ANIMIND_MATTE_MODE") or "isolated"),
+           "matteDevice": (os.getenv("ANIMIND_MATTE_DEVICE") or "cpu")}
     if settings.gemini_dead_reason():  # a 402 / depleted credit seen in this process: art falls back to mock
         out["generatorNote"] = f"Gemini indisponível: {settings.gemini_dead_reason()[:200]}"
     return out
 
 
+@app.post("/v1/plan", dependencies=[Depends(require_key)])
+def post_plan(body: dict, request: Request) -> dict:
+    """Local planner. It does not call a model. Provider calls stay inside the guard."""
+    def run() -> dict:
+        try:
+            return build_plan(body)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    return protect(request, body, "plan", run)
+
+
+@app.post("/v1/characters/{character_id}/eyes", dependencies=[Depends(require_key)])
+def post_character_eyes(character_id: str) -> dict:
+    """Probe a saved rig. Writes only eye_control.json and never calls an image provider."""
+    from .eye_control import upgrade_character  # noqa: PLC0415
+
+    try:
+        return upgrade_character(character_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "unknown character") from exc
+
+
 @app.post("/v1/characters/{character_id}/front", dependencies=[Depends(require_key)])
 def post_character_front(character_id: str, request: Request) -> dict:
     """Redraw a character's front view (checked for frontality, one retry within the Gemini cap)."""
-    try:
-        saved = characters.regenerate_front(character_id, _base(request))
-    except NotImplementedError as exc:
-        raise HTTPException(501, str(exc)) from exc
-    if saved is None:
-        raise HTTPException(404, "unknown character")
-    return saved
+    def run() -> dict:
+        try:
+            saved = characters.regenerate_front(character_id, _base(request))
+        except NotImplementedError as exc:
+            raise HTTPException(501, str(exc)) from exc
+        if saved is None:
+            raise HTTPException(404, "unknown character")
+        return saved
+
+    return protect(request, {"characterId": character_id}, "character", run)
 
 
 @app.post("/v1/characters/{character_id}/rerig", dependencies=[Depends(require_key)])
@@ -75,28 +129,196 @@ def post_character_rerig(character_id: str, request: Request) -> dict:
     return saved
 
 
+@app.get("/v1/puppets", dependencies=[Depends(require_key)])
+def get_puppets(request: Request) -> dict:
+    """Recovered puppets for a logged-in owner. Anonymous gets the same 404 as a miss."""
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    if not user:
+        raise HTTPException(404, "not found")
+    return puppet_library.catalog()
+
+
 @app.post("/v1/characters", dependencies=[Depends(require_key)])
 def post_characters(body: dict, request: Request) -> dict:
+    def run() -> dict:
+        try:
+            return characters.create_character(body, _base(request))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except NotImplementedError as exc:
+            raise HTTPException(501, str(exc)) from exc
+
     try:
-        return characters.create_character(body, _base(request))
+        return protect(request, body, "character", run)
+    except portrait.PortraitRefused as exc:
+        raise HTTPException(409, exc.decision) from exc
+
+
+@app.post("/v1/portraits/plan", dependencies=[Depends(require_key)])
+def post_portrait_plan(body: dict, request: Request) -> dict:
+    """Resolution contract. It does not generate. Usage cost stays null."""
+    result = protect(request, body, "portrait", lambda: portrait.plan(body))
+    result["usage"] = publish_usage(result.get("usage"))
+    return result
+
+
+@app.post("/v1/avatars/plan", dependencies=[Depends(require_key)])
+def post_avatar_plan(body: dict, request: Request) -> dict:
+    """Infer one or two people. Does not generate or start a job."""
+    def run() -> dict:
+        return avatar_request.infer(
+            str(body.get("prompt") or ""),
+            language=str(body.get("language") or body.get("lang") or "pt"),
+            requested_resolution=str(body.get("requestedResolution") or "1k"),
+        )
+
+    result = protect(request, body, "avatar-plan", run)
+    result["usage"] = publish_usage(result.get("usage"))
+    return result
+
+
+@app.post("/v1/avatars", dependencies=[Depends(require_key)])
+def post_avatar(body: dict, request: Request) -> dict:
+    """Background job after a logged-in click. No user, no spend."""
+    try:
+        user = avatar_request.accept_user(request.headers.get("x-animind-user"))
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except NotImplementedError as exc:
-        raise HTTPException(501, str(exc)) from exc
+        raise HTTPException(400, "user") from exc
+    if not user:
+        raise HTTPException(403, "login")
+    if body.get("generate") is True:
+        if not admin_auth.trusted(request.headers.get("x-animind-admin")):
+            raise HTTPException(403, "admin")
+        require_explicit_identity(request)
+        if body.get("dryRun") is True:
+            from . import dry_run  # noqa: PLC0415
+            from .spend.guard import SpendDenied  # noqa: PLC0415
+            from .spend.http import http_error  # noqa: PLC0415
+
+            if not settings.dry_run():
+                raise HTTPException(403, "dry_run_disabled")
+            try:
+                result = dry_run.run(body, user, _base(request))
+            except SpendDenied as exc:
+                raise http_error(exc.block) from exc
+            result["usage"] = publish_usage(result.get("usage"), job_id=result.get("id"))
+            return admin_avatar.keep(user, result)
+
+        def live() -> dict:
+            return admin_avatar.run(body, user, _base(request))
+
+        result = protect(request, body, "avatar", live)
+        result["usage"] = publish_usage(result.get("usage"), job_id=result.get("id"))
+        return admin_avatar.keep(user, result)
+
+    def run() -> dict:
+        return avatar_request.generate_avatar(
+            body, user, login=request.headers.get("x-animind-user"),
+        )
+
+    try:
+        result = protect(request, body, "avatar", run)
+    except avatar_request.AvatarRefused as exc:
+        raise HTTPException(403, exc.code) from exc
+    result["usage"] = publish_usage(result.get("usage"), job_id=result.get("id"))
+    if result.get("id") and user:
+        result["usage"] = avatar_request.keep_usage(user, result["id"], result["usage"])
+    return result
+
+
+@app.get("/v1/avatars/{job_id}", dependencies=[Depends(require_key)])
+def get_avatar(job_id: str, request: Request) -> dict:
+    try:
+        user = avatar_request.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    found = avatar_request.get(job_id, user) or admin_avatar.get(user, job_id)
+    if found is None:
+        raise HTTPException(404, "avatar not found")
+    return found
+
+
+@app.post("/v1/admin/avatars/preflight", dependencies=[Depends(require_key)])
+def avatar_preflight(request: Request) -> dict:
+    """Validate one-character proof prerequisites without calling a provider."""
+    if not admin_auth.trusted(request.headers.get(admin_auth.HEADER)):
+        raise HTTPException(403, "admin")
+    return admin_avatar.preflight()
+
+
+@app.get("/v1/admin/spend", dependencies=[Depends(require_key)])
+def admin_spend(request: Request) -> dict:
+    """Sanitized spend book; only the separate super-admin credential may read it."""
+    if not admin_auth.trusted_super(request.headers.get(admin_auth.HEADER)):
+        raise HTTPException(403, "super_admin")
+    return ledger.admin_summary()
 
 
 @app.post("/v1/render", dependencies=[Depends(require_key)])
 def post_render(body: dict, request: Request) -> dict:
-    return render.submit(body, _base(request))
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    payload = dict(body)
+    payload.pop("personaUser", None)
+    payload.pop("owner", None)
+    if not user:
+        raise HTTPException(404, "job not found")
+    payload["personaUser"] = user
+    payload["owner"] = user
+    result = protect(request, body, "render", lambda: render.submit(payload, _base(request)))
+    if result.get("id"):
+        result["usage"] = render.keep_usage(
+            user, str(result["id"]), publish_usage(result.get("usage"), job_id=str(result["id"])),
+        )
+    return result
+
+
+@app.post("/v1/debates", dependencies=[Depends(require_key)])
+def post_debate(body: dict, request: Request) -> dict:
+    """A fixture debate script. Paid generation stays off, so the writer is never a live model."""
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    payload = dict(body)
+    payload.pop("owner", None)
+    try:
+        return debate.create(payload, user)
+    except debate.SheetDenied as exc:
+        raise HTTPException(404, "not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(500, "debate") from exc
+
+
+@app.get("/v1/debates/{debate_id}", dependencies=[Depends(require_key)])
+def get_debate(debate_id: str, request: Request) -> dict:
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    found = debate.get(debate_id, user)
+    if found is None:
+        raise HTTPException(404, "debate not found")
+    return found
 
 
 @app.post("/v1/preview", dependencies=[Depends(require_key)])
 def post_preview(body: dict, request: Request) -> dict:
     """PNG preview the app requests before the full character rig exists."""
-    try:
-        return preview.build_preview(body, _base(request))
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    def run() -> dict:
+        try:
+            return preview.build_preview(body, _base(request))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    return protect(request, body, "preview", run)
 
 
 @app.post("/v1/scenarios", dependencies=[Depends(require_key)])
@@ -109,8 +331,14 @@ def post_scenarios(body: dict) -> dict:
 
 
 @app.get("/v1/jobs/{job_id}", dependencies=[Depends(require_key)])
-def get_job(job_id: str) -> dict:
-    job = render.get(job_id)
+def get_job(job_id: str, request: Request) -> dict:
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    if not user:
+        raise HTTPException(404, "job not found")
+    job = render.get(job_id, user)
     if job is None:
         raise HTTPException(404, "job not found")
     return job
@@ -181,16 +409,34 @@ def get_stick_presets() -> dict:
 
 
 @app.get("/v1/personas/sheet", dependencies=[Depends(require_key)])
-def get_sheet(name: str, lang: str = "pt-BR") -> dict:
-    """The persona's quote sheet (Wikiquote, cached): every "Citação real" in a script is one of these, verbatim."""
+def get_sheet(name: str, request: Request, lang: str = "pt-BR") -> dict:
+    """The persona's quote sheet. A quote is verified only when its text is on the source page."""
     nm = personas.persona_name(name)
     if not nm:
         raise HTTPException(400, "name required")
-    sheet = personas.load(nm, lang, fetch=settings.personas_online())
-    keep = ("id", "text", "source", "work", "sourceKind", "url", "wikisource")
-    return {"name": nm, "lang": lang, "found": bool(sheet.get("found")), "wikiquote": sheet.get("wikiquote"),
-            "license": sheet.get("license"),
-            "quotes": [{k: q[k] for k in keep if k in q} for q in sheet.get("quotes") or []]}
+    try:
+        user = personas.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    with personas.user_scope(user):
+        sheet = personas.load(nm, lang, fetch=settings.personas_online())
+    if not sheet.get("found"):
+        raise HTTPException(404, "not found")
+    keep = (
+        "id", "text", "source", "work", "sourceKind", "url", "wikisource",
+        "verification", "sourceSite", "revision",
+    )
+    body = {
+        "name": nm,
+        "lang": lang,
+        "found": True,
+        "wikiquote": sheet.get("wikiquote"),
+        "license": sheet.get("license"),
+        "quotes": [{k: q[k] for k in keep if k in q} for q in sheet.get("quotes") or []],
+    }
+    if "fixture" in sheet:
+        body["fixture"] = sheet["fixture"]
+    return body
 
 
 @app.post("/v1/personas/deep", dependencies=[Depends(require_key)])
@@ -217,11 +463,13 @@ def get_deep_job(job_id: str) -> dict:
 
 
 @app.get("/v1/files/{path:path}")
-def get_file(path: str) -> FileResponse:
-    """Generated art and media. Ids are random; paths are confined to the data dir."""
-    root = settings.data_dir().resolve()
-    for sub in ("assets", ""):
-        target = (root / sub / path).resolve()
-        if target.is_relative_to(root) and target.is_file() and target.suffix in {".png", ".json", ".wav", ".mp4", ".mp3"}:
-            return FileResponse(target)
-    raise HTTPException(404, "not found")
+def get_file(path: str, request: Request) -> FileResponse:
+    """Generated media. Files under a user hash are readable only by that user."""
+    try:
+        user = owner.accept_user(request.headers.get("x-animind-user"))
+    except ValueError as exc:
+        raise HTTPException(400, "user") from exc
+    target = owner.readable_file(path, user)
+    if target is None:
+        raise HTTPException(404, "not found")
+    return FileResponse(target)

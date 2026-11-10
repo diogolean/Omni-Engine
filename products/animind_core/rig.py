@@ -25,9 +25,12 @@ touches git. ``build_mock_rig`` draws the same layer set with PIL, no network.
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import logging
 import math
+import multiprocessing
 import os
 import re
 from pathlib import Path
@@ -68,6 +71,18 @@ FRONT_PROMPT = (
     "closed, lips together, eyes open, neutral friendly expression. Solid flat pure magenta #FF00FF background. "
     "No text."
 )
+RIGHT_PROMPT = (
+    "Redraw this exact same character, identity, art style, colors, outfit, hair and outlines in a "
+    "three-quarter view turned 25 degrees toward the right of the image. Keep the same camera distance, "
+    "eye line, head scale and shoulder framing. Mouth closed, eyes open, neutral expression. "
+    "Solid flat pure magenta #FF00FF background. No text."
+)
+PROFILE_PROMPT = (
+    "Redraw this exact same character, identity, art style, colors, outfit, hair and outlines in a strict "
+    "90 degree left profile. Keep the same camera distance, eye line, head scale and shoulder framing. "
+    "Show one clean facial silhouette. Mouth closed, visible eye open, neutral expression. "
+    "Solid flat pure magenta #FF00FF background. No text."
+)
 MOUTHLESS_PROMPT = (
     "Edit this image: the same character, identical pose, framing, scale, lighting, colours, outlines and art "
     "style, but remove the mouth and lips completely: smooth clean skin where the mouth was, no mouth, no lips, "
@@ -100,17 +115,34 @@ def detect_features(image_path: Path) -> dict[str, Box]:
         make_guarded_gemini_client,
     )
 
+    from .spend.guard import billable  # noqa: PLC0415
+
     with Image.open(image_path) as im:
         w, h = im.size
     client = make_guarded_gemini_client(_gemini_key())
-    response = guarded_generate_content(
-        client,
+    prompt_ref = f"{DETECT_PROMPT}\nimage-sha256:{hashlib.sha256(image_path.read_bytes()).hexdigest()}"
+    with billable(
+        provider="google",
         model=DETECT_MODEL,
-        contents=[types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/png"), DETECT_PROMPT],
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
-        kind="text",
-        source="animind_core.rig.detect",
-    )
+        operation="detect_features",
+        prompt=prompt_ref,
+    ) as attempt:
+        attempt.mark_sent()
+        response = guarded_generate_content(
+            client,
+            model=DETECT_MODEL,
+            contents=[types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/png"), DETECT_PROMPT],
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
+            kind="text",
+            source="animind_core.rig.detect",
+            max_attempts=1,
+            enforce_budget=False,
+        )
+        usage = getattr(response, "usage_metadata", None)
+        attempt.observe(
+            input_tokens=getattr(usage, "prompt_token_count", None),
+            output_tokens=getattr(usage, "candidates_token_count", None),
+        )
     raw = response.text or ""
     data = json.loads(re.search(r"\{.*\}", raw, re.S).group(0))
     out: dict[str, Box] = {}
@@ -130,6 +162,10 @@ def _png(src: Path, dest: Path, size: tuple[int, int] | None = None) -> Path:
 
 
 def _budget_left() -> float:
+    from .spend.guard import current  # noqa: PLC0415
+
+    if current() is not None:
+        return float("inf")
     from production.cost.google_guardrail import get_google_cost_tracker, max_google_cost_usd  # noqa: PLC0415
     return max_google_cost_usd() - get_google_cost_tracker().total_usd()
 
@@ -139,12 +175,28 @@ def spent_usd() -> float:
     return get_google_cost_tracker().total_usd()
 
 
+def _paid_image(prompt: str, destination: Path, **kwargs: Any) -> str:
+    """Gemini image call. The guard runs before the factory, and records null when unpriced."""
+    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+    from .spend.guard import billable  # noqa: PLC0415
+
+    with billable(
+        provider="google", model="gemini-2.5-flash-image", operation="image", prompt=prompt, images=1,
+    ) as attempt:
+        attempt.mark_sent()
+        return generate_character_image(
+            prompt,
+            destination,
+            external_spend_guard=True,
+            **kwargs,
+        )
+
+
 def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict[str, int], notes: dict[str, str],
                  tries: int = 2, tag: str = "sheet") -> Path | None:
     """Draw the 4x3 parts sheet (9 mouths + 3 eye states) and gate it: 12 cells must slice out and
     the closed-mouth and open-eye cells must register on the master (NCC). Re-drawn while the cap allows."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     from . import partsheet, qa  # noqa: PLC0415
 
     with Image.open(closed) as im:
@@ -157,7 +209,7 @@ def _parts_sheet(closed: Path, work: Path, boxes: dict[str, Box], attempts: dict
         attempts[tag] = attempts.get(tag, 0) + 1
         raw = work / f"_gen_{tag}"
         try:
-            generate_character_image(partsheet.SHEET_PROMPT, raw, aspect_ratio="4:3", reference_path=closed)
+            _paid_image(partsheet.SHEET_PROMPT, raw, aspect_ratio="4:3", reference_path=closed)
             out = _png(raw, work / f"source_{tag}.png")
             got = partsheet.load(out, base, boxes)
         except (Exception, SystemExit) as exc:  # noqa: BLE001 — budget stop / bad image
@@ -190,8 +242,6 @@ def _mouthless_shot(src: Path, work: Path, boxes: dict[str, Box], tag: str, atte
                     notes: dict[str, str], tries: int = 2) -> Path | None:
     """Gemini edit of ``src`` with the mouth removed (the head is drawn mouthless instead of inpainted).
     Gated: no lip/cavity ink may remain around the mouth; re-drawn once while the cap allows."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     from . import qa  # noqa: PLC0415
 
     size = Image.open(src).size
@@ -208,7 +258,7 @@ def _mouthless_shot(src: Path, work: Path, boxes: dict[str, Box], tag: str, atte
         attempts[tag] = attempts.get(tag, 0) + 1
         raw = work / f"_gen_{tag}"
         try:
-            generate_character_image(MOUTHLESS_PROMPT, raw, aspect_ratio="4:5", reference_path=src)
+            _paid_image(MOUTHLESS_PROMPT, raw, aspect_ratio="4:5", reference_path=src)
             out = _png(raw, work / f"source_{tag}_{attempts[tag]}.png", size)
             with Image.open(out) as im, Image.open(src) as ref:
                 left = qa.ink_share(np.asarray(im.convert("RGB")), np.asarray(ref.convert("RGB")), boxes["mouth"])
@@ -237,15 +287,13 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
     """Generate-then-verify: master (closed mouth) -> parts sheet (all mouths + lids, gated) -> front view
     (gated for symmetry). Order is priority under the cap; a gate failure re-draws only while budget remains,
     otherwise that asset falls back to the deterministic path (warped mouths, drawn lids, side art)."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     from . import styles  # noqa: PLC0415
 
     attempts = attempts if attempts is not None else {}
     work.mkdir(parents=True, exist_ok=True)
     raw = work / "_gen_closed"
     attempts["master"] = 1
-    generate_character_image(raw_prompt or STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style)), raw, aspect_ratio="4:5")
+    _paid_image(raw_prompt or STYLE_PROMPT.format(subject=subject, style=styles.prompt_style(style)), raw, aspect_ratio="4:5")
     closed = _png(raw, work / "source_closed.png")
     raw.unlink(missing_ok=True)
     size = Image.open(closed).size
@@ -286,7 +334,35 @@ def generate_shots(subject: str, work: Path, *, raw_prompt: str | None = None, s
         shots["sheet"] = sheet
     if fs is not None:
         shots["sheet_front"] = fs
-    return {"shots": shots, "notes": notes, "frontBoxes": front_boxes, "boxes": boxes}
+    extra_boxes: dict[str, dict[str, Box]] = {}
+    for name, prompt in (("right_3q", RIGHT_PROMPT), ("profile", PROFILE_PROMPT)):
+        if _budget_left() < 0.039:
+            notes[name] = "missing (budget ceiling)"
+            continue
+        raw_extra = work / f"_gen_{name}"
+        attempts[name] = attempts.get(name, 0) + 1
+        try:
+            _paid_image(prompt, raw_extra, aspect_ratio="4:5", reference_path=closed)
+            extra = _png(raw_extra, work / f"source_{name}.png", size)
+            extra_boxes[name] = detect_features(extra)
+            shots[name] = extra
+            mouthless_extra = _mouthless_shot(
+                extra, work, extra_boxes[name], f"{name}_mouthless", attempts, notes, tries=1,
+            )
+            if mouthless_extra is not None:
+                shots[f"{name}_mouthless"] = mouthless_extra
+            notes[name] = "gemini (identity reference from left master)"
+        except (Exception, SystemExit) as exc:  # noqa: BLE001
+            notes[name] = f"missing ({str(exc)[:160]})"
+        finally:
+            raw_extra.unlink(missing_ok=True)
+    return {
+        "shots": shots,
+        "notes": notes,
+        "frontBoxes": front_boxes,
+        "boxes": boxes,
+        "extraBoxes": extra_boxes,
+    }
 
 
 FRONT_RETRY = (
@@ -299,8 +375,36 @@ FRONT_LANDMARKS = (
     "(same proportions, same muzzle/jaw length)."
 )
 MAX_RETRIES = 3  # per asset (sheet, front); each retry still needs budget left under the cap
+MAX_IMAGE_CALLS = 18
+MAX_DETECT_CALLS = 6
 FRONT_MAX_OFFSET = 0.04  # eyes/mouth centre off the face centre, as a share of face width (3/4 views: >= 0.065)
 FRONT_MIN_EYE_RATIO = 0.8  # narrower eye / wider eye
+
+
+def call_plan() -> dict[str, Any]:
+    """Worst-case logical calls; provider-internal retries are disabled."""
+    return {
+        "image": {
+            "model": "gemini-2.5-flash-image",
+            "maximum": MAX_IMAGE_CALLS,
+            "stages": {
+                "master": 1,
+                "mouthless": 2,
+                "front": 3,
+                "frontMouthless": 2,
+                "sideSheet": 3,
+                "frontSheet": 2,
+                "mouthRedraw": 1,
+                "rightThreeQuarter": 2,
+                "profile": 2,
+            },
+        },
+        "detectFeatures": {
+            "model": DETECT_MODEL,
+            "maximum": MAX_DETECT_CALLS,
+        },
+        "providerInternalRetries": 0,
+    }
 
 
 def frontality(boxes: dict[str, Box]) -> dict[str, float | bool]:
@@ -324,8 +428,6 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
 
     Runs before the mouth edits so the retry spends the budget the open mouth would have used (that
     mouth then falls back to a warp). A 3/4 result that still fails keeps the best attempt, flagged."""
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
-
     best: tuple[float, Path, dict[str, Box], dict[str, Any]] | None = None
     from . import qa  # noqa: PLC0415
 
@@ -339,7 +441,7 @@ def _front_shot(closed: Path, work: Path, size: tuple[int, int], shots: dict[str
         raw = work / "_gen_front"
         try:
             prompt = FRONT_PROMPT + (FRONT_RETRY if attempt else "") + (FRONT_LANDMARKS if drift_bad else "")
-            generate_character_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
+            _paid_image(prompt, raw, aspect_ratio="4:5", reference_path=closed)
             out = _png(raw, work / f"source_front{'' if not attempt else f'_{attempt + 1}'}.png", size)
             boxes = detect_features(out)
             check = frontality(boxes)
@@ -1065,6 +1167,7 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
 
         model = parts["browModel"]
         view["browModel"] = brow_draw.mirror_model(model, W) if mirror else json.loads(json.dumps(model))
+    view["anchors"] = _view_anchors(view)
     # Same geometry with file names instead of URLs, for the server renderer.
     local = json.loads(json.dumps(view))
     for layer in local["layers"]:
@@ -1075,6 +1178,37 @@ def _write_view(parts: dict[str, Any], out: Path, url: Callable[[Path], str], mi
         layer["url"] = f"expressions/{emotion}.png"
     (out / "view.json").write_text(json.dumps(local, indent=2), encoding="utf-8")
     return view
+
+
+def _view_anchors(view: dict[str, Any]) -> dict[str, Any]:
+    """Stable pixel-space anchors derived from the final per-view layers."""
+    layers = {layer["name"]: layer for layer in view["layers"]}
+
+    def center(layer: dict[str, Any] | None) -> list[float] | None:
+        if layer is None:
+            return None
+        return [layer["x"] + layer["w"] / 2, layer["y"] + layer["h"] / 2]
+
+    mouth = (view.get("visemes") or {}).get("X")
+    eye_points = (view.get("mouthQA") or {}).get("eyes") or []
+    anchors: dict[str, Any] = {
+        "coordinateSpace": "canvas_px",
+        "head": center(layers.get("head")),
+        "neck": center(layers.get("neck")),
+        "torso": center(layers.get("torso") or layers.get("body")),
+        "mouth": center(mouth),
+        "eyes": [
+            [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]
+            for box in eye_points
+        ],
+        "brows": center(layers.get("brows")),
+    }
+    anchors["eyeLineY"] = (
+        sum(point[1] for point in anchors["eyes"]) / len(anchors["eyes"])
+        if anchors["eyes"]
+        else None
+    )
+    return anchors
 
 
 def load_view(skin: Path, view: str) -> dict[str, Any]:
@@ -1347,7 +1481,8 @@ def _drop_front_slot(skin: Path) -> None:
 
 def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Callable[[Path], str], *,
              matte: Callable[[Image.Image], Image.Image], front: bool = False,
-             sheet: Path | None = None, mouthless: bool = False) -> dict[str, Any]:
+             sheet: Path | None = None, mouthless: bool = False,
+             view_name: str | None = None) -> dict[str, Any]:
     """Build view parts from mattes + boxes: left/right from the side art, or ``views/front`` when ``front``."""
     with Image.open(shots["closed"]) as im:
         base = _despill(matte(im).convert("RGBA"))
@@ -1516,6 +1651,13 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
         base.save(skin / "character_front.png", format="PNG", optimize=True)
         (skin / "rig_front.json").write_text(json.dumps({"size": size, "boxes": boxes, "mouthBox": mbox}, indent=2), encoding="utf-8")
         return {"front": _write_view(parts, skin / "views" / "front", url, mirror=False)}
+    if view_name is not None:
+        base.save(skin / f"character_{view_name}.png", format="PNG", optimize=True)
+        (skin / f"rig_{view_name}.json").write_text(
+            json.dumps({"size": size, "boxes": boxes, "mouthBox": mbox}, indent=2),
+            encoding="utf-8",
+        )
+        return {view_name: _write_view(parts, skin / "views" / view_name, url, mirror=False)}
     base.save(skin / "character.png", format="PNG", optimize=True)
     left = _write_view(parts, skin / "views" / "left", url, mirror=False)
     right = _write_view(parts, skin / "views" / "right", url, mirror=True)
@@ -1524,17 +1666,23 @@ def assemble(skin: Path, shots: dict[str, Path], boxes: dict[str, Box], url: Cal
 
 
 class BiRefNetMatte:
-    """BiRefNet (rembg ``birefnet-general``) with the ONNX memory arena off.
+    """BiRefNet with explicit device selection and no chroma fallback.
 
-    The engine's cached session keeps growing past 9 GB on CPU after a few
-    1024px passes; with the arena off it stays near 8 GB and is freed by
-    :meth:`close` once the character is built, so the API does not hold it.
+    The default isolated process contains CPU memory growth and turns an OS
+    OOM kill into a reviewable API error instead of killing the parent.
     """
 
     def __init__(self) -> None:
         self._session: Any = None
+        self._worker: Any = None
+        self._pipe: Any = None
 
     def __call__(self, image: Image.Image) -> Image.Image:
+        mode = (os.getenv("ANIMIND_MATTE_MODE") or "isolated").strip().lower()
+        if mode == "isolated":
+            return self._isolated(image)
+        if mode != "in_process":
+            raise RuntimeError("ANIMIND_MATTE_MODE must be isolated or in_process")
         from rembg import remove  # noqa: PLC0415
 
         if self._session is None:
@@ -1545,15 +1693,128 @@ class BiRefNetMatte:
             opts.enable_cpu_mem_arena = False
             opts.enable_mem_pattern = False
             cls = next(c for c in sessions_class if c.name() == "birefnet-general")
-            self._session = cls("birefnet-general", opts)
+            self._session = cls(
+                "birefnet-general",
+                opts,
+                providers=_matte_providers(ort),
+            )
         out = remove(image.convert("RGB"), session=self._session, alpha_matting=False)
         return out.convert("RGBA")
+
+    def _isolated(self, image: Image.Image) -> Image.Image:
+        timeout = float((os.getenv("ANIMIND_MATTE_TIMEOUT_S") or "180").strip())
+        if timeout <= 0:
+            raise RuntimeError("ANIMIND_MATTE_TIMEOUT_S must be positive")
+        if self._worker is None:
+            ctx = multiprocessing.get_context("spawn")
+            parent, child = ctx.Pipe()
+            self._worker = ctx.Process(
+                target=_birefnet_worker,
+                args=(child, (os.getenv("ANIMIND_MATTE_DEVICE") or "cpu").strip().lower()),
+                daemon=True,
+            )
+            self._worker.start()
+            child.close()
+            self._pipe = parent
+        payload = io.BytesIO()
+        image.convert("RGB").save(payload, format="PNG")
+        try:
+            self._pipe.send_bytes(payload.getvalue())
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            raise RuntimeError(_matte_failure(self._worker)) from exc
+        if not self._pipe.poll(timeout):
+            if not self._worker.is_alive():
+                raise RuntimeError(_matte_failure(self._worker))
+            raise RuntimeError(
+                f"BiRefNet timed out after {timeout:g}s; set ANIMIND_MATTE_TIMEOUT_S "
+                "or provision the documented matte worker memory"
+            )
+        try:
+            result = self._pipe.recv()
+        except (EOFError, OSError) as exc:
+            raise RuntimeError(_matte_failure(self._worker)) from exc
+        if result.get("error"):
+            raise RuntimeError(f"BiRefNet worker failed: {result['error']}")
+        return Image.open(io.BytesIO(result["png"])).convert("RGBA")
 
     def close(self) -> None:
         import gc  # noqa: PLC0415
 
+        if self._pipe is not None:
+            try:
+                self._pipe.send_bytes(b"")
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+        if self._worker is not None:
+            self._worker.join(timeout=5)
+            if self._worker.is_alive():
+                self._worker.terminate()
+                self._worker.join(timeout=5)
+        if self._pipe is not None:
+            self._pipe.close()
+        self._worker = None
+        self._pipe = None
         self._session = None
         gc.collect()
+
+
+def _matte_providers(ort: Any, device: str | None = None) -> list[str]:
+    selected = (device or os.getenv("ANIMIND_MATTE_DEVICE") or "cpu").strip().lower()
+    available = set(ort.get_available_providers())
+    choices = {
+        "cpu": "CPUExecutionProvider",
+        "cuda": "CUDAExecutionProvider",
+        "rocm": "ROCMExecutionProvider",
+    }
+    if selected == "auto":
+        for provider in ("CUDAExecutionProvider", "ROCMExecutionProvider", "CPUExecutionProvider"):
+            if provider in available:
+                return [provider, *(["CPUExecutionProvider"] if provider != "CPUExecutionProvider" else [])]
+    provider = choices.get(selected)
+    if provider is None:
+        raise RuntimeError("ANIMIND_MATTE_DEVICE must be cpu, cuda, rocm, or auto")
+    if provider not in available:
+        raise RuntimeError(f"BiRefNet device {selected} is unavailable; providers={sorted(available)}")
+    return [provider, *(["CPUExecutionProvider"] if provider != "CPUExecutionProvider" else [])]
+
+
+def _birefnet_worker(pipe: Any, device: str) -> None:
+    try:
+        import onnxruntime as ort
+        from rembg import remove
+        from rembg.sessions import sessions_class
+
+        opts = ort.SessionOptions()
+        opts.enable_cpu_mem_arena = False
+        opts.enable_mem_pattern = False
+        cls = next(candidate for candidate in sessions_class if candidate.name() == "birefnet-general")
+        session = cls("birefnet-general", opts, providers=_matte_providers(ort, device))
+        while True:
+            raw = pipe.recv_bytes()
+            if not raw:
+                break
+            image = Image.open(io.BytesIO(raw)).convert("RGB")
+            out = remove(image, session=session, alpha_matting=False).convert("RGBA")
+            encoded = io.BytesIO()
+            out.save(encoded, format="PNG", compress_level=1)
+            pipe.send({"png": encoded.getvalue()})
+    except BaseException as exc:  # noqa: BLE001
+        try:
+            pipe.send({"error": f"{type(exc).__name__}: {str(exc)[:240]}"})
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        pipe.close()
+
+
+def _matte_failure(worker: Any) -> str:
+    code = getattr(worker, "exitcode", None)
+    suffix = " (likely OOM/SIGKILL)" if code in {-9, 137} else ""
+    return (
+        f"BiRefNet worker exited with code {code}{suffix}; no chroma fallback was used. "
+        "CPU mode requires a dedicated worker with at least 16 GiB available memory, "
+        "or set ANIMIND_MATTE_DEVICE=cuda/rocm on a supported host"
+    )
 
 
 def reset_budget() -> None:
@@ -1639,6 +1900,7 @@ def einstein_plate_candidates() -> list[Path]:
     for base in bases:
         add(base / "assets" / "puppets" / EINSTEIN_PLATE_ID)
         add(base / "puppets" / EINSTEIN_PLATE_ID)
+        add(base / "recovered" / EINSTEIN_PLATE_ID)
         add(base / EINSTEIN_PLATE_ID)
     data = settings.data_dir()
     cache = data / "avatar_cache"
@@ -1932,6 +2194,30 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
                 status["front"] = "missing (plate is not frontal)"
 
         _use_front(gen["shots"].get("sheet_front") or sheet)
+        def _use_extra_views() -> None:
+            for source_name, public_name in (("right_3q", "right"), ("profile", "profile")):
+                source = gen["shots"].get(source_name)
+                boxes_for_view = (gen.get("extraBoxes") or {}).get(source_name)
+                if source is None or boxes_for_view is None:
+                    status[public_name] = gen["notes"].get(source_name, "missing")
+                    continue
+                extra_shots = {"closed": source}
+                mouthless_extra = gen["shots"].get(f"{source_name}_mouthless")
+                if mouthless_extra is not None:
+                    extra_shots["mouthless"] = mouthless_extra
+                try:
+                    views.update(assemble(
+                        skin,
+                        extra_shots,
+                        boxes_for_view,
+                        url,
+                        matte=matte,
+                        mouthless=mouthless_extra is not None,
+                        view_name=public_name,
+                    ))
+                    status[public_name] = "ready (independent identity-referenced view)"
+                except Exception as exc:  # noqa: BLE001
+                    status[public_name] = f"missing (view rig failed: {str(exc)[:120]})"
         report = qa.finalize(skin, spent_usd(), attempts)
         if sheet is not None and not (report["gates"]["skin"]["pass"] and report["gates"]["edges"]["pass"]):
             attempts["sheetFallback"] = 1  # free retry: deterministic mouths/lids instead of the sheet
@@ -1953,6 +2239,8 @@ def build_rig(subject: str, skin: Path, url: Callable[[Path], str], *, raw_promp
                     _use_front(gen["shots"].get("sheet_front") or sheet)
                     report = qa.finalize(skin, spent_usd(), attempts)
                     views, report = _settle_mouths(skin, views, report, attempts)
+        _use_extra_views()
+        report = qa.finalize(skin, spent_usd(), attempts)
     finally:
         matte.close()
     return {"views": views, "viewStatus": status, "mouthShots": {"sheet": gen["notes"].get("sheet", "none"), "sheetFront": gen["notes"].get("sheet_front", "none")},

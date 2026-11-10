@@ -7,7 +7,13 @@ en-US) and cached as ``ANIMIND_DATA_DIR/personas/<lang>/<slug>.yaml``
 are skipped. Each quote keeps its text exactly as cleaned from the page
 wikitext, the work it comes from and links to Wikiquote, Wikipedia and,
 when the page cites it, Wikisource. The script writer may only put these
-strings on screen as quotes (see :mod:`products.animind_core.script`).
+strings on screen as quotes (see :mod:`products.animind_core.script`). A quote is
+``verified`` only when that same text is found on the Wikisource, Wikipedia, or
+Wikiquote page named by its URL. ``not_found`` stays on the sheet and is not
+spoken as a real line. The sheet keeps about ten quotes.
+
+A request that sends ``X-Animind-User`` caches the sheet under that user's
+hash. An email is refused. The render of the same request reads that cache.
 
 Each quote also gets ``sourceKind``: ``primary`` when its source names a work
 by or about the person (book, dialogue, letter, speech: a title, a page, a §
@@ -22,15 +28,20 @@ week) and every line of that character is a marked paraphrase.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import re
+import threading
 import time
 import unicodedata
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import yaml
 
@@ -38,9 +49,15 @@ from . import settings
 
 _LOG = logging.getLogger("animind_core")
 UA = "AnimindCore/1.0 (github.com/diogolean/animind; persona quotes)"
+_USER: ContextVar[str | None] = ContextVar("animind_persona_user", default=None)
+_API_LOCK = threading.Lock()
+_NEXT_API = 0.0
+_WIKI_HOST = re.compile(r"^([a-z0-9-]+)\.(wikiquote|wikipedia|wikisource)\.org$")
+_USER_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 SITES = {"pt-BR": "pt", "en-US": "en"}
 MAX_QUOTES = 24
-SHEET_VERSION = 3  # bump when parsing/ranking changes; older cached sheets are rebuilt
+SHEET_LIMIT = 10  # quotes kept on a freshly built sheet
+SHEET_VERSION = 6  # bump when parsing/ranking changes; older cached sheets are rebuilt
 MIN_WORDS, MAX_WORDS = 4, 45
 NEGATIVE_TTL_S = 7 * 24 * 3600
 SKIP_SECTION = re.compile(
@@ -219,17 +236,30 @@ def pick(quotes: list[dict[str, Any]], n: int = MAX_QUOTES) -> list[dict[str, An
 
 
 def _api(site: str, **params: Any) -> dict[str, Any]:
+    global _NEXT_API
     url = f"https://{site}/w/api.php?" + urllib.parse.urlencode({"format": "json", "formatversion": 2, **params})
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=15) as r:  # noqa: S310 — fixed https host
-        return json.load(r)
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+    try:
+        interval = float(os.getenv("ANIMIND_WIKI_MIN_INTERVAL_S") or "1")
+    except ValueError:
+        interval = 1.0
+    interval = max(0.0, interval)
+    with _API_LOCK:
+        wait = _NEXT_API - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _NEXT_API = time.monotonic() + interval
+        with urllib.request.urlopen(req, timeout=15) as response:  # noqa: S310 — fixed https host
+            return json.load(response)
 
 
-def _page(site: str, title: str) -> tuple[str, str] | None:
+def _page(site: str, title: str) -> tuple[str, str, int | None] | None:
     data = _api(site, action="parse", page=title, prop="wikitext", redirects=1)
-    if "parse" not in data:
+    parsed = data.get("parse")
+    if not isinstance(parsed, dict) or "wikitext" not in parsed:
         return None
-    return data["parse"]["title"], data["parse"]["wikitext"]
+    revid = parsed.get("revid")
+    return parsed.get("title") or title, parsed["wikitext"], revid if isinstance(revid, int) else None
 
 
 def title_matches(query: str, title: str) -> bool:
@@ -254,8 +284,8 @@ def title_matches(query: str, title: str) -> bool:
     return got[-1] == word
 
 
-def find_page(name: str, lang: str) -> tuple[str, str] | None:
-    """(title, wikitext) of the person's Wikiquote page, or None."""
+def find_page(name: str, lang: str) -> tuple[str, str, int | None] | None:
+    """(title, wikitext, revision) of the person's Wikiquote page, or None."""
     site = f"{SITES.get(lang, 'pt')}.wikiquote.org"
     want = fold(name)
     if len(want) < 3:
@@ -286,10 +316,17 @@ def build(name: str, lang: str = "pt-BR") -> dict[str, Any]:
     page = find_page(name, lang)
     if not page:
         return sheet
-    title, wikitext = page
+    title, wikitext, revid = page
     url = wiki_url(f"{sl}.wikiquote.org", title)
+    wikipedia = wiki_url(f"{sl}.wikipedia.org", title)
     quotes = pick(parse_quotes(wikitext, site_lang=sl, page_url=url))
-    sheet.update(found=bool(quotes), title=title, wikiquote=url, wikipedia=wiki_url(f"{sl}.wikipedia.org", title), quotes=quotes,
+    for quote in quotes:
+        quote.setdefault("wikipedia", wikipedia)
+    pages, revisions = _source_pages(quotes, wikiquote=url, wikipedia=wikipedia)
+    if revid is not None:
+        revisions.setdefault(url, revid)
+    quotes = _limit(verify_quotes(quotes, pages, revisions))
+    sheet.update(found=bool(quotes), title=title, wikiquote=url, wikipedia=wikipedia, quotes=quotes,
                  license="Textos da Wikiquote, CC BY-SA 4.0")
     return sheet
 
@@ -298,6 +335,141 @@ def persona_name(name: str) -> str:
     """The person in a character name: "Sócrates, filósofo de toga" -> "Sócrates"."""
     head = re.split(r"\s*(?:[,(:;]|\s[-–—]\s)", (name or "").strip(), maxsplit=1)[0]
     return " ".join(head.split())[:60]
+
+
+def is_verified(quote: dict[str, Any]) -> bool:
+    """Legacy sheets have no pass. A recorded pass is speakable only when it succeeded."""
+    status = quote.get("verification")
+    if status is None:
+        return True
+    return status == "verified"
+
+
+def text_on_page(quote: str, page: str) -> bool:
+    """True when the whole quote is on the page. Folding ignores case and accents, not words."""
+    folded = fold(quote)
+    if len(folded.split()) < MIN_WORDS or len(folded) < 12:
+        return False
+    return folded in fold(page)
+
+
+def verify_quotes(
+    quotes: list[dict[str, Any]],
+    pages: dict[str, str],
+    revisions: dict[str, int | None] | None = None,
+) -> list[dict[str, Any]]:
+    """Mark each quote from the page that actually contains it.
+
+    ``pages`` maps a source URL to that page's plain text. A missing page is
+    ``not_found``. Nothing is verified from the quote text alone. ``revision``
+    is the Wikimedia revision id of the page that matched, or null.
+    """
+    marks = revisions or {}
+    marked = []
+    for quote in quotes:
+        found = _matching_source(quote, pages)
+        if found is None:
+            marked.append({**quote, "verification": "not_found", "sourceSite": None, "revision": None})
+            continue
+        site, url = found
+        marked.append({
+            **quote, "verification": "verified", "sourceSite": site, "url": url,
+            "revision": marks.get(url),
+        })
+    return marked
+
+
+def _matching_source(quote: dict[str, Any], pages: dict[str, str]) -> tuple[str, str] | None:
+    candidates = []
+    if quote.get("wikisource"):
+        candidates.append(("Wikisource", str(quote["wikisource"])))
+    if quote.get("wikipedia"):
+        candidates.append(("Wikipedia", str(quote["wikipedia"])))
+    if quote.get("url"):
+        candidates.append(("Wikiquote", str(quote["url"])))
+    for site, url in candidates:
+        page = pages.get(url)
+        if page and text_on_page(str(quote.get("text") or ""), page):
+            return site, url
+    return None
+
+
+def _limit(quotes: list[dict[str, Any]], n: int = SHEET_LIMIT) -> list[dict[str, Any]]:
+    verified = [quote for quote in quotes if quote.get("verification") == "verified"]
+    missed = [quote for quote in quotes if quote.get("verification") != "verified"]
+    chosen = (verified + missed)[:n]
+    return [{**quote, "id": f"q{index + 1}"} for index, quote in enumerate(chosen)]
+
+
+def _source_pages(
+    quotes: list[dict[str, Any]], *, wikiquote: str, wikipedia: str,
+) -> tuple[dict[str, str], dict[str, int | None]]:
+    urls = [wikiquote, wikipedia]
+    for quote in quotes:
+        link = quote.get("wikisource")
+        if link and link not in urls:
+            urls.append(str(link))
+        if len(urls) >= 12:
+            break
+    pages: dict[str, str] = {}
+    revisions: dict[str, int | None] = {}
+    for url in urls:
+        try:
+            plain, revid = page_record(url)
+        except Exception:  # noqa: BLE001 — that source stays unverified
+            _LOG.warning("persona source %s could not be read", url.split("?", 1)[0])
+            continue
+        if plain:
+            pages[url] = plain
+            revisions[url] = revid
+    return pages, revisions
+
+
+def page_plain(url: str) -> str:
+    """Plain text of one Wikimedia page. Other hosts are refused."""
+    return page_record(url)[0]
+
+
+def page_record(url: str) -> tuple[str, int | None]:
+    """Plain text and the current revision id. Other hosts are refused."""
+    parsed = urllib.parse.urlparse(url)
+    match = _WIKI_HOST.match(parsed.netloc)
+    if parsed.scheme != "https" or not match:
+        raise ValueError("unsupported source")
+    title = urllib.parse.unquote(parsed.path.split("/wiki/", 1)[-1]).replace("_", " ")
+    site = parsed.netloc
+    data = _api(
+        site, action="query", prop="extracts|revisions", explaintext=1, redirects=1,
+        rvprop="ids", rvlimit=1, titles=title,
+    )
+    pages = (data.get("query") or {}).get("pages") or []
+    if isinstance(pages, dict):
+        pages = list(pages.values())
+    if not pages:
+        return "", None
+    page = pages[0]
+    revs = page.get("revisions") or []
+    revid = revs[0].get("revid") if revs and isinstance(revs[0], dict) else None
+    return str(page.get("extract") or ""), revid if isinstance(revid, int) else None
+
+
+def accept_user(header: str | None) -> str | None:
+    """Opaque user id, stored only as a hash. An email is refused."""
+    raw = (header or "").strip()
+    if not raw:
+        return None
+    if "@" in raw or not _USER_ID.match(raw):
+        raise ValueError("user")
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+@contextmanager
+def user_scope(user: str | None) -> Iterator[None]:
+    token = _USER.set(user or None)
+    try:
+        yield
+    finally:
+        _USER.reset(token)
 
 
 def is_primary(q: dict[str, Any]) -> bool:
@@ -311,8 +483,12 @@ def is_primary(q: dict[str, Any]) -> bool:
     return bool(src) and not SECONDARY.search(src) and not DISPUTED.search(src)
 
 
-def cache_path(name: str, lang: str) -> Path:
-    return settings.data_dir() / "personas" / lang / f"{slug(name)}.yaml"
+def cache_path(name: str, lang: str, user: str | None = None) -> Path:
+    root = settings.data_dir() / "personas"
+    owner = user if user is not None else _USER.get()
+    if owner:
+        root = root / "users" / owner
+    return root / lang / f"{slug(name)}.yaml"
 
 
 def load(name: str, lang: str = "pt-BR", *, fetch: bool = True) -> dict[str, Any]:

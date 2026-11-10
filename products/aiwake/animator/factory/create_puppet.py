@@ -248,6 +248,7 @@ def generate_character_image(
     *,
     aspect_ratio: str = "9:16",
     reference_path: Path | None = None,
+    external_spend_guard: bool = False,
 ) -> str:
     """Generate one image on the fast Gemini Flash image tier."""
     key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
@@ -282,6 +283,8 @@ def generate_character_image(
         config=config,
         kind="image",
         source="factory.create_puppet",
+        max_attempts=1,
+        enforce_budget=not external_spend_guard,
     )
     if not _save_generated_response(response, destination):
         raise RuntimeError(f"{model} response contained no image payload")

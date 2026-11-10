@@ -294,13 +294,16 @@ def _plate(
     from products.aiwake.animator.factory import create_puppet  # noqa: PLC0415
 
     from . import telemetry  # noqa: PLC0415
+    from .spend.guard import billable  # noqa: PLC0415
 
     spec = image_models.selected(_FLASH_MODEL_ID)
     _reserve(spec, budget, spent)
     before = budget.spent_usd
-    model = create_puppet.generate_character_image(
-        prompt, dest, aspect_ratio="9:16", reference_path=reference,
-    )
+    with billable(provider="google", model=spec.model, operation="image", prompt=prompt, images=1) as attempt:
+        attempt.mark_sent()
+        model = create_puppet.generate_character_image(
+            prompt, dest, aspect_ratio="9:16", reference_path=reference,
+        )
     cost = float(spec.usdPerImage)
     if budget.spent_usd == before:
         budget.charge(cost)
@@ -1306,13 +1309,16 @@ def main(argv: list[str] | None = None) -> None:
             return path.name
 
     edit = not args.no_edit
-    if rerig:
-        built = rerig_from_plate(
-            skin, description=description, url=url, character_id=folder, name=display, edit=edit,
-        )
-    else:
-        built = create_avatar(description, "cartoon", skin=skin, url=url, edit_mouth=edit)
-        write_character_json(skin, built, character_id=folder, name=display, url=url)
+    from .spend.guard import cli_scope  # noqa: PLC0415
+
+    with cli_scope():
+        if rerig:
+            built = rerig_from_plate(
+                skin, description=description, url=url, character_id=folder, name=display, edit=edit,
+            )
+        else:
+            built = create_avatar(description, "cartoon", skin=skin, url=url, edit_mouth=edit)
+            write_character_json(skin, built, character_id=folder, name=display, url=url)
     print(
         f"avatar {folder} cost US${built['qa']['costUsd']:.4f} "
         f"mouthless={built.get('frontShot')} cached={built['cached']}"

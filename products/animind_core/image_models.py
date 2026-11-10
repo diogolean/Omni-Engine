@@ -135,6 +135,11 @@ class ImageProvider(ABC):
 
 class ConfigOnlyImageProvider(ImageProvider):
     def generate(self, prompt: str, **options: Any) -> Any:
+        from .spend.guard import SpendDenied, current  # noqa: PLC0415
+
+        frame = current()
+        if frame is not None and frame.enforce:
+            raise SpendDenied("unavailable")
         raise PaidImageGenerationDisabled(
             f"{self.spec.provider} is registered but paid generation is disabled in phase 4"
         )
@@ -285,36 +290,41 @@ def _gemini_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResult:
     _preflight(spec, budget)
     destination = _destination(options)
     started = time.perf_counter()
-    from production.cost.google_guardrail import get_google_cost_tracker  # noqa: PLC0415
-    from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+    from .spend.guard import billable  # noqa: PLC0415
 
-    previous = {
-        name: os.environ.get(name)
-        for name in ("MAX_GOOGLE_COST_PER_RUN_USD", "GOOGLE_COST_ALLOW_ABOVE_CEILING")
-    }
-    os.environ["GOOGLE_COST_ALLOW_ABOVE_CEILING"] = "1"
-    os.environ["MAX_GOOGLE_COST_PER_RUN_USD"] = f"{max(budget.remaining(), spec.usdPerImage):.4f}"
-    before = float(get_google_cost_tracker().total_usd())
-    try:
-        model = generate_character_image(
-            prompt, destination,
-            aspect_ratio=str(options.get("aspect_ratio") or "4:5"),
-            reference_path=options.get("reference_path"),
-        )
-    except Exception:
-        _record_image(spec, cost=0.0, status="failed", path=None, latency_ms=(time.perf_counter() - started) * 1000)
-        raise
-    finally:
-        for name, value in previous.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-    spent = max(0.0, float(get_google_cost_tracker().total_usd()) - before)
-    cost = spent if spent > 0 else spec.usdPerImage
-    budget.charge(cost)
-    _record_image(spec, cost=cost, status="ok", path=destination, latency_ms=(time.perf_counter() - started) * 1000)
-    return ImageResult(destination, spec.provider, model or spec.model, cost)
+    with billable(provider=spec.provider, model=spec.model, operation="image", prompt=prompt, images=1) as attempt:
+        attempt.mark_sent()
+        from production.cost.google_guardrail import get_google_cost_tracker  # noqa: PLC0415
+        from products.aiwake.animator.factory.create_puppet import generate_character_image  # noqa: PLC0415
+
+        previous = {
+            name: os.environ.get(name)
+            for name in ("MAX_GOOGLE_COST_PER_RUN_USD", "GOOGLE_COST_ALLOW_ABOVE_CEILING")
+        }
+        os.environ["GOOGLE_COST_ALLOW_ABOVE_CEILING"] = "1"
+        os.environ["MAX_GOOGLE_COST_PER_RUN_USD"] = f"{max(budget.remaining(), spec.usdPerImage):.4f}"
+        before = float(get_google_cost_tracker().total_usd())
+        try:
+            model = generate_character_image(
+                prompt, destination,
+                aspect_ratio=str(options.get("aspect_ratio") or "4:5"),
+                reference_path=options.get("reference_path"),
+            )
+        except Exception:
+            _record_image(spec, cost=0.0, status="failed", path=None, latency_ms=(time.perf_counter() - started) * 1000)
+            raise
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        spent = max(0.0, float(get_google_cost_tracker().total_usd()) - before)
+        cost = spent if spent > 0 else spec.usdPerImage
+        budget.charge(cost)
+        _record_image(spec, cost=cost, status="ok", path=destination, latency_ms=(time.perf_counter() - started) * 1000)
+        attempt.observe(images=1)
+        return ImageResult(destination, spec.provider, model or spec.model, cost)
 
 
 def _together_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResult:
@@ -342,26 +352,31 @@ def _together_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResul
             model = (os.getenv("TOGETHER_EDIT_MODEL") or DEFAULT_EDIT_MODEL).strip()
             body["model"] = model
     started = time.perf_counter()
-    response = httpx.post(
-        "https://api.together.xyz/v1/images/generations",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json=body,
-        timeout=120.0,
-    )
-    try:
-        response.raise_for_status()
-        payload = response.json()
-        encoded = (payload.get("data") or [{}])[0].get("b64_json") or ""
-        if not encoded:
-            raise RuntimeError("Together response contained no image")
-        destination.write_bytes(_decode_image(encoded))
-    except Exception:
-        _record_image(spec, cost=0.0, status="failed", path=None, latency_ms=(time.perf_counter() - started) * 1000)
-        raise
-    cost = spec.usdPerImage
-    budget.charge(cost)
-    _record_image(spec, cost=cost, status="ok", path=destination, latency_ms=(time.perf_counter() - started) * 1000)
-    return ImageResult(destination, spec.provider, model, cost)
+    from .spend.guard import billable  # noqa: PLC0415
+
+    with billable(provider=spec.provider, model=model, operation="image", prompt=prompt, images=1) as attempt:
+        attempt.mark_sent()
+        response = httpx.post(
+            "https://api.together.xyz/v1/images/generations",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=body,
+            timeout=attempt.timeout(120.0),
+        )
+        try:
+            response.raise_for_status()
+            payload = response.json()
+            encoded = (payload.get("data") or [{}])[0].get("b64_json") or ""
+            if not encoded:
+                raise RuntimeError("Together response contained no image")
+            destination.write_bytes(_decode_image(encoded))
+        except Exception:
+            _record_image(spec, cost=0.0, status="failed", path=None, latency_ms=(time.perf_counter() - started) * 1000)
+            raise
+        cost = spec.usdPerImage
+        budget.charge(cost)
+        _record_image(spec, cost=cost, status="ok", path=destination, latency_ms=(time.perf_counter() - started) * 1000)
+        attempt.observe(images=1)
+        return ImageResult(destination, spec.provider, model, cost)
 
 
 def _openrouter_image(spec: ImageModel, prompt: str, **options: Any) -> ImageResult:
@@ -372,29 +387,36 @@ def _openrouter_image(spec: ImageModel, prompt: str, **options: Any) -> ImageRes
     _preflight(spec, budget)
     destination = _destination(options)
     started = time.perf_counter()
-    response = httpx.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={
-            "model": spec.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "modalities": ["image", "text"],
-        },
-        timeout=120.0,
-    )
-    try:
-        response.raise_for_status()
-        payload = response.json()
-        encoded = _openrouter_image_payload(payload)
-        destination.write_bytes(_decode_image(encoded))
-    except Exception:
-        _record_image(spec, cost=0.0, status="failed", path=None, latency_ms=(time.perf_counter() - started) * 1000)
-        raise
-    usage = payload.get("usage") or {}
-    cost = float(usage.get("cost") or spec.usdPerImage)
-    budget.charge(cost)
-    _record_image(spec, cost=cost, status="ok", path=destination, latency_ms=(time.perf_counter() - started) * 1000)
-    return ImageResult(destination, spec.provider, spec.model, cost)
+    from .spend.guard import billable  # noqa: PLC0415
+
+    with billable(provider=spec.provider, model=spec.model, operation="image", prompt=prompt, images=1, stream=False) as attempt:
+        attempt.mark_sent()
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": spec.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "modalities": ["image", "text"],
+                "stream": False,
+            },
+            timeout=attempt.timeout(120.0),
+        )
+        try:
+            response.raise_for_status()
+            payload = response.json()
+            encoded = _openrouter_image_payload(payload)
+            destination.write_bytes(_decode_image(encoded))
+        except Exception:
+            _record_image(spec, cost=0.0, status="failed", path=None, latency_ms=(time.perf_counter() - started) * 1000)
+            raise
+        usage = payload.get("usage") or {}
+        reported = usage.get("cost")
+        cost = float(reported if reported is not None else spec.usdPerImage)
+        budget.charge(cost)
+        _record_image(spec, cost=cost, status="ok", path=destination, latency_ms=(time.perf_counter() - started) * 1000)
+        attempt.observe(images=1, reported_usd=None if reported is None else float(reported))
+        return ImageResult(destination, spec.provider, spec.model, cost)
 
 
 def _openrouter_image_payload(payload: dict[str, Any]) -> str:

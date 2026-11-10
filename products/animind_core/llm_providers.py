@@ -129,32 +129,46 @@ class DeepSeekProvider(LLMProvider):
         key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
         if not key:
             raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+        from .spend.guard import billable  # noqa: PLC0415
+
         base = (os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").rstrip("/")
-        response = httpx.post(
-            f"{base}/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-                "thinking": {"type": "disabled"},
-                "temperature": 0.8,
-                "stream": False,
-            },
-            timeout=90.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        text = payload["choices"][0]["message"]["content"]
-        usage = payload.get("usage") or {}
-        input_tokens = int(usage.get("prompt_tokens") or 0)
-        output_tokens = int(usage.get("completion_tokens") or 0)
-        cache_hit = int(usage.get("prompt_cache_hit_tokens") or 0)
-        cache_miss = max(0, input_tokens - cache_hit)
-        # Conservative peak rates, verified in the official price table on
-        # 2026-11-02. Off-peak charges are one half of these values.
-        cost = cache_miss * 0.30e-6 + cache_hit * 0.006e-6 + output_tokens * 1.20e-6
-        return TextResult(text, self.id, self.model, input_tokens, output_tokens, cost)
+        body = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "disabled"},
+            "temperature": 0.8,
+            "stream": False,
+        }
+        with billable(
+            provider=self.id, model=self.model, operation="text", prompt=prompt, stream=bool(body["stream"]),
+        ) as attempt:
+            attempt.mark_sent()
+            response = httpx.post(
+                f"{base}/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=body,
+                timeout=attempt.timeout(90.0),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            text = payload["choices"][0]["message"]["content"]
+            usage = payload.get("usage") or {}
+            input_tokens = int(usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("completion_tokens") or 0)
+            cache_hit = usage.get("prompt_cache_hit_tokens")
+            cache_hit_n = int(cache_hit) if cache_hit is not None else 0
+            cache_miss = max(0, input_tokens - cache_hit_n)
+            # Legacy scriptCost float. The spend frame records cache separately and
+            # leaves reported cost null when DeepSeek does not return a bill.
+            # Peak rates checked 2026-11-07 at the official price page.
+            cost = cache_miss * 0.30e-6 + cache_hit_n * 0.006e-6 + output_tokens * 1.20e-6
+            attempt.observe(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_tokens=None if cache_hit is None else cache_hit_n,
+            )
+            return TextResult(text, self.id, self.model, input_tokens, output_tokens, cost)
 
     def complete(self, prompt: str) -> LLMResult:
         raw = self.complete_text(prompt)
@@ -206,9 +220,15 @@ class GeminiProvider(LLMProvider):
     def complete(self, prompt: str) -> LLMResult:
         from production.cost.google_guardrail import get_google_cost_tracker
 
+        from .spend.guard import billable  # noqa: PLC0415
+
         tracker = get_google_cost_tracker()
         before = tracker.snapshot()
-        lines = self._generate(prompt)
+        with billable(
+            provider=self.id, model=self.model, operation="text", prompt=prompt, stream=False,
+        ) as attempt:
+            attempt.mark_sent()
+            lines = self._generate(prompt)
         input_tokens, output_tokens, cost = self._usage(before, tracker.snapshot())
         return LLMResult(lines, self.id, self.model, input_tokens, output_tokens, cost)
 
@@ -227,32 +247,50 @@ class OpenRouterProvider(LLMProvider):
     def complete_text(self, prompt: str) -> TextResult:
         from production.providers.llm import cheap_llm  # noqa: PLC0415
 
+        from .spend.guard import billable  # noqa: PLC0415
+
         key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
         if not key:
             raise RuntimeError("OPENROUTER_API_KEY is not configured")
-        response = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.4,
-                "reasoning": {"enabled": False, "exclude": True},
-                "usage": {"include": True},
-            },
-            timeout=90.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        text = payload["choices"][0]["message"]["content"] or ""
-        usage = payload.get("usage") or {}
-        input_tokens = int(usage.get("prompt_tokens") or 0)
-        output_tokens = int(usage.get("completion_tokens") or 0)
-        if usage.get("cost") is not None:
-            cost = float(usage["cost"])
-        else:
-            cost = cheap_llm.estimate_usd(self.id, self.model, input_tokens, output_tokens)
-        return TextResult(text, self.id, self.model, input_tokens, output_tokens, cost)
+        body = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.4,
+            "reasoning": {"enabled": False, "exclude": True},
+            "usage": {"include": True},
+            "stream": False,
+        }
+        with billable(
+            provider=self.id, model=self.model, operation="text", prompt=prompt, stream=False,
+        ) as attempt:
+            attempt.mark_sent()
+            response = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=body,
+                timeout=attempt.timeout(90.0),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            text = payload["choices"][0]["message"]["content"] or ""
+            usage = payload.get("usage") or {}
+            input_tokens = int(usage.get("prompt_tokens") or 0)
+            output_tokens = int(usage.get("completion_tokens") or 0)
+            reported = usage.get("cost")
+            if reported is not None:
+                cost = float(reported)
+            else:
+                # Legacy scriptCost only. The spend contract does not treat this
+                # other-product estimate as a reported or verified bill.
+                cost = cheap_llm.estimate_usd(self.id, self.model, input_tokens, output_tokens)
+            cached = usage.get("prompt_cache_hit_tokens")
+            attempt.observe(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_tokens=None if cached is None else int(cached),
+                reported_usd=None if reported is None else float(reported),
+            )
+            return TextResult(text, self.id, self.model, input_tokens, output_tokens, cost)
 
     def complete(self, prompt: str) -> LLMResult:
         raw = self.complete_text(prompt)
@@ -348,15 +386,20 @@ def generate(
             and not settings.gemini_available()
         )
         cached = _cache_path(cache_dir, provider, prompt, version)
+        from .spend.guard import SpendDenied, note_unbilled  # noqa: PLC0415
         if cache_enabled and cached.is_file():
             raw = json.loads(cached.read_text(encoding="utf-8"))
             hit = _cached_result(raw, provider, version=version)
             if hit is None:
                 cached.unlink(missing_ok=True)
             else:
+                note_unbilled(provider=hit.provider, model=hit.model, operation="text", reason="cache")
                 return hit, failures
         try:
             result = provider.complete(prompt)
+        except SpendDenied as exc:
+            failures.append(f"{provider.id}: blocked:{exc.block}")
+            return None, failures
         except Exception as exc:  # noqa: BLE001 - fallback is the contract
             failures.append(f"{provider.id}: {exc}")
             _LOG.warning("%s script provider failed; trying fallback: %s", provider.id, exc)
@@ -430,11 +473,18 @@ def generate_text(
             and not settings.gemini_available()
         )
         cached = _cache_path(cache_dir, item, prompt)
+        from .spend.guard import SpendDenied, note_unbilled  # noqa: PLC0415
         if cache_enabled and cached.is_file():
             raw = json.loads(cached.read_text(encoding="utf-8"))
             if raw.get("qaPass") is False:
                 cached.unlink(missing_ok=True)
             else:
+                note_unbilled(
+                    provider=str(raw.get("provider") or item.id),
+                    model=str(raw.get("model") or item.model),
+                    operation="text",
+                    reason="cache",
+                )
                 return TextResult(
                     str(raw.get("text") or ""),
                     str(raw.get("provider") or item.id),
@@ -443,6 +493,9 @@ def generate_text(
                 ), failures
         try:
             result = item.complete_text(prompt)
+        except SpendDenied as exc:
+            failures.append(f"{item.id}: blocked:{exc.block}")
+            return None, failures
         except Exception as exc:  # noqa: BLE001 - fallback is the contract
             failures.append(f"{item.id}: {exc}")
             _LOG.warning("%s script provider failed; trying fallback: %s", item.id, exc)

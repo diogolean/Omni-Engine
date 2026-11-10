@@ -141,8 +141,15 @@ def _tokens(text: str) -> set[str]:
 
 
 def _quotable(sheet: dict[str, Any]) -> list[dict[str, Any]]:
-    """Quotes that may appear as "Citação real": primary sources only."""
-    return [q for q in sheet.get("quotes") or [] if personas.is_primary(q)]
+    """Quotes that may appear as "Citação real": primary and, when checked, verified."""
+    chosen = []
+    for quote in sheet.get("quotes") or []:
+        if not personas.is_primary(quote):
+            continue
+        if not personas.is_verified(quote):
+            continue
+        chosen.append(quote)
+    return chosen
 
 
 def _eligible(sheet: dict[str, Any], max_words: int) -> list[dict[str, Any]]:
@@ -895,6 +902,9 @@ def _gemini(prompt: str) -> list[dict[str, Any]]:
         if raw.get("qaPass") is False or (version not in (None, "", SCRIPT_QA_VERSION) and version):
             cached.unlink(missing_ok=True)
         else:
+            from .spend.guard import note_unbilled  # noqa: PLC0415
+
+            note_unbilled(provider="google", model=WRITER_MODEL, operation="text", reason="cache")
             return list(raw.get("lines") or [])
     lines = _gemini_call(prompt)
     cached.parent.mkdir(parents=True, exist_ok=True)
@@ -949,13 +959,33 @@ def _gemini_call(prompt: str) -> list[dict[str, Any]]:
         make_guarded_gemini_client,
     )
 
-    client = make_guarded_gemini_client((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
-    response = guarded_generate_content(
-        client, model=WRITER_MODEL, contents=prompt,
-        config=_writer_config(),
-        kind="text", source="animind_core.script.write",
-    )
-    return llm_providers._json_lines(response.text or "")
+    from .spend.guard import billable  # noqa: PLC0415
+
+    with billable(provider="google", model=WRITER_MODEL, operation="text", prompt=prompt, stream=False) as attempt:
+        attempt.mark_sent()
+        client = make_guarded_gemini_client((os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip())
+        response = guarded_generate_content(
+            client, model=WRITER_MODEL, contents=prompt,
+            config=_writer_config(),
+            kind="text", source="animind_core.script.write",
+        )
+        usage = getattr(response, "usage_metadata", None)
+        if usage is None:
+            attempt.observe()
+        else:
+            def _maybe(name: str) -> int | None:
+                if not hasattr(usage, name):
+                    return None
+                value = getattr(usage, name)
+                return None if value is None else int(value)
+
+            attempt.observe(
+                input_tokens=_maybe("prompt_token_count"),
+                output_tokens=_maybe("candidates_token_count"),
+                cached_tokens=_maybe("cached_content_token_count"),
+                thinking_tokens=_maybe("thoughts_token_count"),
+            )
+        return llm_providers._json_lines(response.text or "")
 
 
 # ---------------------------------------------------------------- assembly
@@ -2482,6 +2512,8 @@ def check(lines: list[dict[str, Any]], sheets: list[dict[str, Any]], topic: str 
                 continue
             if not personas.is_primary(own):
                 errors.append(f"line {i}: quote comes from a secondary source")
+            if not personas.is_verified(own):
+                errors.append(f"line {i}: quote was not found on its source page")
             if not str(q.get("source") or "").strip():
                 errors.append(f"line {i}: quote has no source")
             elif q.get("source") != own.get("source", ""):

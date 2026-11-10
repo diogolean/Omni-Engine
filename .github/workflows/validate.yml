@@ -44,7 +44,7 @@ jobs:
 
       - name: Secret scan
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz -o /tmp/gitleaks.tgz
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 10 https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz -o /tmp/gitleaks.tgz
           echo "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e  /tmp/gitleaks.tgz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
           # Current tree only. A Facebook page token remains in git history;
@@ -106,3 +106,38 @@ jobs:
             --deselect products/aiwake/tests/test_caption_validator.py::test_truncated_plugs_it_fails \
             --deselect products/aiwake/tests/test_distribution_pipeline.py::test_tiktok_caption_is_hook_quote_trigger \
             --deselect products/aiwake/tests/test_distribution_pipeline.py::test_planner_imports_root_videos_with_optimized_captions
+
+  spend-ledger:
+    name: spend ledger
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: animind_test
+          POSTGRES_PASSWORD: animind_test
+          POSTGRES_DB: animind_spend_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U animind_test -d animind_spend_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ANIMIND_SPEND_DATABASE_URL: postgresql://animind_test:animind_test@127.0.0.1:5432/animind_spend_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install validation dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements-ci.txt && pip install -r products/animind_core/requirements.txt
+
+      - name: Test
+        run: pytest -q products/animind_core/tests/test_spend_guard.py products/animind_core/tests/test_core_integration.py products/animind_core/tests/test_job_owner.py products/animind_core/tests/test_persona_verification.py products/animind_core/tests/test_admin_avatar.py products/animind_core/tests/test_capacity.py products/animind_core/tests/test_puppet_library.py

@@ -10,9 +10,11 @@ placeholders from the app) are drawn as a neutral silhouette.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -29,6 +31,8 @@ from . import (
     characters,
     frameqa,
     languages,
+    owner,
+    personas,
     rig,
     scene,
     settings,
@@ -45,6 +49,7 @@ SAMPLE_RATE = 24000
 GAP_S = 0.3
 ENV_FPS = 100
 _JOBS: dict[str, dict[str, Any]] = {}
+_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 _LOCK = threading.Lock()
 _RENDER_LOCK = threading.Lock()
 
@@ -101,11 +106,14 @@ def _tts_retryable(exc: BaseException) -> bool:
 async def _tts(text: str, voice: str, out: Path, rate: str = "+0%", pitch: str = "+0Hz") -> None:
     import edge_tts  # noqa: PLC0415
 
+    from .spend.guard import admit_unpriced  # noqa: PLC0415
+
     attempts = _tts_attempts()
     last: BaseException | None = None
     for attempt in range(attempts):
         try:
-            await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
+            with admit_unpriced(provider="edge-tts", model=voice, operation="speech", attempt=attempt + 1):
+                await edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).save(str(out))
             return
         except Exception as exc:  # noqa: BLE001 — only the transient audio miss is retried
             last = exc
@@ -394,6 +402,7 @@ def smooth_visemes(cues: list[dict[str, Any]], frame_s: float = 1 / 24) -> list[
 def _set(job_id: str, **kw: Any) -> None:
     with _LOCK:
         _JOBS[job_id].update(kw)
+        _save(_JOBS[job_id])
 
 
 def settle_frame_qa(video: Path, report: dict[str, Any], *, repaired: list[str] | None = None) -> dict[str, Any]:
@@ -462,7 +471,8 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             else "AI"
         )
         topic = (req.get("topic") or default_topic).strip()[:200]
-        work = settings.data_dir() / "jobs" / job_id
+        owner_id = req.get("owner") if isinstance(req.get("owner"), str) else None
+        work = settings.data_dir() / owner.job_rel(owner_id, job_id)
         work.mkdir(parents=True, exist_ok=True)
         mode = "deep" if req.get("personaMode") == "deep" else "quick"
         art = styles.pick(req.get("style") or (chars[0].get("artStyle") if chars else None))
@@ -483,10 +493,11 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
             probe, voices[0], work / "probe.mp3", work / "probe.wav", 8.0, 0,
         )
         words_per_s = scripts.measured_rate(probe, len(probe_pcm) / SAMPLE_RATE)
-        written = scripts.write(
-            template, topic, [str(c.get("name") or "") for c in chars], language.script, mode=mode,
-            tone=tone, objective=objective, duration=target_duration, words_per_s=words_per_s,
-        )
+        with personas.user_scope(req.get("personaUser") if isinstance(req.get("personaUser"), str) else None):
+            written = scripts.write(
+                template, topic, [str(c.get("name") or "") for c in chars], language.script, mode=mode,
+                tone=tone, objective=objective, duration=target_duration, words_per_s=words_per_s,
+            )
         lines = written["lines"]
         script_dump = {
             "lines": lines,
@@ -629,7 +640,7 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
                 frame_qa = frameqa.check(video, trace)
         frame_qa = settle_frame_qa(video, frame_qa, repaired=qa_warnings)
         (work / "frame_qa.json").write_text(json.dumps(frame_qa, indent=2))
-        files = f"{base_url}/v1/files/jobs/{job_id}"
+        files = f"{base_url}/v1/files/{owner.job_rel(owner_id, job_id)}"
         result = {
             "template": template, "scenario": scenario, "characters": chars,
             "script": script, "durationMs": int(duration * 1000), "audioUrl": f"{files}/voice.wav",
@@ -688,14 +699,159 @@ def _run(job_id: str, req: dict[str, Any], base_url: str) -> None:
 def submit(req: dict[str, Any], base_url: str) -> dict[str, Any]:
     if not shutil.which("ffmpeg"):
         raise RuntimeError("ffmpeg is not installed")
+    from .spend.guard import current  # noqa: PLC0415
+
     job_id = uuid.uuid4().hex[:12]
+    frame = current()
+    if frame is not None:
+        frame.job_id = job_id
+    owner_id = req.get("owner") if isinstance(req.get("owner"), str) else None
+    job: dict[str, Any] = {"id": job_id, "status": "queued", "progress": 0.0, "_owner": owner_id}
+    if frame is not None:
+        job["_frame"] = frame
     with _LOCK:
-        _JOBS[job_id] = {"id": job_id, "status": "queued", "progress": 0.0}
-    threading.Thread(target=_run, args=(job_id, req, base_url), daemon=True).start()
-    return dict(_JOBS[job_id])
+        _JOBS[job_id] = job
+        _save(job)
+    ctx = contextvars.copy_context()
+    threading.Thread(target=ctx.run, args=(_run, job_id, req, base_url), daemon=True).start()
+    return _public_job(job)
 
 
-def get(job_id: str) -> dict[str, Any] | None:
+def get(job_id: str, owner_id: str | None = None) -> dict[str, Any] | None:
+    """The job for this owner, including usage when a spend frame or ledger row exists."""
+    from .spend import contract, ledger  # noqa: PLC0415
+    from .spend.guard import ref_hash, user_hash  # noqa: PLC0415
+
     with _LOCK:
         job = _JOBS.get(job_id)
-        return dict(job) if job else None
+        if job is not None and job.get("_owner") != owner_id:
+            job = None
+        if job is None:
+            job = _load(owner_id, job_id)
+            if job is not None:
+                _JOBS[job_id] = job
+        stored = None if job is None else dict(job)
+    if stored is not None:
+        frame = stored.pop("_frame", None)
+        public = _public_job(stored)
+        if frame is not None:
+            public["usage"] = contract.document(frame, job_id)
+        elif "usage" not in public:
+            public["usage"] = contract.empty("unknown", owner_id or "unknown", job_id)
+        _point_at_owner(public, owner_id)
+        _hide_missing_preview(public, _job_dir(owner_id, job_id))
+        return public
+    rows = ledger.rows_for_job(ref_hash(job_id) or "")
+    if not rows:
+        return None
+    expected = owner_id if owner_id is not None else user_hash("anonymous")
+    if str(rows[0].get("user_id") or "") != expected:
+        return None
+    return {
+        "id": job_id,
+        "status": "unknown",
+        "progress": 0.0,
+        "usage": contract.from_rows(
+            rows,
+            request_id=str(rows[0].get("request_id") or "unknown"),
+            user_ref=str(rows[0].get("user_id") or "unknown"),
+            job_id=job_id,
+        ),
+    }
+
+
+def _public(job_id: str) -> dict[str, Any]:
+    with _LOCK:
+        job = _JOBS.get(job_id) or {}
+        return _public_job(job)
+
+
+def keep_usage(owner_id: str | None, job_id: str, usage: dict[str, Any]) -> dict[str, Any]:
+    """Store usage once, on the owner's job file."""
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if job is None or job.get("_owner") != owner_id:
+            job = _load(owner_id, job_id)
+            if job is None:
+                return usage
+            _JOBS[job_id] = job
+        if not isinstance(job.get("usage"), dict):
+            job["usage"] = usage
+            _save(job)
+        return job["usage"]
+
+
+def _job_dir(owner_id: str | None, job_id: str) -> Path | None:
+    if not isinstance(job_id, str) or not _JOB_ID.match(job_id):
+        return None
+    return settings.data_dir() / owner.job_rel(owner_id, job_id)
+
+
+def _save(job: dict[str, Any]) -> None:
+    owner_id = job.get("_owner") if isinstance(job.get("_owner"), str) else None
+    directory = _job_dir(owner_id, str(job.get("id") or ""))
+    if directory is None:
+        return
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "job.json").write_text(
+        json.dumps(_public_job(job), ensure_ascii=False), encoding="utf-8",
+    )
+
+
+def _load(owner_id: str | None, job_id: str) -> dict[str, Any] | None:
+    directory = _job_dir(owner_id, job_id)
+    if directory is None:
+        return None
+    path = directory / "job.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("id") != job_id:
+        return None
+    data["_owner"] = owner_id
+    _hide_missing_preview(data, directory)
+    return data
+
+
+def _point_at_owner(job: dict[str, Any], owner_id: str | None) -> None:
+    """An owned preview URL stays under that user's tree, never loose ``jobs/``."""
+    if not isinstance(owner_id, str) or not owner_id:
+        return
+    result = job.get("result")
+    if not isinstance(result, dict):
+        return
+    rel = owner.job_rel(owner_id, str(job.get("id") or ""))
+    for key in ("videoUrl", "audioUrl", "frameQaUrl"):
+        url = result.get(key)
+        if not isinstance(url, str) or "/v1/files/" not in url:
+            continue
+        head, tail = url.split("/v1/files/", 1)
+        name = tail.rsplit("/", 1)[-1]
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            result.pop(key, None)
+            continue
+        result[key] = f"{head}/v1/files/{rel}/{name}"
+
+
+def _hide_missing_preview(job: dict[str, Any], directory: Path | None) -> None:
+    """A poll with no MP4 is not a finished preview."""
+    if directory is None:
+        return
+    video = directory / "preview.mp4"
+    if video.is_file() and video.stat().st_size > 0:
+        return
+    result = job.get("result")
+    if isinstance(result, dict):
+        result.pop("videoUrl", None)
+        result.pop("audioUrl", None)
+        result.pop("frameQaUrl", None)
+    if job.get("status") == "done":
+        job["status"] = "failed"
+        job["error"] = "preview missing"
+
+
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in job.items() if not str(key).startswith("_")}

@@ -203,10 +203,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image-budget-usd", type=float, default=0.30)
     parser.add_argument("--dry-run-images", action="store_true")
     args = parser.parse_args(argv)
-    report = run(
-        args.output, image_budget_usd=args.image_budget_usd,
-        allow_paid_images=not args.dry_run_images,
-    )
+    from .spend.guard import cli_scope  # noqa: PLC0415
+
+    with cli_scope():
+        report = run(
+            args.output, image_budget_usd=args.image_budget_usd,
+            allow_paid_images=not args.dry_run_images,
+        )
     print(telemetry.markdown(report["rows"]))
     return 0
 

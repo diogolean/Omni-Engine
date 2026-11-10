@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import avatar, casting, qa, rig, settings, sheet, stick, styles, telemetry
+from . import avatar, casting, portrait, qa, rig, settings, sheet, stick, styles, telemetry
 from .image_models import BudgetExceeded
 
 _LOG = logging.getLogger("animind_core")
@@ -47,7 +47,12 @@ AIWAKE_AVATAR_SOURCES = (
 def avatar_pipeline() -> dict[str, Any]:
     return {
         "sources": list(AIWAKE_AVATAR_SOURCES),
-        "views": {"front": "layered", "left": "layered", "right": "mirror:left"},
+        "views": {
+            "front": "layered",
+            "left": "layered",
+            "right": "independent when generated; mirror:left fallback",
+            "profile": "independent when generated",
+        },
         "parts": ["torso", "neck", "head", "eyes", "lids", "brows", "mouths:X,A-H", "emotions"],
     }
 
@@ -67,6 +72,25 @@ def load(character_id: str) -> dict[str, Any] | None:
         return None
     path = puppets_dir() / character_id / "character.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def _with_eye_control(character: dict[str, Any], skin: Path) -> dict[str, Any]:
+    """Attach the gaze probe. A failed probe is unavailable, never ready."""
+    from .eye_control import SCHEMA, assess_skin  # noqa: PLC0415
+
+    try:
+        report = assess_skin(skin) if skin.is_dir() else {
+            "schema": SCHEMA, "version": 1, "ready": False, "reason": "view-missing", "views": {},
+        }
+    except Exception as exc:  # noqa: BLE001 — character creation must not die on the probe
+        report = {
+            "schema": SCHEMA, "version": 1, "ready": False, "reason": "probe-error",
+            "errorType": type(exc).__name__, "views": {},
+        }
+    out = dict(character)
+    out["eyeControl"] = report
+    out["eyeControlReady"] = bool(report.get("ready"))
+    return out
 
 
 REUSE_MIN_SCORE = 80
@@ -164,7 +188,22 @@ def reusable(name: str, art_style: str, base_url: str) -> dict[str, Any] | None:
     return reused | {"reused": True, **({"qaWarning": warning} if warning else {})}
 
 
-def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
+def create_character(
+    req: dict[str, Any],
+    base_url: str,
+    *,
+    puppets_root: Path | None = None,
+) -> dict[str, Any]:
+    """Run the canonical Aiwake character path.
+
+    ``puppets_root`` is an ownership boundary for server-created puppets.  It
+    changes storage only; generation, rigging, expressions, QA and publishing
+    remain this module's existing pipeline.
+    """
+    if "requestedResolution" in req or "resolution" in req:
+        decision = portrait.plan(req)
+        if not decision["consume"]:
+            raise portrait.PortraitRefused(decision)
     started = time.perf_counter()
     source = req.get("source") or {}
     kind = source.get("kind")
@@ -188,6 +227,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
 
     name = (str(req.get("name") or "").strip() or subject)[:40]
     assets = settings.data_dir() / "assets"
+    root = Path(puppets_root) if puppets_root is not None else puppets_dir()
     art_style = styles.pick(req.get("artStyle"))
     image_model = avatar.configured_model()
     stick_options: dict[str, Any] = {}
@@ -220,11 +260,15 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         character_id = f"stick_{preset}_{fingerprint}"
     else:
         character_id = f"{_slug(name)}_{uuid.uuid4().hex[:8]}"
-    skin = assets / "puppets" / character_id
+    skin = root / character_id
     files_base = f"{base_url}/v1/files"
 
     def url(path: Path) -> str:
-        return f"{files_base}/{path.relative_to(assets).as_posix()}"
+        try:
+            relative = path.relative_to(assets)
+        except ValueError:
+            relative = path.relative_to(settings.data_dir())
+        return f"{files_base}/{relative.as_posix()}"
 
     reuse_art = req.get("reuse", True) is not False
     if character_type == "stick" and reuse_art and (skin / "character.json").is_file():
@@ -238,6 +282,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         saved.setdefault("avatarPipeline", avatar_pipeline())
         text = re.sub(r"https?://[^\"\s]+?/v1/files/", f"{base_url}/v1/files/", json.dumps(saved))
         reused = json.loads(text) | {"reused": True}
+        reused = _with_eye_control(reused, skin)
         telemetry.record(
             "avatar", provider="procedural", model=f"stick:{preset}",
             latency_ms=(time.perf_counter() - started) * 1000,
@@ -245,7 +290,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             status="cached", metadata={"views": sorted((reused.get("views") or {}).keys())},
         )
         return reused
-    if character_type == "rig" and not req.get("rawPrompt") and (
+    if puppets_root is None and character_type == "rig" and not req.get("rawPrompt") and (
         req.get("reuse", True) is not False or image_cap_blocks(name, art_style)
     ):
         found = reusable(name, art_style, base_url)
@@ -253,6 +298,7 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
             found["gender"] = casting.public_gender({**found, **req, "name": name, "prompt": subject})
             if req.get("voiceId"):
                 found["voiceId"] = str(req["voiceId"])
+            found = _with_eye_control(found, puppets_dir() / str(found.get("id") or ""))
             if image_cap_blocks(name, art_style):
                 found["qaWarning"] = (
                     found.get("qaWarning")
@@ -355,6 +401,11 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "mouthShots": built["mouthShots"],
         "artStyle": art_style,
         "frontShot": built.get("frontShot", "mock"),
+        **({
+            key: built.get(key)
+            for key in ("plateId", "frontKind", "frontEqualsLeft", "frontIsTruePhoto")
+            if key in built
+        }),
         **({"preset": built["preset"], "customization": built["customization"]} if character_type == "stick" else {}),
         # generate-then-verify QA: score 0-100, Gemini cost, attempts, failed gates; sheet stored with the character
         "qa": built.get("qa"),
@@ -366,9 +417,10 @@ def create_character(req: dict[str, Any], base_url: str) -> dict[str, Any]:
         "viewsContactSheetUrl": url(sheet.build_views(skin, name)),
         "avatarPipeline": avatar_pipeline(),
     }
+    character = _with_eye_control(character, skin)
     (skin / "character.json").write_text(json.dumps(character, indent=2), encoding="utf-8")
     qa_report = character.get("qa") or {}
-    if character_type == "rig" and mode not in {"procedural", "mock"}:
+    if puppets_root is None and character_type == "rig" and mode not in {"procedural", "mock"}:
         record_image_spend(
             name, art_style, float(qa_report.get("costUsd") or 0),
             character_id, int(qa_report.get("score") or 0),

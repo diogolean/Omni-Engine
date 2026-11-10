@@ -8,10 +8,13 @@ Rhubarb visemes).
 | Endpoint | What runs |
 | --- | --- |
 | `POST /v1/characters` | `type: "rig"` uses `rig.py` when Gemini is configured: Gemini master via Aiwake `create_puppet.generate_character_image` -> generated mouthless head + 4x3 parts sheet (nine Rhubarb mouths and three lid states) -> BiRefNet matte -> registered layers. Together or OpenRouter rigs, and every stick figure with a key, use `avatar.create_avatar`. `type: "stick"` with no image key uses `stick.py` as the offline mock. |
-| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line (retried on `NoAudioReceived`) -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame. A bad mouth layer is replaced with the safe drawn set and the shot is encoded once more. If a video file exists, the job is `done` and the QA note is in `warnings` (and `frameQa.warnings`); the job fails only when there is no video. Results include `frameQa` and `frameQaUrl`. |
+| `POST /v1/render`, `GET /v1/jobs/{id}` | edge-tts per line (retried on `NoAudioReceived`) -> Rhubarb visemes (`animation.parametric.rhubarb`, envelope fallback) -> hard-cut mouth sprites in `scene.py` -> Rigly/ffmpeg MP4. After encoding, `frameqa.py` decodes every frame. A bad mouth layer is replaced with the safe drawn set and the shot is encoded once more. If a video file exists, the job is `done` and the QA note is in `warnings` (and `frameQa.warnings`); the job fails only when there is no video. Results include `frameQa` and `frameQaUrl`. `X-Animind-User` is required. Without that header, `POST /v1/render` and `GET /v1/jobs/{id}` are the same 404 as a missing job, and `jobs/<id>/preview.mp4` is not served. An email is refused. Another account gets that same 404. The poll reads `users/<hash>/jobs/<id>/job.json` after a restart and returns `usage` (`animind.usage.v1`; unknown cost is null). `videoUrl` points at `users/<hash>/jobs/<id>/`, not a loose `jobs/` path. A missing `preview.mp4` is not a ready preview. |
 | `POST /v1/preview` | Lightweight PNG before the full rig. Body: `{character: {name, prompt}, characterType: "stick"\|"illustrated", artStyle, language, index}`. Response: `{id, index, name, kind, source: "core", accent, imageUrl, note}`. This is not the final cut-out; that is still `POST /v1/characters`. |
 | `POST /v1/scenarios` | `{mode: "auto", characterNames}` or `{mode: "prompt", prompt, characterNames}` -> `{scenario, source: "core", prompt?, note?}`. `scenario` is one of `studio`, `classroom`, `arena`, `space`, `agora` (classical names map to `agora`). A free-text prompt is mapped to the nearest built-in plate; the core does not paint a new set. |
-| `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. |
+| `GET /v1/files/{path}` | Generated PNG/JSON/media, confined to `ANIMIND_DATA_DIR`. A render with `X-Animind-User` is stored under `users/<hash>/jobs/<id>` and is not served to anyone else. |
+| `POST /v1/debates`, `GET /v1/debates/{id}` | Two to six persona names, a theme, and `pt` or `en`. Sheets are read in the caller's scope. A missing sheet is 404 `not found` and does not echo the name. The Aiwake debate room takes one turn per persona. Paid generation stays off, so the seated model is the fixture stub and the response says `writer: "fixture"` and `llm.live: false`. A line is that owner's sheet quote only when the quote is primary, on the theme, and verified; otherwise the line is `kind: "fixture"` with `text: null`. `usage` is `animind.usage.v1` with null cost. Another account, or a request without that header, gets 404 `debate not found` on GET. The JSON file is `users/<hash>/debates/<id>.json`. |
+| `POST /v1/portraits/plan` | Resolution contract for a portrait master. `1k` is the default request and `4k` is the premium request. Neither consumes a provider: the reel adapter only sends `1K` or `2K`, the factory image call does not send `image_size`, and there is no 4K preset or 4K price. A client premium flag is ignored. `POST /v1/characters` with `requestedResolution` returns the same refusal and does not draw or generate. |
+| `POST /v1/avatars/plan`, `POST /v1/avatars`, `GET /v1/avatars/{id}` | Minimum contract for the Generate character button. The plan reads intent (monologue/presentation/speech = 1 person, debate = 2), named people, a style word only when present, and `1k`/`4k`. Scenery is not a persona, and a missing person is a choice, not an invented name. `POST /v1/avatars` requires `X-Animind-User`; without it there is no job and no spend. `generate: true` is the real Aiwake factory (`rig.build_rig` / `create_puppet.generate_character_image`) and requires the server header `X-Animind-Admin` matching `ANIMIND_ADMIN_TOKEN`. A browser role is ignored. Without that token the response is 403 `admin`. A trusted admin still stops at `spend:credential` or `spend:price_unavailable` before the socket when the Gemini key or the published image rate is missing. The same user, plan and participant retry returns the same job and the same events. `GET` is the owner poll: `events` lists only stages that ran, `progress` is null, and a story stage is absent until one runs. Cost and tokens stay in a separate admin row, not in that JSON. There is no `generate_avatar` in the factory; this facade does not call `avatar.create_avatar` and does not run a live debate. |
 
 ### Telemetry and provider comparison
 
@@ -21,6 +24,11 @@ tokens, image count, USD, wall latency, script/image/frame QA summaries and
 the local artifact path. Prompts, generated text and key values are never
 written to telemetry. Unit/integration runs set `ANIMIND_DATA_DIR` to their
 temporary test folder, so test telemetry also stays outside git.
+
+Provider calls made while a request is in flight are also on the `usage` field
+of `POST /v1/plan`, `POST /v1/render`, and `GET /v1/jobs/{id}`. The field is
+`animind.usage.v1` (see `docs/spend-contract.md`). Null estimated or reported
+cost means unknown. Job polls and file downloads do not open a new reservation.
 
 ```bash
 # Aggregate all rows by operation/provider/model as a Markdown table.
@@ -165,7 +173,12 @@ character (Wikiquote MediaWiki API, cached as YAML in `ANIMIND_DATA_DIR/personas
   words) on the topic; a memorable close (a quote with punch or <= 14 words, or a written line <= 16 words);
   `notes` lists softer issues (the same idea picked up three lines in a row).
 - `GET /v1/personas/sheet?name=&lang=` returns the cached sheet (id, text, source, work, sourceKind, url,
-  wikisource), so a client can verify that every on-screen quote is literal.
+  wikisource, verification, sourceSite).   `verification` is `verified` only when that text was found on the
+  linked Wikisource page, the person's Wikipedia article, or the Wikiquote page.
+  `revision` is that page's Wikimedia id, or null.
+  `not_found` is kept on the sheet and is not spoken as a real line. No LLM writes the sheet.
+  `X-Animind-User` stores the sheet under that user's hash; an email is refused. The same header on
+  `POST /v1/render` makes the debate read that user's sheet.
 - Rhythm: each beat has a word budget (`maxS` = words / (2.6 × pace) + 0.8 s), a pause after it (0–0.6 s: longer
   after a hook, a quote or the turn, short between quick jabs) and a pace nudge `rateAdj` (quotes −5…−8 %, jabs
   +2…+6 %) added to the cast voice's rate. A clip that overruns `maxS` is voiced again at `max(rateAdj, 0) + 15%`
@@ -299,6 +312,12 @@ cavity (pixels that differ from the closed mouth) about its top edge, so mustach
 never squashed into a second copy (the old "tear" in close-ups).
 
 ## One-click character: generate-then-verify
+
+The response adds `eyeControl` (`animind.eyeControl.v1`) and `eyeControlReady`.
+A supplied view is `gaze: "separable"` only after the pupil centroid moves
+left, right, up, and down while pixels outside the socket stay put. A view
+that was not drawn is omitted. `eyeRig.maxShift` stays the published travel;
+the proof uses the web's `[8, 4]` fit. See `docs/eye-control.md`.
 
 `POST /v1/characters` (one call) builds a rigged character:
 

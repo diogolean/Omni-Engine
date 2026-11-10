@@ -33,10 +33,11 @@ def test_vertical_debate_has_shot_countershot(client, monkeypatch):  # noqa: F81
     for k in ("TITLE_S", "ACT_GAP_S", "END_S"):  # camera test: skip the film titles to keep the 1080x1920 render short
         monkeypatch.setattr(render.titles, k, 0.0)
     a, b = _make(client, "owl"), _make(client, "cat")
-    job = client.post("/v1/render", headers=H, json={"characters": [a, b], "template": "debate", "format": "9:16",
+    own = {**H, "X-Animind-User": "user_one"}
+    job = client.post("/v1/render", headers=own, json={"characters": [a, b], "template": "debate", "format": "9:16",
                                                     "topic": "IA"}).json()
     for _ in range(400):
-        state = client.get(f"/v1/jobs/{job['id']}", headers=H).json()
+        state = client.get(f"/v1/jobs/{job['id']}", headers=own).json()
         if state["status"] in {"done", "failed"}:
             break
         time.sleep(0.5)
@@ -44,7 +45,7 @@ def test_vertical_debate_has_shot_countershot(client, monkeypatch):  # noqa: F81
     res = state["result"]
     assert (res["format"], res["width"], res["height"]) == ("9:16", 1080, 1920)
     assert len(res["voices"]) == 2
-    path = client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1])
+    path = client.get("/v1/files/" + res["videoUrl"].split("/v1/files/")[1], headers=own)
     assert path.status_code == 200
 
 
